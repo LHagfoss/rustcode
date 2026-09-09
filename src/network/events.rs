@@ -239,11 +239,10 @@ pub(crate) fn native_response(
         events.push(AgentEvent::TextDelta(content.to_string()));
     }
 
-    events.push(AgentEvent::Finished(if has_tool_calls {
-        FinishReason::ToolCalls
-    } else {
-        FinishReason::from_provider(provider_finish_reason)
-    }));
+    events.push(AgentEvent::Finished(response_finish_reason(
+        provider_finish_reason,
+        has_tool_calls,
+    )));
 
     ModelResponse {
         raw_content: content.to_string(),
@@ -261,9 +260,20 @@ impl FinishReason {
         match value {
             Some("stop") | None => Self::Stop,
             Some("tool_calls") | Some("function_call") => Self::ToolCalls,
-            Some("length") => Self::Length,
+            Some("length" | "tool_arguments_limit" | "output_limit" | "max_tokens") => Self::Length,
             Some(other) => Self::Unknown(other.to_string()),
         }
+    }
+}
+
+fn response_finish_reason(value: Option<&str>, has_tool_calls: bool) -> FinishReason {
+    let provider_reason = FinishReason::from_provider(value);
+    if provider_reason == FinishReason::Length {
+        FinishReason::Length
+    } else if has_tool_calls {
+        FinishReason::ToolCalls
+    } else {
+        provider_reason
     }
 }
 
@@ -285,14 +295,12 @@ pub(crate) fn classify_response(
         events.push(AgentEvent::TextDelta(content.to_string()));
     }
 
-    let finish_reason = if events
-        .iter()
-        .any(|event| matches!(event, AgentEvent::ToolCall(_)))
-    {
-        FinishReason::ToolCalls
-    } else {
-        FinishReason::from_provider(provider_finish_reason)
-    };
+    let finish_reason = response_finish_reason(
+        provider_finish_reason,
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ToolCall(_))),
+    );
     events.push(AgentEvent::Finished(finish_reason));
     events
 }
@@ -463,7 +471,43 @@ mod tests {
             FinishReason::from_provider(Some("length")),
             FinishReason::Length
         );
+        assert_eq!(
+            FinishReason::from_provider(Some("tool_arguments_limit")),
+            FinishReason::Length
+        );
         assert_eq!(FinishReason::from_provider(None), FinishReason::Stop);
+    }
+
+    #[test]
+    fn output_truncation_overrides_salvaged_native_tool_calls() {
+        let response = native_response(
+            "",
+            Some("tool_arguments_limit"),
+            vec![ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "src/lib.rs", "content": "partial"}),
+                call_id: Some("call_partial".to_string()),
+            }],
+        );
+
+        assert!(matches!(
+            response.events.last(),
+            Some(AgentEvent::Finished(FinishReason::Length))
+        ));
+    }
+
+    #[test]
+    fn output_truncation_overrides_salvaged_text_tool_calls() {
+        let events = classify_response(
+            "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"src/lib.rs\",\"content\":\"partial\"}}\n```",
+            Some("length"),
+            crate::config::ToolProtocol::Json,
+        );
+
+        assert!(matches!(
+            events.last(),
+            Some(AgentEvent::Finished(FinishReason::Length))
+        ));
     }
 
     #[test]

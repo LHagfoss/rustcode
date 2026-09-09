@@ -993,6 +993,125 @@ fn output_limited_call_results_are_retryable_and_bounded() {
 }
 
 #[tokio::test]
+async fn output_truncated_native_response_never_executes_salvaged_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("must-not-exist.txt");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_arguments_limit"),
+        0,
+        None,
+        None,
+        None,
+        vec![crate::tools::ToolCallEnvelope {
+            call_id: "call_partial_write".to_string(),
+            tool_name: "write_to_file".to_string(),
+            arguments: serde_json::json!({
+                "path": target,
+                "content": "this response was truncated"
+            }),
+        }],
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert!(
+        !target.exists(),
+        "a salvaged truncated call must not execute"
+    );
+    let history = state.lock().await;
+    let result = history
+        .history
+        .iter()
+        .find_map(|message| message.tool_result.as_ref())
+        .expect("typed not-executed result");
+    assert_eq!(result.error_kind.as_deref(), Some("OutputLimit"));
+    assert!(result.retryable);
+    assert!(
+        history
+            .history
+            .iter()
+            .any(|message| message.content.contains("No tool ran"))
+    );
+}
+
+#[tokio::test]
+async fn output_truncated_text_response_never_executes_salvaged_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("must-not-exist.txt");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, false);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+    ctx.response.final_content = format!(
+        "```tool\n{{\"name\":\"write_to_file\",\"arguments\":{{\"path\":{},\"content\":\"truncated\"}}}}\n```",
+        serde_json::to_string(&target).expect("serialize path")
+    );
+    ctx.response.streamed_call_ids = vec!["text_call_partial".to_string()];
+
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("length"),
+        0,
+        None,
+        None,
+        None,
+        Vec::new(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert!(
+        !target.exists(),
+        "a salvaged truncated text call must not execute"
+    );
+    let history = state.lock().await;
+    let result = history
+        .history
+        .iter()
+        .find_map(|message| message.tool_result.as_ref())
+        .expect("typed not-executed result");
+    assert_eq!(result.error_kind.as_deref(), Some("OutputLimit"));
+    assert!(result.retryable);
+    assert!(
+        history
+            .history
+            .iter()
+            .any(|message| message.content.contains("No tool ran"))
+    );
+}
+
+#[tokio::test]
 async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
     let state = Arc::new(Mutex::new(AppState::new()));
     {
@@ -5291,7 +5410,8 @@ fn test_adversarial_6_reasoning_recovery_eventually_forces_final() {
         reasoning_loop_recovery_action(u8::MAX),
         LoopRecoveryAction::ForceFinal
     );
-    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("exactly one mutating tool call"));
+    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("safe read-only tool"));
+    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("trustworthy target"));
 }
 
 #[test]

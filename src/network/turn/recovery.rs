@@ -36,69 +36,6 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
     "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
 }
 
-/// Whether the latest user request explicitly asks the agent to change the
-/// workspace. Restrict this to the latest user message so prior conversation
-/// turns cannot accidentally turn a read-only investigation into a mutation
-/// mandate.
-fn explicit_workspace_change_request(prompt: &str) -> bool {
-    let normalized = prompt.to_ascii_lowercase();
-    if [
-        "do not edit",
-        "don't edit",
-        "do not change",
-        "don't change",
-        "do not modify",
-        "don't modify",
-        "without changing",
-        "without editing",
-        "read-only",
-        "read only",
-        "review only",
-        "only inspect",
-        "just inspect",
-        "just review",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
-        || normalized.contains("how do i")
-        || normalized.contains("how can i")
-        || normalized.contains("how should i")
-        || normalized.contains("what should")
-        || normalized.contains("should we")
-    {
-        return false;
-    }
-
-    normalized
-        .split(|c: char| !c.is_ascii_alphabetic())
-        .filter(|word| !word.is_empty())
-        .any(|word| {
-            matches!(
-                word,
-                "add"
-                    | "apply"
-                    | "create"
-                    | "delete"
-                    | "edit"
-                    | "fix"
-                    | "implement"
-                    | "modify"
-                    | "move"
-                    | "patch"
-                    | "refactor"
-                    | "remove"
-                    | "rename"
-                    | "replace"
-                    | "rework"
-                    | "rewrite"
-                    | "update"
-                    | "write"
-                    | "change"
-                    | "changes"
-            )
-        })
-}
-
 const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
 
 fn explicit_external_action_request(prompt: &str) -> bool {
@@ -218,8 +155,8 @@ fn reasoning_loop_recovery_prompt(
 
 fn task_aware_recovery_prompt(
     history: &[ChatMessage],
-    made_edits: bool,
-    compiler_debugging: bool,
+    _made_edits: bool,
+    _compiler_debugging: bool,
     ordinary_prompt: &'static str,
 ) -> &'static str {
     let latest_user = history
@@ -227,17 +164,12 @@ fn task_aware_recovery_prompt(
         .enumerate()
         .rev()
         .find(|(_, message)| message.role == "user");
-    let explicit_change = latest_user
-        .as_ref()
-        .is_some_and(|(_, message)| explicit_workspace_change_request(&message.content));
     let outstanding_external_action = latest_user.is_some_and(|(index, message)| {
         explicit_external_action_request(&message.content)
             && !successful_external_action_after(history, index)
     });
     if outstanding_external_action {
         OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT
-    } else if explicit_change && !made_edits && !compiler_debugging {
-        super::super::WORKSPACE_CHANGE_LOOP_RECOVERY_PROMPT
     } else {
         ordinary_prompt
     }
@@ -478,15 +410,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_change_recovery_requires_mutation_or_focused_exit() {
+    fn explicit_change_recovery_allows_a_bounded_safe_step() {
         let history = vec![ChatMessage::new(
             "user",
             "The current state is clear; maybe we should rework stuff now.",
         )];
         let prompt = loop_recovery_prompt(&history, false, false);
-        assert!(prompt.contains("exactly one concrete, safe mutating tool call"));
-        assert!(prompt.contains("one focused question"));
-        assert!(prompt.contains("Do not inspect, search, reread"));
+        assert_eq!(prompt, LOOP_RECOVERY_PROMPT);
+        assert!(!prompt.contains("mutating tool call"));
     }
 
     #[test]
@@ -513,6 +444,8 @@ mod tests {
             reasoning_loop_recovery_prompt(&read_only_history, false, false),
             REASONING_LOOP_RECOVERY_PROMPT
         );
+        assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("safe read-only tool"));
+        assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("trustworthy target"));
 
         let change_history = vec![ChatMessage::new("user", "Please rework the parser.")];
         assert_eq!(
@@ -521,6 +454,15 @@ mod tests {
         );
         assert_eq!(
             loop_recovery_prompt(&change_history, true, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        let review_only = vec![ChatMessage::new(
+            "user",
+            "Review the proposed fix only; do not edit the workspace.",
+        )];
+        assert_eq!(
+            loop_recovery_prompt(&review_only, false, false),
             LOOP_RECOVERY_PROMPT
         );
     }
