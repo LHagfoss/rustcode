@@ -1,3 +1,8 @@
+## [v0.51.23](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.23) - 2026-09-09
+
+### Fixes
+- Fix Groq Compound compatibility by omitting unsupported thinking-control fields from generic provider requests.
+- Improve release CI handling for delayed required-check registration.
 ## [v0.51.22](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.22) - 2026-09-09
 
 ### Fixes
