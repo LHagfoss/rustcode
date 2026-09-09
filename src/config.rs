@@ -154,6 +154,14 @@ pub struct ModelProfile {
     /// response. Omitted profiles retain the safe four-call default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
+    /// Use a compact text-protocol tool menu for providers with small request
+    /// bodies, omitting long descriptions and MCP tool listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_tool_prompt: Option<bool>,
+    /// Client-only allowance for reasoning deltas from providers that expose
+    /// reasoning in streams but reject reasoning-control request fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_reasoning_budget: Option<u32>,
 }
 
 /// Provider-specific spelling for an output token limit.

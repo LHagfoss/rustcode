@@ -40,6 +40,7 @@ pub(crate) struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
     pub(crate) profile: ToolSchemaProfile,
+    pub(crate) compact_text_prompt: bool,
 }
 
 /// Deterministic provider-facing tool menu for the read-only inspection mode.
@@ -66,6 +67,7 @@ impl ToolSchemaPolicy {
             include_agent_tools,
             include_mcp_tools: true,
             profile: ToolSchemaProfile::Coding,
+            compact_text_prompt: false,
         }
     }
 
@@ -82,6 +84,7 @@ impl ToolSchemaPolicy {
             include_agent_tools: false,
             include_mcp_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
+            compact_text_prompt: false,
         }
     }
 
@@ -90,7 +93,21 @@ impl ToolSchemaPolicy {
             include_agent_tools: false,
             include_mcp_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
+            compact_text_prompt: false,
         }
+    }
+
+    pub(crate) fn root_for_mode_with_compact_prompt(
+        include_agent_tools: bool,
+        mode: crate::config::AgentMode,
+        compact_text_prompt: bool,
+    ) -> Self {
+        let mut policy = Self::root_for_mode(include_agent_tools, mode);
+        policy.compact_text_prompt = compact_text_prompt;
+        if compact_text_prompt {
+            policy.include_mcp_tools = false;
+        }
+        policy
     }
 }
 
@@ -1300,10 +1317,14 @@ If the request context names a skill, load it first. For a likely specialized wo
         if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
             continue;
         }
-        p.push_str(&format!(
-            "- {} | Args: {} | {}\n",
-            t.name, t.arguments, t.description
-        ));
+        if policy.compact_text_prompt {
+            p.push_str(&format!("- {} | Args: {}\n", t.name, t.arguments));
+        } else {
+            p.push_str(&format!(
+                "- {} | Args: {} | {}\n",
+                t.name, t.arguments, t.description
+            ));
+        }
     }
     if policy.include_mcp_tools {
         for (name, desc, schema) in collect_mcp_tools() {
@@ -1325,6 +1346,11 @@ If the request context names a skill, load it first. For a likely specialized wo
             - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
             - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
         );
+    }
+
+    if policy.compact_text_prompt {
+        p.push_str("\nUse the exact tool names and JSON argument shapes listed above.\n");
+        return p;
     }
 
     match protocol {
