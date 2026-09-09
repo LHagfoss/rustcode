@@ -1,3 +1,9 @@
+## [v0.51.24](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.24) - 2026-09-09
+
+### Features
+- Bound recovery context growth and preserve progressive tool reads.
+- Add request-prefix cache diagnostics and deterministic recovery decisions.
+- Reduce Groq request context overhead with compact tool prompts and provider error handling.
 ## [v0.51.23](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.23) - 2026-09-09
 
 ### Fixes
