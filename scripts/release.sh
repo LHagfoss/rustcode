@@ -750,6 +750,10 @@ wait_for_required_pr_checks() {
         if output="$(gh pr checks "$branch" --required \
             --json name,state,bucket,link 2>&1)"; then
             :
+        elif [[ "$output" == *"no required checks reported"* ]]; then
+            # GitHub returns this plain-text response briefly before the
+            # workflow check runs have registered on a newly created PR.
+            output='[]'
         elif ! jq -e . >/dev/null 2>&1 <<<"$output"; then
             error "Could not query required checks for $branch: $output"
             return 1
@@ -1172,11 +1176,11 @@ run_tests() {
             case "$mock_mode" in
                 delayed)
                     case "$mock_tick" in
-                        0) printf '%s' '[{"name":"test","state":"PENDING","bucket":"pending","link":""}]' ;;
+                        0) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
                         *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
                     esac ;;
                 failed) printf '%s' '[{"name":"test","state":"FAILURE","bucket":"fail","link":""}]' ;;
-                missing) printf '%s' '[]'; return 8 ;;
+                missing) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
                 api_error) printf '%s' 'not-json'; return 1 ;;
             esac
         }
