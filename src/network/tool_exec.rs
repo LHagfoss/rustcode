@@ -15,6 +15,8 @@ use super::{
 mod compiler_tests;
 #[path = "tool_exec/preview.rs"]
 mod preview;
+#[path = "tool_exec/replay.rs"]
+mod replay;
 #[path = "tool_exec/result.rs"]
 mod result;
 
@@ -657,6 +659,14 @@ pub(crate) async fn execute_tool_batch(
     for call in tool_calls {
         let name = &call.name;
         let args = &call.arguments;
+        let replay = {
+            let s = state.lock().await;
+            replay::successful_side_effect_replay(&s.history, call)
+        };
+        if let Some(result) = replay {
+            results.push(result);
+            continue;
+        }
         let live_key = {
             let mut s = state.lock().await;
             s.begin_live_tool_call(call.call_id.as_deref(), name, args)
