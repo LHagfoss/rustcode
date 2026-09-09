@@ -18,8 +18,8 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    RequestPrefixCache, attach_request_context_tail, inject_bootstrap_action_nudge,
-    inject_system_reminder, trim_msgs_to_budget,
+    PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail,
+    inject_bootstrap_action_nudge, inject_system_reminder, trim_msgs_to_budget,
 };
 
 #[path = "network/text.rs"]
@@ -356,6 +356,43 @@ pub(crate) fn push_or_replace_loop_warning(history: &mut Vec<ChatMessage>, text:
     } else {
         history.push(ChatMessage::new("system", text));
     }
+}
+
+/// Recovery guidance is a current-state hint, not durable task evidence. Keep
+/// only the latest hint for this logical user turn so repeated recovery cannot
+/// grow every subsequent request while assistant/tool history remains intact.
+pub(crate) fn push_or_replace_recovery_notice(history: &mut Vec<ChatMessage>, text: String) {
+    let is_recovery_notice = |content: &str| {
+        content.starts_with("[Evidence-based recovery:")
+            || content.starts_with("The previous tool action repeated")
+            || content.starts_with("[Your reasoning became repetitive")
+            || content.starts_with("[Replan required:")
+    };
+    let notice = history
+        .iter_mut()
+        .rev()
+        .take_while(|message| message.role != "user")
+        .find(|message| message.role == "system" && is_recovery_notice(&message.content));
+    if let Some(notice) = notice {
+        notice.content = text;
+    } else {
+        history.push(ChatMessage::new("system", text));
+    }
+}
+
+pub(crate) fn log_recovery_decision(ctx: &TurnContext, source: &str, decision: &str, reason: &str) {
+    crate::logger::operational_event(
+        "turn.recovery_decision",
+        serde_json::json!({
+            "round": ctx.budget.tool_rounds,
+            "source": source,
+            "decision": decision,
+            "reason": reason,
+            "loop_recovery_attempts": ctx.recovery.loop_recovery_attempts,
+            "reasoning_recovery_attempts": ctx.recovery.reasoning_recovery_attempts,
+            "no_progress_streak": ctx.progress.consecutive_no_progress,
+        }),
+    );
 }
 
 /// True when a mutating tool's result reflects real forward progress —
@@ -1229,6 +1266,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         &history_snapshot,
         history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref()),
     );
+    let rendered_history_messages = rendered_history.len();
 
     // Preserve the complete previous request before appending newly rendered
     // assistant/tool messages. A fresh runtime snapshot remains at the tail.
@@ -1323,6 +1361,40 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             cache.clear();
         }
     }
+
+    let cache_decision = prefix_cache
+        .as_deref()
+        .map(RequestPrefixCache::last_decision)
+        .unwrap_or(PrefixCacheDecision::Cold);
+
+    let prompt_bytes = serde_json::to_vec(&msgs).map_or(0, |payload| payload.len());
+    let runtime_tail_count = msgs
+        .iter()
+        .filter(|message| {
+            message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        })
+        .count();
+    crate::logger::operational_event(
+        "turn.context_diagnostics",
+        serde_json::json!({
+            "round": tool_rounds,
+            "prompt_bytes": prompt_bytes,
+            "prompt_messages": msgs.len(),
+            "rendered_history_messages": rendered_history_messages,
+            "runtime_tail_bytes": dynamic_context.len(),
+            "runtime_tail_count": runtime_tail_count,
+            "estimated_prompt_tokens": preflight.total_estimated_prompt,
+            "cache_decision": cache_decision.label(),
+            "cache_context_updates": prefix_cache
+                .as_deref()
+                .map(RequestPrefixCache::context_updates)
+                .unwrap_or_default(),
+            "hard_trimmed": dropped > 0,
+        }),
+    );
 
     Ok(msgs)
 }

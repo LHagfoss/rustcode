@@ -17,7 +17,8 @@ use super::super::{
     FORCE_ANSWER_PROMPT, LoopRecoveryAction, active_todo_checkpoint, cached_compiler_check,
     call_refs_for, compiler_diagnostic_fingerprint, completion_block_message,
     completion_claims_unapplied_work, failure_replan_message, is_mutating_tool,
-    loop_recovery_action_for, mutation_made_progress, push_or_replace_loop_warning,
+    log_recovery_decision, loop_recovery_action_for, mutation_made_progress,
+    push_or_replace_loop_warning, push_or_replace_recovery_notice,
     truncated_batch_summary_with_dropped, unanswered_call_results,
     unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
@@ -436,6 +437,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     LoopRecoveryAction::Recover => {
                         ctx.recovery.loop_recovery_attempts =
                             ctx.recovery.loop_recovery_attempts.saturating_add(1);
+                        log_recovery_decision(ctx, "tool_loop", "recover", "loop_detector_abort");
                         ctx.recovery.loop_detector.reset();
                         dbg_log!(
                             "Loop detector: abort after {} repeats — allowing bounded recovery turn",
@@ -455,7 +457,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             ctx.compiler.consecutive_diagnostics > 0
                                 || ctx.compiler.consecutive_error_gates > 0,
                         );
-                        s.history.push(ChatMessage::new("system", recovery_prompt));
+                        push_or_replace_recovery_notice(
+                            s.history.as_mut_vec(),
+                            recovery_prompt.to_string(),
+                        );
                         crate::config::save_history(&s.history);
                         s.clear_current_response();
                         s.status = AppStatus::Streaming;
@@ -466,6 +471,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         return ToolHandlingOutcome::Continue;
                     }
                     LoopRecoveryAction::ForceFinal => {
+                        log_recovery_decision(
+                            ctx,
+                            "tool_loop",
+                            "force_final",
+                            "loop_detector_abort",
+                        );
                         dbg_log!(
                             "Loop detector: abort after {} repeats — forcing wrap-up turn",
                             n
@@ -964,6 +975,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     cross_turn_target_files.push(target_file.to_string());
                 }
                 ctx.progress.last_reason = Some(assessment.reason);
+                crate::logger::operational_event(
+                    "turn.progress",
+                    serde_json::json!({
+                        "round": ctx.budget.tool_rounds,
+                        "tool": name,
+                        "meaningful": assessment.meaningful,
+                        "reason": assessment.reason.label(),
+                        "streak": assessment.streak,
+                        "replayed": metadata.replayed,
+                        "success": metadata.success,
+                    }),
+                );
                 if assessment.meaningful {
                     ctx.progress.consecutive_no_progress = 0;
                 } else if !assessment.suppress_stagnation {
@@ -1150,6 +1173,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.recovery.loop_recovery_attempts =
                             ctx.recovery.loop_recovery_attempts.saturating_add(1);
                         ctx.metrics.evidence_recoveries += 1;
+                        log_recovery_decision(ctx, "evidence", "recover", reason.label());
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();
                         let recovery_prompt = loop_recovery_prompt(
@@ -1158,10 +1182,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             ctx.compiler.consecutive_diagnostics > 0
                                 || ctx.compiler.consecutive_error_gates > 0,
                         );
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        push_or_replace_recovery_notice(
+                            s.history.as_mut_vec(),
                             format!("{evidence}\n{recovery_prompt}"),
-                        ));
+                        );
                         crate::config::save_history(&s.history);
                         s.clear_current_response();
                         s.status = AppStatus::Streaming;
@@ -1172,6 +1196,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         return ToolHandlingOutcome::Continue;
                     }
                     LoopRecoveryAction::ForceFinal => {
+                        log_recovery_decision(ctx, "evidence", "force_final", reason.label());
                         crate::logger::operational_event(
                             loop_detect::DIAG_RECOVERY_EXHAUSTED,
                             serde_json::json!({
@@ -1219,7 +1244,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 // different mutation method. The consecutive-failure budget
                 // remains intact as the hard backstop.
                 ctx.recovery.loop_detector.reset();
-                s.history.push(ChatMessage::new("system", replan));
+                push_or_replace_recovery_notice(s.history.as_mut_vec(), replan);
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;

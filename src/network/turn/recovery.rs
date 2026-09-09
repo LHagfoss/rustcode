@@ -228,7 +228,8 @@ pub(super) async fn handle_response_recovery(
     use super::super::loop_detect;
     use super::super::text::{self, strip_tool_call_syntax};
     use super::super::{
-        EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, reasoning_loop_recovery_action,
+        EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, log_recovery_decision,
+        push_or_replace_recovery_notice, reasoning_loop_recovery_action,
     };
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
@@ -304,6 +305,12 @@ pub(super) async fn handle_response_recovery(
             LoopRecoveryAction::Recover => {
                 ctx.recovery.reasoning_recovery_attempts =
                     ctx.recovery.reasoning_recovery_attempts.saturating_add(1);
+                log_recovery_decision(
+                    ctx,
+                    "reasoning_loop",
+                    "recover",
+                    response_finish_reason.unwrap_or("reasoning_loop"),
+                );
                 ctx.recovery.reasoning_recovery_pending = true;
                 ctx.recovery.reasoning_loop_detector.reset();
                 crate::logger::operational_event(
@@ -327,7 +334,10 @@ pub(super) async fn handle_response_recovery(
                     ctx.compiler.consecutive_diagnostics > 0
                         || ctx.compiler.consecutive_error_gates > 0,
                 );
-                s.history.push(ChatMessage::new("system", recovery_prompt));
+                push_or_replace_recovery_notice(
+                    s.history.as_mut_vec(),
+                    recovery_prompt.to_string(),
+                );
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
@@ -338,6 +348,12 @@ pub(super) async fn handle_response_recovery(
                 return ResponseRecoveryOutcome::Continue;
             }
             LoopRecoveryAction::ForceFinal => {
+                log_recovery_decision(
+                    ctx,
+                    "reasoning_loop",
+                    "force_final",
+                    response_finish_reason.unwrap_or("reasoning_loop"),
+                );
                 dbg_log!("Reasoning loop recovery exhausted — returning concise final response");
                 crate::logger::operational_event(
                     loop_detect::DIAG_RECOVERY_EXHAUSTED,
