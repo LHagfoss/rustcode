@@ -1,3 +1,8 @@
+## [v0.51.26](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.26) - 2026-09-09
+
+### Fixes
+- Bound repeated equivalent command-failure loops while preserving progressive reads, edits, compaction, and recovery.
+- Redact common credential assignments before tool output is persisted or shown to the model.
 ## [v0.51.25](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.25) - 2026-09-09
 
 ### Chores
