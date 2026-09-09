@@ -5,6 +5,21 @@ pub const MAX_CONTEXT_FRAGMENT_CHARS: usize = 16 * 1024;
 pub const MAX_CONTEXT_TAIL_CHARS: usize = 48 * 1024;
 const MAX_TOOL_CONTINUITY_CHARS: usize = 512;
 
+/// Immutable instruction inputs assembled fresh for every provider request.
+/// They are deliberately not persisted in conversation history: resume,
+/// retry, and compaction all reconstruct them from current configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RequestInstructions<'a> {
+    pub(crate) base: &'a str,
+    pub(crate) developer: Option<&'a str>,
+}
+
+impl<'a> RequestInstructions<'a> {
+    pub(crate) const fn new(base: &'a str, developer: Option<&'a str>) -> Self {
+        Self { base, developer }
+    }
+}
+
 /// Provider-independent history representation. Persisted `ChatMessage`
 /// values remain backward-compatible, while requests are normalized through
 /// explicit variants so tool calls and results cannot silently change roles.
@@ -165,10 +180,24 @@ pub(crate) fn to_messages(
     history: &[ChatMessage],
     system_prompt: impl Into<String>,
 ) -> Vec<serde_json::Value> {
+    let system_prompt = system_prompt.into();
+    to_messages_with_instructions(history, RequestInstructions::new(&system_prompt, None))
+}
+
+pub(crate) fn to_messages_with_instructions(
+    history: &[ChatMessage],
+    instructions: RequestInstructions<'_>,
+) -> Vec<serde_json::Value> {
     let mut messages = vec![serde_json::json!({
         "role": "system",
-        "content": system_prompt.into(),
+        "content": instructions.base,
     })];
+    if let Some(developer) = instructions.developer.filter(|value| !value.is_empty()) {
+        messages.push(serde_json::json!({
+            "role": "developer",
+            "content": developer,
+        }));
+    }
     let mut first_user = true;
 
     // A message the provider gave call ids for is replayed as the structured
@@ -277,15 +306,27 @@ pub(crate) fn to_messages(
                 "content": final_content,
             })
         }
-        HistoryEntry::System(content) |
-        HistoryEntry::CompactionSummary(content) | HistoryEntry::Lifecycle(content) => serde_json::json!({
-            "role": "system",
-            "content": content,
-        }),
+        HistoryEntry::System(content) => runtime_notice("historical_system", content),
+        HistoryEntry::CompactionSummary(content) => runtime_notice("compaction", content),
+        HistoryEntry::Lifecycle(content) => runtime_notice("lifecycle", content),
         });
     }
 
     messages
+}
+
+fn runtime_notice(kind: &str, content: &str) -> serde_json::Value {
+    let mut bounded = content.to_string();
+    if bounded.len() > MAX_CONTEXT_FRAGMENT_CHARS {
+        bounded.truncate(bounded.floor_char_boundary(MAX_CONTEXT_FRAGMENT_CHARS));
+        bounded.push_str("\n[runtime notice truncated]");
+    }
+    serde_json::json!({
+        "role": "user",
+        "content": format!(
+            "<rustcode_runtime_notice provenance=\"{kind}\">\n{bounded}\n</rustcode_runtime_notice>"
+        ),
+    })
 }
 
 /// Provider message for one history entry when the transcript carries call ids,
@@ -595,6 +636,196 @@ mod tests {
         assert_eq!(
             messages[3]["content"],
             "<tool_result>\ngrep: found a match\n</tool_result>"
+        );
+    }
+
+    #[test]
+    fn immutable_instructions_are_typed_once_and_runtime_notices_keep_order() {
+        let history = vec![
+            ChatMessage::new("user", "inspect"),
+            ChatMessage::new("system", "[Loop warning: use existing evidence]"),
+            ChatMessage::new(
+                "tool",
+                "run_command: verified\n[Output truncated: 4 bytes total]",
+            ),
+            ChatMessage::new(
+                "system",
+                format!(
+                    "{}\ncompleted earlier work",
+                    crate::network::compaction::SUMMARY_MARKER
+                ),
+            ),
+        ];
+
+        let messages = to_messages_with_instructions(
+            &history,
+            RequestInstructions::new("base", Some("developer")),
+        );
+
+        assert_eq!(
+            messages[0],
+            serde_json::json!({"role": "system", "content": "base"})
+        );
+        assert_eq!(
+            messages[1],
+            serde_json::json!({"role": "developer", "content": "developer"})
+        );
+        assert_eq!(
+            messages.iter().filter(|m| m["content"] == "base").count(),
+            1
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m["content"] == "developer")
+                .count(),
+            1
+        );
+        assert_eq!(messages[2]["content"], "inspect");
+        assert_eq!(messages[3]["role"], "user");
+        assert!(
+            messages[3]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Loop warning")
+        );
+        assert!(
+            messages[4]["content"]
+                .as_str()
+                .unwrap()
+                .contains("verified")
+        );
+        assert!(
+            messages[4]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Output truncated")
+        );
+        assert_eq!(messages[5]["role"], "user");
+        assert!(
+            messages[5]["content"]
+                .as_str()
+                .unwrap()
+                .contains("completed earlier work")
+        );
+    }
+
+    #[test]
+    fn retry_and_resume_reconstruct_the_same_single_instruction_prefix() {
+        let stored = vec![
+            ChatMessage::new("system", "[Session History Summary]\nprior work"),
+            ChatMessage::new("user", "continue"),
+            ChatMessage::new("system", "[Recovery: answer from the evidence]"),
+        ];
+        let serialized = serde_json::to_string(&stored).unwrap();
+        let resumed: Vec<ChatMessage> = serde_json::from_str(&serialized).unwrap();
+        let instructions = RequestInstructions::new("base", Some("project rules"));
+
+        let first = to_messages_with_instructions(&stored, instructions);
+        let retry = to_messages_with_instructions(&stored, instructions);
+        let resume = to_messages_with_instructions(&resumed, instructions);
+
+        assert_eq!(first, retry);
+        assert_eq!(first, resume);
+        assert_eq!(first.iter().filter(|m| m["role"] == "system").count(), 1);
+        assert_eq!(first.iter().filter(|m| m["role"] == "developer").count(), 1);
+        assert_eq!(
+            first
+                .iter()
+                .filter(|m| m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("Recovery:")))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn immutable_instruction_inputs_render_exactly_once() {
+        let history = vec![
+            ChatMessage::new("system", "[Loop warning: inspect a different range]"),
+            ChatMessage::new("user", "continue"),
+        ];
+        let messages = to_messages_with_instructions(
+            &history,
+            RequestInstructions::new("BASE-RULE", Some("DEVELOPER-RULE")),
+        );
+        let rendered = serde_json::to_string(&messages).unwrap();
+
+        assert_eq!(rendered.matches("BASE-RULE").count(), 1);
+        assert_eq!(rendered.matches("DEVELOPER-RULE").count(), 1);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "developer");
+        assert_eq!(messages[1]["content"], "DEVELOPER-RULE");
+        assert_eq!(messages[2]["role"], "user");
+        assert!(
+            messages[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("provenance=\"lifecycle\"")
+        );
+    }
+
+    #[test]
+    fn compaction_and_truncation_guidance_are_bounded_runtime_context() {
+        let history = vec![
+            ChatMessage::new(
+                "system",
+                format!(
+                    "{}\n{}",
+                    crate::network::compaction::SUMMARY_MARKER,
+                    "x".repeat(MAX_CONTEXT_FRAGMENT_CHARS + 100)
+                ),
+            ),
+            ChatMessage::new("system", "[tool_result_incomplete: request the next range]"),
+            ChatMessage::new("tool", "view_file: successful source evidence"),
+        ];
+        let messages = to_messages_with_instructions(
+            &history,
+            RequestInstructions::new("base", Some("developer")),
+        );
+        let rendered = serde_json::to_string(&messages).unwrap();
+
+        assert!(rendered.contains("provenance=\\\"compaction\\\""));
+        assert!(rendered.contains("runtime notice truncated"));
+        assert!(rendered.contains("tool_result_incomplete"));
+        assert!(rendered.contains("successful source evidence"));
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn reconstructed_requests_do_not_accumulate_instruction_history() {
+        let history = vec![
+            ChatMessage::new("system", "[Session resumed]"),
+            ChatMessage::new("user", "finish the review"),
+        ];
+        let instructions = RequestInstructions::new("base", Some("developer"));
+
+        let retry = to_messages_with_instructions(&history, instructions);
+        let after_resume = to_messages_with_instructions(&history, instructions);
+
+        assert_eq!(retry, after_resume);
+        assert_eq!(
+            retry
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .count(),
+            1
+        );
+        assert_eq!(
+            retry
+                .iter()
+                .filter(|message| message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("Session resumed")))
+                .count(),
+            1
         );
     }
 

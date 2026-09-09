@@ -2776,6 +2776,30 @@ fn test_align_alternating_messages() {
 }
 
 #[test]
+fn typed_instruction_prefix_survives_provider_alignment() {
+    let raw = vec![
+        serde_json::json!({"role": "system", "content": "base"}),
+        serde_json::json!({"role": "developer", "content": "project"}),
+        serde_json::json!({"role": "user", "content": "task"}),
+    ];
+
+    let aligned = align_alternating_messages(raw);
+
+    assert_eq!(
+        aligned[0],
+        serde_json::json!({"role": "system", "content": "base"})
+    );
+    assert_eq!(
+        aligned[1],
+        serde_json::json!({"role": "developer", "content": "project"})
+    );
+    assert_eq!(
+        aligned[2],
+        serde_json::json!({"role": "user", "content": "task"})
+    );
+}
+
+#[test]
 fn test_build_dynamic_context_tail() {
     let todo = |content: &str, status: &str| crate::app::TodoItem {
         content: content.to_string(),
@@ -2952,6 +2976,46 @@ async fn round_budget_notice_reaches_the_provider_request() {
         message["content"]
             .as_str()
             .is_some_and(|content| content.contains(&notice))
+    }));
+}
+
+#[tokio::test]
+async fn request_assembly_separates_project_instructions_from_runtime_notices() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::write(root.path().join("AGENTS.md"), "DEVELOPER-PROVENANCE-RULE")
+        .expect("write instructions fixture");
+    let mut app = AppState::new();
+    app.workspace_root = Some(root.path().to_path_buf());
+    app.history.push(ChatMessage::new(
+        "system",
+        "[Loop warning: RUNTIME-PROVENANCE-GUIDANCE]",
+    ));
+    app.history
+        .push(ChatMessage::new("user", "inspect the workspace"));
+
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &Arc::new(Mutex::new(app)),
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+    let rendered = serde_json::to_string(&messages).unwrap();
+
+    assert_eq!(rendered.matches("DEVELOPER-PROVENANCE-RULE").count(), 1);
+    assert_eq!(rendered.matches("RUNTIME-PROVENANCE-GUIDANCE").count(), 1);
+    assert!(messages.iter().any(|message| {
+        message["role"] == "developer"
+            && message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("DEVELOPER-PROVENANCE-RULE"))
+    }));
+    assert!(messages.iter().any(|message| {
+        message["role"] == "user"
+            && message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("provenance=\"lifecycle\""))
     }));
 }
 

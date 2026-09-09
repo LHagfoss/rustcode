@@ -113,7 +113,9 @@ fn is_user_turn_boundary(message: &serde_json::Value) -> bool {
             .get("content")
             .and_then(|content| content.as_str())
             .is_some_and(|content| {
-                content.starts_with("<tool_result>") || content.starts_with("<rustcode_context>")
+                content.starts_with("<tool_result>")
+                    || content.starts_with("<rustcode_context>")
+                    || content.starts_with("<rustcode_runtime_notice ")
             })
 }
 

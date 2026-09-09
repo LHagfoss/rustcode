@@ -629,10 +629,10 @@ pub(crate) fn align_alternating_messages(
     }
 
     let mut msgs = Vec::new();
-    let mut system_content = String::new();
+    let mut instruction_prefix: Vec<serde_json::Value> = Vec::new();
 
-    // 1. Merge the leading system messages into the prompt, and keep any later
-    //    one where it happened, as a user turn.
+    // 1. Preserve leading base/developer instructions as distinct typed inputs,
+    //    and keep any later system entry where it happened, as a user turn.
     //
     //    A harness note earns its meaning from its position: "this action has
     //    repeated 5 times" answers the call above it. Hoisting it into the
@@ -644,12 +644,24 @@ pub(crate) fn align_alternating_messages(
     for msg in raw_msgs {
         if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
             if role == "system" && still_leading {
-                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-                    if !system_content.is_empty() {
-                        system_content.push_str("\n\n");
+                if let Some(previous) = instruction_prefix.last_mut()
+                    && previous.get("role").and_then(|value| value.as_str()) == Some("system")
+                {
+                    let content = msg
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
+                    if let Some(previous_content) = previous
+                        .get_mut("content")
+                        .and_then(|value| value.as_str().map(str::to_string))
+                    {
+                        previous["content"] = format!("{previous_content}\n\n{content}").into();
                     }
-                    system_content.push_str(content);
+                } else {
+                    instruction_prefix.push(msg);
                 }
+            } else if role == "developer" && still_leading {
+                instruction_prefix.push(msg);
             } else if role == "system" {
                 let content = msg
                     .get("content")
@@ -664,13 +676,7 @@ pub(crate) fn align_alternating_messages(
         }
     }
 
-    let mut final_msgs = Vec::new();
-    if !system_content.is_empty() {
-        final_msgs.push(serde_json::json!({
-            "role": "system",
-            "content": system_content,
-        }));
-    }
+    let mut final_msgs = instruction_prefix;
 
     if msgs.is_empty() {
         return final_msgs;
@@ -1012,7 +1018,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         volatile_usage,
         volatile_quota,
         volatile_window,
-        mut context_section,
+        context_section,
         system_prompt,
         skill_metadata,
         native_schema_policy,
@@ -1047,7 +1053,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
             None => workspace_root
                 .as_deref()
-                .map(crate::context::environment_context_at)
+                .map(crate::context::environment_context_without_instructions_at)
                 .unwrap_or_else(crate::context::environment_context),
         };
         let protocol = s.active_tool_protocol();
@@ -1093,16 +1099,11 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         )
     };
 
-    // ContextSnapshot deliberately emits only environment deltas after the
-    // first request. Project instructions are different: they are durable
-    // constraints, so keep the current bounded document available after
-    // compaction/resume without putting it into every summary message.
-    if let Some(instructions) = current_snapshot.project_instructions()
-        && !context_section.contains("# Project instructions")
-    {
-        context_section.push_str("\n\n");
-        context_section.push_str(&instructions);
-    }
+    // Project instructions are immutable developer input for this request,
+    // not volatile environment context and not persisted lifecycle history.
+    // Reconstructing them here makes retries, compaction, and resume inject
+    // exactly one current copy.
+    let developer_instructions = current_snapshot.project_instructions();
 
     if image_fallback::has_image_markers(&history_snapshot) {
         let active_profile = active_profile.ok_or_else(|| {
@@ -1206,7 +1207,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let rendered_history = history::to_messages(&history_snapshot, system_prompt.clone());
+    let rendered_history = history::to_messages_with_instructions(
+        &history_snapshot,
+        history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref()),
+    );
 
     // Preserve the complete previous request before appending newly rendered
     // assistant/tool messages. A fresh runtime snapshot remains at the tail.
@@ -1233,8 +1237,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .unwrap_or_default();
         (native_tool_schemas, s.active_context_budget())
     };
+    let instruction_budget_text = developer_instructions
+        .as_deref()
+        .map(|developer| format!("{system_prompt}\n\n{developer}"))
+        .unwrap_or_else(|| system_prompt.clone());
     let preflight = compaction::calculate_preflight_budget(
-        &system_prompt,
+        &instruction_budget_text,
         &native_tool_schemas,
         &history_snapshot,
         &dynamic_context,

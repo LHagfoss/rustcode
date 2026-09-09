@@ -174,6 +174,14 @@ pub fn environment_context() -> String {
 /// date twice and later requests can see it advance without rebuilding this
 /// stable block.
 pub fn environment_context_at(root: &Path) -> String {
+    environment_context_at_with_instructions(root, true)
+}
+
+pub(crate) fn environment_context_without_instructions_at(root: &Path) -> String {
+    environment_context_at_with_instructions(root, false)
+}
+
+fn environment_context_at_with_instructions(root: &Path, include_instructions: bool) -> String {
     let mut out = String::new();
     out.push_str("# Environment\n\n");
 
@@ -194,7 +202,7 @@ pub fn environment_context_at(root: &Path) -> String {
         out.push_str(&tree);
     }
 
-    if let Some(agent_doc) = load_agent_doc(&cwd) {
+    if include_instructions && let Some(agent_doc) = load_agent_doc(&cwd) {
         out.push_str("\n# Project instructions (AGENTS.md)\n\n");
         out.push_str(&agent_doc);
         out.push('\n');
