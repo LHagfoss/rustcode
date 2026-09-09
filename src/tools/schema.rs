@@ -306,6 +306,32 @@ pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     out
 }
 
+pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
+    let Ok(registry) = crate::mcp::get_mcp_registry().lock() else {
+        return false;
+    };
+    let mut clients = registry.values().cloned().collect::<Vec<_>>();
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+    clients.iter().any(|client| {
+        client.get_tools().is_ok_and(|tools| {
+            tools.iter().any(|tool| {
+                let Some(raw) = tool.get("name").and_then(Value::as_str) else {
+                    return false;
+                };
+                let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
+                let matches_name =
+                    name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients));
+                matches_name
+                    && tool
+                        .get("annotations")
+                        .and_then(|annotations| annotations.get("readOnlyHint"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            })
+        })
+    })
+}
+
 pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
