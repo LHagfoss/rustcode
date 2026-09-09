@@ -60,13 +60,25 @@ Interactive, headless, and ACP consumers have separate adapters:
 ## Build and CI boundaries
 
 Changes under `crates/` and CI helper scripts trigger the required Linux test
-job and macOS/Windows portability checks. Release artifacts are built for:
+and lint jobs, plus advisory macOS/Windows portability checks. The required
+test and lint jobs run in parallel so merges do not wait for their combined
+compile time. Release artifacts are built for:
 
 - Linux x86_64
 - macOS Apple Silicon (ARM64)
 - Windows x86_64
 
 Intel macOS is intentionally not part of the release matrix.
+
+The `Build` workflow runs for version tags and manual dispatches only. A push
+to `main` does not rebuild all release targets; the tag build is the single
+source of published artifacts. Use manual dispatch on a branch when a release
+binary needs validation without creating a release.
+
+The release script performs a lightweight local preflight, opens a release PR,
+waits only for required PR checks, and then tags the merged commit. Use
+`--full-verify` when a complete local test run is desired before opening the
+release PR.
 
 Use [`scripts/bench-build-boundaries.md`](../scripts/bench-build-boundaries.md)
 to measure clean, warm, and focused-edit Cargo rebuild costs without cleaning a

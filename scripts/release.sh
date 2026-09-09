@@ -28,6 +28,7 @@ FROM_PHASE=""
 MERGE_COMMIT_OVERRIDE=""
 CI_TIMEOUT=1500
 BUILD_TIMEOUT=1800
+FULL_VERIFY=false
 RELEASE_BRANCH=""
 ORIGINAL_BRANCH=""
 CURRENT_VERSION=""
@@ -143,6 +144,8 @@ Optional:
                        with --from-phase tag.
   --merge-commit SHA   Merge commit to tag when resuming at (or after) the
                        tag phase and it cannot be resolved from the PR.
+  --full-verify        Run the complete local test suite before creating the
+                       release PR. The default relies on required PR checks.
   --ci-timeout SECS    Max seconds to wait for release-PR CI (default: 1500)
   --build-timeout SECS Max seconds to wait for the tag build workflow
                        (default: 1800)
@@ -176,6 +179,7 @@ parse_args() {
                 ;;
             --dry-run)    DRY_RUN=true; shift ;;
             --yes)        YES=true; shift ;;
+            --full-verify) FULL_VERIFY=true; shift ;;
             --patch|--minor|--major)
                 if [[ -n "$BUMP_PART" ]]; then
                     die "Only one of --patch, --minor, --major may be given."
@@ -600,7 +604,7 @@ phase_show_diff() {
 
 # ── Phase: Verification ──────────────────────────────────────────────────────
 phase_verify() {
-    info "Phase 6: Running verification checks"
+    info "Phase 6: Running release preflight checks"
 
     if $DRY_RUN; then
         info "[dry-run] Would verify every workspace package is version $VERSION"
@@ -610,11 +614,12 @@ phase_verify() {
 
     local checks=(
         "cargo fmt --check"
-        "cargo check --tests"
-        "cargo check --tests --locked"
-        "cargo test --locked"
+        "cargo metadata --locked --no-deps --format-version 1 >/dev/null"
         "git diff --check"
     )
+    if $FULL_VERIFY; then
+        checks+=("cargo check --tests --locked" "cargo test --locked")
+    fi
 
     local cmd
     for cmd in "${checks[@]}"; do
@@ -629,7 +634,11 @@ To resume: fix the reported issues and re-run: scripts/release.sh --version $VER
         fi
     done
 
-    info "All verification checks passed."
+    if $FULL_VERIFY; then
+        info "Full local verification passed."
+    else
+        info "Release preflight passed; required PR checks will run the full test suite."
+    fi
 }
 
 # Files the release is allowed to touch. Everything else must be committed
@@ -698,12 +707,12 @@ phase_create_pr() {
 - Updated CHANGELOG.md with release notes.
 
 ### Verification
-The following checks passed before this PR:
+Release preflight passed locally:
 - \`cargo fmt --check\`
-- \`cargo check --tests\`
-- \`cargo check --tests --locked\`
-- \`cargo test --locked\`
+- \`cargo metadata --locked --no-deps --format-version 1\`
 - \`git diff --check\`
+
+The required PR checks run the full test suite and correctness lint gate.
 
 ### Artifacts
 This release will produce binaries for:
@@ -729,39 +738,42 @@ EOF
 }
 
 # ── Phase: Wait for checks & merge ───────────────────────────────────────────
-# A freshly pushed PR may not have registered checks yet. Poll the CI workflow
-# for its exact head, rather than treating "no checks" as failure (or success).
-# The same deadline covers registration and completion; failed runs never pass.
-wait_for_pr_ci() {
-    local head_sha="$1"
-    local max_attempts="${2:-120}" interval="${3:-15}"
-    local attempt=0 run="" run_id="" status="" conclusion=""
-    local start=$SECONDS
-    while [[ "$attempt" -lt "$max_attempts" ]]; do
-        if ! run="$(gh run list --workflow ci.yml --event pull_request \
-            --commit "$head_sha" --limit 1 --json databaseId,status,conclusion \
-            --jq '.[0] // empty')"; then
-            error "Could not query CI for PR head $head_sha."
+# Branch protection requires only the fast blocking checks. Poll those checks
+# directly so advisory native-platform jobs cannot delay a merge. The same
+# deadline covers registration and completion; failed checks never pass.
+wait_for_required_pr_checks() {
+    local branch="$1"
+    local max_seconds="${2:-1500}" interval="${3:-5}"
+    local start=$SECONDS output=""
+
+    while (( SECONDS - start < max_seconds )); do
+        if output="$(gh pr checks "$branch" --required \
+            --json name,state,bucket,link 2>&1)"; then
+            :
+        elif ! jq -e . >/dev/null 2>&1 <<<"$output"; then
+            error "Could not query required checks for $branch: $output"
             return 1
         fi
-        if [[ -n "$run" ]]; then
-            run_id="$(printf '%s' "$run" | jq -r '.databaseId')"
-            status="$(printf '%s' "$run" | jq -r '.status')"
-            conclusion="$(printf '%s' "$run" | jq -r '.conclusion')"
-            if [[ "$status" == "completed" ]]; then
-                if [[ "$conclusion" == "success" ]]; then
-                    info "CI run $run_id passed for PR head $head_sha."
-                    return 0
-                fi
-                error "CI run $run_id concluded $conclusion. Inspect: gh run view $run_id --log-failed"
-                return 1
-            fi
+
+        if [[ -n "$output" ]] && jq -e \
+            'length > 0 and any(.[]; .bucket == "fail" or .bucket == "cancel")' \
+            >/dev/null 2>&1 <<<"$output"; then
+            error "A required check failed for $branch: $output"
+            return 1
         fi
-        attempt=$((attempt + 1))
-        info "Waiting for CI on $head_sha ($attempt/$max_attempts; ${status:-not registered}; elapsed $((SECONDS - start))s)…"
-        if [[ "$attempt" -lt "$max_attempts" ]]; then sleep "$interval"; fi
+
+        if [[ -n "$output" ]] && jq -e \
+            'length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' \
+            >/dev/null 2>&1 <<<"$output"; then
+            info "Required PR checks passed for $branch."
+            return 0
+        fi
+
+        info "Waiting for required PR checks on $branch (elapsed $((SECONDS - start))s of ${max_seconds}s)…"
+        sleep "$interval"
     done
-    error "Timed out waiting for CI on PR head $head_sha after $((SECONDS - start))s."
+
+    error "Timed out waiting for required PR checks on $branch after $((SECONDS - start))s."
     return 1
 }
 
@@ -789,17 +801,10 @@ phase_wait_and_merge() {
 
     local pr_head
     pr_head="$(gh pr view "$RELEASE_BRANCH" --json headRefOid --jq '.headRefOid')"
-    # Budget CI_TIMEOUT seconds with 15s polls (upper bound, not exact).
-    local ci_attempts=$(( (CI_TIMEOUT + 14) / 15 ))
-    if [[ -z "$pr_head" ]] || ! wait_for_pr_ci "$pr_head" "$ci_attempts" 15; then
-        die "Release CI did not pass for PR #${pr_number} within ${CI_TIMEOUT}s; merge aborted."
-    fi
-
-    info "Waiting for required checks on PR #${pr_number}…"
-    if ! gh pr checks "$RELEASE_BRANCH" --watch --fail-fast; then
+    if [[ -z "$pr_head" ]] || ! wait_for_required_pr_checks "$RELEASE_BRANCH" "$CI_TIMEOUT" 5; then
         local pr_url
         pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
-        die "PR checks failed. Inspect the PR at: $pr_url"
+        die "Required PR checks failed or timed out. Inspect the PR at: $pr_url"
     fi
 
     info "All checks passed. Merging PR #${pr_number}…"
@@ -1157,38 +1162,37 @@ run_tests() {
     fi
 
     # Test 7: No real GitHub calls: exercise delayed registration, completion,
-    # failed checks, API errors, and the deadline against an exact head SHA.
-    info "Test 7: Exact-head CI registration and completion gate"
+    # failed checks, API errors, and the deadline for required checks.
+    info "Test 7: Required PR check gate"
     if (
         mock_tick=0 mock_mode=delayed
         sleep() { mock_tick=$((mock_tick + 1)); }
         gh() {
-            [[ "$*" == *"--workflow ci.yml --event pull_request --commit tested-head"* ]] || return 1
+            [[ "$*" == *"pr checks test-branch --required --json name,state,bucket,link"* ]] || return 1
             case "$mock_mode" in
                 delayed)
                     case "$mock_tick" in
-                        0) return 0 ;;
-                        1) printf '%s' '{"databaseId":42,"status":"in_progress","conclusion":""}' ;;
-                        *) printf '%s' '{"databaseId":42,"status":"completed","conclusion":"success"}' ;;
+                        0) printf '%s' '[{"name":"test","state":"PENDING","bucket":"pending","link":""}]' ;;
+                        *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
                     esac ;;
-                failed) printf '%s' '{"databaseId":42,"status":"completed","conclusion":"failure"}' ;;
-                missing) return 0 ;;
-                api_error) return 1 ;;
+                failed) printf '%s' '[{"name":"test","state":"FAILURE","bucket":"fail","link":""}]' ;;
+                missing) printf '%s' '[]'; return 8 ;;
+                api_error) printf '%s' 'not-json'; return 1 ;;
             esac
         }
-        wait_for_pr_ci tested-head 3 0 >/dev/null || exit 1
-        [[ "$mock_tick" -eq 2 ]] || exit 1
+        wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 1 ]] || exit 1
         mock_mode=failed
-        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
+        if wait_for_required_pr_checks test-branch 3 0 >/dev/null 2>&1; then exit 1; fi
         mock_mode=missing mock_tick=0
-        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
-        [[ "$mock_tick" -eq 2 ]] || exit 1
+        if wait_for_required_pr_checks test-branch 0 0 >/dev/null 2>&1; then exit 1; fi
+        [[ "$mock_tick" -eq 0 ]] || exit 1
         mock_mode=api_error
-        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
+        if wait_for_required_pr_checks test-branch 3 0 >/dev/null 2>&1; then exit 1; fi
     ); then
-        info "  ✓ CI waits for registration and success, rejects failures and times out"
+        info "  ✓ required checks wait for registration and success, reject failures and time out"
     else
-        error "  ✗ CI registration/completion gate regression"
+        error "  ✗ required check gate regression"
         failed=$((failed + 1))
     fi
 

@@ -67,8 +67,6 @@ jobs:
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
-              with:
-                  components: rustfmt
 
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
@@ -88,6 +86,40 @@ jobs:
                   ffmpeg -version
                   ffprobe -version
 
+            - name: Run tests
+              # These tests depend on user-installed skills or runner-specific
+              # ripgrep output. Keep them in the local suite, but exclude them
+              # from the clean-runner gate until they have portable fixtures.
+              run: >-
+                  cargo test --locked --
+                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
+                  --skip grep_stops_at_byte_cap_for_large_matching_lines
+
+    lint:
+        # Keep linting separate from the required test job so the expensive
+        # compiler work runs in parallel. Add `lint` to main branch protection
+        # alongside `test` after this workflow is deployed.
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: lint
+        runs-on: ubuntu-24.04
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: linux-lint
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
             - name: Check formatting
               run: cargo fmt --all -- --check
 
@@ -100,19 +132,7 @@ jobs:
             - name: Clippy correctness gate
               # The codebase has an established warning baseline. Keep those
               # warnings visible locally while denying only correctness lints.
-              # Tests are compiled and exercised by the next step. Lint the
-              # shipped binary here to avoid compiling the large test harness
-              # once for Clippy and again for rustc.
               run: cargo clippy --locked -- -A warnings -D clippy::correctness
-
-            - name: Run tests
-              # These tests depend on user-installed skills or runner-specific
-              # ripgrep output. Keep them in the local suite, but exclude them
-              # from the clean-runner gate until they have portable fixtures.
-              run: >-
-                  cargo test --locked --
-                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
-                  --skip grep_stops_at_byte_cap_for_large_matching_lines
 
     portability:
         name: ${{ matrix.name }} portability coverage
@@ -156,8 +176,6 @@ jobs:
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
-              with:
-                  components: rustfmt
 
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2

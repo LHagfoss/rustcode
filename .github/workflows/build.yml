@@ -5,7 +5,6 @@ name: Build
 
 on:
     push:
-        branches: [main]
         tags: ["v*"]
     workflow_dispatch:
 
@@ -67,8 +66,6 @@ jobs:
               with:
                   key: ${{ matrix.target }}
 
-            # Tag caches are isolated from other tag refs. The main-branch run
-            # below seeds the default-branch scope for release builds.
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
 
@@ -82,7 +79,7 @@ jobs:
                   # ThinLTO makes the Windows MSVC release link disproportionately slow.
                   # Keep the optimized release profile, but skip LTO for this platform.
                   CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
-              run: cargo build --release --target ${{ matrix.target }}
+              run: cargo build --locked --release --target ${{ matrix.target }}
 
             - name: Show compiler cache stats
               if: always()
