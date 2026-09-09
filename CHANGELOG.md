@@ -1,3 +1,9 @@
+## [v0.51.22](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.22) - 2026-09-09
+
+### Fixes
+- Prevent repeated equivalent side-effecting tool calls from replaying within the same user turn while keeping reads and failed calls retryable.
+- Make recovery less forceful: bounded read-only inspection and diagnostics remain valid, and truncated tool-call responses fail closed with actionable retry results.
+- Preserve typed instruction provenance so base/developer instructions are reconstructed once and runtime/tool evidence remains correctly ordered.
 ## [v0.51.21](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.21) - 2026-09-08
 
 ### Fixes

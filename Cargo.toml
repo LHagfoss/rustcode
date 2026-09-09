@@ -1,6 +1,6 @@
 [package]
 name = "rustcode"
-version = "0.51.21"
+version = "0.51.22"
 edition = "2024"
 
 [workspace]
