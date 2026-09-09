@@ -219,6 +219,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             _ => None,
         })
         .collect::<Vec<_>>();
+    let response_was_output_truncated = response_events.iter().any(|event| {
+        matches!(
+            event,
+            events::AgentEvent::Finished(events::FinishReason::Length)
+        )
+    });
     let parsed_tool_calls = parsed_tool_calls
         .into_iter()
         .map(|mut call| {
@@ -241,7 +247,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     // the response, leaving arguments silently truncated. Fail every call in
     // this response closed and persist the complete assistant/call + result
     // transaction so the next request can safely re-issue a smaller call.
-    if response_finish_reason == Some("length") && !parsed_tool_calls.is_empty() {
+    if response_was_output_truncated && !parsed_tool_calls.is_empty() {
         let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
         let mut s = state.lock().await;
         let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
