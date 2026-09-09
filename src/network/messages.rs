@@ -144,9 +144,32 @@ pub(crate) struct RequestPrefixCache {
     stable_request: Vec<serde_json::Value>,
     context: String,
     context_updates: u8,
+    last_decision: PrefixCacheDecision,
 }
 
 const MAX_CONTEXT_DELTAS: u8 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PrefixCacheDecision {
+    #[default]
+    Cold,
+    Reused,
+    RebasedHistory,
+    RebasedContext,
+    Invalidated,
+}
+
+impl PrefixCacheDecision {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Reused => "reused",
+            Self::RebasedHistory => "rebased_history",
+            Self::RebasedContext => "rebased_context",
+            Self::Invalidated => "invalidated",
+        }
+    }
+}
 
 fn context_delta(previous: &str, current: &str) -> String {
     let previous = previous.lines().collect::<std::collections::HashSet<_>>();
@@ -166,6 +189,7 @@ impl RequestPrefixCache {
         rendered_history: &[serde_json::Value],
         context: &str,
     ) -> Vec<serde_json::Value> {
+        let had_cached_request = !self.stable_request.is_empty();
         let history_advanced = rendered_history.len() > self.rendered_history.len();
         let prefix_is_intact = history_advanced
             && rendered_history.starts_with(self.rendered_history.as_slice())
@@ -177,6 +201,15 @@ impl RequestPrefixCache {
             messages
         } else {
             rendered_history.to_vec()
+        };
+        self.last_decision = if prefix_is_intact {
+            PrefixCacheDecision::Reused
+        } else if !had_cached_request {
+            PrefixCacheDecision::Cold
+        } else if self.context_updates >= MAX_CONTEXT_DELTAS {
+            PrefixCacheDecision::RebasedContext
+        } else {
+            PrefixCacheDecision::RebasedHistory
         };
         if prefix_is_intact {
             let delta = context_delta(&self.context, context);
@@ -213,11 +246,20 @@ impl RequestPrefixCache {
         self.context = context.to_string();
     }
 
+    pub(crate) fn last_decision(&self) -> PrefixCacheDecision {
+        self.last_decision
+    }
+
+    pub(crate) fn context_updates(&self) -> u8 {
+        self.context_updates
+    }
+
     pub(crate) fn clear(&mut self) {
         self.rendered_history.clear();
         self.stable_request.clear();
         self.context.clear();
         self.context_updates = 0;
+        self.last_decision = PrefixCacheDecision::Invalidated;
     }
 }
 
@@ -256,7 +298,9 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
 
 #[cfg(test)]
 mod request_prefix_tests {
-    use super::{MAX_CONTEXT_DELTAS, RequestPrefixCache, attach_request_context_tail};
+    use super::{
+        MAX_CONTEXT_DELTAS, PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail,
+    };
 
     fn history(contents: &[(&str, &str)]) -> Vec<serde_json::Value> {
         let mut messages = vec![serde_json::json!({
@@ -285,6 +329,7 @@ mod request_prefix_tests {
             ("tool", "network.rs contents"),
         ]);
         let second_request = cache.compose(&second_history, "runtime snapshot two");
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
 
         let rendered = serde_json::to_string(&second_request).unwrap();
         assert!(!rendered.contains("runtime snapshot one"));
@@ -330,6 +375,7 @@ mod request_prefix_tests {
 
         let compacted = history(&[("user", "compacted prompt")]);
         let request = cache.compose(&compacted, "fresh context");
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::RebasedHistory);
         let rendered = serde_json::to_string(&request).unwrap();
 
         assert!(!rendered.contains("old prompt"));
@@ -346,6 +392,7 @@ mod request_prefix_tests {
         cache.record(first_history, &first_request, "old context");
 
         cache.clear();
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::Invalidated);
         let compacted = history(&[("user", "compacted prompt")]);
         let request = cache.compose(&compacted, "fresh context");
         let rendered = serde_json::to_string(&request).unwrap();
@@ -390,6 +437,11 @@ mod request_prefix_tests {
             rendered_history.push(serde_json::json!({"role": "assistant", "content": round}));
             let context = format!("stable\nusage: {round}");
             request = cache.compose(&rendered_history, &context);
+            if round % (usize::from(MAX_CONTEXT_DELTAS) + 1) == 0 {
+                assert_eq!(cache.last_decision(), PrefixCacheDecision::RebasedContext);
+            } else {
+                assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
+            }
             cache.record(rendered_history.clone(), &request, &context);
         }
 

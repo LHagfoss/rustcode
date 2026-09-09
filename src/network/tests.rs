@@ -2715,6 +2715,34 @@ fn loop_warnings_are_coalesced_within_a_user_turn() {
     assert_eq!(warnings[0].content, "[Loop warning: updated]");
 }
 
+#[test]
+fn recovery_notices_are_coalesced_without_dropping_tool_history() {
+    let mut history = vec![ChatMessage::new("user", "inspect and fix")];
+    for round in 0..100 {
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("tool call round {round}"),
+        ));
+        history.push(ChatMessage::new("tool", format!("result {round}")));
+        push_or_replace_recovery_notice(
+            &mut history,
+            format!("[Evidence-based recovery: round {round}]\nUse a different step."),
+        );
+    }
+
+    let recovery_count = history
+        .iter()
+        .filter(|message| message.content.starts_with("[Evidence-based recovery:"))
+        .count();
+    assert_eq!(recovery_count, 1);
+    assert_eq!(history.len(), 202, "assistant/tool evidence remains intact");
+    assert!(history.last().unwrap().content.contains("result 99"));
+    assert!(
+        history.iter().any(|message| message.content
+            == "[Evidence-based recovery: round 99]\nUse a different step.")
+    );
+}
+
 // Regression: hoisting every system message into the prompt filed each loop
 // warning 12k characters away from the call it was about.
 #[test]
