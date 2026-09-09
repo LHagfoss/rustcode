@@ -1096,10 +1096,25 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
         let delegation_active = s.delegation_active;
-        let mut system_prompt = s
-            .prompt_cache
-            .system_prompt(delegation_active, protocol, agent_mode)
-            .to_string();
+        let compact_tool_prompt = s
+            .active_model_profile()
+            .as_ref()
+            .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
+        let mut system_prompt = if compact_tool_prompt {
+            crate::tools::tool_system_prompt_for_policy(
+                crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+                    delegation_active,
+                    agent_mode,
+                    true,
+                ),
+                protocol,
+                agent_mode,
+            )
+        } else {
+            s.prompt_cache
+                .system_prompt(delegation_active, protocol, agent_mode)
+                .to_string()
+        };
         let max_mutating_calls = s
             .active_model_profile()
             .as_ref()
@@ -1108,10 +1123,13 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
         let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
-            Some(crate::tools::ToolSchemaPolicy::root_for_mode(
-                delegation_active,
-                agent_mode,
-            ))
+            Some(
+                crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+                    delegation_active,
+                    agent_mode,
+                    compact_tool_prompt,
+                ),
+            )
         } else {
             None
         };

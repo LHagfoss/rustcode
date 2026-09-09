@@ -1709,7 +1709,10 @@ pub async fn stream_request(
     } else if thinking_mode == ThinkingMode::Disabled {
         None
     } else {
-        profile.as_ref().map(|p| p.context_budget().thinking_budget)
+        profile
+            .as_ref()
+            .and_then(|p| p.client_reasoning_budget)
+            .or_else(|| profile.as_ref().map(|p| p.context_budget().thinking_budget))
     };
 
     let (tool_protocol, native_tool_schemas, mcp_selection) = {
@@ -2158,6 +2161,25 @@ pub async fn stream_request(
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
                                 stream_trace.record(line_buf.len(), &val);
+                                if let Some(error) = val.get("error") {
+                                    let status = error
+                                        .get("status_code")
+                                        .and_then(|value| value.as_u64())
+                                        .and_then(|value| u16::try_from(value).ok());
+                                    let detail = error
+                                        .get("message")
+                                        .and_then(|value| value.as_str())
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| error.to_string());
+                                    return Err(StreamFailure {
+                                        kind: StreamFailureKind::ProviderError,
+                                        status,
+                                        detail: Some(detail),
+                                        bytes_received: stream_bytes_received,
+                                        events_received: stream_events_received,
+                                        partial_event_bytes: 0,
+                                    });
+                                }
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
                                     && !choices.is_empty() {
                                         let provider_stop = choices[0]

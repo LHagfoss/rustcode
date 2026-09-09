@@ -128,10 +128,18 @@ pub(super) async fn collect_round(
     stream_buffer.lock().await.reset();
     let (api_base_url, model_name, request_schema_policy, request_session_id) = {
         let s = state.lock().await;
+        let compact_tool_prompt = s
+            .active_model_profile()
+            .as_ref()
+            .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
         (
             s.api_base_url.clone(),
             s.model_name.clone(),
-            crate::tools::ToolSchemaPolicy::root_for_mode(s.delegation_active, s.agent_mode),
+            crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+                s.delegation_active,
+                s.agent_mode,
+                compact_tool_prompt,
+            ),
             s.active_session_id.clone(),
         )
     };
