@@ -1,3 +1,7 @@
+## [v0.51.25](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.25) - 2026-09-09
+
+### Chores
+- Maintenance release; no functional changes since v0.51.24.
 ## [v0.51.24](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.24) - 2026-09-09
 
 ### Features
