@@ -56,19 +56,32 @@ fn apply_profile_generation_options(
     profile: Option<&crate::config::ModelProfile>,
     thinking_mode: ThinkingMode,
 ) {
+    // `chat_template_kwargs` is an oMLX/Qwen extension, not part of the
+    // OpenAI-compatible request contract. Profiles that do not explicitly
+    // configure thinking must leave both thinking controls untouched so
+    // providers such as Groq do not reject an otherwise ordinary request.
+    let has_thinking_control = profile.is_some_and(|p| p.enable_thinking.is_some());
+    let has_chat_template_controls =
+        profile.is_some_and(|p| p.enable_thinking.is_some() || p.preserve_thinking.is_some());
+
     if thinking_mode == ThinkingMode::Disabled
         || profile.is_some_and(|p| p.enable_thinking == Some(false))
     {
-        payload["enable_thinking"] = serde_json::json!(false);
-        // oMLX exposes reasoning controls through OpenAI-compatible
-        // `chat_template_kwargs`; keep the top-level field for servers that
-        // implement the Qwen extension directly.
-        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(false);
+        if has_thinking_control {
+            payload["enable_thinking"] = serde_json::json!(false);
+        }
+        if has_chat_template_controls {
+            payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(false);
+        }
         return;
     }
     if thinking_mode == ThinkingMode::BoundedRecovery {
-        payload["enable_thinking"] = serde_json::json!(true);
-        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(true);
+        if has_thinking_control {
+            payload["enable_thinking"] = serde_json::json!(true);
+        }
+        if has_chat_template_controls {
+            payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(true);
+        }
         if profile.is_some_and(|p| p.supports_reasoning_effort_wire()) {
             payload["reasoning_effort"] = serde_json::json!("low");
         }
@@ -79,7 +92,9 @@ fn apply_profile_generation_options(
     }
     if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
         payload["enable_thinking"] = serde_json::json!(enable_thinking);
-        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(enable_thinking);
+        if has_chat_template_controls {
+            payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(enable_thinking);
+        }
     }
     if let Some(effort) = profile
         .filter(|p| p.supports_reasoning_effort_wire())
@@ -99,6 +114,9 @@ fn apply_profile_sampling_options(
     payload: &mut serde_json::Value,
     profile: Option<&crate::config::ModelProfile>,
 ) {
+    let has_chat_template_controls =
+        profile.is_some_and(|p| p.enable_thinking.is_some() || p.preserve_thinking.is_some());
+
     if let Some(temperature) = profile.and_then(|p| p.temperature) {
         payload["temperature"] = serde_json::json!(temperature);
     }
@@ -114,7 +132,9 @@ fn apply_profile_sampling_options(
     if let Some(force_sampling) = profile.and_then(|p| p.force_sampling) {
         payload["force_sampling"] = serde_json::json!(force_sampling);
     }
-    if let Some(preserve_thinking) = profile.and_then(|p| p.preserve_thinking) {
+    if has_chat_template_controls
+        && let Some(preserve_thinking) = profile.and_then(|p| p.preserve_thinking)
+    {
         payload["chat_template_kwargs"]["preserve_thinking"] = serde_json::json!(preserve_thinking);
     }
 }
@@ -746,6 +766,21 @@ mod tests {
         assert!(payload.get("enable_thinking").is_none());
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn provider_without_thinking_controls_omits_disabled_thinking_fields() {
+        let profile = crate::config::ModelProfile {
+            url: "https://api.groq.com/openai/v1/chat/completions".to_string(),
+            model: "groq/compound".to_string(),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Disabled);
+
+        assert!(payload.get("enable_thinking").is_none());
+        assert!(payload.get("chat_template_kwargs").is_none());
     }
 
     #[test]
