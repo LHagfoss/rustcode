@@ -97,8 +97,8 @@ jobs:
 
     lint:
         # Keep linting separate from the required test job so the expensive
-        # compiler work runs in parallel. Add `lint` to main branch protection
-        # alongside `test` after this workflow is deployed.
+        # compiler work runs in parallel. This context is required alongside
+        # `test` by main branch protection.
         needs: changes
         if: needs.changes.outputs.code == 'true'
         name: lint
