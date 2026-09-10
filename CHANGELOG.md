@@ -1,3 +1,8 @@
+## [v0.51.34](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.34) - 2026-09-10
+
+### Fixes
+- Make `view_file` completeness explicit so complete reads are not mistaken for truncated output and reread in a recovery loop.
+- Preserve clear distinctions between complete requested ranges and genuinely capped reads.
 ## [v0.51.33](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.33) - 2026-09-10
 
 ### Fixes

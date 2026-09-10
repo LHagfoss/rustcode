@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-loop-detect"
-version = "0.51.33"
+version = "0.51.34"
 edition = "2024"
 
 [dependencies]
