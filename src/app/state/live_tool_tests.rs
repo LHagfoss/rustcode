@@ -110,6 +110,28 @@ fn cleanup_removes_all_live_calls_without_touching_history() {
 }
 
 #[test]
+fn active_turn_projection_cleanup_removes_stale_cancelled_state() {
+    let mut state = AppState::new();
+    state.replace_current_response("stale response");
+    state.begin_live_tool_call(None, "grep", &serde_json::json!({"pattern": "old"}));
+    state.running_tools.push("grep".to_owned());
+    state.generation_start_time = Some(std::time::Instant::now());
+    state.stream_tracker = Some(super::super::StreamTracker::new());
+    state
+        .history
+        .push(super::ChatMessage::new("user", "keep me"));
+
+    state.clear_active_turn_projection();
+
+    assert!(state.current_response.is_empty());
+    assert!(state.live_tool_calls.is_empty());
+    assert!(state.running_tools.is_empty());
+    assert!(state.stream_tracker.is_none());
+    assert!(state.generation_start_time.is_none());
+    assert_eq!(state.history.len(), 1);
+}
+
+#[test]
 fn tool_confirmation_selection_moves_between_approve_and_deny() {
     let mut state = AppState::new();
     assert_eq!(state.tool_confirmation_selected, 0);

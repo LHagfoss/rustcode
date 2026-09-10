@@ -106,7 +106,11 @@ impl TurnContext {
         Self {
             budget: BudgetState {
                 tool_rounds: 0,
-                max_tool_rounds: max_tool_rounds.max(1),
+                max_tool_rounds: if max_tool_rounds == 0 {
+                    usize::MAX
+                } else {
+                    max_tool_rounds
+                },
                 tokens_used: 0,
                 budget_stopped: None,
                 round_budget_notice_sent: false,

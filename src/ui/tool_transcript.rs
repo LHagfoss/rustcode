@@ -63,6 +63,10 @@ pub(super) fn format_pi_tool_action(
         _ => crate::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_case(name)),
     };
 
+    if let Some(target) = crate::app::activity::exploration_tool_parameters(name, args, home_path) {
+        return (action_label, target);
+    }
+
     let target_arg = match name_lower.as_str() {
         "view_file"
         | "viewfile"
@@ -147,25 +151,17 @@ pub(super) fn format_pi_tool_action(
         "remember" | "forget_memory" => args
             .get("key")
             .and_then(|v| v.as_str())
-            .unwrap_or("?")
-            .to_string(),
+            .map(|v| crate::app::activity::sanitize_tool_parameter(v, 100))
+            .unwrap_or_else(|| "?".to_owned()),
         "use_skill" => args
             .get("name")
             .or_else(|| args.get("skill"))
             .or_else(|| args.get("skill_name"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "spawn_agent" => args
-            .get("task")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "send_agent" => args
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+            .map(|v| crate::app::activity::sanitize_tool_parameter(v, 100))
+            .unwrap_or_default(),
+        "spawn_agent" => "agent task".to_owned(),
+        "send_agent" => "agent message".to_owned(),
         "wait_agent" | "cancel_agent" => args
             .get("id")
             .map(|value| {
@@ -175,25 +171,8 @@ pub(super) fn format_pi_tool_action(
                     .unwrap_or_else(|| value.to_string())
             })
             .unwrap_or_default(),
-        "set_goal" => args
-            .get("goal")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "ask_question" => {
-            if let Some(q) = args.get("question").and_then(|v| v.as_str()) {
-                q.to_string()
-            } else if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
-                q_arr
-                    .first()
-                    .and_then(|q| q.get("question"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                String::new()
-            }
-        }
+        "set_goal" => "goal".to_owned(),
+        "ask_question" => "question".to_owned(),
         "manage_task" => {
             let action = args
                 .get("Action")
@@ -237,6 +216,7 @@ pub(super) fn format_generic_tool_args(args: &serde_json::Value) -> String {
 
     let mut parts = Vec::new();
     for (k, v) in obj {
+        let key_lower = k.to_ascii_lowercase();
         if k == "CodeContent"
             || k == "ReplacementContent"
             || k == "content"
@@ -244,12 +224,21 @@ pub(super) fn format_generic_tool_args(args: &serde_json::Value) -> String {
             || k == "Code"
             || k == "toolSummary"
             || k == "toolAction"
+            || key_lower.contains("prompt")
+            || key_lower.contains("password")
+            || key_lower.contains("secret")
+            || key_lower.contains("token")
+            || key_lower.contains("credential")
+            || key_lower.contains("authorization")
         {
             continue;
         }
         let val_str = match v {
             serde_json::Value::String(s) => {
-                let first_line = s.lines().next().unwrap_or("").trim();
+                let first_line = crate::app::activity::sanitize_tool_parameter(
+                    s.lines().next().unwrap_or("").trim(),
+                    30,
+                );
                 if first_line.chars().count() > 30 {
                     format!("\"{}...\"", first_line.chars().take(27).collect::<String>())
                 } else {

@@ -202,20 +202,16 @@ impl ToolExecutionOutput {
 pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
     crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE;
 
-/// Absolute ceiling on calls from one response, whatever their kind. Reads are
-/// cheap and safe to fan out — searching six paths at once is one thought, not
-/// six — so they are bounded only by this backstop against runaway generation.
-pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 32;
-
 /// Cut an over-eager batch down to the calls that may run this round, returning
 /// the kept calls and the calls that were dropped.
 ///
-/// Read-only calls are retained throughout the bounded provider batch. The
+/// Read-only calls are retained throughout the provider batch. The
 /// mutation budget limits only mutating calls (see [`is_read_only_call`]), so
 /// a later read — or a read-only shell inspection such as `git status` — is
-/// not lost merely because an earlier mutation used the budget. The absolute
-/// call ceiling still bounds every batch, and order among retained calls is
-/// kept.
+/// not lost merely because an earlier mutation used the budget. Order among
+/// retained calls is kept. The root orchestrator still executes exactly one
+/// call per model round; this helper also serves consumers that need to retain
+/// the complete parsed response.
 ///
 /// A control-plane call must execute alone, so it is either the entire kept
 /// batch — when it leads — or the boundary where the retained prefix stops.
@@ -230,9 +226,8 @@ pub fn partition_tool_batch(
     if calls.first().is_some_and(is_control) {
         keep[0] = true;
     } else {
-        let limit = calls.len().min(MAX_TOOL_CALLS_PER_RESPONSE);
         let mut mutating = 0;
-        for (index, call) in calls[..limit].iter().enumerate() {
+        for (index, call) in calls.iter().enumerate() {
             if is_control(call) {
                 break;
             }
@@ -271,13 +266,6 @@ pub fn truncate_tool_batch(
 /// intentionally permissive while parsing, but execution must be strict and
 /// fail closed when the model emits an unknown tool or malformed arguments.
 pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Result<(), String> {
-    if calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
-        return Err(format!(
-            "too many tool calls in one response ({}; maximum is {}); chain related shell operations inside one run_command and emit the next action after receiving results",
-            calls.len(),
-            MAX_TOOL_CALLS_PER_RESPONSE
-        ));
-    }
     let mut seen = std::collections::HashSet::new();
     validate_control_plane_batch(calls)?;
 

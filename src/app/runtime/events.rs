@@ -79,7 +79,7 @@ impl AppRuntime {
                 let mut state = self.app_state.lock().await;
                 state.pending_queue.clear();
                 state.background_turn_context = None;
-                state.clear_live_tool_calls();
+                state.clear_active_turn_projection();
                 state.status = AppStatus::Idle;
                 state.request_redraw();
                 Ok(AppRunControl::Continue)

@@ -379,6 +379,16 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         ));
     }
 
+    if matches!(
+        activity.kind,
+        ActivityKind::Working | ActivityKind::RunningTool
+    ) {
+        spans.push(Span::styled(
+            " · esc interrupt",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+
     spans.push(Span::raw(" "));
     Line::from(spans)
 }
@@ -553,8 +563,25 @@ pub(super) fn render_input(
     }
 
     let text_area_height = input_inner.height;
+    let visible_height = text_area_height as usize;
+    let cursor_row = cursor_dy as usize;
+    let scroll_start = if visible_height == 0 {
+        0
+    } else {
+        cursor_row.saturating_sub(visible_height.saturating_sub(1))
+    };
+    let visible_lines = if visible_height == 0 {
+        Vec::new()
+    } else {
+        lines
+            .into_iter()
+            .skip(scroll_start)
+            .take(visible_height)
+            .collect::<Vec<_>>()
+    };
+    let cursor_dy = cursor_dy.saturating_sub(scroll_start as u16);
     let text_area = input_inner;
-    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL()));
+    let paragraph = Paragraph::new(visible_lines).style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(paragraph, text_area);
 
     if inner_width > 0 && !show_picker {
@@ -619,18 +646,7 @@ pub(super) fn render_composer_footer(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     };
-    let interrupt_hint = if state.waiting_for_background_terminal() {
-        Some("esc to interrupt")
-    } else if matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools().is_empty()
-    {
-        Some("esc interrupt")
-    } else {
-        None
-    };
-    let right = interrupt_hint
-        .map(|hint| format!("{hint} · {remaining}% context left  "))
-        .unwrap_or_else(|| format!("{remaining}% context left  "));
+    let right = format!("{remaining}% context left  ");
     let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let left = fit_to_width(
         &left_content,

@@ -159,7 +159,6 @@ fn apply_api_native_tools(
 const RECOVERY_MAX_TOKENS: u32 = 1024;
 const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
 const MAX_INVALID_ARGUMENT_PREVIEW_BYTES: usize = 1024;
-const MAX_TOOL_CALL_INDEX: usize = 127;
 const MAX_PROVIDER_TRACE_EVENTS: usize = 256;
 const MAX_PROVIDER_TRACE_BYTES: usize = 64 * 1024;
 const PROVIDER_TRACE_METADATA_RESERVE: usize = 4096;
@@ -436,7 +435,6 @@ impl ToolAccumulatorSet {
     /// deliberately fails closed instead of guessing that unrelated fragments
     /// belong to one JSON document.
     fn resolve(&mut self, index: Option<usize>, id: Option<&str>) -> usize {
-        let index = index.map(|index| index.min(MAX_TOOL_CALL_INDEX));
         let call_index = index
             .and_then(|index| self.by_index.get(&index).copied())
             .or_else(|| id.and_then(|id| self.by_id.get(id).copied()))
@@ -464,7 +462,7 @@ impl ToolAccumulatorSet {
         let call_index = self.resolve(index, id);
         let acc = &mut self.calls[call_index];
         if let Some(index) = index {
-            acc.index = Some(index.min(MAX_TOOL_CALL_INDEX));
+            acc.index = Some(index);
         }
         if acc.id.is_empty() {
             if let Some(id) = id.filter(|id| !id.is_empty()) {
@@ -2112,9 +2110,7 @@ pub async fn stream_request(
 
     let mut accumulators = ToolAccumulatorSet::default();
     let mut tool_argument_limit_reached = false;
-    let mut fences = ToolFenceCounter::default();
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
-    let runaway_limit = crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
 
     dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
@@ -2327,13 +2323,6 @@ pub async fn stream_request(
                                                     super::stream::ProviderFinalAnswerState::Terminal;
                                             }
                                         }
-                                        let runaway = fences.push(&chunk) > runaway_limit
-                                            || accumulators
-                                                .calls
-                                                .iter()
-                                                .filter(|acc| !acc.name.is_empty())
-                                                .count()
-                                                > runaway_limit;
                                         if !chunk.is_empty() {
                                             let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
                                             let mut s = state.lock().await;
@@ -2371,19 +2360,6 @@ pub async fn stream_request(
                                             }
                                         }
                                         if reasoning_loop_cut || reasoning_budget_cut {
-                                            line_buf.clear();
-                                            break;
-                                        }
-                                        if runaway {
-                                            dbg_log!(
-                                                "stream_request: past {} tool calls in one response — cutting the stream",
-                                                runaway_limit
-                                            );
-                                            crate::logger::operational_event(
-                                                "stream.runaway_cut",
-                                                serde_json::json!({ "limit": runaway_limit }),
-                                            );
-                                            accumulators.calls.truncate(runaway_limit);
                                             line_buf.clear();
                                             break;
                                         }

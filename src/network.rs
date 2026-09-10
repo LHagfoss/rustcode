@@ -261,7 +261,9 @@ pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit>
     // focused failure guards get a chance to act first. This remains the hard
     // final backstop for a model that keeps producing novel but unproductive
     // actions which evade the more specific deterministic signals.
-    if ctx.budget.tool_rounds >= ctx.budget.max_tool_rounds {
+    if ctx.budget.max_tool_rounds != usize::MAX
+        && ctx.budget.tool_rounds >= ctx.budget.max_tool_rounds
+    {
         return Some(TurnBudgetLimit::ToolRounds(ctx.budget.tool_rounds));
     }
     None

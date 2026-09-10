@@ -116,6 +116,9 @@ pub(crate) fn hydrate_explicit_verification_from_history(
 /// background wakeup. Keep the checkpoint count explicit: the notice can
 /// remain in history after subsequent rounds have consumed more budget.
 pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> {
+    if ctx.budget.max_tool_rounds == usize::MAX {
+        return None;
+    }
     let remaining = ctx
         .budget
         .max_tool_rounds

@@ -8,7 +8,9 @@ pub use rustcode_core::{AgentMode, ToolProtocol};
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
-pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 40;
+/// Zero means no fixed round ceiling. Turns still terminate on context,
+/// token, cancellation, and progress/recovery safety budgets.
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 0;
 pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 /// Tool rounds should be short and action-oriented. Reasoning models often
 /// spend their entire completion allowance thinking before emitting a tool

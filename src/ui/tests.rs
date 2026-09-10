@@ -772,6 +772,19 @@ fn tool_path_formatting_uses_captured_snapshot_home() {
 }
 
 #[test]
+fn committed_exploration_summary_matches_live_safe_parameters() {
+    let args = serde_json::json!({
+        "path": "/workspace/src/lib.rs",
+        "start_line": 10,
+        "end_line": 20,
+        "content": "secret source must not be shown"
+    });
+    let (_, rendered) = super::format_pi_tool_action("view_file", &args, Some("/workspace"));
+    assert_eq!(rendered, "~/src/lib.rs (lines 10-20)");
+    assert!(!rendered.contains("secret"));
+}
+
+#[test]
 fn persisted_edit_result_resolves_tool_name_without_previous_call() {
     let result = "replace_file_content: successfully replaced target_content\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n```";
     let tool_name = super::resolve_tool_result_name(None, Some("replace_file_content"), result);
@@ -2375,7 +2388,7 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
 
     assert!(!status.contains("Tokens/s"), "{status}");
     assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
-    assert!(footer.contains("esc interrupt"), "{footer}");
+    assert!(status.contains("esc interrupt"), "{status}");
 }
 
 #[test]
@@ -2444,7 +2457,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     let line = super::activity_status_line(&state.render_snapshot(), false).to_string();
 
     assert!(line.contains("Working"));
-    assert!(!line.contains("esc interrupt"));
+    assert!(line.contains("esc interrupt"));
     assert!(!line.contains("tool_calls"));
     assert!(!line.contains("Bash"));
     assert!(!line.contains("cargo test"));
@@ -3291,7 +3304,7 @@ fn live_tail_uses_formatted_working_status() {
         .collect::<String>();
 
     assert!(text.contains("• Working"));
-    assert!(!text.contains("esc interrupt"));
+    assert!(text.contains("esc interrupt"));
     assert!(!text.contains("Working..."));
 }
 
@@ -3878,6 +3891,10 @@ fn count_input_lines_accounts_for_prompt_indent() {
     // Next char triggers wrap to line 2
     assert_eq!(super::count_input_lines("12345678", 10), 1);
     assert_eq!(super::count_input_lines("123456789", 10), 2);
+    assert_eq!(
+        super::count_input_lines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj", 80),
+        10
+    );
 }
 
 #[test]

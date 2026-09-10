@@ -621,6 +621,16 @@ impl AppState {
         }
     }
 
+    /// Clear all render-only state left by a cancelled or interrupted turn.
+    pub(crate) fn clear_active_turn_projection(&mut self) {
+        self.clear_current_response();
+        self.clear_live_tool_calls();
+        self.running_tools.clear();
+        self.stream_tracker = None;
+        self.generation_start_time = None;
+        self.request_redraw();
+    }
+
     pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
         self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
         self.request_redraw();
