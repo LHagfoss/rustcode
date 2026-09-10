@@ -2029,6 +2029,42 @@ fn test_tool_signature_buckets_full_reads() {
 }
 
 #[test]
+fn test_tool_signature_normalizes_equivalent_shell_reads() {
+    let view = serde_json::json!({"path": "js/main.js", "start_line": 1, "end_line": 40});
+    let sed = serde_json::json!({"command": "sed -n '1,40p' js/main.js"});
+    let awk = serde_json::json!({"command": "awk 'NR>=1 && NR<=40' js/main.js"});
+    let unrelated = serde_json::json!({"command": "sed -n '41,80p' js/main.js"});
+
+    assert_eq!(
+        tool_signature("view_file", &view),
+        tool_signature("run_command", &sed)
+    );
+    assert_eq!(
+        tool_signature("run_command", &sed),
+        tool_signature("run_command", &awk)
+    );
+    assert_ne!(
+        tool_signature("run_command", &sed),
+        tool_signature("run_command", &unrelated)
+    );
+}
+
+#[test]
+fn shell_file_reads_are_repeatable_read_only_calls() {
+    for command in [
+        "cat js/main.js",
+        "sed -n '1,40p' js/main.js",
+        "awk 'NR>=1 && NR<=40' js/main.js",
+    ] {
+        let args = serde_json::json!({"command": command});
+        assert!(
+            loop_detect::is_read_only_call("run_command", &args),
+            "expected read-only classification for {command}"
+        );
+    }
+}
+
+#[test]
 fn test_is_read_only_tool() {
     assert!(is_read_only_tool("view_file"));
     assert!(is_read_only_tool("grep"));

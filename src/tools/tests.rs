@@ -1340,6 +1340,42 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     );
 }
 
+#[test]
+fn complete_view_file_results_force_progress() {
+    let prompt = tool_system_prompt(
+        false,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+
+    for required in [
+        "complete results are authoritative",
+        "do not reread them",
+        "edit or verify next",
+    ] {
+        assert!(prompt.contains(required), "missing {required:?}: {prompt}");
+    }
+}
+
+#[test]
+fn manual_preview_port_guidance_honors_user_control() {
+    let prompt = tool_system_prompt(
+        false,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+
+    for required in [
+        "For manual previews",
+        "use the user's exact port",
+        "do not start/probe/fallback",
+        "let them run it after verification",
+        "do not start a server merely to inspect a static app",
+    ] {
+        assert!(prompt.contains(required), "missing {required:?}: {prompt}");
+    }
+}
+
 // Regression: the JSON format must tell the model to make one call per
 // response, while the parser remains able to recover every call in a batch so
 // the orchestration layer can close the unexecuted calls safely.

@@ -643,6 +643,13 @@ pub(crate) fn path_mtime(raw_path: &str) -> Option<std::time::SystemTime> {
 
 /// A canonical key identifying "the same call" for the repeat guard.
 pub(crate) fn tool_signature(name: &str, args: &serde_json::Value) -> String {
+    if let Some(target) = crate::network::loop_detect::inspection_target(name, args) {
+        return format!("inspection:{target}");
+    }
+    if crate::network::loop_detect::is_read_only_call(name, args) {
+        let (_, category) = crate::network::loop_detect::signatures(name, args);
+        return format!("inspection:{category}");
+    }
     let key = match name {
         // Bucket full/default reads together so paging can't bypass the guard.
         "view_file" => {

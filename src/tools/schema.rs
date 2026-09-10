@@ -1250,7 +1250,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
 - Issue exactly one tool call per response, including read-only inspection, and wait for its result before issuing the next call. This preserves progressive reads, multi-step edits, and recovery without speculative batching.\n\
-- Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; do not retrieve the same range again with `cat`, `sed`, or `awk`.\n\
+- Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; complete results are authoritative, so do not reread them—edit or verify next. For manual previews, use the user's exact port, do not start/probe/fallback, and let them run it after verification; do not start a server merely to inspect a static app.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Prefer the smallest focused sequence.\n\
 - Run focused checks and cover boundaries for complex logic.\n\
