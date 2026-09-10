@@ -1174,6 +1174,92 @@ async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
     );
 }
 
+#[tokio::test]
+async fn multi_call_response_executes_one_and_closes_remaining_call_ids() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        vec![
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_first".to_string(),
+                tool_name: "get_time".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_second".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "Cargo.toml"}),
+            },
+        ],
+    )
+    .await;
+
+    let state = state.lock().await;
+    assert_eq!(ctx.metrics.tool_calls, 1);
+    let assistant = state
+        .history
+        .iter()
+        .find(|message| message.role == "assistant" && !message.tool_calls.is_empty())
+        .expect("the complete model call list is persisted");
+    assert_eq!(
+        assistant
+            .tool_calls
+            .iter()
+            .map(|call| call.id.as_str())
+            .collect::<Vec<_>>(),
+        ["call_first", "call_second"]
+    );
+
+    let results = state
+        .history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].tool_call_id.as_deref(), Some("call_first"));
+    assert!(
+        results[0]
+            .tool_result
+            .as_ref()
+            .is_some_and(|result| result.success)
+    );
+    assert_eq!(results[1].tool_call_id.as_deref(), Some("call_second"));
+    let deferred = results[1].tool_result.as_ref().expect("deferred result");
+    assert!(!deferred.success);
+    assert_eq!(deferred.error_kind.as_deref(), Some("Internal"));
+    assert!(
+        results[1]
+            .content
+            .contains("not executed in this model round")
+    );
+
+    let messages = history::to_messages(&state.history, "system");
+    let rendered_ids = messages
+        .iter()
+        .filter_map(|message| message.get("tool_call_id").and_then(|id| id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered_ids, ["call_first", "call_second"]);
+}
+
 #[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {

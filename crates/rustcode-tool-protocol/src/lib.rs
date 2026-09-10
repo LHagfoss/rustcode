@@ -237,8 +237,9 @@ pub fn find_closing_tool_fence(after_tag: &str) -> (usize, usize) {
 }
 
 fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
-    // Walk every ```tool fence, not just the first, so a model can batch
-    // multiple tool calls in one turn (the executor runs them in parallel).
+    // Walk every ```tool fence, not just the first, so malformed or over-eager
+    // model output can be recovered as a complete call list. The orchestration
+    // layer executes at most one call per model round.
     // `find("```tool")` also matches ```tool_code (Gemini's code-exec fence);
     // require the fence tag to be exactly `tool` (next char whitespace) so we
     // skip those without eating the real call.

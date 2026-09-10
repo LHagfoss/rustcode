@@ -30,8 +30,8 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "background",
         "run_command",
         "destructive operations",
-        "ISSUE INDEPENDENT READS TOGETHER",
-        "run in parallel",
+        "Issue exactly one tool call",
+        "wait for its result",
         "already applied",
         "advisory loop signals, not a hard stop",
         "native function-calling interface",
@@ -1256,16 +1256,21 @@ fn plan_mode_allows_reads_but_denies_mutation_execution_and_unknown_tools() {
 }
 
 #[test]
-fn tool_safety_is_conservative_and_parallelizes_only_reads() {
+fn tool_safety_is_conservative_and_classifies_reads() {
+    let call = |name: &str| ToolCall {
+        name: name.to_string(),
+        arguments: serde_json::json!({}),
+        call_id: None,
+    };
     assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
     assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
-    assert!(supports_parallel_execution("use_skill"));
-    assert!(supports_parallel_execution("view_file"));
+    assert!(is_read_only_call(&call("use_skill")));
+    assert!(is_read_only_call(&call("view_file")));
     assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
-    assert!(!supports_parallel_execution("write_to_file"));
+    assert!(!is_read_only_call(&call("write_to_file")));
     assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
     assert_eq!(tool_safety("unknown_mcp_tool"), ToolSafety::Unknown);
-    assert!(!supports_parallel_execution("unknown_mcp_tool"));
+    assert!(!is_read_only_call(&call("unknown_mcp_tool")));
 }
 
 #[test]
@@ -1299,10 +1304,8 @@ fn skills_are_read_only_and_not_isolated_as_control_plane() {
 // Every test session opened its edit with old_string: "" — the model's
 // instinct for "add a line at the top" — costing a turn before the error
 // taught it otherwise. The spec the model reads before calling now says it.
-// The prompt used to cap every response at "1 or 2 tool calls", so the model
-// never issued a batch and the parallel read path was never exercised — the
-// harness runs independent reads concurrently and only rations the calls
-// that change things.
+// The orchestration boundary accepts a model batch for transcript safety but
+// executes only one call from it.
 #[test]
 fn the_prompt_matches_what_the_executor_actually_does() {
     let prompt = tool_system_prompt(
@@ -1312,33 +1315,19 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     );
 
     assert!(
-        prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
+        prompt.contains("Issue exactly one tool call"),
         "got: {prompt}"
     );
-    assert!(prompt.contains("run in parallel"), "got: {prompt}");
+    assert!(prompt.contains("wait for its result"), "got: {prompt}");
+    assert!(!prompt.contains("run in parallel"), "got: {prompt}");
     assert!(
         !prompt.contains("at most 1 or 2 tool calls"),
         "the old cap is gone"
     );
 
-    // Every tool the prompt names as parallel must actually be one.
-    for name in [
-        "view_file",
-        "grep",
-        "glob",
-        "list_directory",
-        "find_symbol",
-        "get_project_map",
-        "search_web",
-    ] {
-        assert!(
-            supports_parallel_execution(name),
-            "{name} is not parallel-capable"
-        );
-    }
     // And the stated limit on changes must be the one the executor enforces.
     assert!(
-        prompt.contains("at most four workspace-changing calls"),
+        prompt.contains("Issue exactly one tool call"),
         "got: {prompt}"
     );
     assert!(
@@ -1351,17 +1340,11 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     );
 }
 
-// Regression: the JSON "Tool Format" section used to tell the model to
-// "Emit one tool call at a time" and claimed "the harness executes calls
-// sequentially" — flatly contradicting the Rules section's "ISSUE
-// INDEPENDENT READS TOGETHER" batching instruction a few paragraphs
-// earlier, and contradicting `parse_tool_calls_fenced`, which walks every
-// ```tool fence in a response specifically so a model can batch several
-// calls in one turn. This asserts the contradiction is gone and the
-// format section now agrees with the executor's real parallel-reads /
-// serialized-mutations behavior.
+// Regression: the JSON format must tell the model to make one call per
+// response, while the parser remains able to recover every call in a batch so
+// the orchestration layer can close the unexecuted calls safely.
 #[test]
-fn json_protocol_tool_format_does_not_contradict_the_batching_rule() {
+fn json_protocol_tool_format_requires_one_call_per_response() {
     let prompt = tool_system_prompt(
         false,
         crate::config::ToolProtocol::Json,
@@ -1376,12 +1359,9 @@ fn json_protocol_tool_format_does_not_contradict_the_batching_rule() {
         !prompt.contains("executes calls sequentially"),
         "got: {prompt}"
     );
+    assert!(prompt.contains("Emit exactly one fence"), "got: {prompt}");
     assert!(
-        prompt.contains("Several fences are allowed"),
-        "got: {prompt}"
-    );
-    assert!(
-        prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
+        !prompt.contains("Several fences are allowed"),
         "got: {prompt}"
     );
 }
@@ -1655,14 +1635,15 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
 }
 
 #[test]
-fn truncate_allows_multiple_skills_and_parallel_reads() {
+fn partition_retains_multiple_read_calls_for_non_orchestration_consumers() {
     let call = |name: &str| ToolCall {
         name: name.to_string(),
         arguments: serde_json::json!({}),
         call_id: None,
     };
 
-    // Multiple use_skill calls and read tools run together in parallel.
+    // Batch partitioning remains available to non-root consumers; the root
+    // model-round boundary no longer sends such a batch to the executor.
     let (kept, dropped) = truncate_tool_batch(
         vec![
             call("use_skill"),
@@ -1912,7 +1893,7 @@ fn validation_rejects_unknown_duplicate_and_mixed_calls() {
             MAX_MUTATING_CALLS_PER_RESPONSE
         )
         .is_err(),
-        "effective duplicate reads must not enter the parallel scheduler"
+        "duplicate reads must still be rejected before execution"
     );
     assert!(
         validate_tool_calls(

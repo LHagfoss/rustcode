@@ -1209,11 +1209,9 @@ pub(crate) fn append_tool_response_limit(prompt: &mut String, max_mutating_calls
         prompt,
         "\n\n# Tool response limit\n\
 The effective max_mutating_calls_per_response is {max_mutating_calls}. \
-Emit at most {max_mutating_calls} mutating tool calls in one assistant response. \
+Emit exactly one tool call in each assistant response and wait for its result before choosing the next action. \
 This includes mutating `run_command` calls, file writes/edits, \
-and other tools with side effects. Read-only shell inspection never consumes this limit. Extra mutating calls are dropped, not queued. \
-Wait for the tool results before emitting the next batch; never assume a dropped call ran. \
-Use `grep`, `glob`, and `view_file` for independent reads, which do not consume this mutation limit.\n"
+and other tools with side effects. Read-only inspection never consumes this limit, but it also must be issued one call at a time. Never assume an unexecuted call ran.\n"
     )
     .expect("writing to a String cannot fail");
 }
@@ -1251,7 +1249,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel, as do read-only shell inspections. Wait for dependent results. Emit at most four workspace-changing calls, commands, or delegations per response (fewer when the tool response limit below says so), and wait for results before issuing another.\n\
+- Issue exactly one tool call per response, including read-only inspection, and wait for its result before issuing the next call. This preserves progressive reads, multi-step edits, and recovery without speculative batching.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; do not retrieve the same range again with `cat`, `sed`, or `awk`.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Prefer the smallest focused sequence.\n\
@@ -1279,7 +1277,7 @@ If the request context names a skill, load it first. For a likely specialized wo
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Several fences are allowed only for independent reads, which run in parallel. Emit a workspace change or command alone and wait for its result.\n\n"
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Emit exactly one fence and wait for its result before issuing the next call.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
@@ -1291,7 +1289,7 @@ If the request context names a skill, load it first. For a likely specialized wo
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Multiple calls in one response are allowed only for independent reads. Emit a workspace change or command alone and wait for its result. When complete, reply with a plain-text summary and no tool call.\n\n"
+                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Issue exactly one tool call per response and wait for its result before choosing the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
@@ -1429,10 +1427,8 @@ mod response_limit_tests {
                         "effective max_mutating_calls_per_response is {limit}."
                     )));
                     assert_eq!(prompt.matches("# Tool response limit").count(), 1);
-                    assert!(
-                        prompt.contains("Read-only shell inspection never consumes this limit")
-                    );
-                    assert!(prompt.contains("dropped, not queued"));
+                    assert!(prompt.contains("Read-only inspection never consumes this limit"));
+                    assert!(prompt.contains("Never assume an unexecuted call ran"));
 
                     // The shell guidance must agree with the actual executor:
                     // mutating commands consume the mutation allowance while

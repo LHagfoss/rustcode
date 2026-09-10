@@ -19,7 +19,6 @@ use super::super::{
     completion_claims_unapplied_work, failure_replan_message, is_mutating_tool,
     log_recovery_decision, loop_recovery_action_for, mutation_made_progress,
     push_or_replace_loop_warning, push_or_replace_recovery_notice,
-    truncated_batch_summary_with_dropped, unanswered_call_results,
     unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
 use super::recovery::{loop_recovery_prompt, record_malformed_call};
@@ -53,7 +52,7 @@ fn batch_invalidates_read_recovery(
 
 fn mutation_batch_guidance(limit: usize) -> String {
     format!(
-        "Keep mutation-budget calls to at most {limit} per response. Only workspace-changing calls count toward this limit: mutating run_command invocations and workspace-editing tools. Read-only shell inspection (such as git status, ls, or cat) never consumes it. For parallel read-only inspection, use grep, glob, view_file, or a read-only shell command instead."
+        "Emit exactly one tool call per response and wait for its result before choosing the next action. The mutation budget remains {limit} for provider policy compatibility, but it is not a reason to batch calls. Read-only inspection never consumes it."
     )
 }
 
@@ -168,23 +167,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 ) -> ToolHandlingOutcome {
     // Phase 3: normalize provider output into protocol-independent events.
-    let (protocol, max_mutating_calls, mutation_limit_source) = {
+    let protocol = {
         let state = state.lock().await;
-        let profile = state.active_model_profile();
-        let mutation_limit_source = profile
-            .as_ref()
-            .and_then(|profile| profile.max_mutating_calls_per_response)
-            .filter(|limit| *limit > 0)
-            .map(|_| "profile")
-            .unwrap_or("default");
-        (
-            state.active_tool_protocol(),
-            profile
-                .as_ref()
-                .map(|profile| profile.max_mutating_calls_per_response())
-                .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE),
-            mutation_limit_source,
-        )
+        state.active_tool_protocol()
     };
     let model_response = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
         let typed_calls = native_tool_calls
@@ -278,38 +263,51 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     }
 
     let requested_calls = parsed_tool_calls.len();
-    let (parsed_tool_calls, dropped_calls) =
-        crate::tools::partition_tool_batch(parsed_tool_calls, max_mutating_calls);
-    let dropped_count = dropped_calls.len();
-    if dropped_count > 0 {
-        dbg_log!(
-            "Oversized batch: running {} of {} requested tool calls",
-            parsed_tool_calls.len(),
-            requested_calls
-        );
+    let omitted_call_count = parsed_tool_calls
+        .len()
+        .saturating_sub(crate::tools::MAX_TOOL_CALLS_PER_RESPONSE);
+    let mut parsed_tool_calls = parsed_tool_calls;
+    if omitted_call_count > 0 {
+        parsed_tool_calls.truncate(crate::tools::MAX_TOOL_CALLS_PER_RESPONSE);
         crate::logger::operational_event(
             "tools.batch_truncated",
             serde_json::json!({
                 "requested": requested_calls,
                 "kept": parsed_tool_calls.len(),
-                "dropped": dropped_count,
-                "max_mutating_calls": max_mutating_calls,
-                "max_mutating_calls_source": mutation_limit_source,
+                "omitted": omitted_call_count,
+                "reason": "absolute_tool_call_ceiling",
             }),
         );
-        ctx.response.final_content =
-            truncated_batch_summary_with_dropped(&parsed_tool_calls, &dropped_calls);
     }
-    let oversized_batch = dropped_count > 0;
     let validation_errors = crate::tools::validation_errors_by_call(&parsed_tool_calls);
-    let executable_tool_calls = parsed_tool_calls
+    // Preserve the control-plane priority (for example, load a requested
+    // skill before acting), but never execute more than one call from a model
+    // response. The complete call list remains in the transcript and the
+    // calls not selected below receive explicit non-executed results.
+    let selected_call_index = parsed_tool_calls
         .iter()
-        .zip(&validation_errors)
-        .filter_map(|(call, error)| error.is_none().then(|| call.clone()))
-        .collect::<Vec<_>>();
-    if let Err(reason) = crate::tools::validate_control_plane_batch(&parsed_tool_calls)
-        .and_then(|_| crate::tools::validate_tool_calls(&executable_tool_calls, max_mutating_calls))
-    {
+        .enumerate()
+        .find(|(index, call)| {
+            validation_errors[*index].is_none()
+                && matches!(
+                    crate::tools::tool_safety(&call.name),
+                    crate::tools::ToolSafety::ControlPlane
+                )
+        })
+        .map(|(index, _)| index)
+        .or_else(|| {
+            parsed_tool_calls
+                .iter()
+                .enumerate()
+                .find(|(index, _)| validation_errors[*index].is_none())
+                .map(|(index, _)| index)
+        })
+        .or_else(|| (!parsed_tool_calls.is_empty()).then_some(0));
+    let executable_tool_calls = selected_call_index
+        .filter(|index| validation_errors[*index].is_none())
+        .map(|index| vec![parsed_tool_calls[index].clone()])
+        .unwrap_or_default();
+    if let Some(reason) = selected_call_index.and_then(|index| validation_errors[index].clone()) {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -333,27 +331,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         ) {
             s.history.push(message);
         }
-        let guidance = if oversized_batch {
-            ctx.recovery.oversized_batch_rejections =
-                ctx.recovery.oversized_batch_rejections.saturating_add(1);
-            if ctx.recovery.oversized_batch_rejections >= 2 {
-                ctx.recovery.force_final = true;
-            }
-            format!(
-                " This response contained {requested_calls} separate tool calls; {} were kept and {} were dropped, then the kept calls failed validation, so nothing ran and nothing it claimed about their results happened. Dropped calls: {}. Start again from the last real tool result. {}",
-                parsed_tool_calls.len(),
-                dropped_count,
-                dropped_calls
-                    .iter()
-                    .map(|call| call.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                mutation_batch_guidance(max_mutating_calls)
-            )
-        } else {
-            ctx.recovery.oversized_batch_rejections = 0;
-            String::new()
-        };
+        ctx.recovery.oversized_batch_rejections = 0;
         let repeat_guidance = if repeated_malformed {
             format!(
                 " This is the same invalid tool request repeated {} times. Stop retrying this exact shape; re-read the schema and re-plan, or respond with text explaining what remains.",
@@ -365,7 +343,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         s.history.push(ChatMessage::new(
                     "system",
                     format!(
-                        "[Tool call rejected before execution: {reason}] Emit one corrected tool call.{guidance}{repeat_guidance}"
+                        "[Tool call rejected before execution: {reason}] Emit one corrected tool call. {}{}",
+                        mutation_batch_guidance(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE),
+                        repeat_guidance
                     ),
                 ));
         crate::config::save_history(&s.history);
@@ -376,13 +356,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         return ToolHandlingOutcome::Continue;
     }
     ctx.recovery.oversized_batch_rejections = 0;
-    let (executable_tool_calls, deferred_tool_calls) =
-        crate::tools::isolate_control_plane_call(executable_tool_calls);
     let tool_calls = parsed_tool_calls;
-    let read_only_batch = !tool_calls.is_empty()
-        && tool_calls
-            .iter()
-            .all(|call| loop_detect::is_read_only_call(&call.name, &call.arguments));
+    let deferred_call_count = tool_calls.len().saturating_sub(executable_tool_calls.len());
+    let unexecuted_call_count = deferred_call_count.saturating_add(omitted_call_count);
+    let read_only_batch = selected_call_index.is_some_and(|index| {
+        tool_calls
+            .get(index)
+            .is_some_and(|call| loop_detect::is_read_only_call(&call.name, &call.arguments))
+    });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -532,20 +513,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
-                if dropped_count > 0 {
-                    s.history.push(ChatMessage::new(
-                                "system",
-                                format!(
-                                    "[{dropped_count} of the {requested_calls} tool calls in that response were dropped: {}. The kept calls ran; their results follow — plan the next step from those, not from what the response predicted. {}]",
-                                    dropped_calls
-                                        .iter()
-                                        .map(|call| call.name.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                    mutation_batch_guidance(max_mutating_calls)
-                                ),
-                            ));
-                }
                 crate::config::save_history(&s.history);
             }
 
@@ -566,12 +533,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
             }
 
-            let deferred_notice = (deferred_tool_calls > 0).then(|| {
-                format!(
-                    "[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
-                )
-            });
-            // Phase 4: execute the accepted tool batch and record progress evidence.
+            // Phase 4: execute exactly the selected call and record progress
+            // evidence. The other calls are closed below, never silently
+            // dropped or described as if they ran.
             let results = execute_tool_batch(
                 client,
                 state,
@@ -582,57 +546,26 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 &mut ctx.compiler.dirty,
                 &mut ctx.compiler.cache,
                 &mut ctx.lifecycle.user_wait_duration,
-                deferred_notice,
+                None,
             )
             .await;
             let mut executed_results = results.into_iter();
-            let results = validation_errors
-                .into_iter()
-                .enumerate()
-                .map(|(index, error)| {
-                    error.map_or_else(
-                        || {
-                            let result = executed_results.next();
-                            match result {
-                                Some(res) => res,
-                                None => ToolResult {
-                                    tool_name: tool_calls
-                                        .get(index)
-                                        .map(|c| c.name.clone())
-                                        .unwrap_or_else(|| "<unknown>".to_string()),
-                                    content: format!(
-                                        "error: tool execution missing for this call ({})",
-                                        index
-                                    ),
-                                    diff: None,
-                                    file_preview: None,
-                                    metadata: crate::network::events::ToolResultMetadata {
-                                        success: false,
-                                        error_kind: Some(crate::tools::ToolErrorKind::Validation),
-                                        retryable: false,
-                                        ..Default::default()
-                                    },
-                                },
-                            }
+            let results = selected_call_index
+                .map(|index| {
+                    vec![executed_results.next().unwrap_or_else(|| ToolResult {
+                        tool_name: tool_calls[index].name.clone(),
+                        content: format!("error: tool execution missing for this call ({index})"),
+                        diff: None,
+                        file_preview: None,
+                        metadata: crate::network::events::ToolResultMetadata {
+                            success: false,
+                            error_kind: Some(crate::tools::ToolErrorKind::Internal),
+                            retryable: true,
+                            ..Default::default()
                         },
-                        |reason| ToolResult {
-                            tool_name: tool_calls
-                                .get(index)
-                                .map(|call| call.name.clone())
-                                .unwrap_or_else(|| "<unknown>".to_string()),
-                            content: format!("error: {reason}"),
-                            diff: None,
-                            file_preview: None,
-                            metadata: crate::network::events::ToolResultMetadata {
-                                success: false,
-                                error_kind: Some(crate::tools::ToolErrorKind::Validation),
-                                retryable: false,
-                                ..Default::default()
-                            },
-                        },
-                    )
+                    })]
                 })
-                .collect::<Vec<_>>();
+                .unwrap_or_default();
 
             ctx.metrics.tool_calls += results.len();
             let mutation_batch = results
@@ -653,9 +586,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "count": results.len(),
                     "requested": requested_calls,
                     "executed": results.len(),
-                    "dropped": dropped_count,
-                    "max_mutating_calls": max_mutating_calls,
-                    "max_mutating_calls_source": mutation_limit_source,
+                    "deferred": unexecuted_call_count,
                     "successes": results.iter().filter(|result| result.metadata.success).count(),
                     "failed": results.iter().filter(|result| !result.metadata.success).count(),
                     "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
@@ -666,7 +597,21 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Orchestrator: Cancelled during tool execution");
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
-                append_cancelled_batch_results(s.history.as_mut_vec(), results, &call_refs);
+                let selected_refs = selected_call_index
+                    .and_then(|index| call_refs.get(index))
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                append_cancelled_batch_results(s.history.as_mut_vec(), results, &selected_refs);
+                for (index, call_ref) in call_refs.iter().enumerate() {
+                    if Some(index) != selected_call_index {
+                        s.history.extend(unanswered_call_results_with_kind(
+                            std::slice::from_ref(call_ref),
+                            "not executed because the model round was cancelled",
+                            crate::tools::ToolErrorKind::Cancelled,
+                        ));
+                    }
+                }
                 if call_refs.is_empty() {
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
@@ -683,7 +628,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // was actually available and complete. A later turn may recover
             // by re-issuing a bounded read, so this is intentionally scoped
             // to the batch that requested completion.
-            let mut batch_incomplete = dropped_count > 0;
+            let mut batch_incomplete = unexecuted_call_count > 0;
             let mut background_pending = false;
             let explicit_verification_user_index = s
                 .history
@@ -715,10 +660,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut cross_turn_authoritative_progress = false;
             let mut cross_turn_target_files = Vec::new();
             let mut cross_turn_tool_count = 0;
-            let executed = results.len();
+            let mut result_messages = Vec::with_capacity(results.len() + deferred_call_count);
             for (position, result) in results.into_iter().enumerate() {
-                let call = tool_calls.get(position);
-                let answered_call = call_refs.get(position).map(|call| call.id.clone());
+                let call_position = selected_call_index.unwrap_or(position);
+                let call = tool_calls.get(call_position);
+                let answered_call = call_refs.get(call_position).map(|call| call.id.clone());
                 let name = result.tool_name;
                 let mut metadata = result.metadata.clone();
                 // The provider call id is attached at the orchestration
@@ -741,15 +687,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
                 if metadata.pending {
                     background_pending = true;
-                    s.history.push(tool_result_history_message(
-                        ToolResult {
-                            tool_name: name,
-                            content,
-                            diff: diff_opt,
-                            file_preview,
-                            metadata,
-                        },
-                        answered_call,
+                    result_messages.push((
+                        call_position,
+                        tool_result_history_message(
+                            ToolResult {
+                                tool_name: name,
+                                content,
+                                diff: diff_opt,
+                                file_preview,
+                                metadata,
+                            },
+                            answered_call,
+                        ),
                     ));
                     continue;
                 }
@@ -1023,15 +972,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         loop_detect::LoopStatus::Ok => {}
                     }
                 }
-                s.history.push(tool_result_history_message(
-                    ToolResult {
-                        tool_name: name,
-                        content,
-                        diff: diff_opt,
-                        file_preview,
-                        metadata,
-                    },
-                    answered_call,
+                result_messages.push((
+                    call_position,
+                    tool_result_history_message(
+                        ToolResult {
+                            tool_name: name,
+                            content,
+                            diff: diff_opt,
+                            file_preview,
+                            metadata,
+                        },
+                        answered_call,
+                    ),
                 ));
             }
 
@@ -1070,6 +1022,53 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
 
+            for (index, call_ref) in call_refs.iter().enumerate() {
+                if Some(index) == selected_call_index {
+                    continue;
+                }
+                let (reason, error_kind) = validation_errors[index]
+                    .as_deref()
+                    .map(|reason| (reason, crate::tools::ToolErrorKind::Validation))
+                    .unwrap_or((
+                        "not executed in this model round; reissue it only if still needed",
+                        crate::tools::ToolErrorKind::Internal,
+                    ));
+                if let Some(message) = unanswered_call_results_with_kind(
+                    std::slice::from_ref(call_ref),
+                    reason,
+                    error_kind,
+                )
+                .into_iter()
+                .next()
+                {
+                    result_messages.push((index, message));
+                }
+            }
+            result_messages.sort_by_key(|(index, _)| *index);
+            for (_, message) in result_messages {
+                s.history.push(message);
+            }
+            if deferred_call_count > 0 || omitted_call_count > 0 {
+                let deferred = tool_calls
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| Some(*index) != selected_call_index)
+                    .map(|(index, call)| {
+                        call_refs
+                            .get(index)
+                            .map(|call_ref| format!("{} ({})", call.name, call_ref.id))
+                            .unwrap_or_else(|| call.name.clone())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "[The model emitted {requested_calls} tool calls. Only one was executed this round; the remaining calls ({deferred}) were not executed or scheduled, and {omitted_call_count} over-limit call(s) were omitted from the transcript. Reissue one at a time after reviewing the real result.]"
+                    ),
+                ));
+            }
+
             if background_pending {
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
@@ -1079,10 +1078,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 return ToolHandlingOutcome::Stop;
             }
 
-            // `record_turn_evidence` models a complete model turn. Record the
-            // batch once after all results are processed; calling it for each
-            // result makes two read-only calls from one response look like two
-            // repeated turns and triggers a false cross-turn loop.
+            // `record_turn_evidence` models a complete model turn. Record it
+            // once after the selected result is processed.
             // Completion has its own evidence, verification, and compiler
             // gates below. Do not let generic loop recovery intercept a
             // `complete_task` request before those authoritative gates run.
@@ -1124,15 +1121,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                 }
             }
-            if executed < call_refs.len() {
-                batch_incomplete = true;
-                for message in
-                    unanswered_call_results(&call_refs[executed..], "no result was produced")
-                {
-                    s.history.push(message);
-                }
-            }
-
             if !completed
                 && let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
                     stagnation
@@ -1557,14 +1545,13 @@ mod tests {
     }
 
     #[test]
-    fn dropped_call_guidance_exempts_read_only_shell_commands_from_the_limit() {
+    fn single_call_guidance_preserves_mutation_policy() {
         for limit in [1, 3] {
             let guidance = mutation_batch_guidance(limit);
-            assert!(guidance.contains(&format!("at most {limit} per response")));
-            assert!(guidance.contains("Read-only shell inspection"));
-            assert!(guidance.contains("never consumes it"));
-            assert!(!guidance.contains("including read-only shell commands"));
-            assert!(guidance.contains("grep, glob, view_file"));
+            assert!(guidance.contains("exactly one tool call per response"));
+            assert!(guidance.contains(&format!("mutation budget remains {limit}")));
+            assert!(guidance.contains("Read-only inspection never consumes it"));
+            assert!(!guidance.contains("parallel"));
         }
     }
 

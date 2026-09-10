@@ -593,53 +593,19 @@ pub(crate) async fn execute_tool_batch(
             .collect::<Vec<_>>();
     }
 
+    // Keep the executor's per-call compiler-check and cache invalidation
+    // semantics for internal callers, but never run calls concurrently. The
+    // model-round boundary normally supplies one call; this sequential
+    // fallback also keeps direct/test callers deterministic.
     if tool_calls.len() > 1 {
         let mut results = Vec::with_capacity(tool_calls.len());
-        let mut index = 0;
-        while index < tool_calls.len() {
-            let parallel_run_end = tool_calls[index..]
-                .iter()
-                .position(|call| !crate::tools::supports_parallel_execution(&call.name))
-                .map(|offset| index + offset)
-                .unwrap_or(tool_calls.len());
-
-            if parallel_run_end > index + 1 {
-                let futures = tool_calls[index..parallel_run_end]
-                    .iter()
-                    .map(|call| async {
-                        let mut read_dirty = false;
-                        let mut read_cache = None;
-                        let mut user_wait = std::time::Duration::ZERO;
-                        execute_tool_batch(
-                            client,
-                            state,
-                            cancel_token,
-                            std::slice::from_ref(call),
-                            approved,
-                            &None,
-                            &mut read_dirty,
-                            &mut read_cache,
-                            &mut user_wait,
-                            deferred_notice.clone(),
-                        )
-                        .await
-                    });
-                results.extend(
-                    futures_util::future::join_all(futures)
-                        .await
-                        .into_iter()
-                        .flatten(),
-                );
-                index = parallel_run_end;
-                continue;
-            }
-
+        for call in tool_calls {
             results.extend(
                 Box::pin(execute_tool_batch(
                     client,
                     state,
                     cancel_token,
-                    std::slice::from_ref(&tool_calls[index]),
+                    std::slice::from_ref(call),
                     approved,
                     edit_root,
                     compile_dirty,
@@ -649,7 +615,9 @@ pub(crate) async fn execute_tool_batch(
                 ))
                 .await,
             );
-            index += 1;
+            if cancel_token.is_cancelled() {
+                break;
+            }
         }
         return results;
     }
