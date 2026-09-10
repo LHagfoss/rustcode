@@ -57,44 +57,6 @@ pub(crate) fn build_volatile_context_block(
     b
 }
 
-pub(crate) fn build_repo_map_fragment() -> Option<String> {
-    let root = std::env::current_dir().ok()?;
-    let mut entries: Vec<String> = std::fs::read_dir(&root)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with('.') || n == "target" {
-                return None;
-            }
-            let mut s = n;
-            if e.file_type().ok()?.is_dir() {
-                s.push('/');
-            }
-            Some(s)
-        })
-        .collect();
-    entries.sort();
-    let mut out = String::from("# Repo map (top-level)\n");
-    for e in entries.iter().take(30) {
-        out.push_str(&format!("- {e}\n"));
-    }
-    if let Ok(src) = std::fs::read_dir(root.join("src")) {
-        let mut mods: Vec<String> = src
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        mods.sort();
-        if !mods.is_empty() {
-            out.push_str("\nsrc/\n");
-            for m in mods.iter().take(20) {
-                out.push_str(&format!("- {m}\n"));
-            }
-        }
-    }
-    Some(out)
-}
-
 pub(crate) fn format_read_file_context_entry(
     path: &str,
     snapshot_mtime: Option<std::time::SystemTime>,
@@ -192,24 +154,13 @@ fn build_dynamic_context_tail_internal(
             .map(str::to_string)
             .or_else(|| objective_hint.map(compact_objective))
             .unwrap_or_else(|| "Continue the user's request".to_string());
-        let files_status = if read_files.is_empty() {
-            "none recorded".to_string()
-        } else {
-            format!("{} tracked below", read_files.len())
-        };
         fragments.push(history::ContextFragment::new(
             "checkpoint",
             format!(
-                "# Turn checkpoint (refresh each round)\n- Files already read: {files_status}\n- Current objective: {objective}\n- Edit status: {}\n- Next action: {}",
+                "# Turn state (refresh each round)\n- Current objective: {objective}\n- Edit status: {}\n- Next action: {}",
                 checkpoint.edit_status, checkpoint.next_action
             ),
         ));
-    }
-
-    if !read_files.is_empty() || !todos.is_empty() {
-        if let Some(map) = build_repo_map_fragment() {
-            fragments.push(history::ContextFragment::new("repo_map", map));
-        }
     }
 
     if !read_files.is_empty() {
@@ -378,8 +329,8 @@ mod tests {
             Some("this fallback must not win"),
         );
 
-        assert!(rendered.contains("# Turn checkpoint (refresh each round)"));
-        assert!(rendered.contains("Files already read: 1 tracked below"));
+        assert!(rendered.contains("# Turn state (refresh each round)"));
+        assert!(!rendered.contains("Files already read:"));
         assert!(rendered.contains("Current objective: Verify the request assembly"));
         assert!(rendered.contains("Edit status: edits made; verification pending"));
         assert!(rendered.contains("Next action: run the focused tests"));

@@ -907,6 +907,66 @@ mod tests {
     }
 
     #[test]
+    fn request_projection_bounds_a_growing_tool_loop_without_losing_dialogue() {
+        let mut history = Vec::new();
+        for turn in 0..8 {
+            history.push(ChatMessage::new("user", format!("task turn {turn}")));
+            if turn == 0 {
+                history.push(ChatMessage::new(
+                    "system",
+                    "[Evidence-based recovery: stale instruction from turn zero]",
+                ));
+            }
+            history.push(
+                ChatMessage::new(
+                    "assistant",
+                    format!("planning turn {turn}\n```tool\n{{}}\n```"),
+                )
+                .with_tool_calls(vec![crate::app::ToolCallRef {
+                    id: format!("loop-call-{turn}"),
+                    name: "view_file".to_string(),
+                    arguments: format!(r###"{{"path":"src/loop_{turn}.rs"}}"###),
+                }]),
+            );
+            history.push(
+                ChatMessage::new(
+                    "tool",
+                    format!(
+                        "view_file: repeated raw loop output {turn} {}",
+                        "x".repeat(512)
+                    ),
+                )
+                .answering(Some(format!("loop-call-{turn}"))),
+            );
+            history.push(ChatMessage::new(
+                "assistant",
+                format!("turn {turn} is understood"),
+            ));
+        }
+        history.push(ChatMessage::new("user", "continue the current task"));
+        history.push(ChatMessage::new(
+            "system",
+            "[Evidence-based recovery: take one different action]",
+        ));
+
+        let rendered = serde_json::to_string(&to_messages_for_request(
+            &history,
+            RequestInstructions::new("base", None),
+        ))
+        .expect("render request");
+
+        assert!(rendered.contains("task turn 0"));
+        assert!(rendered.contains("turn 7 is understood"));
+        assert!(rendered.contains("continue the current task"));
+        assert!(rendered.contains("repeated raw loop output 7"));
+        assert!(!rendered.contains("repeated raw loop output 0"));
+        assert!(!rendered.contains("loop-call-0"));
+        assert!(rendered.contains("Evidence-based recovery: take one different action"));
+        assert!(!rendered.contains("stale instruction from turn zero"));
+        assert!(rendered.len() < 10_000);
+    }
+
+    #[test]
     fn compaction_and_truncation_guidance_are_bounded_runtime_context() {
         let history = vec![
             ChatMessage::new(

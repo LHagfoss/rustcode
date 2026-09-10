@@ -1388,10 +1388,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             "runtime_tail_count": runtime_tail_count,
             "estimated_prompt_tokens": preflight.total_estimated_prompt,
             "cache_decision": cache_decision.label(),
+            "cache_reused": cache_decision == PrefixCacheDecision::Reused,
             "cache_context_updates": prefix_cache
                 .as_deref()
                 .map(RequestPrefixCache::context_updates)
                 .unwrap_or_default(),
+            "history_projection": "recent_turns",
             "hard_trimmed": dropped > 0,
         }),
     );

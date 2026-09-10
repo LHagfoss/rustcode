@@ -76,17 +76,16 @@ fn apply_profile_generation_options(
         return;
     }
     if thinking_mode == ThinkingMode::BoundedRecovery {
+        // Recovery exists to escape a planning/no-progress loop. Giving the
+        // model another reasoning budget here recreates the exact condition
+        // that triggered recovery, especially on local models whose entire
+        // 1024-token response can be consumed by <think> output. Keep tools
+        // enabled, but make this one action-oriented retry non-thinking.
         if has_thinking_control {
-            payload["enable_thinking"] = serde_json::json!(true);
+            payload["enable_thinking"] = serde_json::json!(false);
         }
         if has_chat_template_controls {
-            payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(true);
-        }
-        if profile.is_some_and(|p| p.supports_reasoning_effort_wire()) {
-            payload["reasoning_effort"] = serde_json::json!("low");
-        }
-        if profile.is_some_and(|p| p.supports_thinking_budget_wire()) {
-            payload["thinking_budget"] = serde_json::json!(RECOVERY_THINKING_BUDGET);
+            payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(false);
         }
         return;
     }
@@ -157,7 +156,6 @@ fn apply_api_native_tools(
     }
 }
 
-const RECOVERY_THINKING_BUDGET: u32 = 1024;
 const RECOVERY_MAX_TOKENS: u32 = 1024;
 const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
 const MAX_INVALID_ARGUMENT_PREVIEW_BYTES: usize = 1024;
@@ -1061,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_keeps_thinking_on_with_a_small_one_request_budget() {
+    fn recovery_disables_thinking_for_a_bounded_action_request() {
         let profile = crate::config::ModelProfile {
             enable_thinking: Some(true),
             reasoning_effort: Some("medium".to_string()),
@@ -1078,10 +1076,10 @@ mod tests {
             ThinkingMode::BoundedRecovery,
         );
 
-        assert_eq!(payload["enable_thinking"], true);
-        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
-        assert_eq!(payload["reasoning_effort"], "low");
-        assert_eq!(payload["thinking_budget"], RECOVERY_THINKING_BUDGET);
+        assert_eq!(payload["enable_thinking"], false);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
         assert_eq!(
             clamp_request_max_tokens(16_000, ThinkingMode::BoundedRecovery),
             RECOVERY_MAX_TOKENS
@@ -1258,11 +1256,6 @@ mod tests {
         apply_api_native_tools(&mut payload, schema, true);
 
         assert_eq!(payload["tool_choice"], "auto");
-    }
-
-    #[test]
-    fn recovery_thinking_budget_is_small_and_deterministic() {
-        assert_eq!(RECOVERY_THINKING_BUDGET, 1024);
     }
 
     #[test]
@@ -1702,11 +1695,12 @@ pub async fn stream_request(
             output_token_limit = Some(override_limit.min(verified_ceiling).max(1));
         }
     }
-    // Recovery keeps reasoning enabled but applies a small client-side bound:
-    // it exists to produce the next action, not another full planning turn.
-    let thinking_budget = if thinking_mode == ThinkingMode::BoundedRecovery {
-        Some(RECOVERY_THINKING_BUDGET)
-    } else if thinking_mode == ThinkingMode::Disabled {
+    // Recovery is action-oriented and therefore deliberately has no reasoning
+    // budget. Normal configured thinking remains unchanged.
+    let thinking_budget = if matches!(
+        thinking_mode,
+        ThinkingMode::BoundedRecovery | ThinkingMode::Disabled
+    ) {
         None
     } else {
         profile
