@@ -187,9 +187,10 @@ impl RequestPrefixCache {
     ) -> Vec<serde_json::Value> {
         let had_cached_request = !self.stable_request.is_empty();
         let history_advanced = rendered_history.len() > self.rendered_history.len();
-        let prefix_is_intact = history_advanced
-            && rendered_history.starts_with(self.rendered_history.as_slice())
-            && !self.stable_request.is_empty();
+        let prefix_is_intact = !self.stable_request.is_empty()
+            && ((history_advanced
+                && rendered_history.starts_with(self.rendered_history.as_slice()))
+                || rendered_history == self.rendered_history);
         let mut messages = if prefix_is_intact {
             let mut messages = self.stable_request.clone();
             messages.extend_from_slice(&rendered_history[self.rendered_history.len()..]);
@@ -351,6 +352,7 @@ mod request_prefix_tests {
         let retry = cache.compose(&rendered_history, "volatile snapshot two");
         let rendered = serde_json::to_string(&retry).unwrap();
 
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
         assert_eq!(retry.len(), rendered_history.len() + 1);
         assert!(!rendered.contains("volatile snapshot one"));
         assert_eq!(rendered.matches("volatile snapshot two").count(), 1);
@@ -437,6 +439,39 @@ mod request_prefix_tests {
         assert_eq!(rendered.matches("usage:").count(), 1);
         assert!(rendered.contains("usage: 8"));
         assert_eq!(cache.context_updates(), 8);
+    }
+
+    #[test]
+    fn append_only_prefix_rebases_once_after_a_real_history_rewrite() {
+        let mut rendered_history = history(&[("user", "inspect")]);
+        let mut request = rendered_history.clone();
+        attach_request_context_tail(&mut request, "context 0");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(rendered_history.clone(), &request, "context 0");
+
+        for round in 1..=10 {
+            rendered_history.push(
+                serde_json::json!({"role": "assistant", "content": format!("round {round}")}),
+            );
+            request = cache.compose(&rendered_history, &format!("context {round}"));
+            assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
+            cache.record(
+                rendered_history.clone(),
+                &request,
+                &format!("context {round}"),
+            );
+        }
+
+        let rewritten = history(&[("user", "compacted inspect")]);
+        request = cache.compose(&rewritten, "context rewritten");
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::RebasedHistory);
+        cache.record(rewritten.clone(), &request, "context rewritten");
+
+        let retry = cache.compose(&rewritten, "context retry");
+        assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
+        let rendered = serde_json::to_string(&retry).unwrap();
+        assert!(!rendered.contains("context rewritten"));
+        assert_eq!(rendered.matches("context retry").count(), 1);
     }
 }
 

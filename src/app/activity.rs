@@ -111,76 +111,188 @@ pub fn is_editing_tool(tool_name: &str) -> bool {
 }
 
 fn compact_target(raw: &str) -> String {
-    let compacted = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut target = compacted.chars().take(120).collect::<String>();
-    if compacted.chars().count() > 120 {
-        target.push('…');
+    sanitize_tool_parameter(raw, 120)
+}
+
+/// Sanitize a short tool parameter before it reaches a live or committed
+/// transcript. Tool summaries are intentionally bounded and never render raw
+/// prompts, file contents, or structured arguments.
+pub fn sanitize_tool_parameter(raw: &str, max_chars: usize) -> String {
+    let compacted = raw
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut value = compacted.chars().take(max_chars).collect::<String>();
+    if compacted.chars().count() > max_chars {
+        value.push('…');
     }
-    target
+    value
+}
+
+fn safe_parameter(key: &str, value: &str, max_chars: usize) -> String {
+    let key = key.to_ascii_lowercase();
+    let value_lower = value.to_ascii_lowercase();
+    if key.contains("password")
+        || key.contains("secret")
+        || key.contains("credential")
+        || key.contains("token")
+        || key.contains("api_key")
+        || key.contains("authorization")
+        || key.contains("prompt")
+        || key.contains("content")
+        || value_lower.contains("bearer ")
+        || value_lower.contains("sk-")
+        || value_lower.contains("ghp_")
+    {
+        "[redacted]".to_owned()
+    } else {
+        sanitize_tool_parameter(value, max_chars)
+    }
+}
+
+fn string_arg<'a, 'b>(
+    args: &'a serde_json::Value,
+    keys: &'b [&'b str],
+) -> Option<(&'b str, &'a str)> {
+    keys.iter().find_map(|key| {
+        args.get(*key)
+            .and_then(|value| value.as_str())
+            .map(|value| (*key, value))
+    })
+}
+
+fn path_with_home(path: &str, home_path: Option<&str>) -> String {
+    let path = if let Some(home) = home_path {
+        path.strip_prefix(home)
+            .map(|suffix| format!("~{suffix}"))
+            .unwrap_or_else(|| path.to_owned())
+    } else {
+        path.to_owned()
+    };
+    safe_parameter("path", &path, 100)
+}
+
+/// Render only the allowlisted exploration arguments shared by live and
+/// committed tool summaries.
+pub fn exploration_tool_parameters(
+    name: &str,
+    args: &serde_json::Value,
+    home_path: Option<&str>,
+) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let path = string_arg(
+        args,
+        &[
+            "TargetFile",
+            "target_file",
+            "AbsolutePath",
+            "absolute_path",
+            "DirectoryPath",
+            "directory_path",
+            "SearchPath",
+            "search_path",
+            "path",
+            "file",
+            "filePath",
+            "filepath",
+        ],
+    )
+    .map(|(_, value)| path_with_home(value, home_path));
+    match lower.as_str() {
+        "view_file" | "viewfile" | "read_file" | "readfile" => {
+            let path = path.unwrap_or_else(|| "?".to_owned());
+            let start = ["start_line", "StartLine", "startLine"]
+                .iter()
+                .find_map(|key| args.get(*key).and_then(|value| value.as_u64()));
+            let end = ["end_line", "EndLine", "endLine"]
+                .iter()
+                .find_map(|key| args.get(*key).and_then(|value| value.as_u64()));
+            Some(match (start, end) {
+                (Some(start), Some(end)) => format!("{path} (lines {start}-{end})"),
+                (Some(start), None) => format!("{path} (line {start})"),
+                _ => path,
+            })
+        }
+        "list_directory" | "list_dir" | "listdir" | "glob" => {
+            let pattern = string_arg(args, &["pattern", "glob"])
+                .map(|(key, value)| safe_parameter(key, value, 80));
+            Some(match (path, pattern) {
+                (Some(path), Some(pattern)) if pattern != path => format!("{path} ({pattern})"),
+                (Some(path), _) => path,
+                (None, Some(pattern)) => pattern,
+                _ => ".".to_owned(),
+            })
+        }
+        "grep" | "grep_search" | "grepsearch" => {
+            let (pattern_key, pattern) =
+                string_arg(args, &["Query", "query", "pattern", "Pattern"])
+                    .unwrap_or(("pattern", "?"));
+            let pattern = safe_parameter(pattern_key, pattern, 80);
+            let mut summary = match path {
+                Some(path) if path != "." => format!("{pattern} in {path}"),
+                _ => pattern,
+            };
+            if let Some((key, include)) = string_arg(args, &["include", "Include", "glob", "Glob"])
+            {
+                summary.push_str(&format!(" ({} {})", key, safe_parameter(key, include, 50)));
+            }
+            if args
+                .get("ignore_case")
+                .or_else(|| args.get("IgnoreCase"))
+                .or_else(|| args.get("case_insensitive"))
+                .and_then(|value| value.as_bool())
+                == Some(true)
+            {
+                summary.push_str(" (case-insensitive)");
+            }
+            Some(sanitize_tool_parameter(&summary, 140))
+        }
+        "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch" | "codebase_symbol"
+        | "codebasesymbol" => {
+            let (key, query) =
+                string_arg(args, &["query", "Query", "symbol"]).unwrap_or(("query", "?"));
+            Some(safe_parameter(key, query, 100))
+        }
+        "get_project_map" | "getprojectmap" => Some("project map".to_owned()),
+        _ => None,
+    }
 }
 
 /// Return the small semantic label shown for a live tool. This is shared by
 /// the executor and TUI so the network layer records no terminal formatting.
 pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, String) {
+    if let Some(target) = exploration_tool_parameters(name, args, None) {
+        let action = match name.to_ascii_lowercase().as_str() {
+            "view_file" | "viewfile" | "read_file" | "readfile" => "Read",
+            "list_directory" | "list_dir" | "listdir" | "glob" => "List",
+            "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch"
+            | "codebase_symbol" | "codebasesymbol" => "Search",
+            "get_project_map" | "getprojectmap" => "Read",
+            _ => "Search",
+        };
+        return (action.to_owned(), compact_target(&target));
+    }
     let value = |keys: &[&str], fallback: &str| -> String {
         keys.iter()
-            .find_map(|key| args.get(*key).and_then(|value| value.as_str()))
-            .unwrap_or(fallback)
-            .to_string()
+            .find_map(|key| {
+                args.get(*key)
+                    .and_then(|value| value.as_str())
+                    .map(|value| safe_parameter(key, value, 120))
+            })
+            .unwrap_or_else(|| fallback.to_owned())
     };
     let name_lower = name.to_ascii_lowercase();
     let (action, target) = match name_lower.as_str() {
-        "view_file" | "viewfile" | "read_file" | "readfile" => (
-            "Read",
-            value(
-                &[
-                    "TargetFile",
-                    "target_file",
-                    "AbsolutePath",
-                    "absolute_path",
-                    "path",
-                    "file",
-                    "filePath",
-                    "filepath",
-                ],
-                "?",
-            ),
-        ),
-        "list_directory" | "list_dir" | "listdir" | "glob" => (
-            "List",
-            value(
-                &[
-                    "DirectoryPath",
-                    "directory_path",
-                    "SearchPath",
-                    "search_path",
-                    "path",
-                    "pattern",
-                ],
-                ".",
-            ),
-        ),
-        "grep" | "grep_search" | "grepsearch" => {
-            let query = value(&["Query", "query", "pattern"], "?");
-            let path = args
-                .get("SearchPath")
-                .or_else(|| args.get("search_path"))
-                .or_else(|| args.get("path"))
-                .and_then(|value| value.as_str())
-                .filter(|path| !path.is_empty() && *path != ".");
-            return (
-                "Search".to_string(),
-                compact_target(
-                    &path
-                        .map(|path| format!("{query} in {path}"))
-                        .unwrap_or(query),
-                ),
-            );
-        }
-        "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch" | "codebase_symbol"
-        | "codebasesymbol" | "search_web" | "searchweb" => {
-            ("Search", value(&["query", "Query"], "?"))
-        }
+        "search_web" | "searchweb" => ("Search", "query".to_owned()),
         "run_command" | "runcommand" | "execute_command" | "bash" => (
             "Bash",
             value(&["CommandLine", "command_line", "command"], "?"),
@@ -485,7 +597,8 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
 mod tests {
     use super::{
         ActivityKind, AnimationCell, LiveToolCall, animation_trail, classify_activity,
-        classify_live_tools, format_terminal_title, sanitize_session_name, summarize_tool_call,
+        classify_live_tools, exploration_tool_parameters, format_terminal_title,
+        sanitize_session_name, summarize_tool_call,
     };
     use crate::app::AppStatus;
 
@@ -533,6 +646,31 @@ mod tests {
                 .count()
                 <= 12
         );
+    }
+
+    #[test]
+    fn exploration_summaries_are_bounded_and_include_safe_navigation_parameters() {
+        let view = exploration_tool_parameters(
+            "view_file",
+            &serde_json::json!({"path": "/workspace/src/lib.rs", "start_line": 10, "end_line": 20}),
+            Some("/workspace"),
+        )
+        .unwrap();
+        assert_eq!(view, "~/src/lib.rs (lines 10-20)");
+
+        let grep = summarize_tool_call(
+            "grep",
+            &serde_json::json!({
+                "pattern": "renderer",
+                "SearchPath": "src",
+                "include": "*.rs",
+                "ignore_case": true,
+                "password": "do-not-display"
+            }),
+        );
+        assert_eq!(grep.0, "Search");
+        assert_eq!(grep.1, "renderer in src (include *.rs) (case-insensitive)");
+        assert!(!grep.1.contains("do-not-display"));
     }
 
     #[test]

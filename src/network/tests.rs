@@ -3014,11 +3014,24 @@ fn healthy_progress_does_not_trigger_the_budget() {
 
 #[test]
 fn max_tool_rounds_triggers_the_budget() {
-    let mut ctx = TurnContext::new();
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
     ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.budget.max_tool_rounds),
         other => panic!("expected ToolRounds limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_turn_allows_productive_work_past_previous_round_ceiling() {
+    let mut ctx = TurnContext::new();
+    for round in 0..64 {
+        ctx.budget.tool_rounds = round;
+        ctx.budget.tokens_used = round as u64 * 100;
+        ctx.progress.consecutive_no_progress = 0;
+        ctx.progress.consecutive_failed_mutations = 0;
+        ctx.compiler.consecutive_error_gates = 0;
+        assert!(turn_budget_exceeded(&ctx).is_none(), "round {round}");
     }
 }
 
@@ -3339,7 +3352,7 @@ fn repeated_compiler_error_gates_trigger_the_budget() {
 #[tokio::test]
 async fn stopping_for_budget_never_falsely_reports_completion() {
     let state = Arc::new(Mutex::new(AppState::new()));
-    let mut ctx = TurnContext::new();
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
     ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
     ctx.lifecycle.task_completed = false;
     ctx.response.final_content = "Applying the last edit".to_string();

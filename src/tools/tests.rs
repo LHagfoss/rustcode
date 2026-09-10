@@ -1627,11 +1627,11 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     assert_eq!(kept[1].name, "run_command");
     assert_eq!(kept[3].name, "run_command");
 
-    // The absolute ceiling still applies to a runaway response.
+    // Read-only calls are not capped by an arbitrary response-wide ceiling.
     let runaway: Vec<ToolCall> = (0..50).map(|_| call("grep")).collect();
     let (kept, dropped) = truncate_tool_batch(runaway, MAX_MUTATING_CALLS_PER_RESPONSE);
-    assert_eq!(kept.len(), MAX_TOOL_CALLS_PER_RESPONSE);
-    assert_eq!(dropped, 50 - MAX_TOOL_CALLS_PER_RESPONSE);
+    assert_eq!(kept.len(), 50);
+    assert_eq!(dropped, 0);
 }
 
 #[test]
@@ -1906,14 +1906,14 @@ fn validation_rejects_unknown_duplicate_and_mixed_calls() {
         )
         .is_err()
     );
-    let calls = (0..=MAX_TOOL_CALLS_PER_RESPONSE)
-        .map(|_| ToolCall {
+    let calls = (0..33)
+        .map(|index| ToolCall {
             name: "grep".to_string(),
-            arguments: serde_json::json!({"pattern": "TODO"}),
+            arguments: serde_json::json!({"pattern": format!("TODO-{index}")}),
             call_id: None,
         })
         .collect::<Vec<_>>();
-    assert!(validate_tool_calls(&calls, MAX_MUTATING_CALLS_PER_RESPONSE).is_err());
+    assert!(validate_tool_calls(&calls, MAX_MUTATING_CALLS_PER_RESPONSE).is_ok());
     assert!(
         validate_tool_calls(
             &[ToolCall {

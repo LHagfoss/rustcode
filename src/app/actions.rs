@@ -47,6 +47,7 @@ pub async fn handle_escape(
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
+    s.clear_active_turn_projection();
 
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;

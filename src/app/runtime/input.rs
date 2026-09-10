@@ -105,7 +105,7 @@ pub(super) async fn handle_app_event(
             let mut state = app_state.lock().await;
             state.pending_queue.clear();
             state.background_turn_context = None;
-            state.clear_live_tool_calls();
+            state.clear_active_turn_projection();
             state.status = AppStatus::Idle;
             state.request_redraw();
             *needs_redraw = true;

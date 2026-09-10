@@ -51,7 +51,7 @@ pub(crate) fn desired_height_snapshot(
     terminal_height: u16,
 ) -> u16 {
     let available = terminal_height.max(1);
-    let inner_width = width.saturating_sub(2).max(1);
+    let inner_width = width.max(1);
     let completion_dismissed =
         state.dismissed_completion() == state.completion_identity().as_deref();
     let filtered_cmds = if completion_dismissed {
@@ -75,12 +75,13 @@ pub(crate) fn desired_height_snapshot(
 
     let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
     let question_active = *state.status() == AppStatus::AwaitingQuestion;
+    let raw_input_lines = count_input_lines(&state.input_buffer(), inner_width as usize);
     let input_height = if approval_active {
         tool_confirmation_height(state, available.saturating_sub(2))
     } else if question_active {
         question_height(state, width, available.saturating_sub(2))
     } else {
-        count_input_lines(&state.input_buffer(), inner_width as usize).min(8) + 2
+        raw_input_lines + 2
     };
     let queue_height = queue_preview_height(state);
     let popup_height = if approval_active || question_active {
@@ -151,18 +152,17 @@ pub(crate) fn render_with_transcript_snapshot(
         crate::app::suggestion::filtered_commands(&state.input_buffer())
     };
 
-    let inner_width = f.area().width.saturating_sub(2).max(1);
+    let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
     let raw_input_lines = count_input_lines(&state.input_buffer(), inner_width as usize);
-    let input_lines = raw_input_lines.min(8);
     let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
     let question_active = *state.status() == AppStatus::AwaitingQuestion;
-    let input_height = if approval_active {
+    let provisional_input_height = if approval_active {
         tool_confirmation_height(state, f.area().height.saturating_sub(2))
     } else if question_active {
         question_height(state, f.area().width, f.area().height.saturating_sub(2))
     } else {
-        input_lines + 2
+        raw_input_lines + 2
     };
     let queue_block_height = queue_preview_height(state);
 
@@ -201,9 +201,24 @@ pub(crate) fn render_with_transcript_snapshot(
             .height
             .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
-            .saturating_sub(input_height)
+            .saturating_sub(provisional_input_height)
             .saturating_sub(footer_height),
     );
+
+    let input_height = if approval_active || question_active {
+        provisional_input_height
+    } else {
+        let max_input_lines = f
+            .area()
+            .height
+            .saturating_sub(vertical_padding)
+            .saturating_sub(queue_block_height)
+            .saturating_sub(footer_height)
+            .saturating_sub(popup_height)
+            .saturating_sub(2)
+            .max(1);
+        raw_input_lines.min(max_input_lines) + 2
+    };
 
     let max_chat_height = f
         .area()
