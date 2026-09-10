@@ -1,3 +1,9 @@
+## [v0.51.30](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.30) - 2026-09-10
+
+### Fixes
+- Keep sequential tool rounds under one transcript group across incremental commits.
+- Prevent incidental shell failures from blocking completion when no requested verification command failed.
+- Normalize conversation recaps and keep interrupt guidance in the composer footer.
 ## [v0.51.29](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.29) - 2026-09-10
 
 ### Fixes
