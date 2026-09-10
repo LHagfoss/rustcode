@@ -651,7 +651,8 @@ pub(crate) async fn execute_tool_batch(
         };
         let execution_live_key = live_key.clone();
         let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
-            let is_read_only = is_read_only_tool(&name_clone);
+            let is_read_only = is_read_only_tool(&name_clone)
+                || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone);
             let mut replay_artifact = None;
 
             let mut is_repeat = false;
