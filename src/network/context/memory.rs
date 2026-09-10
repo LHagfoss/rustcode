@@ -41,6 +41,9 @@ impl StructuredSessionMemory {
         let mut memory = Self::default();
 
         for message in history {
+            if message.conversation_recap {
+                continue;
+            }
             if message.role == "system" {
                 if message.content.starts_with(STRUCTURED_MEMORY_MARKER)
                     || message.content.starts_with(SUMMARY_MARKER)

@@ -1,4 +1,4 @@
-use super::{compact_idle_summary, handle_ctrl_c, parse_token_count};
+use super::{build_idle_recap, compact_idle_summary, handle_ctrl_c, parse_token_count};
 
 #[test]
 fn idle_summary_removes_headings_and_bullets() {
@@ -31,6 +31,68 @@ fn idle_summary_is_bounded_by_words_without_an_ellipsis() {
     let summary = compact_idle_summary(&"important status ".repeat(100));
     assert!(summary.split_whitespace().count() <= 32);
     assert!(!summary.ends_with('…'));
+}
+
+#[test]
+fn idle_recap_uses_intent_and_status_not_tool_transcript() {
+    let history = vec![
+        crate::app::ChatMessage::new("user", "check the logged time for Monday"),
+        crate::app::ChatMessage::new(
+            "assistant",
+            "<think>inspect every tool result</think> I could not complete the lookup.",
+        ),
+        crate::app::ChatMessage::new(
+            "tool",
+            "run_command: stdout: commit 89927ca Author: user@example.test",
+        ),
+        crate::app::ChatMessage::new("system", "[Evidence-based recovery: try again]"),
+        crate::app::ChatMessage::new("assistant", "old recap").as_conversation_recap(),
+        crate::app::ChatMessage::new("user", "just tell me what I can log"),
+    ];
+
+    let recap = build_idle_recap(&history);
+
+    assert!(recap.contains("just tell me what I can log"));
+    assert!(!recap.contains("89927ca"));
+    assert!(!recap.contains("TOOL:"));
+    assert!(!recap.contains("Evidence-based recovery"));
+    assert!(!recap.contains("old recap"));
+    assert!(recap.len() <= 512);
+}
+
+#[test]
+fn idle_recap_does_not_attach_an_older_answer_to_a_new_task() {
+    let history = vec![
+        crate::app::ChatMessage::new("user", "old task"),
+        crate::app::ChatMessage::new("assistant", "old task is complete"),
+        crate::app::ChatMessage::new("tool", "run_command: old failure").with_tool_result(
+            crate::app::ToolResultRecord {
+                tool_name: "run_command".into(),
+                success: false,
+                ..Default::default()
+            },
+        ),
+        crate::app::ChatMessage::new("user", "new task still needs work"),
+    ];
+
+    let recap = build_idle_recap(&history);
+
+    assert!(recap.contains("new task still needs work"));
+    assert!(!recap.contains("old task is complete"));
+    assert!(!recap.contains("old failure"));
+    assert!(recap.contains("No final result was recorded yet"));
+}
+
+#[test]
+fn idle_summary_rejects_transcript_echoes_before_word_truncation() {
+    assert_eq!(
+        compact_idle_summary("TOOL: run_command: exit code: 0 stdout: copied transcript"),
+        ""
+    );
+    assert_eq!(
+        compact_idle_summary("The task is complete and the tests pass."),
+        "The task is complete and the tests pass."
+    );
 }
 
 async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {

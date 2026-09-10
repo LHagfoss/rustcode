@@ -427,7 +427,8 @@ async fn force_compact_internal(
     let to_summarize: Vec<&ChatMessage> = history[..summarize_count]
         .iter()
         .filter(|m| {
-            !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
+            !m.conversation_recap
+                && !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
                 && !(m.role == "system" && m.content.starts_with(ORIGINAL_TASK_MARKER))
         })
         .collect();

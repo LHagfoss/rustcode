@@ -147,15 +147,12 @@ pub(crate) struct RequestPrefixCache {
     last_decision: PrefixCacheDecision,
 }
 
-const MAX_CONTEXT_DELTAS: u8 = 3;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PrefixCacheDecision {
     #[default]
     Cold,
     Reused,
     RebasedHistory,
-    RebasedContext,
     Invalidated,
 }
 
@@ -165,7 +162,6 @@ impl PrefixCacheDecision {
             Self::Cold => "cold",
             Self::Reused => "reused",
             Self::RebasedHistory => "rebased_history",
-            Self::RebasedContext => "rebased_context",
             Self::Invalidated => "invalidated",
         }
     }
@@ -193,8 +189,7 @@ impl RequestPrefixCache {
         let history_advanced = rendered_history.len() > self.rendered_history.len();
         let prefix_is_intact = history_advanced
             && rendered_history.starts_with(self.rendered_history.as_slice())
-            && !self.stable_request.is_empty()
-            && self.context_updates < MAX_CONTEXT_DELTAS;
+            && !self.stable_request.is_empty();
         let mut messages = if prefix_is_intact {
             let mut messages = self.stable_request.clone();
             messages.extend_from_slice(&rendered_history[self.rendered_history.len()..]);
@@ -206,8 +201,6 @@ impl RequestPrefixCache {
             PrefixCacheDecision::Reused
         } else if !had_cached_request {
             PrefixCacheDecision::Cold
-        } else if self.context_updates >= MAX_CONTEXT_DELTAS {
-            PrefixCacheDecision::RebasedContext
         } else {
             PrefixCacheDecision::RebasedHistory
         };
@@ -298,9 +291,7 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
 
 #[cfg(test)]
 mod request_prefix_tests {
-    use super::{
-        MAX_CONTEXT_DELTAS, PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail,
-    };
+    use super::{PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail};
 
     fn history(contents: &[(&str, &str)]) -> Vec<serde_json::Value> {
         let mut messages = vec![serde_json::json!({
@@ -426,7 +417,7 @@ mod request_prefix_tests {
     }
 
     #[test]
-    fn changing_runtime_context_is_periodically_rebased_and_bounded() {
+    fn changing_runtime_context_reuses_an_append_only_prefix() {
         let mut rendered_history = history(&[("user", "inspect")]);
         let mut request = rendered_history.clone();
         attach_request_context_tail(&mut request, "stable\nusage: 0");
@@ -437,11 +428,7 @@ mod request_prefix_tests {
             rendered_history.push(serde_json::json!({"role": "assistant", "content": round}));
             let context = format!("stable\nusage: {round}");
             request = cache.compose(&rendered_history, &context);
-            if round % (usize::from(MAX_CONTEXT_DELTAS) + 1) == 0 {
-                assert_eq!(cache.last_decision(), PrefixCacheDecision::RebasedContext);
-            } else {
-                assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
-            }
+            assert_eq!(cache.last_decision(), PrefixCacheDecision::Reused);
             cache.record(rendered_history.clone(), &request, &context);
         }
 
@@ -449,7 +436,7 @@ mod request_prefix_tests {
         assert_eq!(rendered.matches("stable").count(), 1);
         assert_eq!(rendered.matches("usage:").count(), 1);
         assert!(rendered.contains("usage: 8"));
-        assert!(cache.context_updates <= MAX_CONTEXT_DELTAS);
+        assert_eq!(cache.context_updates(), 8);
     }
 }
 

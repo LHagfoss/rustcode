@@ -3014,12 +3014,12 @@ async fn request_assembly_separates_project_instructions_from_runtime_notices() 
         .expect("write instructions fixture");
     let mut app = AppState::new();
     app.workspace_root = Some(root.path().to_path_buf());
+    app.history
+        .push(ChatMessage::new("user", "inspect the workspace"));
     app.history.push(ChatMessage::new(
         "system",
         "[Loop warning: RUNTIME-PROVENANCE-GUIDANCE]",
     ));
-    app.history
-        .push(ChatMessage::new("user", "inspect the workspace"));
 
     let messages = prepare_turn_request(
         &reqwest::Client::new(),
