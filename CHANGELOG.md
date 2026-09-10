@@ -1,3 +1,9 @@
+## [v0.51.31](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.31) - 2026-09-10
+
+### Fixes
+- Disabled hidden reasoning during bounded recovery so local models can take a concrete tool action after a no-progress loop.
+- Simplified per-turn dynamic context by removing repeated repository-map and duplicate checkpoint state while preserving recent tool evidence, compaction, and cache reuse.
+- Added deterministic regression coverage for growing tool-call loops, multi-round history projection, and sanitized context diagnostics.
 ## [v0.51.30](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.30) - 2026-09-10
 
 ### Fixes
