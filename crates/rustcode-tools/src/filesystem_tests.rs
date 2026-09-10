@@ -63,6 +63,10 @@ fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
     assert!(ranged.contains("1: // scratch"), "got: {ranged}");
     assert!(!ranged.contains("truncated"), "got: {ranged}");
     assert!(
+        ranged.contains("Read complete for the requested range"),
+        "got: {ranged}"
+    );
+    assert!(
         ranged.contains("the file continues to line 3"),
         "got: {ranged}"
     );
@@ -76,6 +80,11 @@ fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
     let whole = whole_output.content;
     assert!(!whole.contains("truncated"), "got: {whole}");
     assert!(!whole.contains("continues"), "got: {whole}");
+    assert!(
+        whole.contains("Read complete: all lines in the requested range were delivered"),
+        "got: {whole}"
+    );
+    assert!(whole.contains("no continuation is needed"), "got: {whole}");
 }
 
 #[test]
@@ -154,6 +163,10 @@ fn a_read_cut_short_by_the_default_window_names_the_omitted_range() {
         rustcode_core::ToolResultCompleteness::LineTruncated
     );
     let out = output.content;
+    assert!(
+        out.contains("[Read partial: content was omitted"),
+        "got: {out}"
+    );
     assert!(out.contains("[Truncated:"), "got: {out}");
     let window_end = DEFAULT_READ_WINDOW_LINES;
     let expected_next = window_end + 1;
@@ -225,6 +238,10 @@ fn an_oversized_explicit_range_is_bounded_and_reported_as_capped_not_complete() 
     );
     // Reported as a genuine, capped truncation — not as "end of requested
     // range", which would falsely imply the read is complete.
+    assert!(
+        out.contains("[Read partial: content was omitted"),
+        "got: {out}"
+    );
     assert!(out.contains("[Truncated:"), "got: {out}");
     assert!(out.contains("capped at"), "got: {out}");
     assert!(!out.contains("end of requested range"), "got: {out}");
