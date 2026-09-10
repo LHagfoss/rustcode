@@ -352,6 +352,24 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         path, start_line, actual_end, total, byte_offset
     );
 
+    // Put the completeness decision before the source body. The typed
+    // metadata carries the same fact, but the model must not have to infer
+    // whether a normal-looking full read needs a follow-up from the absence
+    // of a truncation marker at the end of a long result.
+    if actual_end == total {
+        out.push_str(
+            "[Read complete: all lines in the requested range were delivered; no continuation is needed.]\n",
+        );
+    } else if requested_end.is_some() && !cap_applied {
+        out.push_str(
+            "[Read complete for the requested range; the file continues beyond this range.]\n",
+        );
+    } else {
+        out.push_str(
+            "[Read partial: content was omitted; follow the exact continuation range below.]\n",
+        );
+    }
+
     let slice_start = start_line - line_number_offset - 1;
     let slice_end = actual_end - line_number_offset;
     for (idx, line) in lines[slice_start..slice_end].iter().enumerate() {
