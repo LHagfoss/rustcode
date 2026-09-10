@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-session"
-version = "0.51.31"
+version = "0.51.32"
 edition = "2024"
 
 [dependencies]

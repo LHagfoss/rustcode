@@ -1,3 +1,9 @@
+## [v0.51.32](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.32) - 2026-09-10
+
+### Fixes
+- Stabilize request-prefix reuse and runtime context projection across long recovery turns.
+- Remove arbitrary productive tool-call and tool-round ceilings while preserving progress and cancellation safety guards.
+- Improve multiline composer scrolling, cancellation cleanup, interrupt status placement, and sanitized exploration summaries.
 ## [v0.51.31](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.31) - 2026-09-10
 
 ### Fixes
