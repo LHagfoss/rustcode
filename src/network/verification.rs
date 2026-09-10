@@ -128,6 +128,78 @@ pub(crate) fn is_verification_command(command: &str) -> bool {
     classify_command(command).is_some()
 }
 
+/// Return whether a command is the verification action the user asked for in
+/// this turn. The request-level predicate is intentionally broad so it can
+/// guide the model, but it must not make every incidental shell command
+/// authoritative. In particular, `git diff` or `node -v` should not block a
+/// completed task merely because the prompt also asked for checks.
+pub(crate) fn is_explicit_verification_command(prompt: &str, command: &str) -> bool {
+    if !is_explicit_verification_request(prompt) {
+        return false;
+    }
+    if is_verification_command(command) {
+        return true;
+    }
+
+    let normalized_command = command.trim().to_ascii_lowercase();
+    if normalized_command.is_empty() {
+        return false;
+    }
+
+    // Preserve support for arbitrary named checks when the user supplied the
+    // command explicitly, most commonly as an inline shell snippet.
+    let mut in_backticks = false;
+    let mut candidate = String::new();
+    for character in prompt.chars() {
+        if character == '`' {
+            if in_backticks
+                && !candidate.trim().is_empty()
+                && normalized_command.starts_with(&candidate.trim().to_ascii_lowercase())
+            {
+                return true;
+            }
+            in_backticks = !in_backticks;
+            candidate.clear();
+        } else if in_backticks {
+            candidate.push(character);
+        }
+    }
+
+    // A generic request such as "run the repository check" may not contain
+    // the eventual executable name. Treat only command names that clearly
+    // identify a verification action as authoritative in that case.
+    let executable = normalized_command
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .rsplit_once('/')
+        .map_or(
+            normalized_command
+                .split_whitespace()
+                .next()
+                .unwrap_or_default(),
+            |(_, name)| name,
+        );
+    matches!(
+        executable,
+        "check"
+            | "check.sh"
+            | "test"
+            | "test.sh"
+            | "lint"
+            | "lint.sh"
+            | "format"
+            | "format.sh"
+            | "fmt"
+            | "verify"
+            | "verify.sh"
+            | "validate"
+            | "validate.sh"
+            | "build"
+            | "build.sh"
+    )
+}
+
 pub(crate) fn is_explicit_verification_request(prompt: &str) -> bool {
     let normalized = prompt.to_ascii_lowercase();
     if [
@@ -149,6 +221,8 @@ pub(crate) fn is_explicit_verification_request(prompt: &str) -> bool {
     let asks_for_check = [
         "command",
         "check",
+        "verify",
+        "validate",
         "test",
         "lint",
         "build",
@@ -283,6 +357,33 @@ mod tests {
                 .map(|evidence| evidence.command.as_str()),
             Some("markdownlint --config .markdownlint.json README.md")
         );
+    }
+
+    #[test]
+    fn incidental_diff_does_not_become_explicit_verification_failure() {
+        let prompt =
+            "Audit the project, run it if possible, verify the result, and fix real issues.";
+        assert!(is_explicit_verification_request(prompt));
+        assert!(!super::is_explicit_verification_command(
+            prompt,
+            "git diff ."
+        ));
+        assert!(super::is_explicit_verification_command(
+            prompt,
+            "cargo test --all"
+        ));
+    }
+
+    #[test]
+    fn inline_arbitrary_check_command_is_explicit() {
+        assert!(super::is_explicit_verification_command(
+            "Run `markdownlint README.md` and report whether it passes.",
+            "markdownlint README.md"
+        ));
+        assert!(!super::is_explicit_verification_command(
+            "Run `markdownlint README.md` and report whether it passes.",
+            "git diff --stat"
+        ));
     }
 
     #[test]

@@ -346,16 +346,23 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     ])];
     lines.push(Line::from(""));
     let message_padding = Span::styled("  ", line_style);
-    lines.extend(
-        render_markdown(content, content_width, false, true)
-            .into_iter()
-            .map(|mut line| {
-                if !line.spans.is_empty() {
-                    line.spans.insert(0, message_padding.clone());
-                }
-                line
-            }),
-    );
+    let recap = crate::app::sanitize_recap_content(content);
+    if !recap.is_empty() {
+        let mut recap_lines = Vec::new();
+        push_wrapped_with_continuation(
+            &mut recap_lines,
+            vec![Span::styled(
+                recap,
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), false),
+            )],
+            content_width,
+            Some(message_padding.clone()),
+        );
+        if let Some(first) = recap_lines.first_mut() {
+            first.spans.insert(0, message_padding);
+        }
+        lines.extend(recap_lines);
+    }
     lines.push(Line::from(""));
     lines.into_iter().map(|line| own_line(&line)).collect()
 }

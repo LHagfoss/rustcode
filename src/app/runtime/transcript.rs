@@ -134,19 +134,51 @@ pub(super) fn commit_transcript(
         if message.role == "tool" {
             let (indices, group_end) =
                 tool_result_group(snapshot, index, history_range.end, terminal_width);
-            let mut block = crate::ui::render_committed_tool_result_group_snapshot(
-                snapshot,
-                &indices,
-                terminal_width,
-                false,
-            );
+            let group_kind = crate::ui::tool_result_group_kind(snapshot, &indices, terminal_width);
+            let continuing =
+                group_kind.is_some() && transcript_cursor.tool_group_kind() == group_kind;
+            let mut block = if continuing {
+                crate::ui::render_committed_tool_result_continuation_snapshot(
+                    snapshot,
+                    &indices,
+                    terminal_width,
+                    false,
+                )
+            } else {
+                crate::ui::render_committed_tool_result_group_snapshot(
+                    snapshot,
+                    &indices,
+                    terminal_width,
+                    false,
+                )
+            };
             if !block.is_empty() {
-                block.push(ratatui::text::Line::from(""));
+                if !continuing {
+                    block.push(ratatui::text::Line::from(""));
+                }
                 blocks.push(block);
+                transcript_cursor.set_tool_group_kind(group_kind);
+            } else {
+                // Hidden control-plane results (for example complete_task)
+                // still terminate the visible exploration group.
+                transcript_cursor.set_tool_group_kind(None);
             }
             index = group_end;
             continue;
+        } else if message.role == "assistant"
+            && is_tool_only_assistant(snapshot, index, terminal_width)
+            && snapshot
+                .history()
+                .get(index + 1)
+                .is_some_and(|next| next.role == "tool")
+        {
+            // One-tool-per-round orchestration inserts an empty assistant
+            // call between results. It is part of the active visual group,
+            // not a new transcript boundary.
+            index += 1;
+            continue;
         } else if message.role == "assistant" && !message.conversation_recap {
+            transcript_cursor.set_tool_group_kind(None);
             let separator = crate::ui::render_work_separator_before_assistant_snapshot(
                 snapshot,
                 index,
@@ -163,6 +195,7 @@ pub(super) fn commit_transcript(
                 terminal_width,
             ));
         } else {
+            transcript_cursor.set_tool_group_kind(None);
             blocks.push(crate::ui::render_committed_history_block_snapshot(
                 snapshot,
                 index,

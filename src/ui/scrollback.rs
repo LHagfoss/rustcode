@@ -448,6 +448,7 @@ pub(crate) fn mutable_stream_is_continuation(text: &str) -> bool {
 pub(crate) struct TranscriptCursor {
     next_history_index: usize,
     committed_stream: String,
+    tool_group_kind: Option<super::tool_transcript::ToolTranscriptKind>,
 }
 
 impl TranscriptCursor {
@@ -475,6 +476,19 @@ impl TranscriptCursor {
 
     pub(crate) fn has_committed_stream(&self) -> bool {
         !self.committed_stream.is_empty()
+    }
+
+    /// The kind of tool group whose next compatible tool-only round may
+    /// continue under the same visual heading.
+    pub(crate) fn tool_group_kind(&self) -> Option<super::tool_transcript::ToolTranscriptKind> {
+        self.tool_group_kind
+    }
+
+    pub(crate) fn set_tool_group_kind(
+        &mut self,
+        kind: Option<super::tool_transcript::ToolTranscriptKind>,
+    ) {
+        self.tool_group_kind = kind;
     }
 
     pub(crate) fn pending_history_range(&self, history_len: usize) -> Range<usize> {

@@ -351,23 +351,10 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     } else {
         state.generation_start_time()
     };
-    let interruptible = matches!(
-        activity.kind,
-        ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
-    );
-
     if state.waiting_for_background_terminal() {
         if let Some(started) = started {
             spans.push(Span::styled(
-                format!(" ({} · ", fmt_elapsed_compact(started.elapsed().as_secs())),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-            spans.push(Span::styled(
-                "esc to interrupt",
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-            spans.push(Span::styled(
-                ")",
+                format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
@@ -379,17 +366,6 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         spans.push(Span::styled(
             format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-
-    if interruptible && !state.waiting_for_background_terminal() {
-        spans.push(Span::styled(
-            " · esc ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        spans.push(Span::styled(
-            "interrupt",
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
     }
 
@@ -643,7 +619,18 @@ pub(super) fn render_composer_footer(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     };
-    let right = format!("{remaining}% context left  ");
+    let interrupt_hint = if state.waiting_for_background_terminal() {
+        Some("esc to interrupt")
+    } else if matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools().is_empty()
+    {
+        Some("esc interrupt")
+    } else {
+        None
+    };
+    let right = interrupt_hint
+        .map(|hint| format!("{hint} · {remaining}% context left  "))
+        .unwrap_or_else(|| format!("{remaining}% context left  "));
     let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let left = fit_to_width(
         &left_content,

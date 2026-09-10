@@ -106,7 +106,10 @@ pub(crate) fn hydrate_explicit_verification_from_history(
         return;
     };
     ledger.record_command(command, record.exit_code);
-    ledger.record_explicit_command(command, record.exit_code);
+    if verification::is_explicit_verification_command(&history[user_prompt_index].content, command)
+    {
+        ledger.record_explicit_command(command, record.exit_code);
+    }
 }
 
 /// Warn once per logical turn, including when that turn resumes after a

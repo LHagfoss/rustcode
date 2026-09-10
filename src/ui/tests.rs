@@ -914,6 +914,49 @@ fn use_skill_renders_in_committed_history() {
 }
 
 #[test]
+fn incremental_tool_round_continuation_has_no_second_group_heading() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.extend([
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "view_file".to_owned(),
+            arguments: r#"{"TargetFile":"index.html"}"#.to_owned(),
+        }]),
+        ChatMessage::new("tool", "view_file: first read")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-2".to_owned(),
+            name: "view_file".to_owned(),
+            arguments: r#"{"TargetFile":"js/app.js"}"#.to_owned(),
+        }]),
+        ChatMessage::new("tool", "view_file: second read")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    ]);
+
+    let snapshot = state.render_snapshot();
+    let continuation =
+        super::render_committed_tool_result_continuation_snapshot(&snapshot, &[3], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+    assert!(continuation.iter().any(|line| line.contains("Read")));
+    assert!(!continuation.iter().any(|line| line.contains("Explored")));
+}
+
+#[test]
 fn high_verbosity_keeps_tool_call_summaries_visible() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
@@ -2332,6 +2375,7 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
 
     assert!(!status.contains("Tokens/s"), "{status}");
     assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
+    assert!(footer.contains("esc interrupt"), "{footer}");
 }
 
 #[test]
@@ -2355,7 +2399,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
 
     let status = super::activity_status_line(&snapshot, false).to_string();
     assert!(status.contains("Waiting for background terminal"));
-    assert!(status.contains("esc to interrupt"));
+    assert!(!status.contains("esc to interrupt"));
     assert!(status.contains("1 background terminal running"));
     assert!(status.contains("/ps to view · /stop to close"));
     let neutral_status = super::activity_status_line(&neutral_snapshot, false).to_string();
@@ -2400,7 +2444,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     let line = super::activity_status_line(&state.render_snapshot(), false).to_string();
 
     assert!(line.contains("Working"));
-    assert!(line.contains("esc interrupt"));
+    assert!(!line.contains("esc interrupt"));
     assert!(!line.contains("tool_calls"));
     assert!(!line.contains("Bash"));
     assert!(!line.contains("cargo test"));
@@ -3145,6 +3189,30 @@ fn conversation_recap_renders_as_compact_labeled_block() {
 }
 
 #[test]
+fn conversation_recap_renders_sanitized_plain_text() {
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new(
+            "assistant",
+            "### 1. Done\n- **Fixed** `src/main.rs`\n\n### 2. Next\n- Run tests",
+        )
+        .as_conversation_recap(),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 0, 80);
+    let text = rendered
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("Fixed src/main.rs Run tests"), "{text}");
+    assert!(!text.contains("###"), "{text}");
+    assert!(!text.contains("**"), "{text}");
+    assert!(!text.contains('`'), "{text}");
+}
+
+#[test]
 fn conversation_recap_wraps_inside_its_message_gutter() {
     let mut state = AppState::new();
     state.history.push(
@@ -3223,7 +3291,7 @@ fn live_tail_uses_formatted_working_status() {
         .collect::<String>();
 
     assert!(text.contains("• Working"));
-    assert!(text.contains("esc interrupt"));
+    assert!(!text.contains("esc interrupt"));
     assert!(!text.contains("Working..."));
 }
 

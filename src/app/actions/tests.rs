@@ -9,6 +9,31 @@ fn idle_summary_removes_headings_and_bullets() {
 }
 
 #[test]
+fn idle_recap_normalizes_structured_markdown_and_paste_markers() {
+    let history = vec![
+        crate::app::ChatMessage::new(
+            "user",
+            "<!--PASTE:1318:Review the project and fix every real issue.-->",
+        ),
+        crate::app::ChatMessage::new(
+            "assistant",
+            "### 1. Issues Found and Fixed\n- **Dummy reference** in `js/app.js`.\n\n### 2. Files Changed\n- `js/app.js`",
+        ),
+    ];
+
+    let recap = build_idle_recap(&history);
+
+    assert_eq!(
+        recap,
+        "Task: Review the project and fix every real issue. Latest status: Dummy reference in js/app.js. js/app.js."
+    );
+    assert!(!recap.contains("<!--PASTE:"));
+    assert!(!recap.contains("###"));
+    assert!(!recap.contains("**"));
+    assert!(!recap.contains('`'));
+}
+
+#[test]
 fn idle_summary_strips_reasoning_before_compacting() {
     assert_eq!(
         compact_idle_summary(

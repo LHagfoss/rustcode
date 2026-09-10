@@ -530,14 +530,14 @@ pub(super) fn indent_tool_result_body(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ToolTranscriptKind {
+pub(crate) enum ToolTranscriptKind {
     Explored,
     Command,
     Edit,
     Tool,
 }
 
-pub(super) fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
+pub(crate) fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
     if crate::app::activity::is_exploration_tool(tool_name) {
         ToolTranscriptKind::Explored
     } else if tool_name == "run_command" || tool_name.eq_ignore_ascii_case("bash") {
@@ -547,6 +547,23 @@ pub(super) fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
     } else {
         ToolTranscriptKind::Tool
     }
+}
+
+pub(crate) fn tool_result_group_kind(
+    state: &RenderSnapshot,
+    message_indices: &[usize],
+    width: u16,
+) -> Option<ToolTranscriptKind> {
+    let mut kinds = message_indices
+        .iter()
+        .filter_map(|&index| tool_transcript_entry(state, index, width, false))
+        .map(|entry| entry.kind);
+    let first = kinds.next()?;
+    Some(if kinds.all(|kind| kind == first) {
+        first
+    } else {
+        ToolTranscriptKind::Tool
+    })
 }
 
 pub(super) fn format_exploration_action(
@@ -966,6 +983,28 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
+    render_tool_result_group_snapshot(state, message_indices, width, show_picker, true)
+}
+
+/// Render a later tool-only round as children of an already committed group.
+/// Terminal scrollback cannot revise the first round's heading, so the
+/// transcript cursor uses this form when one-tool rounds arrive incrementally.
+pub(crate) fn render_committed_tool_result_continuation_snapshot(
+    state: &RenderSnapshot,
+    message_indices: &[usize],
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    render_tool_result_group_snapshot(state, message_indices, width, show_picker, false)
+}
+
+fn render_tool_result_group_snapshot(
+    state: &RenderSnapshot,
+    message_indices: &[usize],
+    width: u16,
+    show_picker: bool,
+    include_header: bool,
+) -> Vec<Line<'static>> {
     let entries = message_indices
         .iter()
         .filter_map(|&index| tool_transcript_entry(state, index, width, show_picker))
@@ -991,10 +1030,10 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
         let group = &entries[index..group_end];
         let success = group.iter().all(|entry| entry.success);
 
-        if !lines.is_empty() {
+        if include_header && !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        if homogeneous && kind == ToolTranscriptKind::Command {
+        if include_header && homogeneous && kind == ToolTranscriptKind::Command {
             if matches!(state.verbosity(), crate::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
@@ -1016,18 +1055,20 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
                 ));
             }
         } else {
-            let title = if !homogeneous {
-                "Ran"
-            } else if kind == ToolTranscriptKind::Explored {
-                "Explored"
-            } else if kind == ToolTranscriptKind::Edit {
-                "Edited"
-            } else if kind == ToolTranscriptKind::Tool {
-                "Ran"
-            } else {
-                "Called"
-            };
-            lines.push(tool_group_header(title, success, show_picker));
+            if include_header {
+                let title = if !homogeneous {
+                    "Ran"
+                } else if kind == ToolTranscriptKind::Explored {
+                    "Explored"
+                } else if kind == ToolTranscriptKind::Edit {
+                    "Edited"
+                } else if kind == ToolTranscriptKind::Tool {
+                    "Ran"
+                } else {
+                    "Called"
+                };
+                lines.push(tool_group_header(title, success, show_picker));
+            }
             let mut seen = std::collections::HashSet::new();
             let mut first_child = true;
             for entry in group {

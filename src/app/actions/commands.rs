@@ -99,19 +99,66 @@ fn looks_like_transcript_echo(content: &str) -> bool {
         || lower.contains("stderr:")
 }
 
+pub(crate) fn sanitize_recap_content(content: &str) -> String {
+    crate::network::text::strip_tool_call_syntax(&crate::network::text::strip_think_blocks(content))
+        .lines()
+        .map(normalize_recap_line)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn recap_fragment(content: &str, max_words: usize) -> String {
-    let text = crate::network::text::strip_tool_call_syntax(
-        &crate::network::text::strip_think_blocks(content),
-    )
-    .lines()
-    .map(str::trim)
-    .filter(|line| !line.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ");
+    let text = sanitize_recap_content(content);
     text.split_whitespace()
         .take(max_words)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn normalize_recap_line(line: &str) -> String {
+    let mut line = line.trim().to_owned();
+    let markdown_heading = line.starts_with('#');
+    if let Some(start) = line.find("<!--PASTE:")
+        && let Some(end) = line[start..].find("-->").map(|offset| start + offset + 3)
+    {
+        let payload = line[start..end]
+            .strip_prefix("<!--PASTE:")
+            .and_then(|payload| payload.strip_suffix("-->"))
+            .and_then(|payload| payload.split_once(':').map(|(_, body)| body))
+            .unwrap_or_default()
+            .to_owned();
+        line.replace_range(start..end, &payload);
+    }
+
+    while line.starts_with(['#', '-', '*', '•']) {
+        line.remove(0);
+        line = line.trim_start().to_owned();
+    }
+    if let Some(dot) = line.find('.')
+        && dot > 0
+        && line[..dot]
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        line = line[dot + 1..].trim_start().to_owned();
+    }
+    line = line.replace("**", "").replace("__", "").replace('`', "");
+
+    let heading = line.trim().to_ascii_lowercase();
+    if markdown_heading
+        || matches!(
+            heading.as_str(),
+            "conversation recap"
+                | "issues found and fixed"
+                | "files changed"
+                | "checks/tests performed"
+                | "remaining limitations or blocker"
+        )
+    {
+        return String::new();
+    }
+    line.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Build the automatic UI recap without sending the raw transcript to a
@@ -165,13 +212,26 @@ pub(crate) fn build_idle_recap(history: &[ChatMessage]) -> String {
         });
 
     let mut recap = match (task, answer, failure) {
-        (Some(task), Some(answer), _) => format!("Task: {task}. Latest status: {answer}."),
+        (Some(task), Some(answer), _) => format!(
+            "{} {}",
+            recap_sentence("Task", &task),
+            recap_sentence("Latest status", &answer)
+        ),
         (Some(task), None, Some(failure)) => {
-            format!("Task: {task}. Latest status: blocked by {failure}.")
+            format!(
+                "{} {}",
+                recap_sentence("Task", &task),
+                recap_sentence("Latest status", &format!("blocked by {failure}"))
+            )
         }
-        (Some(task), None, None) => format!("Task: {task}. No final result was recorded yet."),
-        (None, Some(answer), _) => format!("Latest status: {answer}."),
-        (None, None, Some(failure)) => format!("Latest status: blocked by {failure}."),
+        (Some(task), None, None) => format!(
+            "{} No final result was recorded yet.",
+            recap_sentence("Task", &task)
+        ),
+        (None, Some(answer), _) => recap_sentence("Latest status", &answer),
+        (None, None, Some(failure)) => {
+            recap_sentence("Latest status", &format!("blocked by {failure}"))
+        }
         (None, None, None) => String::new(),
     };
     if recap.len() > MAX_IDLE_RECAP_CHARS {
@@ -179,6 +239,13 @@ pub(crate) fn build_idle_recap(history: &[ChatMessage]) -> String {
         recap.push('…');
     }
     recap
+}
+
+fn recap_sentence(label: &str, content: &str) -> String {
+    format!(
+        "{label}: {}.",
+        content.trim().trim_end_matches(['.', '!', '?'])
+    )
 }
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {

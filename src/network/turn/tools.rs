@@ -712,7 +712,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ctx.verification
                         .ledger
                         .record_command(command, metadata.exit_code);
-                    if explicit_verification_requested {
+                    if explicit_verification_user_index.is_some_and(|index| {
+                        verification::is_explicit_verification_command(
+                            &s.history[index].content,
+                            command,
+                        )
+                    }) {
                         ctx.verification
                             .ledger
                             .record_explicit_command(command, metadata.exit_code);
@@ -1279,7 +1284,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
             const MAX_VERIFICATION_BLOCKS: u8 = 2;
             if completed {
-                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
                 if let Some(evidence) = ctx.verification.ledger.explicit_last_failure() {
                     ctx.verification.blocks = ctx.verification.blocks.saturating_add(1);
                     s.history.push(ChatMessage::new(
@@ -1390,6 +1394,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                 }
 
+                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
                 dbg_log!("complete_task accepted; finalizing the turn");
                 let task_result_summary = tool_calls
                     .iter()
