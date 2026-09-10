@@ -743,7 +743,6 @@ pub struct ProgressLedger {
     seen_outputs: HashSet<u64>,
     seen_reads: HashSet<u64>,
     seen_verifications: HashSet<u64>,
-    seen_failures: HashSet<u64>,
     recent_states: VecDeque<u64>,
     no_progress_streak: usize,
 }
@@ -754,7 +753,6 @@ impl Default for ProgressLedger {
             seen_outputs: HashSet::new(),
             seen_reads: HashSet::new(),
             seen_verifications: HashSet::new(),
-            seen_failures: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
             no_progress_streak: 0,
         }
@@ -789,10 +787,6 @@ impl ProgressLedger {
         let verification_action = stable_hash(&observation.action);
         let fresh_verification =
             stable_verification && remember(&mut self.seen_verifications, verification_action);
-        let new_failure = observation
-            .failure_fingerprint
-            .is_some_and(|hash| remember(&mut self.seen_failures, hash));
-
         let state_hash = observation.state_fingerprint;
         let state_changed =
             state_hash.is_some_and(|state| self.recent_states.back().copied() != Some(state));
@@ -820,18 +814,16 @@ impl ProgressLedger {
             } else {
                 (false, ProgressReason::NoNewInformation)
             }
-        } else if observation.fresh_read && new_output {
+        } else if observation.fresh_read && observation.success && new_output {
             (true, ProgressReason::FreshRead)
         } else if observation.search_result && observation.success && observation.no_result {
             (false, ProgressReason::NoNewInformation)
-        } else if observation.search_result && new_output {
+        } else if observation.search_result && observation.success && new_output {
             (true, ProgressReason::NewInformation)
         } else if fresh_verification {
             (true, ProgressReason::Verification)
         } else if stable_verification {
             (false, ProgressReason::RepeatedVerification)
-        } else if !observation.success && new_failure {
-            (true, ProgressReason::NewInformation)
         } else if !observation.success {
             (false, ProgressReason::RepeatedFailure)
         } else if new_output {

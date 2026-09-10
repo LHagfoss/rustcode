@@ -441,7 +441,7 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
         loop_detect::LoopStatus::Abort(2),
         "failed-mutation repetition must continue across a background wakeup"
     );
-    assert_eq!(resumed.progress.ledger.no_progress_streak(), 1);
+    assert_eq!(resumed.progress.ledger.no_progress_streak(), 2);
     assert_eq!(
         resumed
             .verification

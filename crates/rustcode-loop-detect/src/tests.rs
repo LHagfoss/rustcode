@@ -966,17 +966,49 @@ fn semantically_equivalent_failures_become_no_progress_despite_new_commands() {
         failed.failure_fingerprint = Some(stable_hash("semantic_failure:authentication"));
         failed.success = false;
         let assessment = ledger.observe(&failed);
-        if index == 0 {
-            assert!(assessment.meaningful);
-        } else {
-            assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
-            assert!(!assessment.meaningful);
-        }
+        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        assert!(!assessment.meaningful);
     }
-    assert_eq!(
-        ledger.no_progress_streak(),
-        ProgressLedger::RECOVERY_STREAK - 1
-    );
+    assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
+}
+
+#[test]
+fn distinct_failed_commands_do_not_reset_no_progress_streak() {
+    let mut ledger = ProgressLedger::default();
+    for (index, action) in ["curl /one", "curl /two", "curl /three"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut failed = observation(&format!("different failure {index}"), None, None);
+        failed.action = action.to_string();
+        failed.success = false;
+        let assessment = ledger.observe(&failed);
+        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        assert!(!assessment.meaningful);
+        assert_eq!(assessment.streak, index + 1);
+    }
+    assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
+}
+
+#[test]
+fn failed_reads_and_searches_do_not_count_novel_errors_as_progress() {
+    let mut ledger = ProgressLedger::default();
+
+    let mut failed_read = observation("permission denied", None, None);
+    failed_read.read_only = true;
+    failed_read.fresh_read = true;
+    failed_read.success = false;
+    let read_assessment = ledger.observe(&failed_read);
+    assert_eq!(read_assessment.reason, ProgressReason::RepeatedFailure);
+    assert!(!read_assessment.meaningful);
+
+    let mut failed_search = observation("different search error", None, None);
+    failed_search.search_result = true;
+    failed_search.success = false;
+    let search_assessment = ledger.observe(&failed_search);
+    assert_eq!(search_assessment.reason, ProgressReason::RepeatedFailure);
+    assert!(!search_assessment.meaningful);
+    assert_eq!(ledger.no_progress_streak(), 2);
 }
 
 #[test]
