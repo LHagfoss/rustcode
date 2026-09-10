@@ -1,3 +1,9 @@
+## [v0.51.28](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.28) - 2026-09-10
+
+### Fixes
+- Bound request-local context to durable dialogue plus the previous and active turns while preserving complete stored history.
+- Keep append-only provider prefix-cache reuse across runtime context updates and rebase only when history or cache state changes.
+- Replace automatic idle recap transcript echoes with a deterministic, bounded task/status recap and exclude recaps from memory and compaction inputs.
 ## [v0.51.27](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.27) - 2026-09-10
 
 ### Fixes
