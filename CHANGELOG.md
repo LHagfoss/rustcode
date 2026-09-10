@@ -1,3 +1,9 @@
+## [v0.51.33](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.33) - 2026-09-10
+
+### Fixes
+- Normalize equivalent read-only shell/file inspections so unchanged evidence is reused instead of re-executed.
+- Strengthen complete-read and manual-preview workflow guidance to stop inspection loops and respect user-controlled preview ports.
+- Add regression coverage for inspection progress and static-app validation.
 ## [v0.51.32](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.32) - 2026-09-10
 
 ### Fixes
