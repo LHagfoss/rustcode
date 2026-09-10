@@ -1,3 +1,8 @@
+## [v0.51.27](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.27) - 2026-09-10
+
+### Fixes
+- Count failed tool results as no progress even when the command or error text is novel, preventing failure-only recovery loops from consuming the turn budget.
+- Preserve successful progressive reads, searches, verification, and multi-step recovery behavior.
 ## [v0.51.26](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.26) - 2026-09-09
 
 ### Fixes
