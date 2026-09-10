@@ -188,6 +188,32 @@ pub(crate) fn to_messages_with_instructions(
     history: &[ChatMessage],
     instructions: RequestInstructions<'_>,
 ) -> Vec<serde_json::Value> {
+    to_messages_with_scope(history, instructions, HistoryRenderScope::Full)
+}
+
+/// Render the request-local history projection used for an active model turn.
+/// Persisted history remains complete, but old tool mechanics and lifecycle
+/// notices are not useful conversation context forever. Keep durable dialogue
+/// from older turns, the complete previous turn for continuity, and the
+/// complete active turn for progressive reads, edits, and recovery.
+pub(crate) fn to_messages_for_request(
+    history: &[ChatMessage],
+    instructions: RequestInstructions<'_>,
+) -> Vec<serde_json::Value> {
+    to_messages_with_scope(history, instructions, HistoryRenderScope::RecentTurns)
+}
+
+#[derive(Clone, Copy)]
+enum HistoryRenderScope {
+    Full,
+    RecentTurns,
+}
+
+fn to_messages_with_scope(
+    history: &[ChatMessage],
+    instructions: RequestInstructions<'_>,
+    scope: HistoryRenderScope,
+) -> Vec<serde_json::Value> {
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": instructions.base,
@@ -228,8 +254,12 @@ pub(crate) fn to_messages_with_instructions(
     // full history, so an excluded duplicate never synthesizes a spurious
     // "did not run" error for its announcer.
     let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
+    let turn_starts = request_turn_starts(history);
 
     for (index, message) in history.iter().enumerate() {
+        if !should_include_request_message(index, message, scope, turn_starts) {
+            continue;
+        }
         if redundant.contains(&index) {
             continue;
         }
@@ -313,6 +343,63 @@ pub(crate) fn to_messages_with_instructions(
     }
 
     messages
+}
+
+fn request_turn_starts(history: &[ChatMessage]) -> Option<(usize, Option<usize>)> {
+    let mut users = history
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == "user")
+        .map(|(index, _)| index);
+    let active = users.next_back()?;
+    let previous = users.next_back();
+    Some((active, previous))
+}
+
+fn is_compaction_summary(message: &ChatMessage) -> bool {
+    message.role == "system"
+        && message
+            .content
+            .starts_with(crate::network::compaction::SUMMARY_MARKER)
+}
+
+fn is_lifecycle_notice(message: &ChatMessage) -> bool {
+    message.role == "system" && !is_compaction_summary(message)
+}
+
+fn is_durable_older_message(message: &ChatMessage) -> bool {
+    if message.conversation_recap || is_lifecycle_notice(message) {
+        return is_compaction_summary(message);
+    }
+    match message.role.as_str() {
+        "tool" => false,
+        "assistant" => message.tool_calls.is_empty(),
+        _ => true,
+    }
+}
+
+fn should_include_request_message(
+    index: usize,
+    message: &ChatMessage,
+    scope: HistoryRenderScope,
+    turn_starts: Option<(usize, Option<usize>)>,
+) -> bool {
+    if message.conversation_recap {
+        return false;
+    }
+    let HistoryRenderScope::RecentTurns = scope else {
+        return true;
+    };
+    let Some((active_start, previous_start)) = turn_starts else {
+        return true;
+    };
+    if index >= active_start {
+        return true;
+    }
+    if previous_start.is_some_and(|start| index >= start) {
+        return !is_lifecycle_notice(message);
+    }
+    is_durable_older_message(message)
 }
 
 fn runtime_notice(kind: &str, content: &str) -> serde_json::Value {
@@ -764,6 +851,59 @@ mod tests {
                 .unwrap()
                 .contains("provenance=\"lifecycle\"")
         );
+    }
+
+    #[test]
+    fn request_projection_keeps_recent_evidence_and_drops_stale_mechanics() {
+        let old_call = ChatMessage::new("assistant", "old tool call").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "old-call".into(),
+                name: "run_command".into(),
+                arguments: "{\"command\":\"old\"}".into(),
+            },
+        ]);
+        let old_result = ChatMessage::new("tool", "run_command: OLD RAW OUTPUT")
+            .answering(Some("old-call".into()));
+        let previous_call =
+            ChatMessage::new("assistant", "previous tool call").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: "previous-call".into(),
+                    name: "view_file".into(),
+                    arguments: "{\"path\":\"src/lib.rs\"}".into(),
+                },
+            ]);
+        let previous_result = ChatMessage::new("tool", "view_file: PREVIOUS INSPECTION EVIDENCE")
+            .answering(Some("previous-call".into()));
+        let history = vec![
+            ChatMessage::new("user", "old task"),
+            old_call,
+            old_result,
+            ChatMessage::new("system", "[old recovery: use another step]"),
+            ChatMessage::new("assistant", "old task finished"),
+            ChatMessage::new("user", "previous task"),
+            previous_call,
+            previous_result,
+            ChatMessage::new("system", "[previous recovery: retry]"),
+            ChatMessage::new("assistant", "previous task inspected the file"),
+            ChatMessage::new("user", "current task"),
+            ChatMessage::new("system", "[current recovery: inspect the actual error]"),
+        ];
+        let stored = serde_json::to_string(&history).expect("serialize history");
+
+        let messages = to_messages_for_request(
+            &history,
+            RequestInstructions::new("base", Some("developer")),
+        );
+        let rendered = serde_json::to_string(&messages).expect("render request");
+
+        assert!(rendered.contains("old task finished"));
+        assert!(!rendered.contains("OLD RAW OUTPUT"));
+        assert!(!rendered.contains("old-call"));
+        assert!(rendered.contains("PREVIOUS INSPECTION EVIDENCE"));
+        assert!(rendered.contains("previous-call"));
+        assert!(!rendered.contains("previous recovery"));
+        assert!(rendered.contains("current recovery"));
+        assert_eq!(serde_json::to_string(&history).unwrap(), stored);
     }
 
     #[test]

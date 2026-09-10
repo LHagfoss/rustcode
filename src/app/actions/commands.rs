@@ -59,6 +59,7 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 /// keep only a head of each so the transcript stays small and fast.
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
 const MAX_IDLE_SUMMARY_WORDS: usize = 32;
+const MAX_IDLE_RECAP_CHARS: usize = 512;
 
 pub(crate) fn compact_idle_summary(content: &str) -> String {
     // Some models put their recap inside their reasoning stream. Remove that
@@ -72,10 +73,112 @@ pub(crate) fn compact_idle_summary(content: &str) -> String {
         .filter(|line| !line.eq_ignore_ascii_case("conversation recap"))
         .collect::<Vec<_>>()
         .join(" ");
+    if text.is_empty() || looks_like_transcript_echo(&text) {
+        return String::new();
+    }
     text.split_whitespace()
         .take(MAX_IDLE_SUMMARY_WORDS)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn looks_like_transcript_echo(content: &str) -> bool {
+    let lower = content.trim_start().to_ascii_lowercase();
+    [
+        "tool:",
+        "system:",
+        "user:",
+        "assistant:",
+        "```tool",
+        "```json",
+    ]
+    .iter()
+    .any(|marker| lower.starts_with(marker))
+        || lower.contains("exit code:")
+        || lower.contains("stdout:")
+        || lower.contains("stderr:")
+}
+
+fn recap_fragment(content: &str, max_words: usize) -> String {
+    let text = crate::network::text::strip_tool_call_syntax(
+        &crate::network::text::strip_think_blocks(content),
+    )
+    .lines()
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
+    text.split_whitespace()
+        .take(max_words)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Build the automatic UI recap without sending the raw transcript to a
+/// model. Recaps are presentation state, so they should be cheap, bounded,
+/// and derived from user intent plus visible status rather than tool output.
+pub(crate) fn build_idle_recap(history: &[ChatMessage]) -> String {
+    let task_index = history.iter().enumerate().rev().find(|(_, message)| {
+        message.role == "user"
+            && !message.conversation_recap
+            && !message.content.starts_with("<tool_result>")
+    });
+    let task_position = task_index.map(|(index, _)| index);
+    let task = task_index
+        .as_ref()
+        .map(|(_, message)| recap_fragment(&message.content, 16))
+        .filter(|content| !content.is_empty());
+    let answer = task_position.and_then(|task_index| {
+        history
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(index, message)| {
+                *index > task_index
+                    && message.role == "assistant"
+                    && !message.conversation_recap
+                    && message.tool_calls.is_empty()
+            })
+            .and_then(|(_, message)| {
+                let content = recap_fragment(&message.content, 16);
+                (!content.is_empty()).then_some(content)
+            })
+    });
+    let failure = history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| {
+            if task_position.is_some_and(|task_index| index <= task_index) {
+                return None;
+            }
+            let record = message.tool_result.as_ref()?;
+            if record.success {
+                return None;
+            }
+            let kind = record
+                .error_kind
+                .as_deref()
+                .or_else(|| record.exit_code.map(|_| "command failure"))
+                .unwrap_or("tool failure");
+            Some(format!("{} ({kind})", record.tool_name))
+        });
+
+    let mut recap = match (task, answer, failure) {
+        (Some(task), Some(answer), _) => format!("Task: {task}. Latest status: {answer}."),
+        (Some(task), None, Some(failure)) => {
+            format!("Task: {task}. Latest status: blocked by {failure}.")
+        }
+        (Some(task), None, None) => format!("Task: {task}. No final result was recorded yet."),
+        (None, Some(answer), _) => format!("Latest status: {answer}."),
+        (None, None, Some(failure)) => format!("Latest status: blocked by {failure}."),
+        (None, None, None) => String::new(),
+    };
+    if recap.len() > MAX_IDLE_RECAP_CHARS {
+        recap.truncate(recap.floor_char_boundary(MAX_IDLE_RECAP_CHARS));
+        recap.push('…');
+    }
+    recap
 }
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
@@ -96,51 +199,58 @@ async fn summarize_session_inner(
     compact: bool,
 ) {
     let started = std::time::Instant::now();
-    let (api_base_url, model_name, transcript, captured_session_id, captured_history_len) = {
+    let (
+        api_base_url,
+        model_name,
+        transcript,
+        deterministic_recap,
+        captured_session_id,
+        captured_history_len,
+    ) = {
         let mut s = state_arc.lock().await;
         if !already_claimed && !s.claim_summary() {
             return;
         }
 
-        // Flatten the chat into a single plain transcript. Sending the raw
-        // history (system/assistant/tool roles) through the request builder's
-        // alternation/merge logic produced empty responses on some providers;
-        // one system instruction + one user message with the transcript is
-        // robust everywhere.
-        let mut transcript = String::new();
-        for m in &s.history {
-            if m.content.trim().is_empty() {
-                continue;
-            }
-            let who = match m.role.as_str() {
-                "user" => "USER",
-                "assistant" => "ASSISTANT",
-                "tool" => "TOOL",
-                _ => "SYSTEM",
-            };
-            // Trim verbose tool outputs — they dominate the byte count but add
-            // little the summary needs.
-            let body: String =
-                if m.role == "tool" && m.content.chars().count() > MAX_SUMMARY_TOOL_CHARS {
-                    let head: String = m.content.chars().take(MAX_SUMMARY_TOOL_CHARS).collect();
-                    format!("{head}… (truncated)")
-                } else {
-                    m.content.clone()
+        let deterministic_recap = compact.then(|| build_idle_recap(&s.history));
+        // Manual summaries retain the richer model-generated transcript, but
+        // idle UI recaps use the bounded deterministic projection above.
+        let transcript = if compact {
+            String::new()
+        } else {
+            let mut transcript = String::new();
+            for m in &s.history {
+                if m.content.trim().is_empty() || m.conversation_recap {
+                    continue;
+                }
+                let who = match m.role.as_str() {
+                    "user" => "USER",
+                    "assistant" => "ASSISTANT",
+                    "tool" => "TOOL",
+                    _ => "SYSTEM",
                 };
-            transcript.push_str(&format!("{who}: {body}\n\n"));
-        }
-        // Keep the most recent slice if oversized (char-boundary safe).
-        if transcript.len() > MAX_SUMMARY_TRANSCRIPT_CHARS {
-            let cut = transcript.len() - MAX_SUMMARY_TRANSCRIPT_CHARS;
-            let mut idx = cut;
-            while idx < transcript.len() && !transcript.is_char_boundary(idx) {
-                idx += 1;
+                let body: String =
+                    if m.role == "tool" && m.content.chars().count() > MAX_SUMMARY_TOOL_CHARS {
+                        let head: String = m.content.chars().take(MAX_SUMMARY_TOOL_CHARS).collect();
+                        format!("{head}… (truncated)")
+                    } else {
+                        m.content.clone()
+                    };
+                transcript.push_str(&format!("{who}: {body}\n\n"));
             }
-            transcript = format!(
-                "...(earlier conversation truncated)...\n\n{}",
-                &transcript[idx..]
-            );
-        }
+            if transcript.len() > MAX_SUMMARY_TRANSCRIPT_CHARS {
+                let cut = transcript.len() - MAX_SUMMARY_TRANSCRIPT_CHARS;
+                let mut idx = cut;
+                while idx < transcript.len() && !transcript.is_char_boundary(idx) {
+                    idx += 1;
+                }
+                transcript = format!(
+                    "...(earlier conversation truncated)...\n\n{}",
+                    &transcript[idx..]
+                );
+            }
+            transcript
+        };
 
         // Drive the existing status-bar spinner + elapsed timer.
 
@@ -152,6 +262,7 @@ async fn summarize_session_inner(
             s.api_base_url.clone(),
             s.model_name.clone(),
             transcript,
+            deterministic_recap,
             s.active_session_id.clone(),
             s.history.len(),
         )
@@ -163,6 +274,28 @@ async fn summarize_session_inner(
         api_base_url,
         transcript.len()
     );
+
+    if compact {
+        let mut s = state_arc.lock().await;
+        if s.active_session_id != captured_session_id || s.history.len() != captured_history_len {
+            s.summary_in_flight = false;
+            s.clear_current_response();
+            s.request_redraw();
+            return;
+        }
+        s.status = AppStatus::Idle;
+        s.generation_start_time = None;
+        s.clear_current_response();
+        if let Some(content) = deterministic_recap.filter(|content| !content.is_empty()) {
+            let mut msg = ChatMessage::new("assistant", content).as_conversation_recap();
+            msg.response_time_ms = Some(started.elapsed().as_millis() as u64);
+            s.history.push(msg);
+        }
+        s.finish_summary();
+        crate::config::save_session_history(&captured_session_id, &s.history);
+        s.request_redraw();
+        return;
+    }
 
     if transcript.trim().is_empty() {
         let mut s = state_arc.lock().await;

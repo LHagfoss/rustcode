@@ -1262,7 +1262,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let rendered_history = history::to_messages_with_instructions(
+    let rendered_history = history::to_messages_for_request(
         &history_snapshot,
         history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref()),
     );
