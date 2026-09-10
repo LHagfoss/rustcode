@@ -1,3 +1,9 @@
+## [v0.51.29](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.29) - 2026-09-10
+
+### Fixes
+- Execute one tool call per model round, including read-only inspection, to keep local-model context and tool state coherent.
+- Preserve structured tool-call/result pairing, sequential per-call compiler checks, and bounded over-eager tool responses.
+- Use one consistent divider color across conversation recap and work separators.
 ## [v0.51.28](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.28) - 2026-09-10
 
 ### Fixes
