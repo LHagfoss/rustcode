@@ -1157,7 +1157,12 @@ pub(super) fn push_centered_separator<'a>(
         Modifier::empty(),
         show_picker,
     );
-    let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let label_style = get_themed_style(
+        COLOR_TURN_SEPARATOR(),
+        COLOR_BG(),
+        Modifier::BOLD,
+        show_picker,
+    );
     lines.push(Line::from(vec![
         Span::styled("─".repeat(left), line_style),
         Span::styled(label, label_style),

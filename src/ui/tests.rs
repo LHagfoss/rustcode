@@ -2090,6 +2090,12 @@ fn resumed_session_separator_spans_width_and_centers_label() {
     assert_eq!(lines[0].width(), 0);
     assert_eq!(lines[1].width(), 60);
     assert_eq!(lines[1].spans[1].content, " Resumed Session ");
+    assert!(
+        lines[1]
+            .spans
+            .iter()
+            .all(|span| span.style.fg == Some(COLOR_TURN_SEPARATOR()))
+    );
 
     let left = lines[1].spans[0].content.width();
     let right = lines[1].spans[2].content.width();
@@ -3123,6 +3129,12 @@ fn conversation_recap_renders_as_compact_labeled_block() {
 
     assert!(text[0].starts_with("─ Conversation recap ─"));
     assert_eq!(text[0].chars().count(), 80);
+    assert!(
+        rendered[0]
+            .spans
+            .iter()
+            .all(|span| span.style.fg == Some(COLOR_TURN_SEPARATOR()))
+    );
     assert_eq!(text[1], "");
     assert_eq!(
         text[2],
