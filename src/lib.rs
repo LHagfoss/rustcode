@@ -134,6 +134,34 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(cli::Commands::Sessions { command }) = cli_args.command.as_ref() {
+        if let Some(cli::SessionCommands::Migrate { dry_run }) = command {
+            let Some(report) = config::migrate_legacy_sessions(*dry_run) else {
+                eprintln!("Session migration failed: configuration directory is unavailable.");
+                std::process::exit(1);
+            };
+            println!(
+                "{} {} legacy session(s): {} migrated, {} skipped, {} error(s).",
+                if *dry_run {
+                    "Would migrate"
+                } else {
+                    "Processed"
+                },
+                report.found,
+                report.migrated,
+                report.skipped,
+                report.errors.len()
+            );
+            for error in &report.errors {
+                eprintln!("session migration: {error}");
+            }
+            if !report.errors.is_empty() {
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(cli::Commands::Sync { command }) = cli_args.command {
         match command {
             Some(cli::SyncCommands::Pull) => {

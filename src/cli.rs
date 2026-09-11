@@ -56,6 +56,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<SyncCommands>,
     },
+
+    /// Inspect or migrate the on-disk session store
+    Sessions {
+        #[command(subcommand)]
+        command: Option<SessionCommands>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum SessionCommands {
+    /// Migrate legacy sessions into sessions/YYYY/MM/DD/<id>
+    Migrate {
+        /// Report the migration without changing files
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -104,6 +120,17 @@ mod tests {
         assert!(matches!(
             Cli::try_parse_from(["rustcode", "init"]).unwrap().command,
             Some(Commands::Init)
+        ));
+    }
+
+    #[test]
+    fn parses_session_migration_dry_run() {
+        let cli = Cli::try_parse_from(["rustcode", "sessions", "migrate", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Migrate { dry_run: true })
+            })
         ));
     }
 }
