@@ -133,11 +133,7 @@ pub(super) fn render_popup_menu(
             Span::styled(
                 left_text,
                 Style::default()
-                    .fg(if is_selected {
-                        COLOR_PRIMARY()
-                    } else {
-                        COLOR_TEXT()
-                    })
+                    .fg(COLOR_TEXT())
                     .bg(COLOR_PANEL())
                     .add_modifier(if is_selected {
                         Modifier::BOLD

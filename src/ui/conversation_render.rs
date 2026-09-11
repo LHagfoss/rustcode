@@ -337,13 +337,14 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     let line_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false);
     let label_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::BOLD, false);
     let label_width = label.width();
-    let mut lines = vec![Line::from(vec![
+    let mut lines = vec![Line::from("")];
+    lines.push(Line::from(vec![
         Span::styled(label, label_style),
         Span::styled(
             "─".repeat((width as usize).saturating_sub(label_width)),
             line_style,
         ),
-    ])];
+    ]));
     lines.push(Line::from(""));
     let message_padding = Span::styled("  ", line_style);
     let recap = crate::app::sanitize_recap_content(content);
