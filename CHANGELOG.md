@@ -1,3 +1,10 @@
+## [v0.51.38](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.38) - 2026-09-11
+
+### Fixes
+
+- Partition sessions by date with UUIDv7-shaped IDs and provide safe legacy migration with per-session diagnostics.
+- Share Rust dependency and native build-script caches across CI jobs.
+- Hide textual tool-call envelopes from the human-facing transcript.
 ## [v0.51.37](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.37) - 2026-09-11
 
 ### Fixes
