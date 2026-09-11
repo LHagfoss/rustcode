@@ -1,0 +1,23 @@
+# Maintainer: LHagfoss <github.com/LHagfoss>
+
+pkgname=rustcode
+pkgver=0.51.39
+pkgrel=1
+pkgdesc='Lightweight terminal UI agent harness'
+arch=('x86_64' 'aarch64')
+url='https://github.com/LHagfoss/rustcode'
+license=('unknown')
+depends=('glibc' 'gcc-libs')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/LHagfoss/rustcode/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('32c6d79413c83520bf82fbb6bd5b6b443816787f981c42620dae4589799c0ba4')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --locked --release
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/rustcode "$pkgdir/usr/bin/rustcode"
+}
