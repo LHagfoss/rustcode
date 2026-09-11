@@ -71,7 +71,11 @@ jobs:
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
               with:
-                  key: linux
+                  # Share dependency and native build-script artifacts between
+                  # the Linux test and lint jobs. The test-only FFmpeg flag is
+                  # read at runtime, so it must not split this compile cache.
+                  shared-key: linux
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -115,7 +119,8 @@ jobs:
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
               with:
-                  key: linux-lint
+                  shared-key: linux
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -180,7 +185,7 @@ jobs:
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
               with:
-                  key: ${{ matrix.cache_key }}
+                  shared-key: ${{ matrix.cache_key }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11

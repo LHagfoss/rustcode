@@ -64,7 +64,7 @@ jobs:
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
               with:
-                  key: ${{ matrix.target }}
+                  shared-key: ${{ matrix.target }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
