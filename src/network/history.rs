@@ -77,7 +77,7 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
     }
 }
 
-/// Indices of older exact-duplicate file reads excluded from the request.
+/// Indices of redundant read-only tool results excluded from the request.
 ///
 /// Pure, non-mutating selection (#985): storage keeps every message verbatim
 /// and only the rendered request drops the redundant older copy, while the
@@ -103,7 +103,37 @@ pub(crate) fn redundant_tool_result_indices(
             redundant.insert(index);
         }
     }
+    // A successfully loaded skill remains active for the turn. Keep its first
+    // body (the authoritative instructions) and discard later full replays or
+    // synthetic "already loaded" notices, including inside the active turn.
+    // Failed loads have neither marker and remain visible for diagnosis/retry.
+    let mut loaded_skills = std::collections::HashSet::new();
+    for (index, message) in history.iter().enumerate() {
+        let Some(skill) = duplicate_skill_load_key(&message.content) else {
+            continue;
+        };
+        if !loaded_skills.insert(skill) {
+            redundant.insert(index);
+        }
+    }
     redundant
+}
+
+fn duplicate_skill_load_key(content: &str) -> Option<String> {
+    const CONTENT_MARKER: &str = "use_skill: <skill_content name=\"";
+    const NOTICE_PREFIX: &str = "use_skill: Skill `";
+    const NOTICE_SUFFIX: &str = " is already loaded and active above";
+
+    if let Some(rest) = content.strip_prefix(CONTENT_MARKER) {
+        return rest
+            .split_once('"')
+            .map(|(name, _)| name.to_ascii_lowercase());
+    }
+    let rest = content.strip_prefix(NOTICE_PREFIX)?;
+    let (name, suffix) = rest.split_once('`')?;
+    suffix
+        .starts_with(NOTICE_SUFFIX)
+        .then(|| name.to_ascii_lowercase())
 }
 
 fn duplicate_file_read_key(content: &str) -> Option<String> {
@@ -1261,6 +1291,41 @@ mod tests {
         assert!(rendered.contains("src/b.rs"));
         assert!(rendered.contains("cannot read"));
         assert!(rendered.contains("Truncated"));
+    }
+
+    #[test]
+    fn render_time_dedup_keeps_one_skill_load_inside_active_turn() {
+        let body =
+            "use_skill: <skill_content name=\"openai-docs\">\ninstructions\n</skill_content>";
+        let history = vec![
+            ChatMessage::new("user", "use openai-docs"),
+            ChatMessage::new("tool", body),
+            ChatMessage::new("assistant", "loading again"),
+            ChatMessage::new("tool", body),
+            ChatMessage::new(
+                "tool",
+                "use_skill: Skill `openai-docs` is already loaded and active above. Proceed.",
+            ),
+        ];
+
+        let excluded = redundant_tool_result_indices(&history, history.len());
+        assert_eq!(excluded, std::collections::HashSet::from([3, 4]));
+
+        let messages = to_messages_for_request(&history, RequestInstructions::new("system", None));
+        let rendered = serde_json::to_string(&messages).expect("render history");
+        assert_eq!(rendered.matches("<skill_content").count(), 1);
+        assert!(!rendered.contains("already loaded and active"));
+    }
+
+    #[test]
+    fn render_time_dedup_preserves_failed_skill_loads() {
+        let history = vec![
+            ChatMessage::new("user", "use missing-skill"),
+            ChatMessage::new("tool", "use_skill: error: skill not found"),
+            ChatMessage::new("tool", "use_skill: error: skill not found"),
+        ];
+
+        assert!(redundant_tool_result_indices(&history, history.len()).is_empty());
     }
 
     // Repeated turns keep a stable prompt prefix: rendering turn two replays

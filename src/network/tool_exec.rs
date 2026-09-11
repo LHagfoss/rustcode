@@ -779,7 +779,31 @@ pub(crate) async fn execute_tool_batch(
             };
             is_repeat = cached_repeat.is_some();
 
-            let (execution, diff_opt, user_wait) = if is_repeat {
+            let already_loaded_skill = if name_clone == "use_skill" {
+                let requested = args_clone.get("name").and_then(|value| value.as_str());
+                let loaded = {
+                    let s = state_clone.lock().await;
+                    crate::skills::loaded_skills_since_latest_user(&s.history)
+                };
+                requested.and_then(|requested| {
+                    loaded
+                        .iter()
+                        .find(|name| name.eq_ignore_ascii_case(requested))
+                        .cloned()
+                })
+            } else {
+                None
+            };
+
+            let (execution, diff_opt, user_wait) = if let Some(skill_name) = already_loaded_skill {
+                (
+                    crate::tools::ToolExecutionOutput::success(format!(
+                        "Skill `{skill_name}` is already loaded and active above. Proceed with the actual task using its instructions; do not call `use_skill` again for this request."
+                    )),
+                    None,
+                    std::time::Duration::ZERO,
+                )
+            } else if is_repeat {
                 let tuple = match cached_repeat {
                     Some(previous) => {
                         let mut content = compact_replayed_read_result(

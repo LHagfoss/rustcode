@@ -4659,7 +4659,7 @@ fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt()
         description: "Solidtime workflow".to_string(),
         path: std::path::PathBuf::from("/skills/solidtime"),
     }];
-    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills)
+    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills, &[])
         .expect("named skill route");
     let mut dynamic_context = "# Environment\nworkspace".to_string();
     prepend_skill_routing_hint(&mut dynamic_context, Some(&hint));

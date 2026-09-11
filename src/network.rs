@@ -1219,13 +1219,18 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             || is_model_directed_note(m)
     });
 
+    let loaded_skills = crate::skills::loaded_skills_since_latest_user(&history_snapshot);
     let skill_hint = if let Some(latest_user_prompt) = history_snapshot
         .iter()
         .rev()
         .find(|message| message.role == "user")
         .map(|message| message.content.as_str())
     {
-        crate::skills::skill_routing_hint(latest_user_prompt, skill_metadata.as_slice())
+        crate::skills::skill_routing_hint(
+            latest_user_prompt,
+            skill_metadata.as_slice(),
+            &loaded_skills,
+        )
     } else {
         None
     };

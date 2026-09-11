@@ -638,6 +638,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut failure_replan = None;
             let mut evidence_recovery = None;
             let mut grounded_recovery = None;
+            let mut authentication_failure = false;
             let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
@@ -864,6 +865,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let semantic_failure = (!benign_shell_failure)
                     .then(|| loop_detect::semantic_failure_class(&content))
                     .flatten();
+                authentication_failure |= semantic_failure == Some("authentication");
                 let failure_fingerprint = semantic_failure
                     .map(|class| loop_detect::stable_hash(&format!("semantic_failure:{class}")))
                     .or_else(|| {
@@ -1134,9 +1136,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     "repeated tool output".to_string(),
                 ));
-                let recovery_guidance = if reason
-                    == loop_detect::ProgressReason::RepeatedVerification
-                {
+                let recovery_guidance = if authentication_failure {
+                    "The tool failed because authentication credentials are missing or invalid. Do not repeat the same request. Inspect the relevant environment/configuration for credentials if that is safe and in scope; otherwise report the authentication blocker clearly to the user."
+                } else if reason == loop_detect::ProgressReason::RepeatedVerification {
                     "This verification already passed for the unchanged workspace. Do not run it again. Verify a different user-visible behavior, make a necessary edit, or finish."
                 } else {
                     "Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command."

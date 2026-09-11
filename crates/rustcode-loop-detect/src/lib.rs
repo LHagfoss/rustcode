@@ -41,7 +41,13 @@ const SEARCH_BINS: &[&str] = &["rg", "grep", "ag", "ack", "fgrep", "egrep"];
 pub fn is_read_only(name: &str) -> bool {
     matches!(
         name,
-        "view_file" | "read_file" | "grep" | "list_directory" | "glob" | "find_symbol"
+        "view_file"
+            | "read_file"
+            | "grep"
+            | "list_directory"
+            | "glob"
+            | "find_symbol"
+            | "use_skill"
     )
 }
 
@@ -111,6 +117,12 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             Some(cmd) => normalize_command(cmd),
             None => exact.clone(),
         }
+    } else if name == "use_skill" {
+        args.get("name")
+            .and_then(Value::as_str)
+            .filter(|skill| !skill.is_empty())
+            .map(|skill| format!("skill:{skill}"))
+            .unwrap_or_else(|| exact.clone())
     } else if name == "grep" {
         let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
         let path = args
@@ -511,6 +523,10 @@ pub fn semantic_failure_class(output: &str) -> Option<&'static str> {
     if lower.contains("401 unauthorized")
         || lower.contains("unauthenticated")
         || lower.contains("no token found")
+        || lower.contains("missing credentials")
+        || lower.contains("credentials are missing")
+        || lower.contains("missing api key")
+        || lower.contains("api key is missing")
         || lower.contains("authentication failed")
         || lower.contains("authentication error")
     {
