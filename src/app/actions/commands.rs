@@ -100,12 +100,21 @@ fn looks_like_transcript_echo(content: &str) -> bool {
 }
 
 pub(crate) fn sanitize_recap_content(content: &str) -> String {
-    crate::network::text::strip_tool_call_syntax(&crate::network::text::strip_think_blocks(content))
-        .lines()
-        .map(normalize_recap_line)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+    let compact = crate::paste::compact(content);
+    crate::network::text::strip_tool_call_syntax(&crate::network::text::strip_think_blocks(
+        &compact,
+    ))
+    .lines()
+    .map(crate::network::text::strip_ansi_escapes)
+    .map(|line| -> String {
+        line.chars()
+            .filter(|character| !character.is_control())
+            .collect()
+    })
+    .map(|line| normalize_recap_line(&line))
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 fn recap_fragment(content: &str, max_words: usize) -> String {
@@ -119,18 +128,6 @@ fn recap_fragment(content: &str, max_words: usize) -> String {
 fn normalize_recap_line(line: &str) -> String {
     let mut line = line.trim().to_owned();
     let markdown_heading = line.starts_with('#');
-    if let Some(start) = line.find("<!--PASTE:")
-        && let Some(end) = line[start..].find("-->").map(|offset| start + offset + 3)
-    {
-        let payload = line[start..end]
-            .strip_prefix("<!--PASTE:")
-            .and_then(|payload| payload.strip_suffix("-->"))
-            .and_then(|payload| payload.split_once(':').map(|(_, body)| body))
-            .unwrap_or_default()
-            .to_owned();
-        line.replace_range(start..end, &payload);
-    }
-
     while line.starts_with(['#', '-', '*', '•']) {
         line.remove(0);
         line = line.trim_start().to_owned();

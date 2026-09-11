@@ -104,6 +104,58 @@ pub(super) fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
         .len() as u16
 }
 
+fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, Style)> {
+    let text_style = if state.input_buffer().starts_with('/') {
+        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
+    } else {
+        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
+    };
+    let marker_style =
+        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
+    let mut styled_chars = Vec::new();
+    for (segment, marker) in collapsed_marker_segments(&state.input_buffer()) {
+        let style = if marker.is_some() {
+            marker_style
+        } else {
+            text_style
+        };
+        styled_chars.extend(segment.chars().map(|character| (character, style)));
+    }
+
+    if state.input_buffer().is_empty() && state.get_command_suggestion().is_none() {
+        let placeholder_style =
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
+        styled_chars.extend(
+            "Ask RustCode to do anything"
+                .chars()
+                .map(|character| (character, placeholder_style)),
+        );
+    } else if let Some(suffix) = state.get_command_suggestion() {
+        let suggestion_style =
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
+        styled_chars.extend(
+            suffix
+                .chars()
+                .map(|character| (character, suggestion_style)),
+        );
+    }
+    styled_chars
+}
+
+pub(super) fn input_line_count(state: &RenderSnapshot, inner_width: usize) -> u16 {
+    if inner_width == 0 {
+        return 1;
+    }
+    wrap_input_chars(
+        &input_styled_chars(state, false),
+        inner_width,
+        0,
+        Style::default(),
+    )
+    .0
+    .len() as u16
+}
+
 pub(super) fn format_token_count(tokens: u32) -> String {
     if tokens >= 1000 {
         format!("{:.1}K", tokens as f32 / 1000.0)
@@ -506,40 +558,13 @@ pub(super) fn render_input(
     };
     let input_inner = area.inner(input_margin);
 
-    let text_style = if state.input_buffer().starts_with('/') {
-        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
-    } else {
-        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
-    };
-
     let inner_width = input_inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_dx = 0u16;
     let mut cursor_dy = 0u16;
 
     if inner_width > 0 {
-        let marker_style =
-            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
-        let mut styled_chars = Vec::new();
-        for (segment, marker) in collapsed_marker_segments(&state.input_buffer()) {
-            let style = if marker.is_some() {
-                marker_style
-            } else {
-                text_style
-            };
-            styled_chars.extend(segment.chars().map(|c| (c, style)));
-        }
-
-        if state.input_buffer().is_empty() && state.get_command_suggestion().is_none() {
-            let placeholder_style =
-                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
-            let placeholder_text = "Ask RustCode to do anything";
-            styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
-        } else if let Some(suffix) = state.get_command_suggestion() {
-            let suggestion_style =
-                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
-            styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
-        }
+        let styled_chars = input_styled_chars(state, show_picker);
 
         let safe_end = state.cursor_position().min(state.input_buffer().len());
         let safe_end = if state.input_buffer().is_char_boundary(safe_end) {

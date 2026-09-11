@@ -1731,6 +1731,21 @@ fn test_parse_multimodal_content_plain() {
 }
 
 #[test]
+fn test_parse_multimodal_content_expands_complete_paste_payload_once() {
+    let payload = "first --> second";
+    let marker = format!(
+        "before <!--PASTE:{}:{}--> after",
+        payload.chars().count(),
+        payload
+    );
+    let val = parse_multimodal_content(&marker);
+    assert_eq!(
+        val,
+        serde_json::Value::String("before first --> second after".to_string())
+    );
+}
+
+#[test]
 fn test_parse_multimodal_content_with_image_nonexistent() {
     let val = parse_multimodal_content(
         "Look at this: ![image](file:///nonexistent/path.png) interesting!",
