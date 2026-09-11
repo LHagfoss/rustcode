@@ -75,7 +75,7 @@ pub(crate) fn desired_height_snapshot(
 
     let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
     let question_active = *state.status() == AppStatus::AwaitingQuestion;
-    let raw_input_lines = count_input_lines(&state.input_buffer(), inner_width as usize);
+    let raw_input_lines = input_line_count(state, inner_width as usize);
     let input_height = if approval_active {
         tool_confirmation_height(state, available.saturating_sub(2))
     } else if question_active {
@@ -154,7 +154,7 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
-    let raw_input_lines = count_input_lines(&state.input_buffer(), inner_width as usize);
+    let raw_input_lines = input_line_count(state, inner_width as usize);
     let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
     let question_active = *state.status() == AppStatus::AwaitingQuestion;
     let provisional_input_height = if approval_active {

@@ -93,31 +93,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
 }
 
 pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
-    let clean_text = if text.contains("<!--PASTE:") {
-        let mut out = String::new();
-        let mut rest = text;
-        while let Some(idx) = rest.find("<!--PASTE:") {
-            out.push_str(&rest[..idx]);
-            let after = &rest[idx + "<!--PASTE:".len()..];
-            if let Some(end) = after.find("-->") {
-                let payload = &after[..end];
-                if let Some((_, body)) = payload.split_once(':') {
-                    out.push_str(body);
-                } else {
-                    out.push_str(payload);
-                }
-                rest = &after[end + 3..];
-            } else {
-                out.push_str(&rest[idx..]);
-                rest = "";
-                break;
-            }
-        }
-        out.push_str(rest);
-        out
-    } else {
-        text.to_string()
-    };
+    let clean_text = crate::paste::expand(text);
 
     if !clean_text.contains("![image](file://") {
         return serde_json::Value::String(clean_text);

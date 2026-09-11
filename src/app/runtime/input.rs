@@ -1312,7 +1312,10 @@ pub(super) async fn handle_app_event(
                             // to another token makes completion eligible again.
                         } else if s.sel_start.is_some() || s.sel_end.is_some() {
                             s.clear_selection();
-                        } else if !s.input_buffer.is_empty() {
+                        } else if !s.input_buffer.is_empty()
+                            && matches!(s.status, AppStatus::Idle)
+                            && s.running_tools.is_empty()
+                        {
                             s.input_buffer.clear();
                             s.cursor_position = 0;
                         } else {
@@ -1632,16 +1635,7 @@ pub(super) async fn handle_app_event(
                         }
                     }
                 } else {
-                    const PASTE_THRESHOLD: usize = 300;
-                    let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
-                        format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
-                    } else {
-                        normalized
-                    };
-                    for c in text_to_insert.chars() {
-                        s.insert_char(c);
-                    }
-                    s.reset_suggestion_cycle();
+                    composer.handle_paste(&mut s, &normalized);
                 }
                 *needs_redraw = true;
             }
