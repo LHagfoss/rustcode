@@ -1,3 +1,9 @@
+## [v0.51.36](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.36) - 2026-09-11
+
+### Fixes
+- Replay covered view_file subranges with the cached numbered source slice instead of a status-only notice.
+- Keep exact read replay compact while preserving truthful inspection metadata and offset/range safety.
+- Render cancelled turns as a left-aligned User Stopped separator without the X marker.
 ## [v0.51.35](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.35) - 2026-09-11
 
 ### Fixes
