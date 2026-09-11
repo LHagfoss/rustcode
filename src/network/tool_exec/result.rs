@@ -237,11 +237,10 @@ fn compact_reference_path(path: &str) -> String {
     bounded
 }
 
-/// Render the model-facing payload for an unchanged repeat. A bounded
-/// successful read body is included so the model can recover if the earlier
-/// result fell out of its active context; failures and truncated reads pass
-/// `None` and remain compact metadata-only replays. The first result remains
-/// the canonical source in history.
+/// Render the model-facing payload for an unchanged repeat. The original body
+/// remains in durable history and the replay carries only a compact, explicit
+/// status. Re-emitting the body here makes a model more likely to mistake a
+/// replay for a fresh or truncated read and start another inspection loop.
 pub(crate) fn compact_replayed_read_result(
     tool_name: &str,
     args: &serde_json::Value,
@@ -251,14 +250,14 @@ pub(crate) fn compact_replayed_read_result(
         .and_then(parse_view_header)
         .map(|(path, start, end, total)| {
             format!(
-                "{} lines {start} to {end} of {total}",
+                "{} Lines {start} to {end} of {total}",
                 compact_reference_path(&path)
             )
         })
         .or_else(|| {
             crate::network::loop_detect::read_target(tool_name, args).map(|(path, start, end)| {
                 format!(
-                    "{} lines {start} to {}",
+                    "{} Lines {start} to {}",
                     compact_reference_path(&path),
                     end.map_or_else(|| "end".to_string(), |end| end.to_string())
                 )
@@ -267,24 +266,10 @@ pub(crate) fn compact_replayed_read_result(
         .unwrap_or_else(|| "the same exact read arguments".to_string());
     let fingerprint = stable_arguments_hash(args);
 
-    let header = previous_content
-        .and_then(|content| content.lines().next())
-        .filter(|line| parse_view_header(line).is_some())
-        .map(|line| line.to_string());
-    let notice = format!(
-        "[Unchanged read replay: tool={tool_name}; fingerprint={fingerprint}; range={range}. "
-    ) + "The earlier result contains this unchanged output; use it instead of repeating the read. "
-        + "Request a different start_line/end_line range or use grep for new evidence.]";
-
-    let mut reference = previous_content
-        .map(str::to_owned)
-        .or(header)
-        .unwrap_or_default();
-    if !reference.is_empty() {
-        reference.push_str("\n\n");
-    }
-    reference.push_str(&notice);
-    reference
+    format!("[Unchanged read replay: tool={tool_name}; fingerprint={fingerprint}; range={range}. ")
+        + "The earlier result is complete and remains the canonical evidence in history; "
+        + "do not repeat this read. Request a different start_line/end_line range or use grep "
+        + "for new evidence.]"
 }
 
 pub(crate) fn tool_result_from_execution(

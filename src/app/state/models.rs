@@ -351,6 +351,9 @@ pub(crate) struct CachedReadOutput {
     pub(crate) full_output_artifact: Option<String>,
     pub(crate) error_kind: Option<crate::tools::ToolErrorKind>,
     pub(crate) retryable: bool,
+    /// Preserve the authoritative inspection facts instead of reconstructing
+    /// them from the compact model-facing replay text.
+    pub(crate) inspection: Option<rustcode_core::InspectionResultMetadata>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
