@@ -594,5 +594,9 @@ mod tests {
         let stripped_tool = strip_tool_call_syntax(tool_input);
         assert!(!stripped_tool.contains("run_command"));
         assert_eq!(stripped_tool.trim(), "Running tool:\n\nDone.");
+
+        let mistral = "Before\n[TOOL_CALLS]get_status[ARGS]{}\nAfter";
+        let stripped_mistral = strip_tool_call_syntax(mistral);
+        assert_eq!(stripped_mistral, "Before\n\nAfter");
     }
 }
