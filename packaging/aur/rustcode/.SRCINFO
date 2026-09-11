@@ -1,0 +1,15 @@
+pkgbase = rustcode
+	pkgdesc = Lightweight terminal UI agent harness
+	pkgver = 0.51.39
+	pkgrel = 1
+	url = https://github.com/LHagfoss/rustcode
+	arch = x86_64
+	arch = aarch64
+	license = unknown
+	depends = glibc
+	depends = gcc-libs
+	makedepends = cargo
+	source = rustcode-0.51.39.tar.gz::https://github.com/LHagfoss/rustcode/archive/refs/tags/v0.51.39.tar.gz
+	sha256sums = 32c6d79413c83520bf82fbb6bd5b6b443816787f981c42620dae4589799c0ba4
+
+pkgname = rustcode

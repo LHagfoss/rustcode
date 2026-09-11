@@ -49,6 +49,23 @@ brew trust lhagfoss/tap
 brew install rustcode
 ```
 
+### Arch Linux via the AUR
+
+Build and install the current tagged source release with an AUR helper:
+
+```bash
+paru -S rustcode
+```
+
+Keep the package updated with the rest of the system:
+
+```bash
+paru -Syu
+```
+
+The AUR package is source-built, so it also works on supported Arch
+architectures that do not have one of RustCode's prebuilt release archives.
+
 Official release binaries are published for Linux x86_64, macOS Apple Silicon
 (ARM64), and Windows x86_64. Intel macOS is not supported by the prebuilt
 installer or Homebrew formula. Building from source may support additional
