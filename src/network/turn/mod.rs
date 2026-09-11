@@ -242,6 +242,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         cancel_token,
         policy,
         ctx,
+        super::events::FinishReason::from_provider(response_finish_reason.as_deref()),
         turn_response_time_ms,
         turn_token_usage,
         thought_time_ms,
