@@ -8,7 +8,6 @@ pub(super) enum CollapsedMarker {
 
 pub(super) fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<CollapsedMarker>)> {
     const MARK_IMG: &str = "![image](file://";
-    const MARK_PASTE: &str = "<!--PASTE:";
     let mut segments = Vec::new();
     let mut rest = text;
     let mut img_n = 0;
@@ -16,7 +15,7 @@ pub(super) fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<Colla
 
     while !rest.is_empty() {
         let next_img = rest.find(MARK_IMG);
-        let next_paste = rest.find(MARK_PASTE);
+        let next_paste = crate::paste::find(rest, 0).map(|(index, _)| index);
         let (idx, is_image) = match (next_img, next_paste) {
             (None, None) => {
                 segments.push((rest.to_owned(), None));
@@ -40,21 +39,14 @@ pub(super) fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<Colla
             segments.push((format!("[Image #{img_n}]"), Some(CollapsedMarker::Image)));
             rest = &after[close + 1..];
         } else {
-            let after = &rest[idx + MARK_PASTE.len()..];
-            let Some(end) = after.find("-->") else {
+            let Some(marker) = crate::paste::parse_at(rest, idx) else {
                 segments.push((rest[idx..].to_owned(), None));
                 break;
             };
-            let payload = &after[..end];
             paste_n += 1;
-            let label = if let Some((len_str, body)) = payload.split_once(':') {
-                let len_num: usize = len_str.parse().unwrap_or(body.len());
-                format!("[Pasted Text #{paste_n} ({len_num} chars)]")
-            } else {
-                format!("[Pasted Text #{paste_n}]")
-            };
+            let label = format!("[Pasted Text #{paste_n} ({} chars)]", marker.char_count);
             segments.push((label, Some(CollapsedMarker::PastedText)));
-            rest = &after[end + 3..];
+            rest = &rest[marker.end..];
         }
     }
     segments

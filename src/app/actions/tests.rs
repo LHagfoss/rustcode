@@ -25,12 +25,26 @@ fn idle_recap_normalizes_structured_markdown_and_paste_markers() {
 
     assert_eq!(
         recap,
-        "Task: Review the project and fix every real issue. Latest status: Dummy reference in js/app.js. js/app.js."
+        "Task: [Pasted Text #1 (1318 chars)]. Latest status: Dummy reference in js/app.js. js/app.js."
     );
     assert!(!recap.contains("<!--PASTE:"));
     assert!(!recap.contains("###"));
     assert!(!recap.contains("**"));
     assert!(!recap.contains('`'));
+}
+
+#[test]
+fn idle_recap_keeps_multiline_paste_compact_and_strips_terminal_controls() {
+    let pasted = "first line\nsecond line --> with ansi \u{1b}[31mred\u{1b}[0m";
+    let marker = format!("<!--PASTE:{}:{}-->", pasted.chars().count(), pasted);
+    let recap = super::sanitize_recap_content(&format!("Task: {marker}"));
+
+    assert_eq!(
+        recap,
+        format!("Task: [Pasted Text #1 ({} chars)]", pasted.chars().count())
+    );
+    assert!(!recap.contains("first line"));
+    assert!(!recap.contains("\u{1b}"));
 }
 
 #[test]

@@ -295,6 +295,13 @@ where
         for row in 0..rows {
             let row_start = usize::from(row) * width;
             let row_cells = &rows_to_draw[row_start..row_start + width];
+            // `insert_before` writes over rows that may still contain the old
+            // mutable composer. Clear the complete physical row first so a
+            // shorter committed line cannot leave stale footer/composer text
+            // or background cells at its right edge.
+            self.backend
+                .set_cursor_position(Position::new(0, y + row))?;
+            self.backend.clear_region(ClearType::CurrentLine)?;
             let last_non_empty = row_cells.iter().rposition(|cell| {
                 cell.symbol() != " "
                     || cell.bg != ratatui::style::Color::Reset
@@ -565,5 +572,33 @@ mod tests {
                 .collect::<String>(),
             "Hello"
         );
+    }
+
+    #[test]
+    fn insert_before_clears_old_composer_cells_before_short_history_rows() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("old footer 72% context left"),
+                    ratatui::layout::Rect::new(0, 0, 40, 1),
+                );
+            })
+            .unwrap();
+
+        terminal
+            .insert_before(1, |buffer| {
+                buffer.set_string(0, 0, "new history", ratatui::style::Style::default());
+            })
+            .unwrap();
+        terminal.draw_height(4, |_| {}).unwrap();
+
+        let row: String = (0..40)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect();
+        assert_eq!(row.trim_end(), "new history");
+        assert!(!row.contains("old footer"));
+        assert!(!row.contains("72% context left"));
     }
 }
