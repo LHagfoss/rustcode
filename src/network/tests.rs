@@ -4073,10 +4073,59 @@ async fn repeated_unchanged_small_view_file_replays_cached_body() {
     assert!(!first.metadata.replayed);
     assert!(repeated.metadata.success, "got: {}", repeated.content);
     assert!(repeated.metadata.replayed);
-    assert!(repeated.content.contains("recoverable body"));
+    assert!(!repeated.content.contains("recoverable body"));
     assert!(repeated.content.contains("Unchanged read replay"));
     assert!(repeated.content.len() <= 50 * 1024);
     assert_eq!(repeated.metadata.inspection, first.metadata.inspection);
+}
+
+#[tokio::test]
+async fn view_file_subrange_reuses_complete_cached_read() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let subrange = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 2}),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, subrange).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("do not repeat this read"));
+    assert!(!repeated.content.contains("second"));
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.requested_range.clone()),
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(2),
+        })
+    );
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone()),
+        first
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone())
+    );
 }
 
 #[tokio::test]
@@ -4115,7 +4164,7 @@ async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
         "replayed read exceeded the context limit: {} bytes",
         repeated.content.len()
     );
-    assert!(repeated.content.contains("line 200:"));
+    assert!(!repeated.content.contains("line 200:"));
     assert!(repeated.content.contains("fingerprint="));
     assert!(repeated.content.contains("Lines 1 to 800"));
     assert!(repeated.content.contains("earlier result"));
@@ -4139,7 +4188,7 @@ async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
     let first_history = tool_result_history_message(first.clone(), None);
     let repeated_history = tool_result_history_message(repeated.clone(), None);
     assert!(first_history.content.contains("line 200:"));
-    assert!(repeated_history.content.contains("line 200:"));
+    assert!(!repeated_history.content.contains("line 200:"));
     assert!(
         repeated_history
             .tool_result
