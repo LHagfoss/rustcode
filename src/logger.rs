@@ -1,4 +1,6 @@
 use serde_json::Value;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 /// debug.log is append-only and never trimmed per write (that would make
 /// every log line pay for a size check). Instead, cap it cheaply once per
@@ -13,7 +15,31 @@ const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) fn rotate_if_oversized() {
     if let Some(log_dir) = crate::config::get_config_dir() {
         rotate_log_dir_if_oversized(&log_dir, MAX_DEBUG_LOG_BYTES);
+        if let Some(session_id) = active_session_id() {
+            let session_dir =
+                rustcode_session::SessionStore::new(&log_dir).session_dir(&session_id);
+            rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
+        }
     }
+}
+
+pub(crate) fn set_active_session_id(session_id: Option<&str>) {
+    let mut active = active_session_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *active = session_id.map(str::to_owned).filter(|id| !id.is_empty());
+}
+
+fn active_session_id() -> Option<String> {
+    active_session_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
+fn active_session_lock() -> &'static Mutex<Option<String>> {
+    static ACTIVE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(None))
 }
 
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
@@ -30,17 +56,33 @@ fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
 }
 
 pub(crate) fn append_line(line: &str) {
-    use std::io::Write;
     if let Some(log_dir) = crate::config::get_config_dir() {
-        let log_path = log_dir.join("debug.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let _ = writeln!(f, "[{now}] {line}");
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let formatted = format!("[{now}] {line}");
+        append_line_to_path(&log_dir.join("debug.log"), &formatted);
+
+        if let Some(session_id) = active_session_id() {
+            let session_dir =
+                rustcode_session::SessionStore::new(&log_dir).session_dir(&session_id);
+            let logs_dir = session_dir.join("logs");
+            let _ = std::fs::create_dir_all(&logs_dir);
+            rotate_log_dir_if_oversized(&logs_dir, MAX_DEBUG_LOG_BYTES);
+            append_line_to_path(&logs_dir.join("debug.log"), &formatted);
         }
+    }
+}
+
+fn append_line_to_path(path: &Path, line: &str) {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -104,5 +146,14 @@ mod tests {
         rotate_log_dir_if_oversized(dir.path(), 100);
         assert!(!dir.path().join("debug.log").exists());
         assert!(!dir.path().join("debug.log.1").exists());
+    }
+
+    #[test]
+    fn appends_session_log_lines_without_changing_global_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sessions/2026/09/11/abc/logs/debug.log");
+        append_line_to_path(&path, "[time] [op] {\"event\":\"turn.start\"}");
+        let contents = std::fs::read_to_string(path).expect("session log");
+        assert!(contents.contains("turn.start"));
     }
 }

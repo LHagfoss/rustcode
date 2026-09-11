@@ -4,8 +4,9 @@
 //! the application's configuration loader. This keeps persistence reusable by
 //! future frontends while retaining the existing on-disk format and paths.
 
+use chrono::{DateTime, Datelike, Local, TimeZone, Utc};
 use rustcode_core::{ChatMessage, History, rebuild_from_compaction_boundary};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock, atomic::AtomicU64, atomic::Ordering};
@@ -14,6 +15,8 @@ use std::time::Duration;
 pub const HISTORY_FILE: &str = "history.json";
 pub const SESSIONS_DIR: &str = "sessions";
 pub const IMAGE_CACHE_FILE: &str = "image_cache.json";
+pub const SESSION_METADATA_FILE: &str = "metadata.json";
+pub const SESSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_SESSIONS: usize = 30;
 
@@ -156,22 +159,40 @@ pub fn next_session_id_value(now: u64, previous: u64) -> u64 {
 }
 
 pub fn next_session_id() -> String {
-    static LAST_SESSION_ID: AtomicU64 = AtomicU64::new(0);
+    static LAST_SESSION_MILLIS: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
         .min(u64::MAX as u128) as u64;
-    let mut previous = LAST_SESSION_ID.load(Ordering::Relaxed);
+    let mut previous = LAST_SESSION_MILLIS.load(Ordering::Relaxed);
     loop {
         let candidate = next_session_id_value(now, previous);
-        match LAST_SESSION_ID.compare_exchange_weak(
+        match LAST_SESSION_MILLIS.compare_exchange_weak(
             previous,
             candidate,
             Ordering::Relaxed,
             Ordering::Relaxed,
         ) {
-            Ok(_) => return candidate.to_string(),
+            Ok(_) => {
+                let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                let process = std::process::id() as u64;
+                let entropy = sequence
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .wrapping_add(process.rotate_left(17))
+                    .wrapping_add(candidate.rotate_left(29));
+                // UUIDv7-shaped: the first 48 bits are milliseconds since the
+                // epoch, followed by the version and RFC 9562 variant bits.
+                return format!(
+                    "{:012x}-7{:03x}-{:04x}-{:04x}-{:012x}",
+                    candidate & 0x0000_ffff_ffff_ffff,
+                    sequence & 0xfff,
+                    0x8000 | ((entropy >> 48) as u16 & 0x3fff),
+                    (entropy >> 32) as u16,
+                    entropy & 0x0000_ffff_ffff_ffff,
+                );
+            }
             Err(actual) => previous = actual,
         }
     }
@@ -220,6 +241,42 @@ pub struct SessionMeta {
     pub message_count: usize,
 }
 
+/// Versioned information stored alongside a canonical session transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    pub schema_version: u32,
+    pub id: String,
+    pub created_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_from: Option<String>,
+}
+
+impl SessionMetadata {
+    fn new(id: &str, created_at_ms: u64, migrated_from: Option<String>) -> Self {
+        Self {
+            schema_version: SESSION_METADATA_SCHEMA_VERSION,
+            id: id.to_string(),
+            created_at_ms,
+            migrated_from,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionMigrationReport {
+    pub dry_run: bool,
+    pub found: usize,
+    pub migrated: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+impl SessionMigrationReport {
+    pub fn changed(&self) -> bool {
+        self.migrated > 0
+    }
+}
+
 #[derive(Deserialize)]
 struct ChatMessageMetaRef<'a> {
     #[serde(borrow)]
@@ -244,8 +301,81 @@ impl SessionStore {
         &self.root
     }
 
+    /// Return the canonical date-partitioned location for a session ID.
+    pub fn canonical_session_dir(&self, session_id: &str) -> PathBuf {
+        let (year, month, day) = session_date_parts(session_id).unwrap_or_else(current_date_parts);
+        self.root
+            .join(SESSIONS_DIR)
+            .join(format!("{year:04}"))
+            .join(format!("{month:02}"))
+            .join(format!("{day:02}"))
+            .join(session_id)
+    }
+
+    /// Resolve a session directory while retaining the old direct-directory
+    /// layout when it already exists. New IDs therefore use the canonical
+    /// date-partitioned layout without moving active legacy workspaces.
     pub fn session_dir(&self, session_id: &str) -> PathBuf {
-        self.root.join(SESSIONS_DIR).join(session_id)
+        let canonical = self.canonical_session_dir(session_id);
+        if canonical.is_dir() {
+            return canonical;
+        }
+        let legacy = self.root.join(SESSIONS_DIR).join(session_id);
+        if legacy.is_dir() { legacy } else { canonical }
+    }
+
+    /// Create a new session directory and its compatibility subdirectories.
+    pub fn ensure_session(&self, session_id: &str) -> PathBuf {
+        let directory = self.session_dir(session_id);
+        let _ = std::fs::create_dir_all(&directory);
+        let _ = std::fs::create_dir_all(directory.join("sandbox"));
+        let _ = std::fs::create_dir_all(directory.join("artifacts"));
+        self.write_metadata_if_missing(&directory, session_id, None);
+        directory
+    }
+
+    fn write_metadata_if_missing(
+        &self,
+        directory: &Path,
+        session_id: &str,
+        migrated_from: Option<String>,
+    ) {
+        let path = directory.join(SESSION_METADATA_FILE);
+        if path.exists() {
+            return;
+        }
+        let metadata = SessionMetadata::new(
+            session_id,
+            session_timestamp_ms(session_id).unwrap_or_else(current_time_ms),
+            migrated_from,
+        );
+        let Ok(json) = serde_json::to_string_pretty(&metadata) else {
+            return;
+        };
+        let _ = std::fs::write(path, json);
+    }
+
+    fn history_path_for_id(&self, session_id: &str) -> PathBuf {
+        let canonical = self.canonical_session_dir(session_id).join(HISTORY_FILE);
+        if canonical.exists() {
+            return canonical;
+        }
+        let legacy_dir = self
+            .root
+            .join(SESSIONS_DIR)
+            .join(session_id)
+            .join(HISTORY_FILE);
+        if legacy_dir.exists() {
+            return legacy_dir;
+        }
+        let legacy_file = self
+            .root
+            .join(SESSIONS_DIR)
+            .join(format!("{session_id}.json"));
+        if legacy_file.exists() {
+            return legacy_file;
+        }
+        self.session_dir(session_id).join(HISTORY_FILE)
     }
 
     pub fn session_has_content(history: &[ChatMessage]) -> bool {
@@ -270,11 +400,18 @@ impl SessionStore {
     pub fn session_id_from_path(path: &Path) -> Option<String> {
         if path.file_name().is_some_and(|name| name == HISTORY_FILE) {
             let parent = path.parent()?;
-            if parent
+            let is_legacy_directory = parent
                 .parent()
                 .and_then(|parent| parent.file_name())
-                .is_some_and(|component| component == SESSIONS_DIR)
-            {
+                .is_some_and(|component| component == SESSIONS_DIR);
+            let is_partitioned_directory = parent
+                .parent()
+                .and_then(|day| day.parent())
+                .and_then(|month| month.parent())
+                .and_then(|year| year.parent())
+                .and_then(|sessions| sessions.file_name())
+                .is_some_and(|component| component == SESSIONS_DIR);
+            if is_legacy_directory || is_partitioned_directory {
                 return parent
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -332,7 +469,7 @@ impl SessionStore {
     }
 
     pub fn session_id_has_content(&self, session_id: &str) -> bool {
-        let path = self.session_dir(session_id).join(HISTORY_FILE);
+        let path = self.history_path_for_id(session_id);
         let Ok(content) = std::fs::read_to_string(path) else {
             return false;
         };
@@ -362,15 +499,15 @@ impl SessionStore {
     }
 
     pub fn save_session_history<H: HistorySnapshot + ?Sized>(&self, session_id: &str, history: &H) {
-        queue_history_write(
-            self.session_dir(session_id).join(HISTORY_FILE),
-            history.messages(),
-            history.revision(),
-        );
+        let path = self.history_path_for_id(session_id);
+        if path == self.session_dir(session_id).join(HISTORY_FILE) {
+            self.ensure_session(session_id);
+        }
+        queue_history_write(path, history.messages(), history.revision());
     }
 
     pub fn save_session_title(&self, session_id: &str, title: &str) {
-        let session_dir = self.session_dir(session_id);
+        let session_dir = self.ensure_session(session_id);
         let _ = std::fs::create_dir_all(&session_dir);
         let _ = std::fs::write(session_dir.join("title.txt"), title);
     }
@@ -387,14 +524,14 @@ impl SessionStore {
     }
 
     pub fn load_session_history_direct(&self, session_id: &str) -> Vec<ChatMessage> {
-        self.load_session_file(&self.session_dir(session_id).join(HISTORY_FILE))
+        self.load_session_file(&self.history_path_for_id(session_id))
     }
 
     pub fn save_session_image_cache(&self, session_id: &str, cache: &HashMap<String, String>) {
         if cache.is_empty() {
             return;
         }
-        let session_dir = self.session_dir(session_id);
+        let session_dir = self.ensure_session(session_id);
         let _ = std::fs::create_dir_all(&session_dir);
         if let Ok(json) = serde_json::to_string_pretty(cache) {
             let _ = std::fs::write(session_dir.join(IMAGE_CACHE_FILE), json);
@@ -476,10 +613,7 @@ impl SessionStore {
         if !Self::session_has_content(history) {
             return None;
         }
-        let session_dir = self.root.join(SESSIONS_DIR).join(next_session_id());
-        std::fs::create_dir_all(&session_dir).ok()?;
-        std::fs::create_dir_all(session_dir.join("sandbox")).ok()?;
-        std::fs::create_dir_all(session_dir.join("artifacts")).ok()?;
+        let session_dir = self.ensure_session(&next_session_id());
         let path = session_dir.join(HISTORY_FILE);
         let json = serde_json::to_string_pretty(history).ok()?;
         std::fs::write(&path, json).ok()?;
@@ -488,25 +622,21 @@ impl SessionStore {
     }
 
     fn prune_sessions(&self) {
-        let Ok(entries) = std::fs::read_dir(self.root.join(SESSIONS_DIR)) else {
-            return;
-        };
-        let mut targets = Vec::new();
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() && path.join(HISTORY_FILE).exists() {
-                targets.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                targets.push(path);
-            }
-        }
+        let mut targets = self
+            .discovered_session_paths()
+            .into_iter()
+            .map(|path| session_storage_root(&path))
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
         if targets.len() <= MAX_SESSIONS {
             return;
         }
-        targets.sort();
+        targets.sort_by(|left, right| {
+            session_sort_key(left)
+                .cmp(&session_sort_key(right))
+                .then_with(|| left.cmp(right))
+        });
         for old in &targets[..targets.len() - MAX_SESSIONS] {
             if old.is_dir() {
                 let _ = std::fs::remove_dir_all(old);
@@ -517,23 +647,12 @@ impl SessionStore {
     }
 
     pub fn sorted_session_paths(&self) -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(self.root.join(SESSIONS_DIR)) else {
-            return Vec::new();
-        };
-        let mut paths = Vec::new();
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() && path.join(HISTORY_FILE).exists() {
-                paths.push(path.join(HISTORY_FILE));
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                paths.push(path);
-            }
-        }
-        paths.sort();
-        paths.reverse();
+        let mut paths = self.discovered_session_paths();
+        paths.sort_by(|left, right| {
+            session_sort_key(right)
+                .cmp(&session_sort_key(left))
+                .then_with(|| right.cmp(left))
+        });
         paths
     }
 
@@ -544,15 +663,10 @@ impl SessionStore {
     }
 
     pub fn session_meta_by_id(&self, id: &str) -> Option<SessionMeta> {
-        let nested = self.session_dir(id).join(HISTORY_FILE);
-        if nested.exists() {
-            self.load_session_meta(&nested)
-        } else {
-            let flat = self.root.join(SESSIONS_DIR).join(format!("{id}.json"));
-            flat.exists()
-                .then(|| self.load_session_meta(&flat))
-                .flatten()
-        }
+        self.sorted_session_paths()
+            .into_iter()
+            .find(|path| Self::session_id_from_path(path).as_deref() == Some(id))
+            .and_then(|path| self.load_session_meta(&path))
     }
 
     pub fn list_sessions_limited(&self, limit: usize) -> (Vec<SessionMeta>, bool) {
@@ -586,9 +700,7 @@ impl SessionStore {
     pub fn delete_session_file(path: &Path) {
         if path.file_name().is_some_and(|name| name == HISTORY_FILE) {
             if let Some(parent) = path.parent()
-                && parent
-                    .parent()
-                    .is_some_and(|root| root.ends_with(SESSIONS_DIR))
+                && is_session_directory(parent)
             {
                 let _ = std::fs::remove_dir_all(parent);
             }
@@ -599,6 +711,265 @@ impl SessionStore {
             let _ = std::fs::remove_file(path);
         }
     }
+
+    fn discovered_session_paths(&self) -> Vec<PathBuf> {
+        let sessions = self.root.join(SESSIONS_DIR);
+        let Ok(entries) = std::fs::read_dir(&sessions) else {
+            return Vec::new();
+        };
+
+        let mut paths = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() && path.join(HISTORY_FILE).is_file() {
+                // Legacy sessions/<id>/history.json.
+                paths.push(path.join(HISTORY_FILE));
+                continue;
+            }
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+            {
+                // Legacy sessions/<id>.json.
+                paths.push(path);
+                continue;
+            }
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Canonical sessions/YYYY/MM/DD/<id>/history.json. Walk exactly
+            // these four levels so unrelated files below sessions/ are not
+            // accidentally treated as transcripts.
+            for month in read_directories(&path) {
+                for day in read_directories(&month) {
+                    for session in read_directories(&day) {
+                        let history = session.join(HISTORY_FILE);
+                        if history.is_file() {
+                            paths.push(history);
+                        }
+                    }
+                }
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// Migrate legacy direct session directories and `sessions/*.json` files
+    /// into the canonical date-partitioned layout. The operation is safe to
+    /// repeat: a source is removed only after its destination is complete.
+    pub fn migrate_legacy_sessions(&self, dry_run: bool) -> SessionMigrationReport {
+        let sources = self
+            .discovered_session_paths()
+            .into_iter()
+            .filter(|path| is_legacy_session_path(path))
+            .collect::<Vec<_>>();
+        let mut report = SessionMigrationReport {
+            dry_run,
+            found: sources.len(),
+            ..Default::default()
+        };
+
+        for source in sources {
+            let Some(id) = Self::session_id_from_path(&source) else {
+                report.skipped += 1;
+                continue;
+            };
+            let destination = self.canonical_session_dir(&id);
+            if destination.exists() {
+                report.skipped += 1;
+                continue;
+            }
+            if dry_run {
+                report.migrated += 1;
+                continue;
+            }
+
+            let source_root = session_storage_root(&source);
+            let temporary =
+                destination.with_file_name(format!(".{}.migrating-{}", id, std::process::id()));
+            if let Some(parent) = destination.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                report.errors.push(format!("{}: {error}", source.display()));
+                continue;
+            }
+            let _ = std::fs::remove_dir_all(&temporary);
+            let result = if source_root.is_dir() {
+                copy_directory(&source_root, &temporary)
+            } else {
+                std::fs::create_dir_all(&temporary)
+                    .and_then(|()| std::fs::copy(&source_root, temporary.join(HISTORY_FILE)))
+                    .map(|_| ())
+            }
+            .and_then(|()| {
+                std::fs::create_dir_all(temporary.join("logs"))?;
+                self.write_metadata_if_missing(
+                    &temporary,
+                    &id,
+                    Some(relative_session_path(&self.root, &source)),
+                );
+                if destination.exists() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "destination appeared during migration",
+                    ));
+                }
+                std::fs::rename(&temporary, &destination)
+            });
+            if let Err(error) = result {
+                let _ = std::fs::remove_dir_all(&temporary);
+                report.errors.push(format!("{}: {error}", source.display()));
+                continue;
+            }
+            let remove_result = if source_root.is_dir() {
+                std::fs::remove_dir_all(&source_root)
+            } else {
+                std::fs::remove_file(&source_root)
+            };
+            if let Err(error) = remove_result {
+                report.errors.push(format!("{}: {error}", source.display()));
+                continue;
+            }
+            report.migrated += 1;
+        }
+        report
+    }
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn current_date_parts() -> (i32, u32, u32) {
+    let now = DateTime::<Local>::from(std::time::SystemTime::now());
+    (now.year(), now.month(), now.day())
+}
+
+fn session_timestamp_ms(session_id: &str) -> Option<u64> {
+    if session_id
+        .chars()
+        .all(|character| character.is_ascii_digit())
+    {
+        return session_id.parse().ok();
+    }
+    let compact = session_id.replace('-', "");
+    (compact.len() >= 12
+        && compact[..12]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit()))
+    .then(|| u64::from_str_radix(&compact[..12], 16).ok())
+    .flatten()
+}
+
+fn session_date_parts(session_id: &str) -> Option<(i32, u32, u32)> {
+    let timestamp = session_timestamp_ms(session_id)?;
+    let date = Utc
+        .timestamp_millis_opt(timestamp as i64)
+        .single()?
+        .with_timezone(&Local);
+    Some((date.year(), date.month(), date.day()))
+}
+
+fn read_directories(path: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(path)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn is_session_directory(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    if path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|component| component == SESSIONS_DIR)
+    {
+        return true;
+    }
+    path.parent()
+        .and_then(|day| day.parent())
+        .and_then(|month| month.parent())
+        .and_then(|year| year.parent())
+        .and_then(|sessions| sessions.file_name())
+        .is_some_and(|component| component == SESSIONS_DIR)
+        && !name.is_empty()
+}
+
+fn is_legacy_session_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|component| component == SESSIONS_DIR)
+        || path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .and_then(|sessions| sessions.file_name())
+            .is_some_and(|component| component == SESSIONS_DIR)
+}
+
+fn session_storage_root(history_path: &Path) -> PathBuf {
+    if history_path
+        .file_name()
+        .is_some_and(|name| name == HISTORY_FILE)
+    {
+        history_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| history_path.to_path_buf())
+    } else {
+        history_path.to_path_buf()
+    }
+}
+
+fn relative_session_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn session_sort_key(path: &Path) -> (u64, String) {
+    let id = SessionStore::session_id_from_path(path).unwrap_or_default();
+    let timestamp = session_timestamp_ms(&id)
+        .or_else(|| {
+            std::fs::metadata(path)
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        })
+        .unwrap_or(0);
+    (timestamp, path.to_string_lossy().into_owned())
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if from.is_dir() {
+            copy_directory(&from, &to)?;
+        } else {
+            std::fs::copy(from, to)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -749,5 +1120,170 @@ mod tests {
         let cache = HashMap::from([(String::from("hash"), String::from("result"))]);
         store.save_session_image_cache("abc", &cache);
         assert_eq!(store.load_session_image_cache("abc"), cache);
+    }
+
+    fn saved_history() -> Vec<ChatMessage> {
+        vec![
+            message("user", "legacy prompt"),
+            message("assistant", "answer"),
+        ]
+    }
+
+    fn write_history(path: &Path) {
+        let history = serde_json::to_string(&saved_history()).expect("serialize history");
+        std::fs::create_dir_all(path.parent().expect("history parent")).expect("parent");
+        std::fs::write(path, history).expect("history");
+    }
+
+    #[test]
+    fn canonical_layout_is_date_partitioned_and_metadata_is_versioned() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000001";
+
+        let expected_date = session_date_parts(id).expect("UUIDv7 timestamp");
+        let directory = store.ensure_session(id);
+        assert_eq!(
+            directory,
+            root.path()
+                .join(SESSIONS_DIR)
+                .join(format!("{:04}", expected_date.0))
+                .join(format!("{:02}", expected_date.1))
+                .join(format!("{:02}", expected_date.2))
+                .join(id)
+        );
+        let metadata: SessionMetadata = serde_json::from_str(
+            &std::fs::read_to_string(directory.join(SESSION_METADATA_FILE)).expect("metadata"),
+        )
+        .expect("valid metadata");
+        assert_eq!(
+            SessionStore::session_id_from_path(&directory.join(HISTORY_FILE)).as_deref(),
+            Some(id)
+        );
+        assert_eq!(metadata.schema_version, SESSION_METADATA_SCHEMA_VERSION);
+        assert_eq!(metadata.id, id);
+    }
+
+    #[test]
+    fn legacy_directories_and_flat_files_are_discovered_and_sorted() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let sessions = root.path().join(SESSIONS_DIR);
+        write_history(&sessions.join("1704067200000").join(HISTORY_FILE));
+        write_history(&sessions.join("1704153600000.json"));
+
+        let paths = store.sorted_session_paths();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(
+            SessionStore::session_id_from_path(&paths[0]).as_deref(),
+            Some("1704153600000")
+        );
+        assert_eq!(
+            SessionStore::session_id_from_path(&paths[1]).as_deref(),
+            Some("1704067200000")
+        );
+        assert_eq!(
+            store
+                .session_meta_by_id("1704067200000")
+                .expect("legacy directory")
+                .message_count,
+            2
+        );
+        assert_eq!(
+            store
+                .session_meta_by_id("1704153600000")
+                .expect("legacy flat file")
+                .message_count,
+            2
+        );
+    }
+
+    #[test]
+    fn migration_supports_dry_run_is_idempotent_and_preserves_tree() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let legacy = root.path().join(SESSIONS_DIR).join("1704067200000");
+        write_history(&legacy.join(HISTORY_FILE));
+        std::fs::create_dir_all(legacy.join("sandbox")).expect("sandbox");
+        std::fs::create_dir_all(legacy.join("artifacts")).expect("artifacts");
+        std::fs::create_dir_all(legacy.join("subagents").join("agent-1")).expect("subagent");
+        std::fs::write(legacy.join("artifacts").join("result.txt"), "artifact").expect("artifact");
+        let flat = root.path().join(SESSIONS_DIR).join("1704153600000.json");
+        write_history(&flat);
+
+        let dry_run = store.migrate_legacy_sessions(true);
+        assert_eq!(dry_run.found, 2);
+        assert_eq!(dry_run.migrated, 2);
+        assert!(!store.canonical_session_dir("1704067200000").exists());
+        assert!(legacy.exists());
+        assert!(flat.exists());
+
+        let applied = store.migrate_legacy_sessions(false);
+        assert_eq!(applied.migrated, 2);
+        assert!(
+            store
+                .canonical_session_dir("1704067200000")
+                .join("artifacts/result.txt")
+                .exists()
+        );
+        assert!(
+            store
+                .canonical_session_dir("1704067200000")
+                .join(SESSION_METADATA_FILE)
+                .exists()
+        );
+        assert!(!legacy.exists());
+        assert!(!flat.exists());
+
+        let repeated = store.migrate_legacy_sessions(false);
+        assert_eq!(repeated.found, 0);
+        assert_eq!(repeated.migrated, 0);
+    }
+
+    #[test]
+    fn migration_does_not_overwrite_a_destination_collision() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "1704067200000";
+        let legacy = root.path().join(SESSIONS_DIR).join(id);
+        write_history(&legacy.join(HISTORY_FILE));
+        let destination = store.canonical_session_dir(id);
+        write_history(&destination.join(HISTORY_FILE));
+        std::fs::write(destination.join("sentinel.txt"), "keep").expect("sentinel");
+
+        let report = store.migrate_legacy_sessions(false);
+        assert_eq!(report.found, 1);
+        assert_eq!(report.skipped, 1);
+        assert!(legacy.exists());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("sentinel.txt")).expect("sentinel"),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn legacy_workspace_paths_remain_under_the_legacy_directory() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "1704067200000";
+        let legacy = root.path().join(SESSIONS_DIR).join(id);
+        write_history(&legacy.join(HISTORY_FILE));
+
+        assert_eq!(store.get_active_session_dir(id), legacy);
+        assert_eq!(
+            store.get_active_session_sandbox_dir(id),
+            legacy.join("sandbox")
+        );
+        assert_eq!(
+            store.get_active_session_artifacts_dir(id),
+            legacy.join("artifacts")
+        );
+        assert_eq!(
+            store
+                .get_active_session_dir(id)
+                .join("subagents")
+                .join("agent-7"),
+            legacy.join("subagents/agent-7")
+        );
     }
 }
