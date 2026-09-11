@@ -440,6 +440,11 @@ pub(super) fn render_assistant_message<'a>(
     }
 
     let main_content = strip_rendered_tool_blocks(main_content);
+    // Some JSON-protocol models serialize a tool envelope as prose even when
+    // the same response also contains a structured call. Keep that envelope
+    // executable in the network layer, but never expose its wire syntax in
+    // the human-facing transcript.
+    let main_content = crate::network::text::strip_tool_call_syntax(&main_content);
     let normalized_main_content = unwrap_markdown_table_fences(&main_content);
     let main_content = normalized_main_content.as_ref();
     if !main_content.trim().is_empty() || is_generating {
