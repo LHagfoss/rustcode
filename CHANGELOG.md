@@ -1,3 +1,9 @@
+## [v0.51.37](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.37) - 2026-09-11
+
+### Fixes
+- Stabilized composer sizing and input routing across multiline, paste, and cancellation states.
+- Kept large pasted content compact in recaps while preserving full provider payloads.
+- Fixed stale inline-terminal rows and added the requested Braille activity spinner.
 ## [v0.51.36](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.36) - 2026-09-11
 
 ### Fixes
