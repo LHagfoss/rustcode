@@ -28,6 +28,67 @@ pub(crate) use result::{
     bounded_tool_result_history_message, compact_replayed_read_result, finalize_tool_result,
     subagent_tool_history_message, tool_result_from_execution, tool_result_history_message,
 };
+
+fn cached_read_covers_request(
+    cached: &crate::app::CachedReadOutput,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> bool {
+    if !cached.success
+        || cached.truncated
+        || cached.replayable_content.is_none()
+        || !matches!(
+            cached.completeness,
+            rustcode_core::ToolResultCompleteness::Complete
+                | rustcode_core::ToolResultCompleteness::UserLimited
+        )
+    {
+        return false;
+    }
+    let Some(inspection) = cached.inspection.as_ref() else {
+        return false;
+    };
+    let Some((requested_path, requested_start, requested_end)) =
+        crate::network::loop_detect::read_target(tool_name, args)
+    else {
+        return false;
+    };
+    let stored_path = inspection
+        .returned_path
+        .as_ref()
+        .or(inspection.requested_path.as_ref());
+    if stored_path != Some(&requested_path) {
+        return false;
+    }
+    let Some(stored_range) = inspection
+        .returned_range
+        .as_ref()
+        .or(inspection.requested_range.as_ref())
+    else {
+        return false;
+    };
+    let stored_start = stored_range.start.unwrap_or(1);
+    let stored_end = stored_range.end.unwrap_or(u64::MAX);
+    let requested_end = requested_end.map_or(stored_end, |end| end as u64);
+    (requested_start as u64) >= stored_start && requested_end <= stored_end
+}
+
+fn replay_inspection_for_request(
+    cached: &crate::app::CachedReadOutput,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> Option<rustcode_core::InspectionResultMetadata> {
+    let mut inspection = cached.inspection.clone()?;
+    if let Some((path, start, end)) = crate::network::loop_detect::read_target(tool_name, args) {
+        inspection.requested_path = Some(path);
+        inspection.requested_range = Some(rustcode_core::InspectionRange {
+            start: Some(start as u64),
+            end: end.map(|value| value as u64),
+        });
+    }
+    Some(inspection)
+}
+
 pub(crate) async fn ask_user_question(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
@@ -662,19 +723,12 @@ pub(crate) async fn execute_tool_batch(
             if is_read_only {
                 if name_clone == "view_file" {
                     if let Some(p) = args_clone.get("path").and_then(|p| p.as_str()) {
-                        let sig = tool_signature(&name_clone, &args_clone);
-                        let already_seen = {
+                        let current = path_mtime(p);
+                        let stored = {
                             let s = state_clone.lock().await;
-                            s.recent_read_calls.iter().any(|c| c == &sig)
+                            s.read_file_mtimes.get(p).copied()
                         };
-                        if already_seen {
-                            let current = path_mtime(p);
-                            let stored = {
-                                let s = state_clone.lock().await;
-                                s.read_file_mtimes.get(p).copied()
-                            };
-                            is_repeat = view_file_unchanged_since_last_read(stored, current);
-                        }
+                        is_repeat = view_file_unchanged_since_last_read(stored, current);
                         view_path = Some(p.to_string());
                         view_mtime = path_mtime(p);
                     }
@@ -693,9 +747,23 @@ pub(crate) async fn execute_tool_batch(
             // have removed that body, so execute those reads again.
             let cached_repeat = if is_repeat {
                 let s = state_clone.lock().await;
-                s.recent_read_outputs
+                let exact = s
+                    .recent_read_outputs
                     .get(&tool_signature(&name_clone, &args_clone))
-                    .cloned()
+                    .cloned();
+                exact
+                    .or_else(|| {
+                        if name_clone == "view_file" {
+                            s.recent_read_outputs
+                                .values()
+                                .find(|previous| {
+                                    cached_read_covers_request(previous, &name_clone, &args_clone)
+                                })
+                                .cloned()
+                        } else {
+                            None
+                        }
+                    })
                     .filter(|previous| {
                         previous.success
                             && !previous.truncated
@@ -815,6 +883,7 @@ pub(crate) async fn execute_tool_batch(
                             full_output_artifact: None,
                             error_kind: execution.error_kind,
                             retryable: execution.retryable,
+                            inspection: None,
                         },
                     );
                     if !s.recent_read_calls.contains(&sig) {
@@ -897,7 +966,29 @@ pub(crate) async fn execute_tool_batch(
         let notice = (result.tool_name == "use_skill")
             .then_some(deferred_notice.as_deref())
             .flatten();
-        let finalized = finalize_tool_result(result.clone(), notice);
+        let cached_inspection = if result.metadata.replayed {
+            let s = state.lock().await;
+            s.recent_read_outputs
+                .get(&tool_signature(&call.name, &call.arguments))
+                .or_else(|| {
+                    if call.name == "view_file" {
+                        s.recent_read_outputs.values().find(|cached| {
+                            cached_read_covers_request(cached, &call.name, &call.arguments)
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .and_then(|cached| {
+                    replay_inspection_for_request(cached, &call.name, &call.arguments)
+                })
+        } else {
+            None
+        };
+        let mut finalized = finalize_tool_result(result.clone(), notice);
+        if let Some(inspection) = cached_inspection {
+            finalized.metadata.inspection = Some(inspection);
+        }
         *result = finalized;
         if is_read_only_tool(&call.name) {
             let sig = tool_signature(&call.name, &call.arguments);
@@ -908,6 +999,7 @@ pub(crate) async fn execute_tool_batch(
                 cached.completeness = result.metadata.completeness;
                 cached.error_kind = result.metadata.error_kind;
                 cached.retryable = result.metadata.retryable;
+                cached.inspection = result.metadata.inspection.clone();
                 if result.metadata.full_output_artifact.is_some() {
                     cached.full_output_artifact = result.metadata.full_output_artifact.clone();
                 }
