@@ -1,3 +1,7 @@
+## [v0.51.39](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.39) - 2026-09-11
+
+### Fixes
+- Migrate legacy session directories that contain only sandbox or artifact state.
 ## [v0.51.38](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.38) - 2026-09-11
 
 ### Fixes
