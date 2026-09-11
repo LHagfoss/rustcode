@@ -65,11 +65,27 @@ cargo install --path .
 
 ## Keeping it upgraded
 
-RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows!
+RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows.
+Native installations update from GitHub Releases; Homebrew installations use Homebrew.
 
 - **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
 - **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
 - **Homebrew (macOS):** `brew upgrade rustcode`
+
+### Updating pre-v0.31.0 native installs
+
+Native binaries released before v0.31.0 predate the GitHub Release updater and
+cannot bootstrap themselves without Homebrew. Reinstall once from the current
+release, then `rustcode --update` will use the matching GitHub archive for
+future upgrades:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+```
+
+The installer verifies the downloaded archive with the release SHA256 manifest
+before replacing the existing binary. Homebrew installations should instead
+continue to use `brew upgrade rustcode`.
 
 ## ACP runtime
 
