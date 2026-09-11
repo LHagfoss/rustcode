@@ -1,18 +1,23 @@
 use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
-pub use rustcode_session::{HistorySnapshot, SessionMeta, WorkspaceManager, WorkspaceRequest};
+pub use rustcode_session::{
+    HistorySnapshot, SessionMeta, SessionMigrationReport, WorkspaceManager, WorkspaceRequest,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const HISTORY_FILE: &str = rustcode_session::HISTORY_FILE;
-const SESSIONS_DIR: &str = rustcode_session::SESSIONS_DIR;
 pub const SESSION_SETTINGS_FILE: &str = "settings.json";
 const SESSION_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 fn store() -> Option<SessionStore> {
     get_config_dir().map(SessionStore::new)
+}
+
+fn ensure_session_dir(session_id: &str) -> Option<PathBuf> {
+    store().map(|session_store| session_store.ensure_session(session_id))
 }
 
 pub(super) fn next_session_id_value(now: u64, previous: u64) -> u64 {
@@ -55,6 +60,7 @@ pub fn set_active_session_id(session_id: &str) {
     } else {
         Some(session_id.to_string())
     };
+    crate::logger::set_active_session_id(cache.as_deref());
 }
 
 fn active_session_cache() -> &'static Mutex<Option<String>> {
@@ -319,6 +325,12 @@ pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<Path
         .create_subagent_workspace(session_id, agent_id)
 }
 
+/// Migrate only the configured RustCode session store. Callers can inspect the
+/// report in dry-run mode before allowing the filesystem changes.
+pub fn migrate_legacy_sessions(dry_run: bool) -> Option<SessionMigrationReport> {
+    store().map(|session_store| session_store.migrate_legacy_sessions(dry_run))
+}
+
 pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
     SessionStore::write_subagent_review_manifest(workspace, agent_id)
 }
@@ -329,7 +341,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
     };
 
     if let Some(ref session_id) = config.last_active_session_id {
-        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
+        let session_dir = SessionStore::new(&dir).session_dir(session_id);
         if session_dir.exists() {
             let _ = fs::create_dir_all(session_dir.join("sandbox"));
             let _ = fs::create_dir_all(session_dir.join("artifacts"));
@@ -342,10 +354,9 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
     let legacy_history = load_session_file(&legacy_history_path);
     if session_has_content(&legacy_history) {
         let session_id = next_session_id();
-        let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
-        let _ = fs::create_dir_all(&session_dir);
-        let _ = fs::create_dir_all(session_dir.join("sandbox"));
-        let _ = fs::create_dir_all(session_dir.join("artifacts"));
+        let Some(session_dir) = ensure_session_dir(&session_id) else {
+            return String::new();
+        };
         write_history_file(&session_dir.join(HISTORY_FILE), &legacy_history);
         let _ = fs::remove_file(&legacy_history_path);
         config.last_active_session_id = Some(session_id.clone());
@@ -355,10 +366,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
     }
 
     let session_id = next_session_id();
-    let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
-    let _ = fs::create_dir_all(&session_dir);
-    let _ = fs::create_dir_all(session_dir.join("sandbox"));
-    let _ = fs::create_dir_all(session_dir.join("artifacts"));
+    let _ = ensure_session_dir(&session_id);
     config.last_active_session_id = Some(session_id.clone());
     save_entire_config(config);
     set_active_session_id(&session_id);
@@ -366,14 +374,11 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
 }
 
 pub fn create_new_session(config: &mut AppConfig) -> String {
-    let Some(dir) = get_config_dir() else {
+    let Some(_dir) = get_config_dir() else {
         return String::new();
     };
     let session_id = next_session_id();
-    let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
-    let _ = fs::create_dir_all(&session_dir);
-    let _ = fs::create_dir_all(session_dir.join("sandbox"));
-    let _ = fs::create_dir_all(session_dir.join("artifacts"));
+    let _ = ensure_session_dir(&session_id);
     config.last_active_session_id = Some(session_id.clone());
     save_entire_config(config);
     flush_history();
