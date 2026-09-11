@@ -454,6 +454,57 @@ fn inline_command_suggestions_render_below_the_composer() {
 }
 
 #[test]
+fn inline_command_selection_is_distinct_from_typed_input() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::{backend::TestBackend, style::Modifier};
+
+    for input in ["/mo", "/model"] {
+        let mut state = AppState::new();
+        state.input_buffer = input.to_owned();
+        state.cursor_position = input.len();
+        state.active_suggestion_index = Some(0);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row_text = |row: u16| {
+            (0..100)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+        };
+
+        let input_row = (0..20)
+            .find(|row| row_text(*row).contains(input))
+            .expect("composer input row should be visible");
+        let input_column = row_text(input_row)
+            .find(input)
+            .expect("typed command should be visible") as u16;
+        assert_eq!(
+            buffer[(input_column, input_row)].fg,
+            COLOR_PRIMARY(),
+            "typed slash command should retain the primary color"
+        );
+
+        let filtered_cmds = crate::app::suggestion::filtered_commands(input);
+        let snapshot = state.render_snapshot();
+        let mut popup_terminal = Terminal::new(TestBackend::new(100, 2)).unwrap();
+        popup_terminal
+            .draw(|frame| {
+                super::modals::render_popup_menu(
+                    frame,
+                    &snapshot,
+                    &filtered_cmds,
+                    ratatui::layout::Rect::new(0, 0, 100, 2),
+                );
+            })
+            .unwrap();
+        let selected_cell = &popup_terminal.backend().buffer()[(0, 0)];
+        assert_eq!(selected_cell.fg, COLOR_TEXT());
+        assert!(selected_cell.modifier.contains(Modifier::BOLD));
+    }
+}
+
+#[test]
 fn welcome_banner_renders_without_a_conversation() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -3183,20 +3234,21 @@ fn conversation_recap_renders_as_compact_labeled_block() {
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
-    assert!(text[0].starts_with("─ Conversation recap ─"));
-    assert_eq!(text[0].chars().count(), 80);
+    assert_eq!(text[0], "");
+    assert!(text[1].starts_with("─ Conversation recap ─"));
+    assert_eq!(text[1].chars().count(), 80);
     assert!(
-        rendered[0]
+        rendered[1]
             .spans
             .iter()
             .all(|span| span.style.fg == Some(COLOR_TURN_SEPARATOR()))
     );
-    assert_eq!(text[1], "");
+    assert_eq!(text[2], "");
     assert_eq!(
-        text[2],
+        text[3],
         "  The implementation is complete; cargo test passes and the next step is review."
     );
-    assert_eq!(text[3], "");
+    assert_eq!(text[4], "");
     assert!(!text.iter().any(|line| line.contains("• ")));
 }
 
@@ -3242,10 +3294,11 @@ fn conversation_recap_wraps_inside_its_message_gutter() {
         .collect::<Vec<_>>();
 
     assert!(text.len() > 5, "recap fixture must wrap: {text:?}");
-    assert!(text[0].starts_with("─ Conversation recap ─"));
-    assert_eq!(text[0].chars().count(), 32);
+    assert_eq!(text[0], "");
+    assert!(text[1].starts_with("─ Conversation recap ─"));
+    assert_eq!(text[1].chars().count(), 32);
     assert!(
-        text[2..]
+        text[3..]
             .iter()
             .filter(|line| !line.is_empty())
             .all(|line| line.starts_with("  ") && line.chars().count() <= 32)
