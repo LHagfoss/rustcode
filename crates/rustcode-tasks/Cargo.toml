@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-tasks"
-version = "0.51.36"
+version = "0.51.37"
 edition = "2024"
 
 [dependencies]
