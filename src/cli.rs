@@ -23,7 +23,7 @@ pub struct Cli {
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
-    /// Check for and install the latest Homebrew release, if available
+    /// Check for and install the latest GitHub Release, using Homebrew for Homebrew installs
     #[arg(long = "update", alias = "upgrade")]
     pub update: bool,
 
@@ -87,6 +87,7 @@ pub enum SyncCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn parses_update_and_upgrade_flags() {
@@ -94,6 +95,13 @@ mod tests {
         assert!(cli.update);
         let cli_alias = Cli::try_parse_from(["rustcode", "--upgrade"]).unwrap();
         assert!(cli_alias.update);
+    }
+
+    #[test]
+    fn update_help_describes_supported_install_sources() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("GitHub Release"));
+        assert!(help.contains("Homebrew"));
     }
 
     #[test]
