@@ -18,7 +18,7 @@ pub(super) fn render_status_panel<'a>(
         return;
     }
     if is_turn_cancelled_notice(content) {
-        push_centered_separator(lines, "✕ Turn cancelled", width, show_picker);
+        push_left_aligned_separator(lines, "User Stopped", width, show_picker);
         return;
     }
     if let Some(label) = yolo_mode_notice_label(content) {
