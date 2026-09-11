@@ -758,26 +758,46 @@ impl SessionStore {
         paths
     }
 
+    fn legacy_session_sources(&self) -> Vec<(String, PathBuf)> {
+        let sessions = self.root.join(SESSIONS_DIR);
+        let Ok(entries) = std::fs::read_dir(&sessions) else {
+            return Vec::new();
+        };
+
+        let mut sources = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !is_legacy_session_id(name) {
+                continue;
+            }
+            if path.is_dir() {
+                // Include artifact-only and otherwise empty legacy session
+                // directories. History discovery intentionally omits those,
+                // but migration must preserve their complete subtree.
+                sources.push((name.to_owned(), path));
+            } else if path.is_file() && path.extension().is_some_and(|ext| ext == "json") {
+                sources.push((name.trim_end_matches(".json").to_owned(), path));
+            }
+        }
+        sources.sort_by(|left, right| left.0.cmp(&right.0));
+        sources
+    }
+
     /// Migrate legacy direct session directories and `sessions/*.json` files
     /// into the canonical date-partitioned layout. The operation is safe to
     /// repeat: a source is removed only after its destination is complete.
     pub fn migrate_legacy_sessions(&self, dry_run: bool) -> SessionMigrationReport {
-        let sources = self
-            .discovered_session_paths()
-            .into_iter()
-            .filter(|path| is_legacy_session_path(path))
-            .collect::<Vec<_>>();
+        let sources = self.legacy_session_sources();
         let mut report = SessionMigrationReport {
             dry_run,
             found: sources.len(),
             ..Default::default()
         };
 
-        for source in sources {
-            let Some(id) = Self::session_id_from_path(&source) else {
-                report.skipped += 1;
-                continue;
-            };
+        for (id, source) in sources {
             let destination = self.canonical_session_dir(&id);
             if destination.exists() {
                 report.skipped += 1;
@@ -909,15 +929,11 @@ fn is_session_directory(path: &Path) -> bool {
         && !name.is_empty()
 }
 
-fn is_legacy_session_path(path: &Path) -> bool {
-    path.parent()
-        .and_then(|parent| parent.file_name())
-        .is_some_and(|component| component == SESSIONS_DIR)
-        || path
-            .parent()
-            .and_then(|parent| parent.parent())
-            .and_then(|sessions| sessions.file_name())
-            .is_some_and(|component| component == SESSIONS_DIR)
+fn is_legacy_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('.')
+        && !id.contains('/')
+        && !(id.len() == 4 && id.chars().all(|character| character.is_ascii_digit()))
 }
 
 fn session_storage_root(history_path: &Path) -> PathBuf {
@@ -1259,6 +1275,28 @@ mod tests {
             std::fs::read_to_string(destination.join("sentinel.txt")).expect("sentinel"),
             "keep"
         );
+    }
+
+    #[test]
+    fn migration_preserves_artifact_only_legacy_sessions() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let legacy = root.path().join(SESSIONS_DIR).join("1704240000000");
+        std::fs::create_dir_all(legacy.join("sandbox")).expect("sandbox");
+        std::fs::create_dir_all(legacy.join("artifacts")).expect("artifacts");
+        std::fs::write(legacy.join("sandbox/state.txt"), "preserve").expect("sandbox file");
+
+        let report = store.migrate_legacy_sessions(false);
+        assert_eq!(report.found, 1);
+        assert_eq!(report.migrated, 1);
+        assert!(!legacy.exists());
+        let destination = store.canonical_session_dir("1704240000000");
+        assert_eq!(
+            std::fs::read_to_string(destination.join("sandbox/state.txt")).expect("migrated file"),
+            "preserve"
+        );
+        assert!(destination.join(SESSION_METADATA_FILE).exists());
+        assert!(destination.join("logs").is_dir());
     }
 
     #[test]
