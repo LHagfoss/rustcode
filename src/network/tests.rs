@@ -4101,8 +4101,10 @@ async fn view_file_subrange_reuses_complete_cached_read() {
     assert!(first.metadata.success, "got: {}", first.content);
     assert!(repeated.metadata.success, "got: {}", repeated.content);
     assert!(repeated.metadata.replayed, "got: {}", repeated.content);
-    assert!(repeated.content.contains("do not repeat this read"));
-    assert!(!repeated.content.contains("second"));
+    assert!(repeated.content.contains("Lines 1 to 2 of 3"));
+    assert!(repeated.content.contains("2: second"));
+    assert!(!repeated.content.contains("Unchanged read replay"));
+    assert!(!repeated.content.contains("3: third"));
     assert_eq!(
         repeated
             .metadata
@@ -4120,12 +4122,68 @@ async fn view_file_subrange_reuses_complete_cached_read() {
             .inspection
             .as_ref()
             .and_then(|inspection| inspection.returned_range.clone()),
-        first
-            .metadata
-            .inspection
-            .as_ref()
-            .and_then(|inspection| inspection.returned_range.clone())
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(2),
+        })
     );
+}
+
+#[tokio::test]
+async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let through_end = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 2}),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, through_end).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(!repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("2: second"));
+    assert!(repeated.content.contains("3: third"));
+}
+
+#[tokio::test]
+async fn view_file_subrange_with_different_content_offset_reexecutes() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let offset = test_tool_call(
+        "view_file",
+        serde_json::json!({
+            "path": path,
+            "content_offset": 6,
+            "start_line": 2,
+            "end_line": 3
+        }),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, offset).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(!repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("2: second"));
+    assert!(repeated.content.contains("3: third"));
 }
 
 #[tokio::test]

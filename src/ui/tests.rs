@@ -2088,7 +2088,9 @@ fn status_panels_render_minimal_inline() {
         &mut cancelled_lines,
     );
     assert_eq!(cancelled_lines.len(), 2);
-    assert_eq!(cancelled_lines[1].spans[1].content, " ✕ Turn cancelled ");
+    let cancelled = cancelled_lines[1].to_string();
+    assert!(cancelled.starts_with("─ User Stopped ─"));
+    assert!(!cancelled.contains('✕'));
 }
 
 #[test]
@@ -2228,11 +2230,8 @@ fn cancelled_turn_renders_as_a_human_status_separator() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("✕ Turn cancelled"))
-    );
+    assert!(rendered.iter().any(|line| line.contains("User Stopped")));
+    assert!(!rendered.iter().any(|line| line.contains('✕')));
     assert!(!rendered.iter().any(|line| line.contains("[harness:")));
 }
 

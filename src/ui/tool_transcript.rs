@@ -1200,6 +1200,38 @@ pub(super) fn push_centered_separator<'a>(
     ]));
 }
 
+pub(super) fn push_left_aligned_separator<'a>(
+    lines: &mut Vec<Line<'a>>,
+    label_text: &str,
+    width: u16,
+    show_picker: bool,
+) {
+    if lines.last().map_or(true, |l| !l.spans.is_empty()) {
+        lines.push(Line::from(""));
+    }
+    let label = format!("─ {} ─", label_text.trim());
+    let label_width = label.width();
+    let line_style = get_themed_style(
+        COLOR_TURN_SEPARATOR(),
+        COLOR_BG(),
+        Modifier::empty(),
+        show_picker,
+    );
+    let label_style = get_themed_style(
+        COLOR_TURN_SEPARATOR(),
+        COLOR_BG(),
+        Modifier::BOLD,
+        show_picker,
+    );
+    lines.push(Line::from(vec![
+        Span::styled(label, label_style),
+        Span::styled(
+            "─".repeat((width as usize).saturating_sub(label_width)),
+            line_style,
+        ),
+    ]));
+}
+
 pub(super) fn push_new_chat_separator<'a>(
     lines: &mut Vec<Line<'a>>,
     width: u16,
