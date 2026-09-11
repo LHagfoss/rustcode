@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker};
 
+use super::super::events::FinishReason;
 use super::super::fetch_model_quota;
 use super::super::lifecycle;
 use super::super::policy;
@@ -206,11 +207,30 @@ fn has_verified_implicit_completion(ctx: &TurnContext) -> bool {
         return false;
     }
 
-    let promoted = super::super::text::promote_bare_thought_markers(&ctx.response.final_content);
+    has_substantive_final_prose(&ctx.response.final_content)
+}
+
+fn has_substantive_final_prose(content: &str) -> bool {
+    let promoted = super::super::text::promote_bare_thought_markers(content);
     let prose = super::super::text::strip_tool_call_syntax(
         &super::super::text::strip_think_blocks(&promoted),
     );
     !prose.trim().is_empty()
+}
+
+fn can_complete_interactive_plain_response(
+    ctx: &TurnContext,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    finish_reason: &FinishReason,
+) -> bool {
+    matches!(finish_reason, FinishReason::Stop)
+        && !cancel_token.is_cancelled()
+        && !ctx.recovery.force_final
+        && !ctx.progress.made_edits
+        && ctx.progress.failed_mutations == 0
+        && ctx.verification.ledger.last_failure().is_none()
+        && ctx.lifecycle.stop_reason.is_none()
+        && has_substantive_final_prose(&ctx.response.final_content)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -219,6 +239,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
     cancel_token: &tokio_util::sync::CancellationToken,
     policy: &Arc<P>,
     ctx: &mut TurnContext,
+    response_finish_reason: FinishReason,
     turn_response_time_ms: u64,
     turn_token_usage: Option<crate::app::TokenUsage>,
     thought_time_ms: Option<u64>,
@@ -323,6 +344,24 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
     }
 
     if finish_gate_passed
+        && !policy.is_headless()
+        && can_complete_interactive_plain_response(ctx, cancel_token, &response_finish_reason)
+    {
+        dbg_log!("Normal interactive prose accepted as completion");
+        let mut s = state.lock().await;
+        if !ctx.response.final_content_persisted {
+            let mut msg = ChatMessage::new("assistant", ctx.response.final_content.clone());
+            msg.response_time_ms = Some(turn_response_time_ms);
+            msg.token_usage = turn_token_usage;
+            msg.thought_time_ms = thought_time_ms;
+            msg.thought_tokens = thought_tokens;
+            s.history.push(msg);
+            crate::config::save_history(&s.history);
+            ctx.response.final_content_persisted = true;
+        }
+        ctx.lifecycle.task_completed = true;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
+    } else if finish_gate_passed
         && policy.is_headless()
         && ctx.lifecycle.stop_reason.is_none()
         && let Some(summary) = completed_inspection_synthesis(
@@ -470,6 +509,7 @@ mod tests {
             &tokio_util::sync::CancellationToken::new(),
             &policy,
             &mut ctx,
+            FinishReason::Stop,
             0,
             None,
             None,
@@ -493,6 +533,7 @@ mod tests {
             &tokio_util::sync::CancellationToken::new(),
             &policy,
             &mut ctx,
+            FinishReason::Stop,
             0,
             None,
             None,
@@ -513,5 +554,174 @@ mod tests {
             reports[0].content,
             "Findings: src/app.ts validates its export input."
         );
+    }
+
+    fn interactive_plain_context(content: &str) -> TurnContext {
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = content.to_string();
+        ctx
+    }
+
+    #[tokio::test]
+    async fn ordinary_interactive_prose_completes_and_is_persisted_once() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let policy = Arc::new(policy::InteractivePolicy);
+        let mut ctx = interactive_plain_context("Your current progress is 38%.");
+
+        let outcome = handle_plain_response_finish(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            12,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+        )
+        .await;
+
+        assert_eq!(outcome, FinishGateOutcome::Stop);
+        assert!(ctx.lifecycle.task_completed);
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::Completed)
+        );
+        assert!(ctx.response.final_content_persisted);
+
+        let _ = handle_plain_response_finish(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            12,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+        )
+        .await;
+
+        let state = state.lock().await;
+        let reports = state
+            .history
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .collect::<Vec<_>>();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].content, "Your current progress is 38%.");
+    }
+
+    #[tokio::test]
+    async fn successful_interactive_tool_round_followed_by_prose_completes() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        state
+            .lock()
+            .await
+            .history
+            .push(ChatMessage::new("tool", "get_status: progress_percent=38"));
+        let policy = Arc::new(policy::InteractivePolicy);
+        let mut ctx = interactive_plain_context("Your current progress is 38%.");
+        ctx.budget.tool_rounds = 1;
+        ctx.metrics.tool_calls = 1;
+        ctx.progress.last_reason =
+            Some(super::super::super::loop_detect::ProgressReason::NewInformation);
+
+        let outcome = handle_plain_response_finish(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            12,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+        )
+        .await;
+
+        assert_eq!(outcome, FinishGateOutcome::Stop);
+        assert!(ctx.lifecycle.task_completed);
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::Completed)
+        );
+        assert_eq!(
+            state
+                .lock()
+                .await
+                .history
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("Your current progress is 38%.")
+        );
+    }
+
+    #[test]
+    fn interactive_plain_completion_preserves_terminal_guards() {
+        let normal = FinishReason::Stop;
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+        let ctx = interactive_plain_context("Done.");
+        assert!(!can_complete_interactive_plain_response(
+            &ctx,
+            &cancel_token,
+            &normal,
+        ));
+
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let mut forced = interactive_plain_context("I stopped safely.");
+        forced.recovery.force_final = true;
+        assert!(!can_complete_interactive_plain_response(
+            &forced,
+            &cancel_token,
+            &normal,
+        ));
+
+        let output_limit = FinishReason::Length;
+        let ctx = interactive_plain_context("Partial response");
+        assert!(!can_complete_interactive_plain_response(
+            &ctx,
+            &cancel_token,
+            &output_limit,
+        ));
+
+        let mut failed_verification = interactive_plain_context("Done.");
+        failed_verification
+            .verification
+            .ledger
+            .record_command("cargo test", Some(1));
+        assert!(!can_complete_interactive_plain_response(
+            &failed_verification,
+            &cancel_token,
+            &normal,
+        ));
+
+        let empty = interactive_plain_context("");
+        assert!(!can_complete_interactive_plain_response(
+            &empty,
+            &cancel_token,
+            &normal,
+        ));
+        let thought_only = interactive_plain_context("<think>still working</think>");
+        assert!(!can_complete_interactive_plain_response(
+            &thought_only,
+            &cancel_token,
+            &normal,
+        ));
+
+        let mut stopped = interactive_plain_context("Done.");
+        stopped.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+        assert!(!can_complete_interactive_plain_response(
+            &stopped,
+            &cancel_token,
+            &normal,
+        ));
     }
 }
