@@ -5,7 +5,9 @@ pub use rustcode_session::{
     HistorySnapshot, SessionMeta, SessionMigrationReport, WorkspaceManager, WorkspaceRequest,
 };
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 const HISTORY_FILE: &str = rustcode_session::HISTORY_FILE;
@@ -506,6 +508,12 @@ debug.log.*
 symbols.db
 tool_output/
 attachments/
+backups/
+sessions/
+usage_stats.json
+# Legacy configuration files are read-only migration inputs, not sync state.
+models.json
+config.json
 sessions/*/sandbox/
 sessions/*/artifacts/
 sessions/*/subagents/
@@ -559,6 +567,90 @@ pub fn get_sync_branch(dir: &Path) -> String {
         }
     }
     "main".to_string()
+}
+
+fn sync_path_is_allowed(path: &str) -> bool {
+    matches!(path, ".gitignore" | "config.toml")
+        || path.starts_with("skills/")
+        || path.starts_with("themes/")
+}
+
+/// Remove already tracked runtime files from the sync index without deleting
+/// their local copies. This makes the allowlist safe for repositories that
+/// were initialized before the narrower sync scope existed.
+pub(crate) fn untrack_non_sync_files(dir: &Path) -> Result<usize, String> {
+    let listed = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Failed to inspect sync index: {e}"))?;
+    if !listed.status.success() {
+        return Err("Failed to inspect sync index".to_string());
+    }
+
+    let mut unwanted = Vec::new();
+    for path in listed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path_text = String::from_utf8_lossy(path);
+        if !sync_path_is_allowed(&path_text) {
+            unwanted.extend_from_slice(path);
+            unwanted.push(0);
+        }
+    }
+
+    if unwanted.is_empty() {
+        return Ok(0);
+    }
+
+    let mut child = Command::new("git")
+        .args(["update-index", "--force-remove", "-z", "--stdin"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to clean sync index: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open sync index input".to_string())?
+        .write_all(&unwanted)
+        .map_err(|e| format!("Failed to clean sync index: {e}"))?;
+    let result = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to finish sync index cleanup: {e}"))?;
+    if !result.status.success() {
+        let error = String::from_utf8_lossy(&result.stderr);
+        return Err(format!("Failed to clean sync index: {}", error.trim()));
+    }
+
+    Ok(unwanted.iter().filter(|byte| **byte == 0).count())
+}
+
+fn stage_sync_files(dir: &Path) -> Result<(), String> {
+    let mut args = vec!["add", "-A", "--"];
+    for path in [".gitignore", "config.toml", "skills", "themes"] {
+        if dir.join(path).exists() {
+            args.push(path);
+        }
+    }
+
+    if args.len() == 2 {
+        return Ok(());
+    }
+
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .map_err(|e| format!("Failed to stage sync files: {e}"))?;
+    if !status.success() {
+        return Err("git add failed".to_string());
+    }
+    Ok(())
 }
 
 pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
@@ -625,14 +717,8 @@ pub fn sync_config_pull() -> Result<(), String> {
         .map(|out| out.status.success())
         .unwrap_or(false);
     if !has_head {
-        let add_out = std::process::Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(&dir)
-            .status()
-            .map_err(|e| format!("Failed to stage initial config snapshot: {e}"))?;
-        if !add_out.success() {
-            return Err("Failed to stage initial config snapshot".to_string());
-        }
+        untrack_non_sync_files(&dir)?;
+        stage_sync_files(&dir)?;
 
         let commit_out = std::process::Command::new("git")
             .args([
@@ -711,16 +797,14 @@ pub fn sync_config_push() -> Result<(), String> {
                 .unwrap_or_else(|| "device".to_string())
         });
 
-    // 1. Stage all files in config directory
-    let add_out = std::process::Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(&dir)
-        .status()
-        .map_err(|e| format!("Failed to stage files: {e}"))?;
-
-    if !add_out.success() {
-        return Err("git add failed".to_string());
+    // 1. Keep runtime state local and stage only the sync allowlist.
+    let removed = untrack_non_sync_files(&dir)?;
+    if removed > 0 {
+        println!(
+            "Removed {removed} local-only file(s) from the sync index; local copies were preserved."
+        );
     }
+    stage_sync_files(&dir)?;
 
     // 2. Commit changes if any
     let commit_msg = format!(

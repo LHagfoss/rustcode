@@ -51,6 +51,16 @@ brew install rustcode
 
 ### Arch Linux via the AUR
 
+For Arch x86_64, the verified prebuilt installer is the fastest option:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+```
+
+If another `rustcode` installation already appears earlier in `PATH`, refresh
+your shell with `hash -r` (Bash) or `rehash` (Zsh), and confirm with
+`which rustcode` and `rustcode --version`.
+
 Build and install the current tagged source release with an AUR helper:
 
 ```bash

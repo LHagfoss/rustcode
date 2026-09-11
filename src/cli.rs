@@ -51,7 +51,7 @@ pub enum Commands {
     /// Run as a headless Agent Client Protocol server over stdio
     Acp,
 
-    /// Sync config, skills, and sessions with remote Git repository
+    /// Sync config, skills, and themes with remote Git repository
     Sync {
         #[command(subcommand)]
         command: Option<SyncCommands>,
@@ -76,9 +76,9 @@ pub enum SessionCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum SyncCommands {
-    /// Pull latest config and skills from remote
+    /// Pull latest config, skills, and themes from remote
     Pull,
-    /// Push local config and skills to remote
+    /// Push local config, skills, and themes to remote
     Push,
     /// Initialize remote Git repository for config sync
     Init { remote_url: String },

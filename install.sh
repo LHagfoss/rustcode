@@ -232,4 +232,14 @@ case ":$PATH:" in
         ;;
 esac
 
+# A previous Cargo or system install can appear earlier in PATH than the
+# freshly installed binary. Detect that explicitly so the user does not keep
+# invoking an older updater after a successful installation.
+RESOLVED_RUSTCODE="$(command -v rustcode 2>/dev/null || true)"
+if [ -n "$RESOLVED_RUSTCODE" ] && [ "$RESOLVED_RUSTCODE" != "$TARGET_EXE" ]; then
+    warn "Your shell currently resolves rustcode to ${RESOLVED_RUSTCODE}."
+    echo "Run '${TARGET_EXE} --version' now, or put '${INSTALL_DIR}' before it in PATH."
+    echo "Then refresh the shell command cache with 'hash -r' or 'rehash'."
+fi
+
 echo "Run 'rustcode' to start pair programming!"

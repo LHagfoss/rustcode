@@ -1029,6 +1029,9 @@ fn test_ensure_sync_gitignore_creates_and_updates() {
     let dir = TempDir::new().unwrap();
     ensure_sync_gitignore(dir.path()).unwrap();
     let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert!(content.contains("sessions/"));
+    assert!(content.contains("backups/"));
+    assert!(content.contains("usage_stats.json"));
     assert!(content.contains("sessions/*/sandbox/"));
     assert!(content.contains("sessions/*/artifacts/"));
     assert!(content.contains("sessions/*/subagents/"));
@@ -1042,6 +1045,73 @@ fn test_ensure_sync_gitignore_creates_and_updates() {
     let updated = fs::read_to_string(custom_dir.path().join(".gitignore")).unwrap();
     assert!(updated.starts_with("custom_entry\n"));
     assert!(updated.contains("sessions/*/sandbox/"));
+}
+
+#[test]
+fn sync_index_cleanup_preserves_local_runtime_files() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("config.toml"), "version = 1\n").unwrap();
+    fs::create_dir_all(dir.path().join("skills/example")).unwrap();
+    fs::write(dir.path().join("skills/example/SKILL.md"), "# Example\n").unwrap();
+    fs::create_dir_all(dir.path().join("themes")).unwrap();
+    fs::write(dir.path().join("themes/default.toml"), "[theme]\n").unwrap();
+    fs::create_dir_all(dir.path().join("sessions/2026/09/11/example")).unwrap();
+    fs::write(
+        dir.path().join("sessions/2026/09/11/example/history.json"),
+        "[]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("backups")).unwrap();
+    fs::write(dir.path().join("backups/archive.tar.gz"), "backup\n").unwrap();
+    ensure_sync_gitignore(dir.path()).unwrap();
+
+    let run_git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {:?} failed", args);
+    };
+    run_git(&["init", "-q"]);
+    run_git(&["add", "-A"]);
+    run_git(&["add", "-f", "sessions", "backups"]);
+    run_git(&[
+        "-c",
+        "user.name=rustcode-test",
+        "-c",
+        "user.email=rustcode-test@localhost",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+
+    assert_eq!(untrack_non_sync_files(dir.path()).unwrap(), 2);
+    assert!(
+        dir.path()
+            .join("sessions/2026/09/11/example/history.json")
+            .exists()
+    );
+    assert!(dir.path().join("backups/archive.tar.gz").exists());
+
+    let tracked = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["ls-files"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(tracked.lines().any(|path| path == "config.toml"));
+    assert!(
+        tracked
+            .lines()
+            .any(|path| path == "skills/example/SKILL.md")
+    );
+    assert!(tracked.lines().any(|path| path == "themes/default.toml"));
+    assert!(!tracked.lines().any(|path| path.starts_with("sessions/")));
+    assert!(!tracked.lines().any(|path| path.starts_with("backups/")));
 }
 
 #[test]

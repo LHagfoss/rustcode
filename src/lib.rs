@@ -165,7 +165,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cli::Commands::Sync { command }) = cli_args.command {
         match command {
             Some(cli::SyncCommands::Pull) => {
-                println!("📥 [sync] Pulling latest config and skills from remote origin...");
+                println!(
+                    "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
+                );
                 if let Err(e) = config::sync_config_pull() {
                     eprintln!("Sync pull failed: {e}");
                     std::process::exit(1);
@@ -173,7 +175,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("✅ [sync] Config sync complete!");
             }
             Some(cli::SyncCommands::Push) => {
-                println!("💾 [sync] Staging and pushing config files...");
+                println!("💾 [sync] Staging and pushing config, skills, and themes...");
                 if let Err(e) = config::sync_config_push() {
                     eprintln!("Sync push failed: {e}");
                     std::process::exit(1);
@@ -191,12 +193,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             None => {
                 // Default behavior for `rustcode sync` (pull then push)
-                println!("📥 [sync] Pulling latest config and skills from remote origin...");
+                println!(
+                    "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
+                );
                 if let Err(e) = config::sync_config_pull() {
                     eprintln!("Sync failed during pull: {e}");
                     std::process::exit(1);
                 }
-                println!("💾 [sync] Staging and pushing config files...");
+                println!("💾 [sync] Staging and pushing config, skills, and themes...");
                 if let Err(e) = config::sync_config_push() {
                     eprintln!("Sync failed during push: {e}");
                     std::process::exit(1);
