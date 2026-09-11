@@ -344,6 +344,7 @@ pub const TIPS: &[&str] = &[
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CachedReadOutput {
     pub(crate) replayable_content: Option<String>,
+    pub(crate) content_offset: u64,
     pub(crate) success: bool,
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,

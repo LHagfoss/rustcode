@@ -237,10 +237,11 @@ fn compact_reference_path(path: &str) -> String {
     bounded
 }
 
-/// Render the model-facing payload for an unchanged repeat. The original body
-/// remains in durable history and the replay carries only a compact, explicit
-/// status. Re-emitting the body here makes a model more likely to mistake a
-/// replay for a fresh or truncated read and start another inspection loop.
+/// Render the model-facing payload for an unchanged exact repeat. The original
+/// body remains in durable history and the replay carries only a compact,
+/// explicit status. Re-emitting the body here makes a model more likely to
+/// mistake a replay for a fresh or truncated read and start another inspection
+/// loop.
 pub(crate) fn compact_replayed_read_result(
     tool_name: &str,
     args: &serde_json::Value,
@@ -270,6 +271,65 @@ pub(crate) fn compact_replayed_read_result(
         + "The earlier result is complete and remains the canonical evidence in history; "
         + "do not repeat this read. Request a different start_line/end_line range or use grep "
         + "for new evidence.]"
+}
+
+/// Re-render a covered `view_file` subrange from a cached complete read.
+///
+/// Exact repeats intentionally stay compact, but a different range inside a
+/// cached read is a legitimate request for evidence the model may need for an
+/// edit. Returning only an unchanged-replay notice in that case can strand the
+/// model with no usable source text, especially after the surrounding history
+/// has been projected or compacted.
+pub(crate) fn replay_cached_view_file_subrange(
+    tool_name: &str,
+    args: &serde_json::Value,
+    previous_content: Option<&str>,
+) -> Option<String> {
+    if tool_name != "view_file" {
+        return None;
+    }
+    let previous_content = previous_content?;
+    let (path, requested_start, requested_end) =
+        crate::network::loop_detect::read_target(tool_name, args)?;
+    let requested_end = requested_end? as u64;
+    let (stored_path, stored_start, stored_end, total) = parse_view_header(previous_content)?;
+    if path != stored_path
+        || (requested_start as u64) < stored_start
+        || requested_end > stored_end
+        || requested_end < requested_start as u64
+    {
+        return None;
+    }
+
+    let numbered_lines = previous_content
+        .lines()
+        .filter_map(|line| {
+            let (number, _) = line.split_once(": ")?;
+            Some((number.parse::<u64>().ok()?, line))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    if (requested_start as u64..=requested_end).any(|number| !numbered_lines.contains_key(&number))
+    {
+        return None;
+    }
+
+    let header = previous_content.lines().next()?;
+    let old_range = format!("Lines {stored_start} to {stored_end}");
+    let new_range = format!("Lines {} to {}", requested_start, requested_end.min(total));
+    let header = header.replacen(&old_range, &new_range, 1);
+    let requested_end = requested_end.min(total);
+    let completeness = if requested_end == total {
+        "[Read complete: all lines in the requested range were delivered; no continuation is needed.]"
+    } else {
+        "[Read complete for the requested range; the file continues beyond this range.]"
+    };
+
+    let mut replay = format!("{header}\n{completeness}\n");
+    for number in requested_start as u64..=requested_end {
+        replay.push_str(numbered_lines.get(&number)?);
+        replay.push('\n');
+    }
+    Some(replay)
 }
 
 pub(crate) fn tool_result_from_execution(

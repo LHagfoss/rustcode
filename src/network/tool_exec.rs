@@ -26,7 +26,8 @@ pub(crate) use preview::{
 };
 pub(crate) use result::{
     bounded_tool_result_history_message, compact_replayed_read_result, finalize_tool_result,
-    subagent_tool_history_message, tool_result_from_execution, tool_result_history_message,
+    replay_cached_view_file_subrange, subagent_tool_history_message, tool_result_from_execution,
+    tool_result_history_message,
 };
 
 fn cached_read_covers_request(
@@ -53,6 +54,18 @@ fn cached_read_covers_request(
     else {
         return false;
     };
+    let Some(requested_end) = requested_end else {
+        // An omitted end_line means read through the file's end. A cached
+        // finite range cannot prove that request is complete.
+        return false;
+    };
+    let requested_offset = args
+        .get("content_offset")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if cached.content_offset != requested_offset {
+        return false;
+    }
     let stored_path = inspection
         .returned_path
         .as_ref()
@@ -69,8 +82,7 @@ fn cached_read_covers_request(
     };
     let stored_start = stored_range.start.unwrap_or(1);
     let stored_end = stored_range.end.unwrap_or(u64::MAX);
-    let requested_end = requested_end.map_or(stored_end, |end| end as u64);
-    (requested_start as u64) >= stored_start && requested_end <= stored_end
+    (requested_start as u64) >= stored_start && requested_end as u64 <= stored_end
 }
 
 fn replay_inspection_for_request(
@@ -85,6 +97,9 @@ fn replay_inspection_for_request(
             start: Some(start as u64),
             end: end.map(|value| value as u64),
         });
+        if cached_read_covers_request(cached, tool_name, args) {
+            inspection.returned_range = inspection.requested_range.clone();
+        }
     }
     Some(inspection)
 }
@@ -747,33 +762,55 @@ pub(crate) async fn execute_tool_batch(
             // have removed that body, so execute those reads again.
             let cached_repeat = if is_repeat {
                 let s = state_clone.lock().await;
+                let reusable = |previous: &crate::app::CachedReadOutput| {
+                    previous.success
+                        && !previous.truncated
+                        && previous.replayable_content.is_some()
+                        && matches!(
+                            previous.completeness,
+                            rustcode_core::ToolResultCompleteness::Complete
+                                | rustcode_core::ToolResultCompleteness::UserLimited
+                        )
+                };
                 let exact = s
                     .recent_read_outputs
                     .get(&tool_signature(&name_clone, &args_clone))
-                    .cloned();
-                exact
-                    .or_else(|| {
-                        if name_clone == "view_file" {
-                            s.recent_read_outputs
-                                .values()
-                                .find(|previous| {
-                                    cached_read_covers_request(previous, &name_clone, &args_clone)
-                                })
-                                .cloned()
-                        } else {
-                            None
-                        }
-                    })
-                    .filter(|previous| {
-                        previous.success
-                            && !previous.truncated
-                            && previous.replayable_content.is_some()
-                            && matches!(
-                                previous.completeness,
-                                rustcode_core::ToolResultCompleteness::Complete
-                                    | rustcode_core::ToolResultCompleteness::UserLimited
-                            )
-                    })
+                    .filter(|previous| reusable(previous))
+                    .cloned()
+                    .map(|previous| (previous, false));
+                exact.or_else(|| {
+                    if name_clone == "view_file" {
+                        s.recent_read_outputs
+                            .values()
+                            .filter(|previous| {
+                                reusable(previous)
+                                    && cached_read_covers_request(
+                                        previous,
+                                        &name_clone,
+                                        &args_clone,
+                                    )
+                            })
+                            .min_by_key(|previous| {
+                                previous
+                                    .inspection
+                                    .as_ref()
+                                    .and_then(|inspection| inspection.returned_range.as_ref())
+                                    .and_then(|range| {
+                                        Some(
+                                            range
+                                                .end
+                                                .unwrap_or(u64::MAX)
+                                                .saturating_sub(range.start.unwrap_or(1)),
+                                        )
+                                    })
+                                    .unwrap_or(u64::MAX)
+                            })
+                            .cloned()
+                            .map(|previous| (previous, true))
+                    } else {
+                        None
+                    }
+                })
             } else {
                 None
             };
@@ -781,12 +818,27 @@ pub(crate) async fn execute_tool_batch(
 
             let (execution, diff_opt, user_wait) = if is_repeat {
                 let tuple = match cached_repeat {
-                    Some(previous) => {
-                        let mut content = compact_replayed_read_result(
-                            &name_clone,
-                            &args_clone,
-                            previous.replayable_content.as_deref(),
-                        );
+                    Some((previous, covered_subrange)) => {
+                        let mut content = if covered_subrange {
+                            replay_cached_view_file_subrange(
+                                &name_clone,
+                                &args_clone,
+                                previous.replayable_content.as_deref(),
+                            )
+                            .unwrap_or_else(|| {
+                                compact_replayed_read_result(
+                                    &name_clone,
+                                    &args_clone,
+                                    previous.replayable_content.as_deref(),
+                                )
+                            })
+                        } else {
+                            compact_replayed_read_result(
+                                &name_clone,
+                                &args_clone,
+                                previous.replayable_content.as_deref(),
+                            )
+                        };
                         if let Some(path) = previous.full_output_artifact.as_deref() {
                             content.push_str(&format!(
                                 " The bounded output remains available at: {path}."
@@ -876,6 +928,10 @@ pub(crate) async fn execute_tool_batch(
                                 && !execution.truncated
                                 && execution.content.len() <= REPLAYABLE_READ_LIMIT)
                                 .then(|| execution.content.clone()),
+                            content_offset: args_clone
+                                .get("content_offset")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0),
                             success: execution.success,
                             exit_code: execution.exit_code,
                             truncated: execution.truncated,
