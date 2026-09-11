@@ -1,3 +1,9 @@
+## [v0.51.35](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.35) - 2026-09-11
+
+### Fixes
+- Prevent complete file reads from re-emitting their full body during unchanged replay.
+- Reuse cached complete evidence for covered `view_file` subranges while preserving typed inspection metadata and durable history.
+- Add regressions for exact and subrange read-loop recovery.
 ## [v0.51.34](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.34) - 2026-09-10
 
 ### Fixes
