@@ -1,3 +1,8 @@
+## [v0.51.40](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.40) - 2026-09-12
+
+### Fixes
+ - Show incremental native tool activity while streamed tool arguments are incomplete.
+ - Simplify animated terminal-title spinners by removing square-bracket wrapping.
 ## [v0.51.39](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.39) - 2026-09-11
 
 ### Fixes
