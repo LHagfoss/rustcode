@@ -16,6 +16,7 @@ pub enum StreamFailureKind {
     FirstEventTimeout,
     StreamIdleTimeout,
     PrematureEof,
+    ResponseBodyDecode,
     MalformedSse,
     ProviderError,
     Cancelled,
@@ -29,6 +30,7 @@ impl fmt::Display for StreamFailureKind {
             Self::FirstEventTimeout => "first_event_timeout",
             Self::StreamIdleTimeout => "stream_idle_timeout",
             Self::PrematureEof => "premature_eof",
+            Self::ResponseBodyDecode => "response_body_decode",
             Self::MalformedSse => "malformed_sse",
             Self::ProviderError => "provider_error",
             Self::Cancelled => "cancelled",
@@ -47,6 +49,7 @@ pub fn stream_failure_kind_from_message(message: &str) -> Option<StreamFailureKi
         "first_event_timeout" => StreamFailureKind::FirstEventTimeout,
         "stream_idle_timeout" => StreamFailureKind::StreamIdleTimeout,
         "premature_eof" => StreamFailureKind::PrematureEof,
+        "response_body_decode" => StreamFailureKind::ResponseBodyDecode,
         "malformed_sse" => StreamFailureKind::MalformedSse,
         "provider_error" => StreamFailureKind::ProviderError,
         "cancelled" => StreamFailureKind::Cancelled,
@@ -282,6 +285,12 @@ mod tests {
                 "stream_failure:first_event_timeout status=none bytes_received=0 events_received=0 partial_event_bytes=0"
             ),
             Some(StreamFailureKind::FirstEventTimeout)
+        );
+        assert_eq!(
+            stream_failure_kind_from_message(
+                "stream_failure:response_body_decode status=none bytes_received=65211 events_received=335 partial_event_bytes=0"
+            ),
+            Some(StreamFailureKind::ResponseBodyDecode)
         );
         assert_eq!(stream_failure_kind_from_message("provider exploded"), None);
     }
