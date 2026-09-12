@@ -58,6 +58,7 @@ fn retryable_stream_failure(message: &str) -> bool {
             lifecycle::StreamFailureKind::FirstEventTimeout
                 | lifecycle::StreamFailureKind::StreamIdleTimeout
                 | lifecycle::StreamFailureKind::PrematureEof
+                | lifecycle::StreamFailureKind::ResponseBodyDecode
         )
     )
 }
@@ -276,6 +277,7 @@ pub(super) async fn collect_round(
                 let mut s = request_state.lock().await;
                 s.clear_current_response();
                 s.clear_live_tool_calls();
+                s.current_token_usage = None;
                 s.status = crate::app::AppStatus::Streaming;
                 s.stream_tracker = Some(crate::app::StreamTracker::new());
                 drop(s);
@@ -425,6 +427,9 @@ mod tests {
         ));
         assert!(retryable_stream_failure(
             "stream_failure:stream_idle_timeout status=none bytes_received=32 events_received=1 partial_event_bytes=4"
+        ));
+        assert!(retryable_stream_failure(
+            "stream_failure:response_body_decode status=none bytes_received=65211 events_received=335 partial_event_bytes=0 detail=SSE stream read failed: error decoding response body"
         ));
         assert!(!retryable_stream_failure(
             "stream_failure:malformed_sse status=none bytes_received=32 events_received=1 partial_event_bytes=0"
