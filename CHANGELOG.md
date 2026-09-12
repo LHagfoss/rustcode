@@ -1,3 +1,10 @@
+## [v0.51.42](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.42) - 2026-09-12
+
+### Fixes
+## Fixes
+
+- Retry a single mid-stream provider response-body decoding failure instead of aborting the turn.
+- Preserve non-retry behavior for malformed SSE, invalid UTF-8, cancellation, and generic I/O failures.
 ## [v0.51.41](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.41) - 2026-09-12
 
 ### Fixes
