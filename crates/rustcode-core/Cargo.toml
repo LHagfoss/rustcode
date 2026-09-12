@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-core"
-version = "0.51.40"
+version = "0.51.41"
 edition = "2024"
 
 [dependencies]
