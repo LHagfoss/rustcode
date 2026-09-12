@@ -180,11 +180,22 @@ where
                 continue;
             }
         }
+        let (content, finish_reason) = if let Some(prefix) =
+            crate::network::text::complete_native_tool_call_prefix(&accumulated)
+        {
+            // A complete native call is actionable now. Drop any later
+            // incomplete call so tolerant JSON repair cannot execute a
+            // truncated mutation, and treat the safe prefix as a completed
+            // tool round rather than an output-limit failure.
+            (prefix.to_string(), Some("stop".to_string()))
+        } else {
+            (accumulated, chunk.finish_reason)
+        };
         return Ok(CollectedResponse {
-            content: accumulated,
+            content,
             final_answer_boundary,
             provider_final_answer_state,
-            finish_reason: chunk.finish_reason,
+            finish_reason,
             thought_time_ms,
             thought_tokens,
         });
@@ -238,6 +249,47 @@ mod tests {
         assert_eq!(result.content, "partial finish");
         assert_eq!(calls, 2);
         assert_eq!(previous_args, ["", "partial"]);
+    }
+
+    #[tokio::test]
+    async fn collect_response_stops_after_complete_textual_call_before_incomplete_call() {
+        let mut calls = 0;
+        let result = collect_response(
+            ContinuationPolicy {
+                adaptive_tool_output_limit: Some(16_000),
+                context_output_limit: Some(100_000),
+                max_total_output_tokens: 32_768,
+            },
+            |_request| {
+                calls += 1;
+                async move {
+                    Ok(ResponseChunk {
+                        content: concat!(
+                            "[TOOL_CALLS]list_directory[ARGS]{\"path\":\"/tmp\"}\n",
+                            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",",
+                            "\"content\":\"partial"
+                        )
+                        .into(),
+                        final_answer_boundary: FinalAnswerBoundary::None,
+                        provider_final_answer_state: ProviderFinalAnswerState::None,
+                        finish_reason: Some("length".into()),
+                        has_native_tool_calls: false,
+                        output_token_limit: Some(8_192),
+                        thought_time_ms: 0,
+                        thought_tokens: 0,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("complete textual tool call should be collected");
+
+        assert_eq!(calls, 1);
+        assert_eq!(
+            result.content,
+            "[TOOL_CALLS]list_directory[ARGS]{\"path\":\"/tmp\"}\n"
+        );
+        assert_eq!(result.finish_reason.as_deref(), Some("stop"));
     }
 
     #[tokio::test]

@@ -22,6 +22,14 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     // parser can repair its JSON. Executing repaired output after a length
     // stop would risk silently applying a truncated mutation.
     if crate::tools::has_incomplete_actionable_tool_call(content) {
+        // Native tag responses can contain several calls. The parser is
+        // intentionally tolerant and the incomplete-call detector must keep
+        // mutation-only responses safe, but a valid call before a trailing
+        // truncated call is already actionable and must be handed to the
+        // tool-round parser instead of being continued wholesale.
+        if complete_native_tool_call_prefix(content).is_some() {
+            return false;
+        }
         return true;
     }
 
@@ -75,6 +83,35 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     false
 }
 
+/// Return the safe prefix when a native response has complete calls followed
+/// by an incomplete call. The incomplete suffix must not reach the tolerant
+/// parser, which could otherwise repair and execute a truncated mutation.
+pub(crate) fn complete_native_tool_call_prefix(content: &str) -> Option<&str> {
+    const MARKER: &str = "[TOOL_CALLS]";
+    let markers: Vec<usize> = content
+        .match_indices(MARKER)
+        .map(|(start, _)| start)
+        .collect();
+
+    for (index, &start) in markers.iter().enumerate() {
+        let end = markers.get(index + 1).copied().unwrap_or(content.len());
+        let segment = &content[start..end];
+        if crate::tools::has_incomplete_actionable_tool_call(segment) {
+            if !crate::tools::parse_tool_calls(
+                &content[..start],
+                crate::config::ToolProtocol::Native,
+            )
+            .is_empty()
+            {
+                return Some(&content[..start]);
+            }
+            return None;
+        }
+    }
+
+    None
+}
+
 /// Evidence used by adaptive continuation. This is deliberately narrower than
 /// `is_cut_off`: ordinary prose and reasoning-only responses may continue for
 /// the existing reasons, but they must never receive a larger output ceiling.
@@ -85,6 +122,7 @@ pub(crate) fn is_adaptive_tool_continuation_candidate(
     matches!(finish_reason, Some("length" | "tool_arguments_limit"))
         && !is_reasoning_only(content)
         && crate::tools::has_incomplete_actionable_tool_call(content)
+        && complete_native_tool_call_prefix(content).is_none()
 }
 
 /// True when the prose (outside `<think>` blocks) ends on language that
@@ -504,6 +542,32 @@ mod tests {
     fn test_is_cut_off_reasoning_only() {
         assert!(is_cut_off("<think>thinking</think>", None));
         assert!(!is_cut_off("<think>thinking</think>\n\nthe answer", None));
+    }
+
+    #[test]
+    fn complete_native_call_is_not_cut_off_by_later_incomplete_call() {
+        let content = concat!(
+            "[TOOL_CALLS]list_directory[ARGS]{\"path\":\"/tmp\"}\n",
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",",
+            "\"content\":\"partial"
+        );
+
+        assert!(!is_cut_off(content, Some("length")));
+        assert!(!is_adaptive_tool_continuation_candidate(
+            content,
+            Some("length")
+        ));
+        assert_eq!(
+            complete_native_tool_call_prefix(content),
+            Some("[TOOL_CALLS]list_directory[ARGS]{\"path\":\"/tmp\"}\n")
+        );
+    }
+
+    #[test]
+    fn only_incomplete_native_mutation_remains_cut_off() {
+        let content = "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial";
+
+        assert!(is_cut_off(content, Some("length")));
     }
 
     #[test]

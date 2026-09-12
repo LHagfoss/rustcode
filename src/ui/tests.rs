@@ -2597,6 +2597,35 @@ fn single_live_generic_tool_is_nested_under_running_heading() {
 }
 
 #[test]
+fn speculative_live_tools_are_nested_under_calling_heading() {
+    let mut generic = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "use_skill",
+        "UseSkill",
+        "release-automation",
+    );
+    generic.execution_started = false;
+    let mut command =
+        crate::app::LiveToolCall::new("local:2", None, "run_command", "Bash", "cargo test");
+    command.execution_started = false;
+
+    let rendered = super::history_cell::render_live_tool_cell(&[generic, command], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        [
+            "• Calling",
+            "  └ UseSkill release-automation",
+            "    Bash $ cargo test"
+        ]
+    );
+}
+
+#[test]
 fn speculative_tool_without_target_is_not_rendered() {
     let mut call = crate::app::LiveToolCall::new("local:1", None, "list", "List", "");
     call.execution_started = false;
