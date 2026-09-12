@@ -1,3 +1,9 @@
+## [v0.51.41](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.41) - 2026-09-12
+
+### Fixes
+
+- Stop repeating oversized textual tool-call responses when a complete call is already available before a truncated suffix.
+- Show speculative tool activity as `Calling` until execution begins.
 ## [v0.51.40](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.40) - 2026-09-12
 
 ### Fixes
