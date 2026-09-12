@@ -349,7 +349,12 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         return Vec::new();
     }
 
-    if calls.len() == 1 && calls[0].tool_name == "run_command" {
+    // Speculative calls are only projections of the model's streamed output;
+    // they have not started execution and should not imply that a tool is
+    // already running.
+    let has_speculative = calls.iter().any(|call| !call.execution_started);
+
+    if !has_speculative && calls.len() == 1 && calls[0].tool_name == "run_command" {
         let call = &calls[0];
         let command = truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1));
         let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
@@ -421,7 +426,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         return lines;
     }
 
-    if calls.len() == 1 && calls[0].tool_name == "render_video" {
+    if !has_speculative && calls.len() == 1 && calls[0].tool_name == "render_video" {
         let call = &calls[0];
         let title_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
@@ -466,7 +471,9 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
-    let label = if all_exploration {
+    let label = if has_speculative {
+        "Calling"
+    } else if all_exploration {
         "Exploring"
     } else if all_editing {
         "Editing"
