@@ -586,11 +586,11 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
         ActivityKind::Ready => "rustcode · Idle".to_string(),
         ActivityKind::Queued => "[>] Queued".to_string(),
         ActivityKind::Working => format!(
-            "[{}] Working",
+            "{} Working",
             TERMINAL_SPINNER[frame as usize % TERMINAL_SPINNER.len()]
         ),
         ActivityKind::RunningTool => format!(
-            "[{}] Running",
+            "{} Running",
             TERMINAL_SPINNER[frame as usize % TERMINAL_SPINNER.len()]
         ),
         ActivityKind::ActionRequired => "[!] Action Required".to_string(),
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn terminal_title_contains_state_and_short_name() {
         let title = format_terminal_title(ActivityKind::Working, "tower defense", 2);
-        assert_eq!(title, "[⣯] Working · tower defense");
+        assert_eq!(title, "⣯ Working · tower defense");
     }
 
     #[test]
@@ -689,10 +689,10 @@ mod tests {
         let expected = ['⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'];
         for (frame, spinner) in expected.into_iter().enumerate() {
             let title = format_terminal_title(ActivityKind::Working, "bench", frame as u64);
-            assert!(title.starts_with(&format!("[{spinner}] Working")));
+            assert!(title.starts_with(&format!("{spinner} Working")));
             assert_eq!(
                 format_terminal_title(ActivityKind::RunningTool, "bench", frame as u64),
-                format!("[{spinner}] Running · bench")
+                format!("{spinner} Running · bench")
             );
         }
         assert_eq!(

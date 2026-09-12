@@ -2607,6 +2607,22 @@ fn speculative_tool_without_target_is_not_rendered() {
 }
 
 #[test]
+fn native_speculative_tool_without_target_shows_calling_row() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.update_speculative_native_tool_call("grep", &serde_json::json!({}));
+
+    let text = super::render_live_tail(&state, 80, 24)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("Calling grep"), "rendered: {text:?}");
+    assert!(!text.contains("[TOOL_CALLS]"), "rendered: {text:?}");
+}
+
+#[test]
 fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
