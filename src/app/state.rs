@@ -514,7 +514,41 @@ impl AppState {
             return;
         }
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+        self.update_speculative_live_tool_call_with_summary(
+            provider_call_id,
+            tool_name,
+            action,
+            target,
+        );
+    }
 
+    /// Project a native text-protocol call before its arguments identify a
+    /// target. Fenced calls retain their existing target-based visibility.
+    pub fn update_speculative_native_tool_call(
+        &mut self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) {
+        if tool_name.is_empty() {
+            return;
+        }
+        let (mut action, mut target) =
+            crate::app::activity::summarize_tool_call(tool_name, arguments);
+        if target.is_empty() || target == "?" {
+            action = "Calling".to_owned();
+            target = crate::tools::mcp_tool_display_name(tool_name)
+                .unwrap_or_else(|| tool_name.to_owned());
+        }
+        self.update_speculative_live_tool_call_with_summary(None, tool_name, action, target);
+    }
+
+    fn update_speculative_live_tool_call_with_summary(
+        &mut self,
+        provider_call_id: Option<&str>,
+        tool_name: &str,
+        action: String,
+        target: String,
+    ) {
         if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
             .iter_mut()
             .find(|call| {

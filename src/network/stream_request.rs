@@ -730,6 +730,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_speculative_native_tool_call_tracks_incremental_name_and_arguments() {
+        assert!(parse_speculative_native_tool_call("[TOOL_CALLS]").is_none());
+
+        let name_only = parse_speculative_native_tool_call("[TOOL_CALLS]grep")
+            .expect("native tool name should be visible before arguments");
+        assert_eq!(name_only.0, "grep");
+        assert_eq!(name_only.1, serde_json::json!({}));
+
+        let partial =
+            parse_speculative_native_tool_call("[TOOL_CALLS]grep[ARGS]{\"pattern\": \"AppConfig\"")
+                .expect("partial native arguments should be repaired");
+        assert_eq!(partial.0, "grep");
+        assert_eq!(partial.1["pattern"], "AppConfig");
+    }
+
+    #[test]
     fn profile_generation_options_include_hard_thinking_budget() {
         let profile = crate::config::ModelProfile {
             enable_thinking: Some(true),
@@ -1550,6 +1566,34 @@ pub(crate) fn parse_speculative_text_tool_call(
     Some((name, args))
 }
 
+/// Speculatively extract a native [TOOL_CALLS]name[ARGS]{...} call. Native
+/// tool output is streamed as plain text, so the name must become visible
+/// before the argument object is complete.
+pub(crate) fn parse_speculative_native_tool_call(
+    content: &str,
+) -> Option<(String, serde_json::Value)> {
+    let marker = "[TOOL_CALLS]";
+    let pos = content.rfind(marker)?;
+    let tail = content[pos + marker.len()..].trim_start();
+    let name_end = tail
+        .char_indices()
+        .find_map(|(index, character)| {
+            (!character.is_ascii_alphanumeric() && character != '_' && character != '-')
+                .then_some(index)
+        })
+        .unwrap_or(tail.len());
+    if name_end == 0 {
+        return None;
+    }
+
+    let name = tail[..name_end].to_owned();
+    let arguments = tail[name_end..]
+        .find('{')
+        .map(|start| parse_speculative_arguments(&tail[name_end + start..]))
+        .unwrap_or_else(|| serde_json::json!({}));
+    Some((name, arguments))
+}
+
 pub(crate) async fn estimate_token_usage(
     messages: &[serde_json::Value],
     reply: &str,
@@ -2356,6 +2400,12 @@ pub async fn stream_request(
                                                         return Ok(None);
                                                     }
                                                     s.update_speculative_live_tool_call(None, &tool_name, &tool_args);
+                                                } else if let Some((tool_name, tool_args)) = parse_speculative_native_tool_call(&buf_content) {
+                                                    let mut s = state.lock().await;
+                                                    if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                        return Ok(None);
+                                                    }
+                                                    s.update_speculative_native_tool_call(&tool_name, &tool_args);
                                                 }
                                             }
                                         }
