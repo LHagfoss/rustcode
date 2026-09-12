@@ -1241,10 +1241,12 @@ pub(super) fn push_new_chat_separator<'a>(
     lines.push(Line::from(""));
 }
 
-pub(super) fn is_hidden_system_notice(content: &str) -> bool {
+pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
     content.contains("Loop warning:")
         || content.contains("tool calls in that response were dropped")
         || content.contains("Oversized response:")
+        || (content.starts_with("[The model emitted ")
+            && content.contains("Only one was executed this round;"))
         || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
         || content.starts_with("[harness: stopped after ")
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
@@ -1278,5 +1280,18 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
         }
     } else {
         format!("{:<width$}", s, width = target_width)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_hidden_system_notice;
+
+    #[test]
+    fn deferred_tool_batch_notice_is_hidden_from_transcript() {
+        assert!(is_hidden_system_notice(
+            "[The model emitted 4 tool calls. Only one was executed this round; the remaining calls (grep, write_to_file) were not executed or scheduled.]"
+        ));
+        assert!(!is_hidden_system_notice("Notice: background task finished"));
     }
 }
