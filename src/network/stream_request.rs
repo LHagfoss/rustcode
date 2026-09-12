@@ -11,6 +11,8 @@ use super::retry;
 use super::stream::StreamBuffer;
 use super::{align_alternating_messages, count_tokens, parse_sse_line};
 
+const RESPONSE_BODY_DECODE_ERROR: &str = "error decoding response body";
+
 /// Tracks streamed tool-fence markers, including markers split across chunks.
 #[derive(Default)]
 struct ToolFenceCounter {
@@ -1306,6 +1308,9 @@ impl SseReadError {
         match self {
             Self::Timeout { kind, .. } => *kind,
             Self::Io(error) if error.contains("invalid UTF-8") => StreamFailureKind::MalformedSse,
+            Self::Io(error) if error == RESPONSE_BODY_DECODE_ERROR => {
+                StreamFailureKind::ResponseBodyDecode
+            }
             Self::Io(_) => StreamFailureKind::ProviderError,
         }
     }
@@ -1333,6 +1338,35 @@ impl std::fmt::Display for SseReadError {
             ),
             Self::Io(error) => write!(f, "SSE stream read failed: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod sse_read_error_tests {
+    use super::{RESPONSE_BODY_DECODE_ERROR, SseReadError};
+    use crate::network::lifecycle::StreamFailureKind;
+
+    #[test]
+    fn classifies_only_the_exact_response_body_decode_error() {
+        assert_eq!(
+            SseReadError::Io(RESPONSE_BODY_DECODE_ERROR.to_owned()).kind(),
+            StreamFailureKind::ResponseBodyDecode
+        );
+        assert_eq!(
+            SseReadError::Io("SSE stream contained invalid UTF-8".to_owned()).kind(),
+            StreamFailureKind::MalformedSse
+        );
+        assert_eq!(
+            SseReadError::Io(
+                "SSE stream contained invalid UTF-8: error decoding response body".to_owned()
+            )
+            .kind(),
+            StreamFailureKind::MalformedSse
+        );
+        assert_eq!(
+            SseReadError::Io("connection reset by peer".to_owned()).kind(),
+            StreamFailureKind::ProviderError
+        );
     }
 }
 
