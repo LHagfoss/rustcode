@@ -1,3 +1,9 @@
+## [v0.51.45](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.45) - 2026-09-13
+
+### Fixes
+- Recover truncated textual tool calls after provider stream failures with bounded, resumable checkpoints and no duplicate side effects.
+- Standardize live activity headings on `Explored` and `Ran` while retaining concrete child operation details.
+- Let the verified `kat-coder` profile adapt tool output up to its configured 16k budget while preserving conservative fallback limits.
 ## [v0.51.44](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.44) - 2026-09-13
 
 ### Fixes
