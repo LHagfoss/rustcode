@@ -1051,6 +1051,23 @@ mod tests {
     }
 
     #[test]
+    fn failed_textual_tool_checkpoint_replays_as_unexecuted_assistant_text() {
+        let partial = "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial";
+        let history = vec![
+            ChatMessage::new("user", "write the file"),
+            ChatMessage::new("assistant", partial).as_unexecuted_tool_call_checkpoint(),
+        ];
+
+        let entries: Vec<_> = normalize_history(&history).collect();
+        assert!(matches!(entries[1], HistoryEntry::Assistant(_)));
+
+        let messages = to_messages(&history, "system");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert!(messages[2]["tool_calls"].is_null());
+        assert_eq!(messages[2]["content"], partial);
+    }
+
+    #[test]
     fn does_not_replay_ui_conversation_recaps_to_the_model() {
         let history = vec![
             ChatMessage::new("user", "inspect this"),

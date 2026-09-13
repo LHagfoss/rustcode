@@ -77,6 +77,9 @@ pub(crate) fn resolve_tool_calls(
     message: &rustcode_core::ChatMessage,
     protocol: crate::config::ToolProtocol,
 ) -> Vec<ToolCall> {
+    if message.unexecuted_tool_call_checkpoint {
+        return Vec::new();
+    }
     if !message.tool_calls.is_empty() {
         message
             .tool_calls

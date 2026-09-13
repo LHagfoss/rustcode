@@ -19,6 +19,16 @@ use crate::network::text::{
     continuation_nudge_for_category, format_continuation_assistant_message,
 };
 
+const MAX_STREAM_RECOVERY_CHECKPOINT_BYTES: usize = 16 * 1024;
+const MAX_STREAM_RECOVERY_ERROR_BYTES: usize = 512;
+const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RoundCollectionError {
+    Continue,
+    Stop,
+}
+
 pub(super) fn messages_for_response_continuation<'a>(
     base: &'a [serde_json::Value],
     previous: &str,
@@ -63,13 +73,69 @@ fn retryable_stream_failure(message: &str) -> bool {
     )
 }
 
+fn bounded_stream_recovery_checkpoint(content: &str) -> String {
+    if content.len() <= MAX_STREAM_RECOVERY_CHECKPOINT_BYTES {
+        return content.to_owned();
+    }
+
+    const MARKER_PREFIX: &str = "\n[partial provider response truncated by harness; ";
+    const MARKER_SUFFIX: &str = " bytes omitted]";
+    let preview_limit = MAX_STREAM_RECOVERY_CHECKPOINT_BYTES
+        .saturating_sub(MARKER_PREFIX.len() + MARKER_SUFFIX.len() + 20);
+    let preview_end = content.floor_char_boundary(preview_limit.min(content.len()));
+    let marker = format!(
+        "{MARKER_PREFIX}{}{}",
+        content.len().saturating_sub(preview_end),
+        MARKER_SUFFIX
+    );
+    format!("{}{}", &content[..preview_end], marker)
+}
+
+fn recoverable_textual_stream_failure(content: &str) -> bool {
+    !content.trim().is_empty()
+        && crate::network::text::has_intended_tool_call(content)
+        && crate::tools::has_incomplete_actionable_tool_call(content)
+}
+
+fn bounded_error_detail(error: &runner::ResponseError) -> String {
+    let detail = error.to_string();
+    let end = detail.floor_char_boundary(MAX_STREAM_RECOVERY_ERROR_BYTES.min(detail.len()));
+    if end == detail.len() {
+        detail
+    } else {
+        format!("{}…", &detail[..end])
+    }
+}
+
+async fn checkpoint_stream_recovery(
+    state: &Arc<Mutex<AppState>>,
+    content: String,
+    error: &runner::ResponseError,
+) {
+    let content = bounded_stream_recovery_checkpoint(&content);
+    let notice = format!(
+        "[Recoverable provider interruption: the response stream failed after a partial textual tool call. The partial response was saved, but no tool call from it was executed. RustCode will make one bounded recovery request. If recovery fails, send the next prompt or use --resume; completed tool calls will not be replayed. Provider detail: {}]",
+        bounded_error_detail(error)
+    );
+    let mut s = state.lock().await;
+    s.replace_current_response(content.clone());
+    s.history
+        .push(ChatMessage::new("assistant", content).as_unexecuted_tool_call_checkpoint());
+    s.history.push(ChatMessage::new("system", notice));
+    let active_id = s.active_session_id.clone();
+    crate::config::save_session_history(&active_id, &s.history);
+    s.current_token_usage = None;
+    s.status = crate::app::AppStatus::Streaming;
+    s.stream_tracker = Some(crate::app::StreamTracker::new());
+}
+
 pub(super) async fn collect_round(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     ctx: &mut TurnContext,
-) -> Result<RoundResponse, ()> {
+) -> Result<RoundResponse, RoundCollectionError> {
     let unprobed = {
         let s = state.lock().await;
         let url = s.api_base_url.clone();
@@ -115,7 +181,7 @@ pub(super) async fn collect_round(
             };
             s.history.push(ChatMessage::new("system", notice));
             s.current_token_usage = None;
-            return Err(());
+            return Err(RoundCollectionError::Stop);
         }
     };
 
@@ -227,7 +293,7 @@ pub(super) async fn collect_round(
                 request_buffer.lock().await.reset();
                 let current_msgs =
                     messages_for_response_continuation(&request_msgs, &request.previous);
-                let finish_reason = stream_request(
+                let stream_result = stream_request(
                     &request_client,
                     request_state,
                     request_cancel,
@@ -242,8 +308,17 @@ pub(super) async fn collect_round(
                     Some(request_session_id.as_str()),
                     request.output_token_limit,
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await;
+                let finish_reason = match stream_result {
+                    Ok(finish_reason) => finish_reason,
+                    Err(error) => {
+                        let partial_content = request_buffer.lock().await.content.clone();
+                        return Err(runner::ResponseError::with_partial(
+                            error.to_string(),
+                            partial_content,
+                        ));
+                    }
+                };
                 let buffer = request_buffer.lock().await;
                 Ok(runner::ResponseChunk {
                     content: buffer.content.clone(),
@@ -261,7 +336,11 @@ pub(super) async fn collect_round(
         match attempt {
             Err(error)
                 if transport_retry_attempts < 1
-                    && retryable_stream_failure(&error)
+                    // Once a response has emitted bytes, replaying the
+                    // request can duplicate a textual call. Preserve it and
+                    // recover from the checkpoint instead.
+                    && error.partial_content.is_empty()
+                    && retryable_stream_failure(&error.to_string())
                     && !request_cancel.is_cancelled() =>
             {
                 transport_retry_attempts += 1;
@@ -269,9 +348,9 @@ pub(super) async fn collect_round(
                     "turn.stream_retry",
                     serde_json::json!({
                         "attempt": transport_retry_attempts,
-                        "reason": lifecycle::stream_failure_kind_from_message(&error)
+                        "reason": lifecycle::stream_failure_kind_from_message(&error.to_string())
                             .map(|kind| kind.to_string()),
-                        "error": error,
+                        "error": error.to_string(),
                     }),
                 );
                 let mut s = request_state.lock().await;
@@ -293,7 +372,8 @@ pub(super) async fn collect_round(
                 ctx.lifecycle.turn_machine.recover_error();
             }
             dbg_log!("Stream request failed: {error}");
-            let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error);
+            let error_message = error.to_string();
+            let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error_message);
             if ctx.lifecycle.task_completed {
                 // Required verification already latched completion. A later
                 // optional continuation must not turn an otherwise successful
@@ -307,10 +387,10 @@ pub(super) async fn collect_round(
                     "turn.completed_transport_warning",
                     serde_json::json!({
                         "kind": kind.to_string(),
-                        "error": error,
+                        "error": error_message,
                     }),
                 );
-            } else if error == "cancelled"
+            } else if error_message == "cancelled"
                 || stream_failure_kind == Some(lifecycle::StreamFailureKind::Cancelled)
             {
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
@@ -324,23 +404,45 @@ pub(super) async fn collect_round(
                     "turn.stream_failure",
                     serde_json::json!({
                         "kind": kind.to_string(),
-                        "error": error,
+                        "error": error_message,
                     }),
                 );
             } else {
-                record_provider_error(ctx, &error);
+                record_provider_error(ctx, &error.to_string());
+            }
+            if !cancel_token.is_cancelled()
+                && ctx.recovery.stream_recovery_attempts < MAX_STREAM_RECOVERY_ATTEMPTS
+                && recoverable_textual_stream_failure(&error.partial_content)
+            {
+                ctx.recovery.stream_recovery_attempts =
+                    ctx.recovery.stream_recovery_attempts.saturating_add(1);
+                ctx.response.final_content =
+                    bounded_stream_recovery_checkpoint(&error.partial_content);
+                ctx.response.final_content_persisted = true;
+                crate::logger::operational_event(
+                    "turn.stream_recovery",
+                    serde_json::json!({
+                        "attempt": ctx.recovery.stream_recovery_attempts,
+                        "kind": stream_failure_kind.map(|kind| kind.to_string()),
+                        "partial_content_bytes": error.partial_content.len(),
+                        "outcome": "continuation_requested",
+                    }),
+                );
+                checkpoint_stream_recovery(state, error.partial_content.clone(), &error).await;
+                ctx.budget.tool_rounds += 1;
+                return Err(RoundCollectionError::Continue);
             }
             let mut s = state.lock().await;
-            let notice = if error == "cancelled"
+            let notice = if error_message == "cancelled"
                 || stream_failure_kind == Some(lifecycle::StreamFailureKind::Cancelled)
             {
                 "Request cancelled by user".to_string()
             } else {
-                format!("Error from LLM Provider: {error}")
+                format!("Error from LLM Provider: {error_message}")
             };
             s.history.push(ChatMessage::new("system", notice));
             s.current_token_usage = None;
-            return Err(());
+            return Err(RoundCollectionError::Stop);
         }
     };
     let content = collected.content;
@@ -382,7 +484,7 @@ pub(super) async fn collect_round(
     if cancel_token.is_cancelled() {
         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
         ctx.lifecycle.turn_machine.cancel();
-        return Err(());
+        return Err(RoundCollectionError::Stop);
     }
     let buffer = stream_buffer.lock().await;
     let native_tool_calls = buffer.native_tool_calls.clone();
@@ -409,7 +511,20 @@ pub(super) async fn collect_round(
 
 #[cfg(test)]
 mod tests {
-    use super::retryable_stream_failure;
+    use super::{recoverable_textual_stream_failure, retryable_stream_failure};
+
+    #[test]
+    fn only_an_incomplete_actionable_textual_call_is_auto_recoverable() {
+        assert!(recoverable_textual_stream_failure(
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial"
+        ));
+        assert!(!recoverable_textual_stream_failure(
+            "ordinary partial prose"
+        ));
+        assert!(!recoverable_textual_stream_failure(
+            "[TOOL_CALLS]get_time[ARGS]{}"
+        ));
+    }
 
     #[test]
     fn only_transport_phase_failures_are_safe_to_replay() {
