@@ -1,3 +1,9 @@
+## [v0.51.43](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.43) - 2026-09-13
+
+### Fixes
+- Enforce one textual tool call per model response and keep deferred calls out of active activity display.
+- Hide internal deferred-call recovery notices from the transcript.
+- Use a compact 2x3 spinner glyph set without bracket wrapping.
 ## [v0.51.42](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.42) - 2026-09-12
 
 ### Fixes
