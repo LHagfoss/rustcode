@@ -313,6 +313,11 @@ pub struct ChatMessage {
     /// assistant turn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conversation_recap: bool,
+    /// Assistant text captured after a provider stream failed before its
+    /// textual tool call was validated. It must remain prose during replay so
+    /// tolerant parsing cannot turn an unexecuted fragment into a call.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unexecuted_tool_call_checkpoint: bool,
 }
 
 impl ChatMessage {
@@ -332,6 +337,7 @@ impl ChatMessage {
             tool_call_id: None,
             compaction_boundary: None,
             conversation_recap: false,
+            unexecuted_tool_call_checkpoint: false,
         }
     }
 
@@ -367,6 +373,11 @@ impl ChatMessage {
 
     pub fn as_conversation_recap(mut self) -> Self {
         self.conversation_recap = true;
+        self
+    }
+
+    pub fn as_unexecuted_tool_call_checkpoint(mut self) -> Self {
+        self.unexecuted_tool_call_checkpoint = true;
         self
     }
 }

@@ -33,6 +33,10 @@ pub struct RecoveryState {
     pub reasoning_recovery_attempts: u8,
     pub reasoning_recovery_pending: bool,
     pub empty_response_recovery_attempts: u8,
+    /// A provider/device failure after textual output gets one fresh,
+    /// turn-scoped continuation. Keeping this separate from transport retries
+    /// prevents a failed recovery from opening an unbounded loop.
+    pub stream_recovery_attempts: u8,
     pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub completion_blocks: u8,
@@ -123,6 +127,7 @@ impl TurnContext {
                 reasoning_recovery_attempts: 0,
                 reasoning_recovery_pending: false,
                 empty_response_recovery_attempts: 0,
+                stream_recovery_attempts: 0,
                 reasoning_loops_detected: 0,
                 force_final: false,
                 completion_blocks: 0,
