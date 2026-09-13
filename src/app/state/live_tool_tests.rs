@@ -79,6 +79,49 @@ fn speculative_tool_call_updates_target_as_arguments_stream() {
 }
 
 #[test]
+fn speculative_providerless_calls_share_one_projection_per_turn() {
+    let mut state = AppState::new();
+
+    state.update_speculative_native_tool_call("view_file", &serde_json::json!({}));
+    let key = state.live_tool_calls[0].key.clone();
+    state.update_speculative_native_tool_call(
+        "write_to_file",
+        &serde_json::json!({"TargetFile": "src/main.rs"}),
+    );
+
+    assert_eq!(state.live_tool_calls.len(), 1);
+    assert_eq!(state.live_tool_calls[0].key, key);
+    assert_eq!(state.live_tool_calls[0].tool_name, "write_to_file");
+    assert_eq!(state.live_tool_calls[0].target, "src/main.rs");
+
+    let execution_key = state.begin_live_tool_call(None, "write_to_file", &serde_json::json!({}));
+    assert_eq!(execution_key, key);
+    assert!(state.live_tool_calls[0].execution_started);
+}
+
+#[test]
+fn speculative_structured_calls_keep_distinct_provider_ids() {
+    let mut state = AppState::new();
+
+    state.update_speculative_live_tool_call(Some("call-1"), "view_file", &serde_json::json!({}));
+    state.update_speculative_live_tool_call(
+        Some("call-2"),
+        "write_to_file",
+        &serde_json::json!({}),
+    );
+
+    assert_eq!(state.live_tool_calls.len(), 2);
+    assert_eq!(
+        state
+            .live_tool_calls
+            .iter()
+            .filter_map(|call| call.provider_call_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec!["call-1", "call-2"]
+    );
+}
+
+#[test]
 fn execution_adopts_the_speculative_live_tool_projection() {
     let mut state = AppState::new();
     state.update_speculative_live_tool_call(Some("call-99"), "get_time", &serde_json::json!({}));

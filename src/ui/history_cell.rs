@@ -70,7 +70,17 @@ impl TranscriptState {
 
     pub(crate) fn sync_model(&mut self, history: &History, live_text: &str) {
         if self.history_revision != Some(history.revision()) {
-            self.model.sync_history(history);
+            // Recovery notices remain in canonical/provider history, but are
+            // implementation details and must not become transcript cells.
+            let visible_history = history
+                .iter()
+                .filter(|message| {
+                    !(message.role == "system" || message.role == "assistant")
+                        || !crate::ui::is_hidden_system_notice(&message.content)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            self.model.sync_history(&visible_history);
             self.history_revision = Some(history.revision());
         }
         self.model.replace_live_text(live_text);
@@ -566,5 +576,31 @@ mod tests {
         transcript.sync_model(&history, "");
         assert_ne!(transcript.history_revision(), first_revision);
         assert_eq!(transcript.model().committed().len(), 2);
+    }
+
+    #[test]
+    fn transcript_hides_deferred_call_notice_but_keeps_other_history() {
+        let mut history = History::default();
+        history.push(ChatMessage::new("user", "inspect the project"));
+        history.push(ChatMessage::new(
+            "system",
+            "[The model emitted 3 tool calls. Only one was executed this round; the remaining calls (grep, write_to_file) were not executed or scheduled.]",
+        ));
+        history.push(ChatMessage::new(
+            "assistant",
+            "Continuing with the real result.",
+        ));
+        let mut transcript = TranscriptState::default();
+
+        transcript.sync_model(&history, "");
+
+        assert_eq!(transcript.model().committed().len(), 2);
+        assert!(
+            transcript
+                .model()
+                .committed()
+                .iter()
+                .all(|cell| !matches!(cell, crate::ui::transcript::HistoryCell::System(_)))
+        );
     }
 }

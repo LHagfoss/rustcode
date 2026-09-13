@@ -472,10 +472,15 @@ impl AppState {
                 !call.execution_started
                     && match provider_call_id {
                         Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                        // Text protocols do not provide a stable call id. Keep
+                        // one speculative projection for the whole response;
+                        // the final tool name/arguments replace the preview as
+                        // the stream becomes authoritative.
+                        None => call.provider_call_id.is_none(),
                     }
             })
         {
+            call.tool_name = tool_name.to_owned();
             call.action = action;
             call.target = target;
             call.execution_started = true;
@@ -555,10 +560,15 @@ impl AppState {
                 !call.execution_started
                     && match provider_call_id {
                         Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                        // A provider-less projection represents the one
+                        // textual call allowed in the current model turn.
+                        // Reuse it even if the streamed tool name changes;
+                        // structured calls retain independent provider IDs.
+                        None => call.provider_call_id.is_none(),
                     }
             })
         {
+            call.tool_name = tool_name.to_owned();
             call.action = action;
             call.target = target;
             self.request_redraw();
