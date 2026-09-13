@@ -191,7 +191,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A background command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. Do not add '&' when using detached=true. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. Do not add '&' when using detached=true. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -440,8 +440,11 @@ fn run_command_output_inner(
         .and_then(parse_json_bool)
         .unwrap_or(false);
     let has_background_operator = has_shell_background_operator(command_str);
-    let detached = detached_requested || (background_requested && has_background_operator);
-    let run_in_bg = (background_requested || detached_requested)
+    // A shell-level `&` can outlive the shell. Treat it as detached even when
+    // the model omitted the JSON background flag, so the child cannot inherit
+    // RustCode's pipes and keep a foreground turn stuck indefinitely.
+    let detached = detached_requested || has_background_operator;
+    let run_in_bg = (background_requested || detached)
         && (detached || !is_short_discovery_command(command_str));
     let command_request = rustcode_command::CommandRequest {
         command: if detached {
@@ -1122,7 +1125,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn nested_background_command_is_auto_detached_and_killable() {
+    fn shell_background_operator_is_auto_detached_without_background_flag() {
         let session_id = format!(
             "nested-background-test-{}",
             std::time::SystemTime::now()
@@ -1133,9 +1136,8 @@ mod tests {
         super::super::set_active_session_id(Some(session_id.clone()));
         let output = run_command_output(&serde_json::json!({
             "command": "sleep 30 &",
-            "background": true,
         }))
-        .expect("nested background command should start");
+        .expect("shell background command should start detached");
         let snapshots = super::super::background_task_snapshots(&session_id);
         let stop = super::super::stop_background_tasks(&session_id);
         super::super::set_active_session_id(None);
@@ -1143,8 +1145,8 @@ mod tests {
         assert!(output.success);
         assert!(!output.pending);
         assert!(output.content.contains("Detached task started"));
-        assert_eq!(snapshots.len(), 1, "nested task was not retained");
-        assert_eq!(stop.stopped, 1, "nested task was not terminated");
+        assert_eq!(snapshots.len(), 1, "implicit detached task was not retained");
+        assert_eq!(stop.stopped, 1, "implicit detached task was not terminated");
     }
 
     #[test]
