@@ -2562,7 +2562,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(rendered[0], "• Running");
+    assert_eq!(rendered[0], "• Ran");
     assert_eq!(
         rendered
             .iter()
@@ -2589,12 +2589,75 @@ fn live_tool_cell_is_a_projection_not_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Exploring"));
+    assert!(text.contains("Explored"));
     assert!(state.history.is_empty());
 }
 
 #[test]
-fn single_live_generic_tool_is_nested_under_running_heading() {
+fn live_exploration_batch_uses_explored_for_speculative_and_executing_calls() {
+    let mut speculative =
+        crate::app::LiveToolCall::new("local:1", None, "grep", "Grep", "src/**/*.rs");
+    speculative.execution_started = false;
+    let executing =
+        crate::app::LiveToolCall::new("local:2", None, "view_file", "Read", "src/main.rs");
+
+    let rendered = super::history_cell::render_live_tool_cell(&[speculative, executing], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Explored");
+    assert_eq!(rendered[1], "  └ Grep src/**/*.rs");
+    assert_eq!(rendered[2], "    Read src/main.rs");
+}
+
+#[test]
+fn mixed_live_exploration_and_action_batch_uses_ran_heading() {
+    let calls = vec![
+        crate::app::LiveToolCall::new("local:1", None, "view_file", "Read", "src/main.rs"),
+        crate::app::LiveToolCall::new("local:2", None, "write_to_file", "Writing", "src/main.rs"),
+    ];
+
+    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  └ Read src/main.rs");
+    assert_eq!(rendered[2], "    Writing src/main.rs");
+}
+
+#[test]
+fn live_mcp_calls_use_ran_heading_for_speculative_and_executing_calls() {
+    let mut speculative = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "mcp__clockify__get_time",
+        "ClockifyGetTime",
+        "workspace",
+    );
+    speculative.execution_started = false;
+    let executing = crate::app::LiveToolCall::new(
+        "local:2",
+        None,
+        "mcp__clockify__start_timer",
+        "ClockifyStartTimer",
+        "task-42",
+    );
+
+    let rendered = super::history_cell::render_live_tool_cell(&[speculative, executing], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  └ ClockifyGetTime workspace");
+    assert_eq!(rendered[2], "    ClockifyStartTimer task-42");
+}
+
+#[test]
+fn single_live_generic_tool_is_nested_under_ran_heading() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -2607,11 +2670,11 @@ fn single_live_generic_tool_is_nested_under_running_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Running", "  └ UseSkill release-automation"]);
+    assert_eq!(rendered, ["• Ran", "  └ UseSkill release-automation"]);
 }
 
 #[test]
-fn speculative_live_tools_are_nested_under_calling_heading() {
+fn speculative_live_tools_are_nested_under_ran_heading() {
     let mut generic = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -2632,7 +2695,7 @@ fn speculative_live_tools_are_nested_under_calling_heading() {
     assert_eq!(
         rendered,
         [
-            "• Calling",
+            "• Ran",
             "  └ UseSkill release-automation",
             "    Bash $ cargo test"
         ]
@@ -2640,7 +2703,7 @@ fn speculative_live_tools_are_nested_under_calling_heading() {
 }
 
 #[test]
-fn speculative_file_write_uses_editing_heading() {
+fn speculative_file_write_uses_ran_heading() {
     let mut call =
         crate::app::LiveToolCall::new("local:1", None, "write_to_file", "Writing", "src/main.js");
     call.execution_started = false;
@@ -2650,7 +2713,7 @@ fn speculative_file_write_uses_editing_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Editing", "  └ src/main.js"]);
+    assert_eq!(rendered, ["• Ran", "  └ src/main.js"]);
 }
 
 #[test]
@@ -2664,7 +2727,7 @@ fn speculative_tool_without_target_is_not_rendered() {
 }
 
 #[test]
-fn native_speculative_tool_without_target_shows_calling_row() {
+fn native_speculative_exploration_without_target_uses_explored_heading() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
     state.update_speculative_native_tool_call("grep", &serde_json::json!({}));
@@ -2675,12 +2738,13 @@ fn native_speculative_tool_without_target_shows_calling_row() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(text.contains("• Explored"), "rendered: {text:?}");
     assert!(text.contains("Calling grep"), "rendered: {text:?}");
     assert!(!text.contains("[TOOL_CALLS]"), "rendered: {text:?}");
 }
 
 #[test]
-fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
+fn live_editing_tool_cell_shows_ran_heading_and_target_child() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -2693,11 +2757,11 @@ fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Editing", "  └ src/game/engine.ts"]);
+    assert_eq!(rendered, ["• Ran", "  └ src/game/engine.ts"]);
 }
 
 #[test]
-fn live_audio_generation_cell_shows_editing_heading_and_output_path() {
+fn live_audio_generation_cell_shows_ran_heading_and_output_path() {
     let arguments = serde_json::json!({
         "prompt": "a short balloon pop",
         "duration_seconds": 0.4,
@@ -2713,7 +2777,7 @@ fn live_audio_generation_cell_shows_editing_heading_and_output_path() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Editing", "  └ assets/audio/balloon-pop.wav"]);
+    assert_eq!(rendered, ["• Ran", "  └ assets/audio/balloon-pop.wav"]);
 }
 
 #[test]
@@ -2735,12 +2799,13 @@ fn live_video_render_cell_shows_progress() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Rendering video-project.json");
-    assert!(rendered[1].contains("render progress: 42% (2.1s/5.0s)"));
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  └ video-project.json");
+    assert!(rendered[2].contains("render progress: 42% (2.1s/5.0s)"));
 }
 
 #[test]
-fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() {
+fn live_batched_edits_with_casing_aliases_group_under_ran_without_actions() {
     let calls = vec![
         crate::app::LiveToolCall::new(
             "local:1",
@@ -2758,12 +2823,12 @@ fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() 
 
     assert_eq!(
         rendered,
-        ["• Editing", "  └ src/game/engine.ts", "    src/App.tsx"]
+        ["• Ran", "  └ src/game/engine.ts", "    src/App.tsx"]
     );
 }
 
 #[test]
-fn live_multiple_generic_tools_show_running_heading() {
+fn live_multiple_generic_tools_show_ran_heading() {
     let calls = vec![
         crate::app::LiveToolCall::new("local:1", None, "clockify_timer", "ClockifyTimer", "start"),
         crate::app::LiveToolCall::new("local:2", None, "notify_user", "NotifyUser", "done"),
@@ -2775,11 +2840,7 @@ fn live_multiple_generic_tools_show_running_heading() {
 
     assert_eq!(
         rendered,
-        [
-            "• Running",
-            "  └ ClockifyTimer start",
-            "    NotifyUser done"
-        ]
+        ["• Ran", "  └ ClockifyTimer start", "    NotifyUser done"]
     );
 }
 
@@ -2802,7 +2863,8 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• cargo test");
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  └ Bash $ cargo test");
     assert!(rendered.iter().any(|line| line.contains("compiler error")));
     assert!(rendered.iter().any(|line| line.contains("lines")));
     assert!(
@@ -2835,7 +2897,7 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
     .map(|line| line.to_string())
     .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• cargo test"]);
+    assert_eq!(rendered, ["• Ran", "  └ Bash $ cargo test"]);
     assert!(
         !rendered
             .iter()
