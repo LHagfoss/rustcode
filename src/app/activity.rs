@@ -33,7 +33,7 @@ pub enum TerminalProgress {
     Error,
 }
 
-const TERMINAL_SPINNER: &[char] = &['⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'];
+const TERMINAL_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 impl TerminalProgress {
     pub fn osc_sequence(&self) -> &'static str {
@@ -681,12 +681,12 @@ mod tests {
     #[test]
     fn terminal_title_contains_state_and_short_name() {
         let title = format_terminal_title(ActivityKind::Working, "tower defense", 2);
-        assert_eq!(title, "⣯ Working · tower defense");
+        assert_eq!(title, "⠹ Working · tower defense");
     }
 
     #[test]
     fn active_terminal_titles_cycle_through_the_requested_spinner() {
-        let expected = ['⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'];
+        let expected = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         for (frame, spinner) in expected.into_iter().enumerate() {
             let title = format_terminal_title(ActivityKind::Working, "bench", frame as u64);
             assert!(title.starts_with(&format!("{spinner} Working")));
@@ -696,7 +696,7 @@ mod tests {
             );
         }
         assert_eq!(
-            format_terminal_title(ActivityKind::Working, "bench", 8),
+            format_terminal_title(ActivityKind::Working, "bench", 10),
             format_terminal_title(ActivityKind::Working, "bench", 0)
         );
     }

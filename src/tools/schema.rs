@@ -1284,7 +1284,7 @@ If the request context names a skill, load it first. For a likely specialized wo
             p.push_str(
                 "Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
-                Rules: use exactly [TOOL_CALLS]tool_name[ARGS]{...}; arguments must be a valid JSON object matching the tool parameters.\n\n"
+                Rules: emit exactly one [TOOL_CALLS] marker in each response. After its single [ARGS] JSON object, stop immediately: emit no second marker and no prose. The next tool call belongs in the next model turn, after the result is provided. Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
@@ -1446,5 +1446,14 @@ mod response_limit_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn native_protocol_requires_one_marker_and_stops_after_arguments() {
+        let prompt = tool_system_prompt(false, ToolProtocol::Native, AgentMode::Build);
+
+        assert!(prompt.contains("exactly one [TOOL_CALLS] marker"));
+        assert!(prompt.contains("After its single [ARGS] JSON object, stop immediately"));
+        assert!(prompt.contains("The next tool call belongs in the next model turn"));
     }
 }
