@@ -1,5 +1,41 @@
 use std::future::Future;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseError {
+    pub(crate) message: String,
+    /// Response text emitted by the failed request. This is kept separate from
+    /// the diagnostic so a stream failure can preserve a safe checkpoint
+    /// without replaying it as a successful tool response.
+    pub(crate) partial_content: String,
+}
+
+impl ResponseError {
+    pub(crate) fn with_partial(message: impl Into<String>, partial_content: String) -> Self {
+        Self {
+            message: message.into(),
+            partial_content,
+        }
+    }
+}
+
+impl From<String> for ResponseError {
+    fn from(message: String) -> Self {
+        Self::with_partial(message, String::new())
+    }
+}
+
+impl From<&str> for ResponseError {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl std::fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// Shared continuation and loop policy for every model-facing turn loop.
 pub(crate) struct TurnRunner {
     continuation_count: usize,
@@ -48,6 +84,7 @@ pub(crate) struct ResponseChunk {
     pub(crate) thought_tokens: u32,
 }
 
+#[derive(Debug)]
 pub(crate) struct CollectedResponse {
     pub(crate) content: String,
     pub(crate) final_answer_boundary: super::stream::FinalAnswerBoundary,
@@ -113,13 +150,14 @@ impl TurnRunner {
 /// Collect one model response, transparently continuing responses cut off by
 /// the provider. The callback owns request construction, allowing TUI, CLI,
 /// and subagent adapters to share exactly one continuation policy.
-pub(crate) async fn collect_response<F, Fut>(
+pub(crate) async fn collect_response<F, Fut, E>(
     policy: ContinuationPolicy,
     mut request: F,
-) -> Result<CollectedResponse, String>
+) -> Result<CollectedResponse, ResponseError>
 where
     F: FnMut(ContinuationRequest) -> Fut,
-    Fut: Future<Output = Result<ResponseChunk, String>>,
+    Fut: Future<Output = Result<ResponseChunk, E>>,
+    E: Into<ResponseError>,
 {
     let mut accumulated = String::new();
     let mut has_native_tool_calls = false;
@@ -133,7 +171,20 @@ where
             previous: accumulated.clone(),
             output_token_limit,
         })
-        .await?;
+        .await
+        .map_err(Into::into)
+        .map_err(|mut error| {
+            // A failed continuation only reports the bytes from that request;
+            // join them to the successful prefix before handing the error back
+            // to the turn layer. This is the checkpoint that must survive a
+            // provider/device failure.
+            if !accumulated.is_empty() {
+                let mut content = accumulated.clone();
+                content.push_str(&error.partial_content);
+                error.partial_content = content;
+            }
+            error
+        })?;
         accumulated.push_str(&chunk.content);
         // This describes the segment that ended the collected response, not
         // any earlier segment. A later reasoning-only continuation must clear
@@ -231,7 +282,7 @@ mod tests {
                 Some("stop".to_string())
             };
             async move {
-                Ok(ResponseChunk {
+                Ok::<_, ResponseError>(ResponseChunk {
                     content: chunk.to_string(),
                     final_answer_boundary: FinalAnswerBoundary::None,
                     provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -263,7 +314,7 @@ mod tests {
             |_request| {
                 calls += 1;
                 async move {
-                    Ok(ResponseChunk {
+                    Ok::<_, ResponseError>(ResponseChunk {
                         content: concat!(
                             "[TOOL_CALLS]list_directory[ARGS]{\"path\":\"/tmp\"}\n",
                             "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",",
@@ -298,7 +349,7 @@ mod tests {
         let result = collect_response(ContinuationPolicy::default(), |request| {
             calls += 1;
             async move {
-                Ok(ResponseChunk {
+                Ok::<_, ResponseError>(ResponseChunk {
                     content: if request.previous.is_empty() {
                         "<think>plan</think>".into()
                     } else {
@@ -327,7 +378,7 @@ mod tests {
         let result = collect_response(ContinuationPolicy::default(), |request| {
             calls += 1;
             async move {
-                Ok(ResponseChunk {
+                Ok::<_, ResponseError>(ResponseChunk {
                     content: if request.previous.is_empty() {
                         "<think>plan</think>".into()
                     } else {
@@ -390,7 +441,7 @@ mod tests {
                 _ => panic!("unexpected continuation"),
             };
             async move {
-                Ok(ResponseChunk {
+                Ok::<_, ResponseError>(ResponseChunk {
                     content,
                     final_answer_boundary,
                     provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -416,7 +467,7 @@ mod tests {
         let result = collect_response(ContinuationPolicy::default(), |request| {
             calls += 1;
             async move {
-                Ok(ResponseChunk {
+                Ok::<_, ResponseError>(ResponseChunk {
                     content: if request.previous.is_empty() {
                         "<think>first</think>".into()
                     } else {
@@ -467,7 +518,7 @@ mod tests {
                     "}</tool_call>"
                 };
                 async move {
-                    Ok(ResponseChunk {
+                    Ok::<_, ResponseError>(ResponseChunk {
                         content: content.to_string(),
                         final_answer_boundary: FinalAnswerBoundary::None,
                         provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -506,7 +557,7 @@ mod tests {
                 calls += 1;
                 requested_limits.push(request.output_token_limit);
                 async move {
-                    Ok(ResponseChunk {
+                    Ok::<_, ResponseError>(ResponseChunk {
                         content: if calls == 1 {
                             "<think>still planning</think>".into()
                         } else {
@@ -547,7 +598,7 @@ mod tests {
                 calls += 1;
                 requested_limits.push(request.output_token_limit);
                 async move {
-                    Ok(ResponseChunk {
+                    Ok::<_, ResponseError>(ResponseChunk {
                         content: "```tool\n{\"name\":\"get_time\",\"arguments\":{}}\n```".into(),
                         final_answer_boundary: FinalAnswerBoundary::None,
                         provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -580,7 +631,7 @@ mod tests {
                 calls += 1;
                 requested_limits.push(request.output_token_limit);
                 async move {
-                    Ok(ResponseChunk {
+                    Ok::<_, ResponseError>(ResponseChunk {
                         content: "<tool_call><function=write_to_file>{\"path\":\"x\",\"content\":\"partial".into(),
                         final_answer_boundary: FinalAnswerBoundary::None,
                         provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -597,5 +648,43 @@ mod tests {
         .unwrap();
         assert_eq!(calls, 1);
         assert_eq!(requested_limits, [None]);
+    }
+
+    #[tokio::test]
+    async fn failed_continuation_preserves_prefix_and_failed_stream_bytes() {
+        let mut calls = 0;
+        let result = collect_response(ContinuationPolicy::default(), |request| {
+            calls += 1;
+            async move {
+                if request.previous.is_empty() {
+                    Ok::<_, ResponseError>(ResponseChunk {
+                        content:
+                            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial"
+                                .into(),
+                        final_answer_boundary: FinalAnswerBoundary::None,
+                        provider_final_answer_state: ProviderFinalAnswerState::None,
+                        finish_reason: Some("length".into()),
+                        has_native_tool_calls: false,
+                        output_token_limit: None,
+                        thought_time_ms: 0,
+                        thought_tokens: 0,
+                    })
+                } else {
+                    Err(ResponseError::with_partial(
+                        "stream_failure:provider_error status=200 events_received=2",
+                        " still incomplete".into(),
+                    ))
+                }
+            }
+        })
+        .await
+        .expect_err("the injected provider failure must reach the caller");
+
+        assert_eq!(calls, 2);
+        assert_eq!(
+            result.partial_content,
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial still incomplete"
+        );
+        assert!(!result.partial_content.is_empty());
     }
 }

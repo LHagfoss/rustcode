@@ -332,7 +332,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     .await
                     .map_err(|e| e.to_string())?;
                     let buffer = request_buffer.lock().await;
-                    Ok(super::runner::ResponseChunk {
+                    Ok::<_, super::runner::ResponseError>(super::runner::ResponseChunk {
                         content: buffer.content.clone(),
                         final_answer_boundary: buffer.final_answer_boundary,
                         provider_final_answer_state: buffer.provider_final_answer_state,
