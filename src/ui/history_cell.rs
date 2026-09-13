@@ -360,24 +360,37 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     }
 
     // Speculative calls are only projections of the model's streamed output;
-    // they have not started execution and should not imply that a tool is
-    // already running.
+    // their lifecycle state does not change the category heading.
     let has_speculative = calls.iter().any(|call| !call.execution_started);
 
     if !has_speculative && calls.len() == 1 && calls[0].tool_name == "run_command" {
         let call = &calls[0];
-        let command = truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1));
+        let title_style =
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+        let command = truncate_to_width(&call.target, (width as usize).saturating_sub(11).max(1));
         let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
             .into_iter()
             .next()
             .map(|line| line.spans)
             .unwrap_or_default();
-        let mut header = vec![Span::styled(
-            "• ",
+        let header = vec![
+            Span::styled("• ", title_style),
+            Span::styled("Ran", title_style),
+        ];
+        let mut invocation = vec![Span::styled(
+            "  └ ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         )];
-        header.extend(command_spans);
-        let mut lines = vec![Line::from(header)];
+        invocation.push(Span::styled(
+            call.action.clone(),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ));
+        invocation.push(Span::styled(
+            " $ ",
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+        invocation.extend(command_spans);
+        let mut lines = vec![Line::from(header), Line::from(invocation)];
 
         if matches!(verbosity, Verbosity::High) {
             return lines;
@@ -413,7 +426,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             }
             lines.push(Line::from(vec![
                 Span::styled(
-                    if lines.len() == 1 { "  └ " } else { "    " },
+                    "    ",
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
@@ -429,7 +442,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         }
         if call.omitted_output_bytes > 0 {
             lines.push(Line::from(Span::styled(
-                format!("  └ … {} earlier bytes omitted", call.omitted_output_bytes),
+                format!("    … {} earlier bytes omitted", call.omitted_output_bytes),
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
             )));
         }
@@ -440,21 +453,28 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         let call = &calls[0];
         let title_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
-        let mut lines = vec![Line::from(vec![
-            Span::styled("• ", title_style),
-            Span::styled("Rendering", title_style),
-            Span::styled(
-                if call.target.is_empty() || call.target == "?" {
-                    String::new()
-                } else {
-                    format!(
-                        " {}",
-                        truncate_to_width(&call.target, (width as usize).saturating_sub(14))
-                    )
-                },
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ])];
+        let child_width = (width as usize).saturating_sub(6).max(1);
+        let child = if call.target.is_empty() || call.target == "?" {
+            call.action.clone()
+        } else {
+            truncate_to_width(&call.target, child_width)
+        };
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("• ", title_style),
+                Span::styled("Ran", title_style),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  └ ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    child,
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]),
+        ];
         if !matches!(verbosity, Verbosity::High)
             && let Some(progress) = call
                 .output
@@ -465,7 +485,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         {
             lines.push(Line::from(vec![
                 Span::styled(
-                    "  └ ",
+                    "    ",
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
@@ -481,15 +501,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
-    let label = if all_exploration {
-        "Exploring"
-    } else if all_editing {
-        "Editing"
-    } else if has_speculative {
-        "Calling"
-    } else {
-        "Running"
-    };
+    let label = if all_exploration { "Explored" } else { "Ran" };
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", title_style),
