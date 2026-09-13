@@ -651,6 +651,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adaptive_continuation_stops_safely_at_total_output_ceiling() {
+        let mut calls = 0;
+        let mut requested_limits = Vec::new();
+        let result = collect_response(
+            ContinuationPolicy {
+                adaptive_tool_output_limit: Some(16_000),
+                context_output_limit: Some(100_000),
+                max_total_output_tokens: 8_192,
+            },
+            |request| {
+                calls += 1;
+                requested_limits.push(request.output_token_limit);
+                async move {
+                    Ok::<_, ResponseError>(ResponseChunk {
+                        content: "<tool_call><function=write_to_file>{\"path\":\"x\",\"content\":\"partial"
+                            .into(),
+                        final_answer_boundary: FinalAnswerBoundary::None,
+                        provider_final_answer_state: ProviderFinalAnswerState::None,
+                        finish_reason: Some("length".into()),
+                        has_native_tool_calls: false,
+                        output_token_limit: Some(8_192),
+                        thought_time_ms: 0,
+                        thought_tokens: 0,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("bounded truncation should return the unexecuted response");
+
+        assert_eq!(calls, 1);
+        assert_eq!(requested_limits, [None]);
+        assert!(crate::network::is_cut_off(
+            &result.content,
+            result.finish_reason.as_deref()
+        ));
+        assert!(
+            crate::tools::parse_tool_calls(&result.content, crate::config::ToolProtocol::Native)
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn failed_continuation_preserves_prefix_and_failed_stream_bytes() {
         let mut calls = 0;
         let result = collect_response(ContinuationPolicy::default(), |request| {
