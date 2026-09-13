@@ -2115,6 +2115,20 @@ fn status_panels_render_minimal_inline() {
         "Repetitive tool loop detected — stopping tools and requesting final response"
     );
 
+    let mut stream_recovery_lines = Vec::new();
+    render_status_panel(
+        "[Recoverable provider interruption: the response stream failed after a partial textual tool call. The partial response was saved, but no tool call from it was executed.]",
+        80,
+        false,
+        &mut stream_recovery_lines,
+    );
+    assert_eq!(stream_recovery_lines.len(), 1);
+    assert_eq!(stream_recovery_lines[0].spans[0].content, "! ");
+    assert_eq!(
+        stream_recovery_lines[0].spans[1].content,
+        "Provider stream interrupted — partial tool call saved safely; retrying once (next prompt or --resume can continue)"
+    );
+
     let mut yolo_enabled_lines = Vec::new();
     render_status_panel("YOLO mode enabled", 80, false, &mut yolo_enabled_lines);
     assert_eq!(yolo_enabled_lines.len(), 2);
