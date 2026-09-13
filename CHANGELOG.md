@@ -1,3 +1,9 @@
+## [v0.51.44](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.44) - 2026-09-13
+
+### Fixes
+- Prevent shell background operators from leaving cancelled tool turns stuck.
+- Preserve actionable MCP server diagnostics when startup fails.
+- Show file-edit activity with an operation-specific live label.
 ## [v0.51.43](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.43) - 2026-09-13
 
 ### Fixes
