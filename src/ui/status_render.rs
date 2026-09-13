@@ -31,6 +31,10 @@ pub(super) fn render_status_panel<'a>(
         || content.contains("CRITICAL — you are stuck in a loop")
     {
         Some("Repetitive tool loop detected — stopping tools and requesting final response")
+    } else if content.contains("[Recoverable provider interruption:") {
+        Some(
+            "Provider stream interrupted — partial tool call saved safely; retrying once (next prompt or --resume can continue)",
+        )
     } else if content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")
     {
