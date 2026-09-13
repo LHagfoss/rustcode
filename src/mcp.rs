@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
 
 #[allow(dead_code)]
 pub struct McpClient {
@@ -17,6 +17,8 @@ pub struct McpClient {
     next_id: Arc<Mutex<i64>>,
     tools: Arc<StdMutex<Vec<Value>>>,
     child: Arc<Mutex<Option<Child>>>,
+    stderr_diagnostics: Arc<StdMutex<Vec<String>>>,
+    stderr_finished: Arc<Notify>,
 }
 
 pub fn get_mcp_registry() -> &'static StdMutex<HashMap<String, Arc<McpClient>>> {
@@ -157,11 +159,23 @@ impl McpClient {
         });
 
         let stderr_name = name.clone();
+        let stderr_diagnostics = Arc::new(StdMutex::new(Vec::new()));
+        let stderr_diagnostics_clone = Arc::clone(&stderr_diagnostics);
+        let stderr_finished = Arc::new(Notify::new());
+        let stderr_finished_clone = Arc::clone(&stderr_finished);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 crate::dbg_log!("[mcp:{stderr_name}] {line}");
+                if let Ok(mut diagnostics) = stderr_diagnostics_clone.lock() {
+                    const MAX_DIAGNOSTIC_LINES: usize = 16;
+                    diagnostics.push(line);
+                    if diagnostics.len() > MAX_DIAGNOSTIC_LINES {
+                        diagnostics.remove(0);
+                    }
+                }
             }
+            stderr_finished_clone.notify_one();
         });
 
         let next_id = Arc::new(Mutex::new(1));
@@ -174,6 +188,8 @@ impl McpClient {
             next_id,
             tools: Arc::clone(&tools),
             child: Arc::new(Mutex::new(Some(child))),
+            stderr_diagnostics,
+            stderr_finished,
         });
 
         // Handshake: initialize
@@ -244,7 +260,27 @@ impl McpClient {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
-                return Err("Server closed connection before responding".to_string());
+                // The server often writes an actionable configuration error to
+                // stderr immediately before closing stdout (for example, the
+                // mail MCP reports missing IMAP credentials). Give that
+                // reader a short chance to finish before falling back to the
+                // generic connection error.
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(100),
+                    self.stderr_finished.notified(),
+                )
+                .await;
+                let diagnostics = self
+                    .stderr_diagnostics
+                    .lock()
+                    .map(|lines| lines.join(" | "))
+                    .unwrap_or_default();
+                if diagnostics.is_empty() {
+                    return Err("Server closed connection before responding".to_string());
+                }
+                return Err(format!(
+                    "Server closed connection before responding; server reported: {diagnostics}"
+                ));
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
@@ -487,5 +523,30 @@ mod tests {
             Ok(_) => panic!("an exited MCP server cannot complete startup"),
         };
         assert!(error.contains("Server closed connection"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_includes_server_stderr_when_startup_fails() {
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            McpClient::start(
+                "diagnostic_server".to_string(),
+                "sh".to_string(),
+                vec![
+                    "-c".to_string(),
+                    "echo 'IMAP_USER not set' >&2; exit 1".to_string(),
+                ],
+                HashMap::new(),
+            ),
+        )
+        .await
+        .expect("server startup failure should be observed promptly");
+
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a server that exits cannot complete startup"),
+        };
+        assert!(error.contains("Server closed connection"));
+        assert!(error.contains("IMAP_USER not set"));
     }
 }
