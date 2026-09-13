@@ -524,4 +524,29 @@ mod tests {
         };
         assert!(error.contains("Server closed connection"));
     }
+
+    #[tokio::test]
+    async fn test_mcp_client_includes_server_stderr_when_startup_fails() {
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            McpClient::start(
+                "diagnostic_server".to_string(),
+                "sh".to_string(),
+                vec![
+                    "-c".to_string(),
+                    "echo 'IMAP_USER not set' >&2; exit 1".to_string(),
+                ],
+                HashMap::new(),
+            ),
+        )
+        .await
+        .expect("server startup failure should be observed promptly");
+
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a server that exits cannot complete startup"),
+        };
+        assert!(error.contains("Server closed connection"));
+        assert!(error.contains("IMAP_USER not set"));
+    }
 }
