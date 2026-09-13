@@ -1176,6 +1176,27 @@ mod tests {
     }
 
     #[test]
+    fn verified_kat_adaptive_tool_limit_is_written_to_the_wire_field() {
+        let profile = crate::config::ModelProfile {
+            name: "kat-coder".to_string(),
+            url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+            model: "KAT-Coder-V2.5-Dev-OptiQ-4bit".to_string(),
+            context_window: Some(262_144),
+            max_tokens: Some(16_000),
+            output_token_field: Some(crate::config::OutputTokenField::MaxOutputTokens),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.verified_tool_output_ceiling(),
+        );
+        assert_eq!(payload["max_output_tokens"], 16_000);
+        assert!(payload.get("max_tokens").is_none());
+    }
+
+    #[test]
     fn native_google_payload_uses_max_output_tokens_capability_field() {
         let profile = crate::config::ModelProfile {
             url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
@@ -1713,9 +1734,7 @@ pub async fn stream_request(
             .config
             .models
             .iter()
-            .find(|p| {
-                (p.model == model || p.name == model) && (p.url == url || p.endpoint_url() == url)
-            })
+            .find(|p| p.matches_request(url, model))
             .cloned()
     };
     let mut max_tokens = profile
@@ -1946,7 +1965,11 @@ pub async fn stream_request(
             "output_token_limit_source":
                 if tool_output_limit_override.is_some() {
                     "adaptive_profile_tool"
-                } else if allow_tools && profile.as_ref().is_some_and(|p| p.tool_max_tokens.is_some()) {
+                } else if allow_tools
+                    && profile
+                        .as_ref()
+                        .is_some_and(|p| p.verified_tool_output_ceiling().is_some())
+                {
                     "profile_tool"
                 } else if profile.as_ref().is_some_and(|p| {
                     p.max_output_tokens.is_some() || p.max_tokens.is_some()

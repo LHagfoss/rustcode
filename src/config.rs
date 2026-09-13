@@ -20,6 +20,9 @@ pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
 /// Upper bound for an explicitly verified profile tool-round override. This
 /// remains below the normal context-budget ceiling for a 128k context model.
 pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
+const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
+const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
+const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
 /// Safe default for workspace-changing calls emitted in one model response.
 /// Read-only inspection (`grep`, `glob`, `view_file`, and read-only shell
 /// commands) is classified separately and never consumes this budget, so the
@@ -228,6 +231,27 @@ pub struct ContextBudget {
 }
 
 impl ModelProfile {
+    /// Whether this profile is the provider/model combination whose larger
+    /// tool budget has been verified. Other profiles must opt in explicitly
+    /// with `tool_max_tokens` instead of inheriting this exception.
+    pub fn is_verified_kat_coder(&self) -> bool {
+        self.name
+            .eq_ignore_ascii_case(VERIFIED_KAT_CODER_PROFILE_NAME)
+            && self.model.eq_ignore_ascii_case(VERIFIED_KAT_CODER_MODEL)
+            && self
+                .url
+                .to_ascii_lowercase()
+                .starts_with(VERIFIED_KAT_CODER_HOST)
+    }
+
+    /// Match the profile used to construct a request. The endpoint is part of
+    /// the identity so a model name alone cannot inherit another profile's
+    /// output or provider capability settings.
+    pub fn matches_request(&self, url: &str, model: &str) -> bool {
+        (self.model == model || self.name == model)
+            && (self.url == url || self.endpoint_url() == url)
+    }
+
     /// Resolve the per-profile mutation policy once at the orchestration
     /// boundary. Zero is treated as an omitted value, and overrides cannot
     /// exceed the small hard cap used to contain configuration mistakes.
@@ -255,10 +279,26 @@ impl ModelProfile {
     /// typo to bypass the context-derived normal completion ceiling.
     pub fn tool_output_ceiling(&self) -> u32 {
         let configured = self.context_budget().max_output_tokens;
-        self.tool_max_tokens
+        self.verified_tool_output_ceiling()
             .unwrap_or(DEFAULT_TOOL_ROUND_MAX_TOKENS)
-            .clamp(1, MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS)
             .min(configured)
+    }
+
+    /// Return a larger tool ceiling only for an explicit opt-in or the known
+    /// verified kat-coder profile. A normal output budget alone is not enough
+    /// for arbitrary profiles, preserving the conservative fallback.
+    pub fn verified_tool_output_ceiling(&self) -> Option<u32> {
+        let configured_output = self.max_output_tokens.or(self.max_tokens);
+        let requested = self.tool_max_tokens.filter(|limit| *limit > 0).or_else(|| {
+            self.is_verified_kat_coder()
+                .then_some(configured_output)
+                .flatten()
+        });
+        requested.map(|limit| {
+            limit
+                .clamp(1, MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS)
+                .min(self.context_budget().max_output_tokens)
+        })
     }
 
     /// Resolve the endpoint's output-limit field. Explicit profile metadata
