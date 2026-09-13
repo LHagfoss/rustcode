@@ -353,6 +353,54 @@ fn verified_profile_can_raise_tool_ceiling_without_changing_initial_default() {
 }
 
 #[test]
+fn verified_kat_profile_derives_tool_ceiling_but_mismatched_profiles_fall_back() {
+    let kat = ModelProfile {
+        name: "kat-coder".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "KAT-Coder-V2.5-Dev-OptiQ-4bit".to_string(),
+        context_window: Some(262_144),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+
+    assert!(kat.is_verified_kat_coder());
+    assert_eq!(kat.verified_tool_output_ceiling(), Some(16_000));
+    assert_eq!(kat.tool_output_ceiling(), 16_000);
+    assert_eq!(
+        kat.completion_token_limit(true),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+    let budget = kat.context_budget();
+    assert_eq!(budget.completion_reserve, 16_000);
+    assert_eq!(
+        budget.history_tokens
+            + budget.completion_reserve
+            + budget.tool_reserve
+            + budget.safety_reserve,
+        budget.context_window
+    );
+    assert!(kat.matches_request(&kat.url, &kat.model));
+
+    let mut unverified = kat.clone();
+    unverified.url = "https://unverified.example/v1/chat/completions".to_string();
+    assert!(!unverified.is_verified_kat_coder());
+    assert_eq!(unverified.verified_tool_output_ceiling(), None);
+    assert_eq!(
+        unverified.tool_output_ceiling(),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+    assert!(!kat.matches_request(&unverified.url, &kat.model));
+
+    let mut wrong_model = kat;
+    wrong_model.model = "KAT-Coder-V2.5-Dev-oQ4e-mtp".to_string();
+    assert!(!wrong_model.is_verified_kat_coder());
+    assert_eq!(
+        wrong_model.tool_output_ceiling(),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+}
+
+#[test]
 fn tool_round_override_is_bounded_by_profile_and_hard_safety_limits() {
     let profile = ModelProfile {
         context_window: Some(128_000),

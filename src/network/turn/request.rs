@@ -237,17 +237,18 @@ pub(super) async fn collect_round(
     // executed yet at this point, so this cannot duplicate a mutation.
     let (adaptive_tool_output_limit, hard_context_limit) = {
         let s = request_state.lock().await;
-        let profile = s.config.models.iter().find(|profile| {
-            (profile.model == model_name || profile.name == model_name)
-                && (profile.url == api_base_url || profile.endpoint_url() == api_base_url)
-        });
+        let profile = s
+            .config
+            .models
+            .iter()
+            .find(|profile| profile.matches_request(&api_base_url, &model_name));
         (
             profile
                 .filter(|profile| {
                     request_allow_tools
                         && request_thinking_mode
                             == super::super::stream_request::ThinkingMode::Normal
-                        && profile.tool_max_tokens.is_some()
+                        && profile.verified_tool_output_ceiling().is_some()
                 })
                 .map(|profile| profile.tool_output_ceiling()),
             profile.map(|profile| profile.context_budget().hard_effective_limit),
