@@ -1145,7 +1145,11 @@ mod tests {
         assert!(output.success);
         assert!(!output.pending);
         assert!(output.content.contains("Detached task started"));
-        assert_eq!(snapshots.len(), 1, "implicit detached task was not retained");
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "implicit detached task was not retained"
+        );
         assert_eq!(stop.stopped, 1, "implicit detached task was not terminated");
     }
 

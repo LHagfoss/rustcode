@@ -2627,13 +2627,8 @@ fn speculative_live_tools_are_nested_under_calling_heading() {
 
 #[test]
 fn speculative_file_write_uses_editing_heading() {
-    let mut call = crate::app::LiveToolCall::new(
-        "local:1",
-        None,
-        "write_to_file",
-        "Writing",
-        "src/main.js",
-    );
+    let mut call =
+        crate::app::LiveToolCall::new("local:1", None, "write_to_file", "Writing", "src/main.js");
     call.execution_started = false;
 
     let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
