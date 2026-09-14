@@ -1,5 +1,5 @@
 # RustCode Installer for Windows
-# Usage: irm https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.ps1 | iex
+# Usage: irm https://rustcode.lhagfoss.com/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
