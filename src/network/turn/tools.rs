@@ -87,7 +87,11 @@ fn selected_tool_call_indices(
         .find(|(index, _)| validation_errors[*index].is_none())
         .map(|(index, _)| index);
     let Some(first_valid) = first_valid else {
-        return if calls.is_empty() { Vec::new() } else { vec![0] };
+        return if calls.is_empty() {
+            Vec::new()
+        } else {
+            vec![0]
+        };
     };
     if !policy.allow_batching {
         return vec![first_valid];
@@ -390,11 +394,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     // before acting). The default policy selects one valid call; explicitly
     // trusted profiles may select a bounded read/mutation batch. Invalid or
     // over-budget calls remain in the transcript as non-executed results.
-    let selected_call_indices = selected_tool_call_indices(
-        &parsed_tool_calls,
-        &validation_errors,
-        scheduling_policy,
-    );
+    let selected_call_indices =
+        selected_tool_call_indices(&parsed_tool_calls, &validation_errors, scheduling_policy);
     let selected_call_index = selected_call_indices.first().copied();
     let executable_tool_calls = selected_call_indices
         .iter()

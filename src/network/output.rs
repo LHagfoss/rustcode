@@ -7,8 +7,7 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
 pub(crate) const INCOMPLETE_TOOL_RESULT_MARKER: &str = "[tool_result_incomplete:";
 pub(crate) const COMPLETED_MUTATION_MARKER: &str = "[mutation_completed_with_clipped_output]";
-pub(crate) const COMPLETED_MUTATION_NOTICE: &str =
-    "[mutation_completed_with_clipped_output] Mutation completed successfully. Only the output or diff preview was clipped for context; do not retry the mutation. Use the saved artifact or a focused read if more detail is needed.";
+pub(crate) const COMPLETED_MUTATION_NOTICE: &str = "[mutation_completed_with_clipped_output] Mutation completed successfully. Only the output or diff preview was clipped for context; do not retry the mutation. Use the saved artifact or a focused read if more detail is needed.";
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SENSITIVE_ASSIGNMENT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
@@ -69,10 +68,9 @@ pub(crate) fn truncate_tool_output_for_message_with_completion(
     let max_bytes = MAX_TOOL_OUTPUT_BYTES.saturating_sub(message_prefix.len());
     // Leave room for the bounded-output explanation and its machine-readable
     // incomplete marker in the final model-visible message.
-    let suffix_lines = 2
-        + completion_notice
-            .filter(|notice| !notice.is_empty())
-            .map_or(0, |notice| notice.lines().count() + 2);
+    let suffix_lines = 2 + completion_notice
+        .filter(|notice| !notice.is_empty())
+        .map_or(0, |notice| notice.lines().count() + 2);
     let max_lines =
         MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count() + suffix_lines);
     let bytes = result.len();

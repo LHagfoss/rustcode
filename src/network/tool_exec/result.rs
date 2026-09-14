@@ -1,11 +1,11 @@
 use crate::app::ChatMessage;
 
 use super::super::events::{ToolResult, ToolResultMetadata};
-use super::super::{is_mutating_tool, mutation_made_progress};
 use super::super::output::{
     COMPLETED_MUTATION_MARKER, COMPLETED_MUTATION_NOTICE, INCOMPLETE_TOOL_RESULT_MARKER,
     truncate_tool_output_for_message_with_completion,
 };
+use super::super::{is_mutating_tool, mutation_made_progress};
 use super::preview::get_file_preview;
 use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
 

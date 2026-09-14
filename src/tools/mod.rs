@@ -30,7 +30,8 @@ pub(crate) use dispatch::{
 pub(crate) use parser::find_closing_tool_fence;
 pub(crate) use schema::{
     MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
-    append_tool_response_limit, mcp_tool_display_name, mcp_tool_read_only_hint,
+    append_tool_response_limit, append_tool_response_policy, mcp_tool_display_name,
+    mcp_tool_read_only_hint,
     native_tools_schema_for_context, native_tools_schema_for_context_with_sticky_at,
     tool_schema_phase, tool_system_prompt_for_policy,
 };

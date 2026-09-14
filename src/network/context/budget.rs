@@ -1,7 +1,8 @@
 use super::tokens::{
-    estimate_message_tokens, estimate_msg_tokens, estimate_tokens, estimate_tool_schema_tokens,
+    estimate_message_tokens, estimate_tokens, estimate_tool_schema_tokens,
 };
 use crate::app::ChatMessage;
+use crate::network::messages::estimate_msg_tokens;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreflightBudget {
@@ -121,7 +122,11 @@ pub fn calculate_preflight_budget_for_projection(
     let metadata_tokens = projected_messages
         .iter()
         .filter_map(|message| message.get("content").and_then(serde_json::Value::as_str))
-        .filter_map(|content| content.find("[result_metadata:").map(|start| &content[start..]))
+        .filter_map(|content| {
+            content
+                .find("[result_metadata:")
+                .map(|start| &content[start..])
+        })
         .map(estimate_tokens)
         .sum::<usize>();
     let history_tokens = projected_message_tokens

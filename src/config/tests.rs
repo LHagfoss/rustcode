@@ -155,8 +155,14 @@ fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
     let default_policy = profile.tool_scheduling_policy();
     assert!(!default_policy.allow_batching);
     assert_eq!(default_policy.max_read_only_calls, 1);
-    assert_eq!(default_policy.max_mutating_calls, DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
-    assert_eq!(default_policy.max_continuations, DEFAULT_MAX_TOOL_CONTINUATIONS);
+    assert_eq!(
+        default_policy.max_mutating_calls,
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+    assert_eq!(
+        default_policy.max_continuations,
+        DEFAULT_MAX_TOOL_CONTINUATIONS
+    );
 
     profile.allow_tool_batching = Some(true);
     profile.max_read_only_calls_per_response = Some(32);
@@ -164,8 +170,14 @@ fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
     profile.max_tool_continuations = Some(32);
     let policy = profile.tool_scheduling_policy();
     assert!(policy.allow_batching);
-    assert_eq!(policy.max_read_only_calls, MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE);
-    assert_eq!(policy.max_mutating_calls, MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE);
+    assert_eq!(
+        policy.max_read_only_calls,
+        MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE
+    );
+    assert_eq!(
+        policy.max_mutating_calls,
+        MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE
+    );
     assert_eq!(policy.max_continuations, MAX_CONFIGURED_TOOL_CONTINUATIONS);
 }
 

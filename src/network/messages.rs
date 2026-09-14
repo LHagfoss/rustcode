@@ -290,8 +290,7 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
     )
 }
 
-const CONTEXT_OMISSION_MARKER: &str =
-    "[Some runtime context was omitted to stay within the active request budget. The current request and active tool transaction were preserved.]";
+const CONTEXT_OMISSION_MARKER: &str = "[Some runtime context was omitted to stay within the active request budget. The current request and active tool transaction were preserved.]";
 
 /// Deterministically shrink the request-local context tail while keeping the
 /// beginning of the workspace context and the volatile runtime block visible.
@@ -340,10 +339,7 @@ pub(crate) fn truncate_context_tail_to_tokens(text: &str, max_tokens: usize) -> 
 /// Replace the synthetic context message in a final request projection. This
 /// intentionally leaves the persisted history and the current tool exchange
 /// untouched.
-pub(crate) fn replace_request_context_tail(
-    msgs: &mut [serde_json::Value],
-    text: &str,
-) -> bool {
+pub(crate) fn replace_request_context_tail(msgs: &mut [serde_json::Value], text: &str) -> bool {
     let Some(message) = msgs.iter_mut().rev().find(|message| {
         message
             .get("content")
@@ -554,8 +550,7 @@ pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
                 .get("content")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|content| content.starts_with("<rustcode_context>"))
-        })
-            && let Some(content) = last_msg.get_mut("content")
+        }) && let Some(content) = last_msg.get_mut("content")
         {
             match content {
                 serde_json::Value::String(s) => {
@@ -607,8 +602,7 @@ pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], boot
                 .get("content")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|content| content.starts_with("<rustcode_context>"))
-    })
-        && let Some(content) = last_msg.get_mut("content")
+    }) && let Some(content) = last_msg.get_mut("content")
     {
         match content {
             serde_json::Value::String(s) => *s = format!("{s}\n\n{nudge}"),
