@@ -1,3 +1,9 @@
+## [v0.51.47](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.47) - 2026-09-14
+
+### Fixes
+## Fixes
+
+- Preserve bounded typed tool-call checkpoints when a native provider stream fails mid-call, without dispatching or replaying incomplete arguments.
 ## [v0.51.46](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.46) - 2026-09-14
 
 ### Fixes
