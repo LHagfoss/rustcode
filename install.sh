@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RustCode Installer for macOS and Linux
-# Usage: curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+# Usage: curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 
 set -euo pipefail
 
@@ -27,6 +27,60 @@ warn() {
 error() {
     printf "${COLOR_RED}${COLOR_BOLD}Error:${COLOR_RESET} %s\n" "$*" >&2
     exit 1
+}
+
+terminal_supports_animation() {
+    [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]
+}
+
+spinner_frame() {
+    case "$(( $1 % 4 ))" in
+        0) printf '|' ;;
+        1) printf '/' ;;
+        2) printf '-' ;;
+        *) printf '\\' ;;
+    esac
+}
+
+run_with_spinner() {
+    local message="$1"
+    shift
+
+    if ! terminal_supports_animation; then
+        info "$message"
+        "$@"
+        return
+    fi
+
+    "$@" &
+    local command_pid=$!
+    local step=0
+    local bar marker frame
+
+    printf '\033[?25l'
+    while kill -0 "$command_pid" 2>/dev/null; do
+        frame="$(spinner_frame "$step")"
+        marker=$((step % 24))
+        bar=""
+        for ((index = 0; index < 24; index++)); do
+            if (( index == marker )); then
+                bar+='>'
+            else
+                bar+='.'
+            fi
+        done
+        printf "\r\033[K${COLOR_CYAN}%s${COLOR_RESET} [${COLOR_GREEN}%s${COLOR_RESET}] %s" "$frame" "$bar" "$message"
+        step=$((step + 1))
+        sleep 0.08
+    done
+
+    if wait "$command_pid"; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    printf '\r\033[K\033[?25h'
+    return "$command_status"
 }
 
 download() {
@@ -124,7 +178,6 @@ if [ -z "$LATEST_TAG" ]; then
 fi
 
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ASSET_NAME}"
-info "Downloading RustCode ${LATEST_TAG} (${ASSET_NAME})..."
 
 TMP_DIR="$(mktemp -d)"
 cleanup() {
@@ -133,13 +186,14 @@ cleanup() {
 trap cleanup EXIT
 
 ARCHIVE_PATH="${TMP_DIR}/${ASSET_NAME}"
-download "$DOWNLOAD_URL" "$ARCHIVE_PATH"
+if ! run_with_spinner "Downloading RustCode ${LATEST_TAG} (${ASSET_NAME})..." download "$DOWNLOAD_URL" "$ARCHIVE_PATH"; then
+    error "Could not download ${ASSET_NAME}."
+fi
 
 MANIFEST_NAME="SHA256SUMS"
 MANIFEST_PATH="${TMP_DIR}/${MANIFEST_NAME}"
 MANIFEST_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${MANIFEST_NAME}"
-info "Verifying ${ASSET_NAME} against ${MANIFEST_NAME}..."
-if ! download "$MANIFEST_URL" "$MANIFEST_PATH"; then
+if ! run_with_spinner "Verifying ${ASSET_NAME} against ${MANIFEST_NAME}..." download "$MANIFEST_URL" "$MANIFEST_PATH"; then
     if EXPECTED_SHA256="$(legacy_checksum "$LATEST_TAG" "$ASSET_NAME")"; then
         warn "${MANIFEST_NAME} is unavailable for ${LATEST_TAG}; using the embedded official one-release migration checksum."
     else
@@ -179,8 +233,9 @@ if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
     error "SHA-256 mismatch for ${ASSET_NAME}; refusing to install the archive."
 fi
 
-info "Extracting archive..."
-tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"
+if ! run_with_spinner "Extracting archive..." tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"; then
+    error "Could not extract ${ASSET_NAME}."
+fi
 
 EXTRACTED_BIN="$(find "$TMP_DIR" -type f -name "rustcode*" ! -name "*.tar.gz" | head -n 1)"
 if [ -z "$EXTRACTED_BIN" ]; then
@@ -199,8 +254,9 @@ fi
 mkdir -p "$INSTALL_DIR"
 TARGET_EXE="${INSTALL_DIR}/rustcode"
 
-info "Installing to ${TARGET_EXE}..."
-cp "$EXTRACTED_BIN" "$TARGET_EXE"
+if ! run_with_spinner "Installing to ${TARGET_EXE}..." cp "$EXTRACTED_BIN" "$TARGET_EXE"; then
+    error "Could not install RustCode to ${TARGET_EXE}."
+fi
 chmod +x "$TARGET_EXE"
 
 success "RustCode ${LATEST_TAG} installed successfully to ${TARGET_EXE}!"
