@@ -871,6 +871,7 @@ pub const TOOLS: &[Tool] = &[
     filesystem::REPLACE_FILE_CONTENT,
     filesystem::MULTI_REPLACE_FILE_CONTENT,
     filesystem::WRITE_TO_FILE,
+    filesystem::WRITE_FILE_CHUNK,
     misc::COMPLETE_TASK,
     misc::LIST_SKILLS,
     misc::USE_SKILL,

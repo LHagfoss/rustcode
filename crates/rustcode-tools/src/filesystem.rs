@@ -1,5 +1,7 @@
 use serde_json::Value;
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use rustcode_core::ToolResultCompleteness;
 
@@ -80,6 +82,19 @@ pub fn write_to_file_schema() -> Value {
         "type": "object", "properties": {
             "path": { "type": "string" }, "content": { "type": "string" },
             "overwrite": { "type": "boolean", "default": true }
+        }, "required": ["path", "content"]
+    })
+}
+
+pub fn write_file_chunk_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "additionalProperties": false, "properties": {
+            "path": { "type": "string", "description": "Absolute or relative path to file" },
+            "content": { "type": "string", "description": "UTF-8 chunk; each call is capped at 16384 bytes" },
+            "offset": { "type": "integer", "minimum": 0, "description": "Byte offset where this chunk starts; use the returned next_offset to resume" },
+            "truncate": { "type": "boolean", "default": false, "description": "Truncate an existing file before writing the first chunk at offset 0" },
+            "expected_size": { "type": "integer", "minimum": 0, "description": "Optional size guard for the current file" },
+            "expected_sha256": { "type": "string", "description": "Optional SHA-256 guard for the current file" }
         }, "required": ["path", "content"]
     })
 }
@@ -1394,6 +1409,190 @@ pub fn write_to_file_with_context(
     context: &crate::ToolContext,
 ) -> Result<String, String> {
     crate::with_context(context, || write_to_file_tool(args))
+}
+
+/// Maximum payload accepted by one resumable file-write call. This keeps the
+/// JSON argument bounded while allowing normal source files to be assembled in
+/// a small number of tool calls.
+pub const MAX_FILE_CHUNK_BYTES: usize = 16 * 1024;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("cannot hash file: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("cannot hash file: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn parse_chunk_offset(args: &Value) -> Result<usize, String> {
+    let Some(value) = args.get("offset") else {
+        return Ok(0);
+    };
+    let offset = parse_json_number(value)
+        .ok_or_else(|| "offset must be a non-negative integer".to_string())?;
+    usize::try_from(offset).map_err(|_| "offset is too large for this platform".to_string())
+}
+
+pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let content = args
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or("missing 'content' argument")?;
+    if content.is_empty() {
+        return Err("content cannot be empty".to_string());
+    }
+    if content.len() > MAX_FILE_CHUNK_BYTES {
+        return Err(format!(
+            "content is {} bytes; one write_file_chunk call is capped at {} bytes",
+            content.len(),
+            MAX_FILE_CHUNK_BYTES
+        ));
+    }
+
+    let offset = parse_chunk_offset(args)?;
+    let truncate = args
+        .get("truncate")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if truncate && offset != 0 {
+        return Err("truncate is only valid with offset 0".to_string());
+    }
+
+    let resolved_path = resolve(path);
+    if resolved_path.is_dir() {
+        return Err(format!("'{path}' is a directory"));
+    }
+    let current_size = if resolved_path.exists() {
+        std::fs::metadata(&resolved_path)
+            .map_err(|e| format!("cannot stat '{path}': {e}"))?
+            .len()
+    } else {
+        0
+    };
+
+    if let Some(value) = args.get("expected_size") {
+        let expected_size = parse_json_number(value)
+            .ok_or_else(|| "expected_size must be a non-negative integer".to_string())?;
+        if expected_size != current_size {
+            return Err(format!(
+                "expected file size {expected_size}, found {current_size}"
+            ));
+        }
+    }
+    if let Some(value) = args.get("expected_sha256") {
+        let expected_hash = value
+            .as_str()
+            .ok_or_else(|| "expected_sha256 must be a string".to_string())?;
+        let actual_hash = if resolved_path.exists() {
+            sha256_file(&resolved_path)?
+        } else {
+            sha256_hex(&[])
+        };
+        if expected_hash != actual_hash {
+            return Err(format!(
+                "expected SHA-256 {expected_hash}, found {actual_hash}"
+            ));
+        }
+    }
+
+    if offset as u64 > current_size {
+        return Err(format!(
+            "offset {offset} exceeds current file size {current_size}; chunks must be contiguous"
+        ));
+    }
+
+    let bytes = content.as_bytes();
+    let available = current_size
+        .saturating_sub(offset as u64)
+        .min(bytes.len() as u64) as usize;
+    let mut existing_window = vec![0u8; available];
+    if available > 0 {
+        let mut file = std::fs::File::open(&resolved_path)
+            .map_err(|e| format!("cannot read '{path}': {e}"))?;
+        file.seek(SeekFrom::Start(offset as u64))
+            .map_err(|e| format!("cannot seek in '{path}': {e}"))?;
+        file.read_exact(&mut existing_window)
+            .map_err(|e| format!("cannot read '{path}': {e}"))?;
+    }
+    let matching_prefix = existing_window
+        .iter()
+        .zip(bytes[..available].iter())
+        .take_while(|(actual, expected)| actual == expected)
+        .count();
+    let reset_file = matching_prefix != available && truncate;
+    if matching_prefix != available && !truncate {
+        return Err(format!(
+            "file content at offset {offset} does not match this chunk; resume with the exact next_offset from the previous result"
+        ));
+    }
+
+    let write_start = if reset_file {
+        0
+    } else {
+        offset + matching_prefix
+    };
+    let already_present = matching_prefix == bytes.len() && !reset_file;
+    let bytes_to_write = if already_present {
+        &bytes[..0]
+    } else if reset_file {
+        bytes
+    } else {
+        &bytes[matching_prefix..]
+    };
+
+    if !bytes_to_write.is_empty() {
+        if let Some(parent) = resolved_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(reset_file || (truncate && write_start == 0 && matching_prefix == 0))
+            .open(&resolved_path)
+            .map_err(|e| format!("cannot open '{path}': {e}"))?;
+        file.seek(SeekFrom::Start(write_start as u64))
+            .map_err(|e| format!("cannot seek in '{path}': {e}"))?;
+        file.write_all(bytes_to_write)
+            .map_err(|e| format!("cannot write '{path}': {e}"))?;
+    }
+
+    let final_size = std::fs::metadata(&resolved_path)
+        .map_err(|e| format!("cannot stat completed file '{path}': {e}"))?
+        .len();
+    let final_hash = sha256_file(&resolved_path)?;
+    let next_offset = offset
+        .checked_add(bytes.len())
+        .ok_or("next_offset exceeds the platform limit")?;
+    Ok(format!(
+        "chunk complete path='{path}' offset={offset} next_offset={next_offset} bytes={} size={} sha256={}",
+        bytes_to_write.len(),
+        final_size,
+        final_hash
+    ))
+}
+
+pub fn write_file_chunk_with_context(
+    args: &Value,
+    context: &crate::ToolContext,
+) -> Result<String, String> {
+    crate::with_context(context, || write_file_chunk_tool(args))
 }
 
 #[cfg(test)]

@@ -100,6 +100,10 @@ fn write_to_file_schema() -> Value {
     rustcode_tools::filesystem::write_to_file_schema()
 }
 
+fn write_file_chunk_schema() -> Value {
+    rustcode_tools::filesystem::write_file_chunk_schema()
+}
+
 pub const WRITE_TO_FILE: Tool = Tool {
     name: "write_to_file",
     description: "Create or overwrite a file with complete content. Parent directories are created automatically.",
@@ -107,6 +111,17 @@ pub const WRITE_TO_FILE: Tool = Tool {
     handler: write_to_file_tool,
     requires_confirmation: true,
     schema: write_to_file_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+pub const WRITE_FILE_CHUNK: Tool = Tool {
+    name: "write_file_chunk",
+    description: "Write one bounded file chunk at a byte offset. Calls are capped at 16 KiB and return offset, next_offset, bytes, size, and SHA-256 metadata so interrupted writes can resume without duplicating content.",
+    arguments: r#"{"path": "file path", "content": "chunk (maximum 16384 bytes)", "offset": "optional byte offset, defaults to 0", "truncate": "optional boolean for the first chunk at offset 0", "expected_size": "optional current file size guard", "expected_sha256": "optional current file SHA-256 guard"}"#,
+    handler: write_file_chunk_tool,
+    requires_confirmation: true,
+    schema: write_file_chunk_schema,
     capabilities: &[ToolCapability::WriteWorkspace],
     safety: ToolSafety::WorkspaceMutation,
 };
@@ -158,6 +173,10 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
 
 pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
     rustcode_tools::filesystem::write_to_file_with_context(args, &context())
+}
+
+pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
+    rustcode_tools::filesystem::write_file_chunk_with_context(args, &context())
 }
 
 pub fn generate_unified_diff(before: &str, after: &str) -> String {

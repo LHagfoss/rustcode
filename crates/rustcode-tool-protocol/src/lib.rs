@@ -65,7 +65,9 @@ fn infer_tool_name_from_args(args: &Value) -> Option<&'static str> {
     let obj = args.as_object()?;
     let has = |k: &str| obj.contains_key(k);
 
-    if has("content") && has("path") {
+    if has("content") && has("path") && has("offset") {
+        Some("write_file_chunk")
+    } else if has("content") && has("path") {
         Some("write_to_file")
     } else if has("replacements") && has("path") {
         Some("multi_replace_file_content")
@@ -634,7 +636,10 @@ pub fn parse_tool_calls(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
 pub fn is_code_editing_tool(name: &str) -> bool {
     matches!(
         name,
-        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "write_file_chunk"
     )
 }
 
@@ -808,6 +813,7 @@ mod tests {
         assert!(is_tool_call_start("[TOOL_CALLS]"));
         assert!(!is_tool_call_start("```rust\nfn main() {}\n```"));
         assert!(is_code_editing_tool("replace_file_content"));
+        assert!(is_code_editing_tool("write_file_chunk"));
         assert!(!is_code_editing_tool("grep"));
     }
 
