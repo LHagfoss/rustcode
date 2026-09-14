@@ -8,7 +8,7 @@ use tokio_util::io::StreamReader;
 
 use super::lifecycle::{StreamFailure, StreamFailureKind};
 use super::retry;
-use super::stream::StreamBuffer;
+use super::stream::{NativeToolCallCheckpoint, StreamBuffer};
 use super::{align_alternating_messages, count_tokens, parse_sse_line};
 
 const RESPONSE_BODY_DECODE_ERROR: &str = "error decoding response body";
@@ -166,6 +166,8 @@ const MAX_PROVIDER_TRACE_BYTES: usize = 64 * 1024;
 const PROVIDER_TRACE_METADATA_RESERVE: usize = 4096;
 const MAX_PROVIDER_TRACE_CHOICES_PER_EVENT: usize = 8;
 const MAX_PROVIDER_TRACE_TOOL_CALLS_PER_CHOICE: usize = 64;
+const MAX_NATIVE_CHECKPOINT_CALLS: usize = 64;
+const MAX_NATIVE_CHECKPOINT_TEXT_BYTES: usize = 256;
 
 fn structural_string(value: Option<&str>) -> serde_json::Value {
     let Some(value) = value else {
@@ -492,6 +494,69 @@ impl ToolAccumulatorSet {
         }
         call_index
     }
+
+    fn checkpoints(&self) -> Vec<NativeToolCallCheckpoint> {
+        self.calls
+            .iter()
+            .take(MAX_NATIVE_CHECKPOINT_CALLS)
+            .filter(|call| {
+                !call.id.is_empty() || !call.name.is_empty() || !call.arguments.is_empty()
+            })
+            .map(|call| {
+                let (parsed_complete, mut diagnostic) =
+                    match serde_json::from_str::<serde_json::Value>(&call.arguments) {
+                        Ok(value) if value.is_object() => (true, String::new()),
+                        Ok(_) => (false, "tool arguments must be a JSON object".to_owned()),
+                        Err(error) => (false, bounded_checkpoint_text(&error.to_string())),
+                    };
+                let arguments_complete = if call.arguments_overflowed {
+                    if diagnostic.is_empty() {
+                        diagnostic = "tool arguments exceeded the local streaming limit".to_owned();
+                    }
+                    false
+                } else {
+                    parsed_complete
+                };
+                NativeToolCallCheckpoint {
+                    index: call.index,
+                    call_id: (!call.id.is_empty()).then(|| bounded_checkpoint_text(&call.id)),
+                    tool_name: bounded_checkpoint_text(&call.name),
+                    argument_bytes: call.argument_bytes,
+                    arguments_complete,
+                    arguments_overflowed: call.arguments_overflowed,
+                    argument_fingerprint: argument_fingerprint(&call.arguments),
+                    diagnostic,
+                }
+            })
+            .collect()
+    }
+}
+
+fn bounded_checkpoint_text(value: &str) -> String {
+    let end = value.floor_char_boundary(MAX_NATIVE_CHECKPOINT_TEXT_BYTES.min(value.len()));
+    let mut bounded = value[..end]
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if end < value.len() {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn argument_fingerprint(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn clamp_request_max_tokens(max_tokens: u32, thinking_mode: ThinkingMode) -> u32 {
@@ -884,6 +949,52 @@ mod tests {
         assert_eq!(calls.calls[0].id, "call-1");
         assert_eq!(calls.calls[0].name, "run_command");
         assert_eq!(calls.calls[0].arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn partial_native_call_checkpoint_preserves_identity_without_arguments() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "index": 2,
+            "id": "call-write",
+            "function": {
+                "name": "write_to_file",
+                "arguments": "{\"path\":\"src/main.rs\",\"content\":\"secret"
+            }
+        }));
+
+        let checkpoint = calls.checkpoints();
+        assert_eq!(checkpoint.len(), 1);
+        assert_eq!(checkpoint[0].index, Some(2));
+        assert_eq!(checkpoint[0].call_id.as_deref(), Some("call-write"));
+        assert_eq!(checkpoint[0].tool_name, "write_to_file");
+        assert!(!checkpoint[0].arguments_complete);
+        assert_eq!(checkpoint[0].argument_bytes, 39);
+        assert!(!checkpoint[0].argument_fingerprint.is_empty());
+        assert!(!checkpoint[0].diagnostic.is_empty());
+        assert_ne!(checkpoint[0].diagnostic, "secret");
+    }
+
+    #[test]
+    fn native_checkpoint_fields_are_bounded() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "id": "i".repeat(MAX_NATIVE_CHECKPOINT_TEXT_BYTES + 1),
+            "function": {
+                "name": "n".repeat(MAX_NATIVE_CHECKPOINT_TEXT_BYTES + 1),
+                "arguments": "{"
+            }
+        }));
+
+        let checkpoint = calls.checkpoints();
+        assert_eq!(checkpoint.len(), 1);
+        assert!(
+            checkpoint[0]
+                .call_id
+                .as_ref()
+                .is_some_and(|id| id.len() <= MAX_NATIVE_CHECKPOINT_TEXT_BYTES + "…".len())
+        );
+        assert!(checkpoint[0].tool_name.len() <= MAX_NATIVE_CHECKPOINT_TEXT_BYTES + "…".len());
     }
 
     #[test]
@@ -2296,6 +2407,7 @@ pub async fn stream_request(
                                          if let Some(tool_calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
                                              for tc in tool_calls {
                                                  let idx = accumulators.add_delta(tc);
+                                                 buffer.lock().await.native_tool_call_checkpoint = accumulators.checkpoints();
                                                  let acc = &accumulators.calls[idx];
                                                  tool_argument_limit_reached |= acc.arguments_overflowed;
                                                  if !quiet && !acc.name.is_empty() {
@@ -2663,6 +2775,7 @@ pub async fn stream_request(
             let mut buf = buffer.lock().await;
             buf.tool_call_ids = streamed_call_ids;
             buf.native_tool_calls = native_tool_calls;
+            buf.native_tool_call_checkpoint.clear();
         }
     }
 

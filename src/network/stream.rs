@@ -14,6 +14,21 @@ pub(crate) enum ProviderFinalAnswerState {
     Terminal,
 }
 
+/// Bounded diagnostic state for a native tool call that was still streaming
+/// when the provider failed. This is deliberately not a tool-call envelope:
+/// it can never be dispatched or rendered as a completed provider message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeToolCallCheckpoint {
+    pub index: Option<usize>,
+    pub call_id: Option<String>,
+    pub tool_name: String,
+    pub argument_bytes: usize,
+    pub arguments_complete: bool,
+    pub arguments_overflowed: bool,
+    pub argument_fingerprint: String,
+    pub diagnostic: String,
+}
+
 pub(crate) struct StreamBuffer {
     pub content: String,
     pub final_answer_boundary: FinalAnswerBoundary,
@@ -35,6 +50,10 @@ pub(crate) struct StreamBuffer {
     /// Structured native calls kept separate from display text. ApiNative
     /// responses must not be serialized into fenced Markdown and parsed back.
     pub native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
+    /// Native call identity and argument diagnostics observed before a
+    /// failed stream. Kept separate from `native_tool_calls` so partial data
+    /// cannot reach the dispatcher or durable structured history.
+    pub native_tool_call_checkpoint: Vec<NativeToolCallCheckpoint>,
 }
 
 impl StreamBuffer {
@@ -49,6 +68,7 @@ impl StreamBuffer {
             output_token_limit: None,
             tool_call_ids: Vec::new(),
             native_tool_calls: Vec::new(),
+            native_tool_call_checkpoint: Vec::new(),
         }
     }
 
@@ -63,6 +83,7 @@ impl StreamBuffer {
         self.output_token_limit = None;
         self.tool_call_ids.clear();
         self.native_tool_calls.clear();
+        self.native_tool_call_checkpoint.clear();
     }
 
     pub fn finish_thought(&mut self) {
@@ -99,6 +120,7 @@ mod tests {
 
         assert!(buffer.tool_call_ids.is_empty());
         assert!(buffer.native_tool_calls.is_empty());
+        assert!(buffer.native_tool_call_checkpoint.is_empty());
         assert_eq!(buffer.thought_time_ms, 0);
         assert_eq!(buffer.thought_tokens, 0);
         assert!(buffer.thought_started_at.is_none());

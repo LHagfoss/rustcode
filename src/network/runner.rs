@@ -7,6 +7,9 @@ pub(crate) struct ResponseError {
     /// the diagnostic so a stream failure can preserve a safe checkpoint
     /// without replaying it as a successful tool response.
     pub(crate) partial_content: String,
+    /// Bounded native call state from a failed stream. These are diagnostics
+    /// only and must not be converted into executable tool calls.
+    pub(crate) partial_native_tool_calls: Vec<super::stream::NativeToolCallCheckpoint>,
 }
 
 impl ResponseError {
@@ -14,6 +17,19 @@ impl ResponseError {
         Self {
             message: message.into(),
             partial_content,
+            partial_native_tool_calls: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_partial_native(
+        message: impl Into<String>,
+        partial_content: String,
+        partial_native_tool_calls: Vec<super::stream::NativeToolCallCheckpoint>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            partial_content,
+            partial_native_tool_calls,
         }
     }
 }
@@ -729,5 +745,31 @@ mod tests {
             "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial still incomplete"
         );
         assert!(!result.partial_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_native_continuation_preserves_non_executable_checkpoint() {
+        let checkpoint = super::super::stream::NativeToolCallCheckpoint {
+            index: Some(0),
+            call_id: Some("call-1".to_owned()),
+            tool_name: "write_to_file".to_owned(),
+            argument_bytes: 12,
+            arguments_complete: false,
+            arguments_overflowed: false,
+            argument_fingerprint: "abc".to_owned(),
+            diagnostic: "unexpected end".to_owned(),
+        };
+        let result = collect_response(ContinuationPolicy::default(), |_request| async {
+            Err::<ResponseChunk, _>(ResponseError::with_partial_native(
+                "stream_failure:provider_error status=200 events_received=1",
+                String::new(),
+                vec![checkpoint.clone()],
+            ))
+        })
+        .await
+        .expect_err("the injected provider failure must reach the caller");
+
+        assert!(result.partial_content.is_empty());
+        assert_eq!(result.partial_native_tool_calls, vec![checkpoint]);
     }
 }
