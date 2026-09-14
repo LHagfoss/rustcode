@@ -1598,8 +1598,9 @@ fn the_edit_tool_spec_explains_how_to_insert() {
         .expect("tool exists");
 
     assert!(
-        spec.description
-            .contains("To insert, anchor on an adjacent line and repeat that line in the replacement"),
+        spec.description.contains(
+            "To insert, anchor on an adjacent line and repeat that line in the replacement"
+        ),
         "got: {}",
         spec.description
     );

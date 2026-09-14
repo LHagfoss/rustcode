@@ -330,7 +330,11 @@ impl ModelProfile {
     pub fn tool_scheduling_policy(&self) -> ToolSchedulingPolicy {
         ToolSchedulingPolicy {
             allow_batching: self.tool_batching_enabled(),
-            max_read_only_calls: self.max_read_only_calls_per_response(),
+            max_read_only_calls: if self.tool_batching_enabled() {
+                self.max_read_only_calls_per_response()
+            } else {
+                1
+            },
             max_mutating_calls: if self.tool_batching_enabled() {
                 self.max_mutating_calls_per_response()
             } else {
