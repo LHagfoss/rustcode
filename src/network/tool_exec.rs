@@ -735,7 +735,23 @@ pub(crate) async fn execute_tool_batch(
             let mut view_path: Option<String> = None;
             let mut view_mtime: Option<std::time::SystemTime> = None;
 
-            if is_read_only {
+            let already_loaded_skill = if name_clone == "use_skill" {
+                let requested = args_clone.get("name").and_then(|value| value.as_str());
+                let loaded = {
+                    let s = state_clone.lock().await;
+                    crate::skills::loaded_skills_since_latest_user(&s.history)
+                };
+                requested.and_then(|requested| {
+                    loaded
+                        .iter()
+                        .find(|loaded| loaded.eq_ignore_ascii_case(requested))
+                        .cloned()
+                })
+            } else {
+                None
+            };
+
+            if is_read_only && already_loaded_skill.is_none() {
                 if name_clone == "view_file" {
                     if let Some(p) = args_clone.get("path").and_then(|p| p.as_str()) {
                         let current = path_mtime(p);
@@ -760,7 +776,9 @@ pub(crate) async fn execute_tool_batch(
             // retained. A notice about an earlier failure, truncated read, or
             // over-threshold body is not evidence when history trimming may
             // have removed that body, so execute those reads again.
-            let cached_repeat = if is_repeat {
+            let cached_repeat = if already_loaded_skill.is_some() {
+                None
+            } else if is_repeat {
                 let s = state_clone.lock().await;
                 let reusable = |previous: &crate::app::CachedReadOutput| {
                     previous.success
@@ -818,7 +836,15 @@ pub(crate) async fn execute_tool_batch(
 
             let session_title_unavailable = name_clone == "set_session_title"
                 && !state_clone.lock().await.session_title_tool_available;
-            let (execution, diff_opt, user_wait) = if session_title_unavailable {
+            let (execution, diff_opt, user_wait) = if let Some(skill_name) = already_loaded_skill {
+                (
+                    crate::tools::ToolExecutionOutput::success(format!(
+                        "Skill `{skill_name}` is already loaded and active above. Proceed with the actual task using its instructions; do not call `use_skill` again for this request."
+                    )),
+                    None,
+                    std::time::Duration::ZERO,
+                )
+            } else if session_title_unavailable {
                 (
                     crate::tools::ToolExecutionOutput::failure_with_kind(
                         "error: set_session_title is only available during the first turn of a new session".to_string(),
