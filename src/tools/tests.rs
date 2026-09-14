@@ -54,6 +54,28 @@ fn api_native_prompt_and_tool_schema_are_measured_separately() {
     assert!(schema.len() > 1_000);
     assert!(crate::network::compaction::estimate_tokens(&schema) > 0);
 }
+
+#[test]
+fn compact_text_contract_exposes_its_active_protocol_and_tool_surface() {
+    let policy = ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+        false,
+        crate::config::AgentMode::Build,
+        true,
+    );
+    let surface = textual_tool_surface(policy, crate::config::AgentMode::Build);
+    let prompt = tool_system_prompt_for_policy(
+        policy,
+        crate::config::ToolProtocol::Native,
+        crate::config::AgentMode::Build,
+    );
+
+    assert!(surface.builtin > 0);
+    assert_eq!(surface.agent, 0);
+    assert!(prompt.contains("[TOOL_CALLS]tool_name[ARGS]"));
+    assert!(prompt.contains("Available tools:"));
+    assert!(prompt.contains("Use the exact tool names and JSON argument shapes"));
+    assert!(!prompt.contains("native function-calling interface"));
+}
 use super::*;
 
 #[test]

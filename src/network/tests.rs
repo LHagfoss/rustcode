@@ -3763,6 +3763,28 @@ fn request_log_summary_reports_shape_not_content() {
 }
 
 #[test]
+fn request_log_summary_identifies_textual_tool_contracts() {
+    let summary = super::stream_request::request_log_summary_with_protocol(
+        "local-model",
+        3,
+        18,
+        4096,
+        "textual",
+        "json",
+        18,
+        142,
+        142,
+    );
+
+    assert!(summary.contains("tool_mode=textual"));
+    assert!(summary.contains("tool_protocol=json"));
+    assert!(summary.contains("tools=18"));
+    assert!(summary.contains("available_builtin_tools=18"));
+    assert!(summary.contains("tool_schema_tokens=142"));
+    assert!(summary.contains("textual_contract_tokens=142"));
+}
+
+#[test]
 fn default_debug_log_line_never_contains_full_payload_content() {
     // A marker that would only ever appear if the actual message content
     // (e.g. a file's source text pulled into context by a prior tool

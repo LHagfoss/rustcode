@@ -1592,9 +1592,45 @@ pub(crate) fn request_log_summary(
     tool_count: usize,
     payload_bytes: usize,
 ) -> String {
-    format!(
-        "stream_request: sending model={model} messages={message_count} tools={tool_count} payload_bytes={payload_bytes}"
+    request_log_summary_with_protocol(
+        model,
+        message_count,
+        tool_count,
+        payload_bytes,
+        "unspecified",
+        "unspecified",
+        tool_count,
+        0,
+        0,
     )
+}
+
+pub(crate) fn request_log_summary_with_protocol(
+    model: &str,
+    message_count: usize,
+    tool_count: usize,
+    payload_bytes: usize,
+    tool_mode: &str,
+    tool_protocol: &str,
+    available_builtin_tools: usize,
+    tool_schema_tokens: usize,
+    textual_contract_tokens: usize,
+) -> String {
+    format!(
+        "stream_request: sending model={model} tool_mode={tool_mode} tool_protocol={tool_protocol} messages={message_count} tools={tool_count} available_builtin_tools={available_builtin_tools} tool_schema_tokens={tool_schema_tokens} textual_contract_tokens={textual_contract_tokens} payload_bytes={payload_bytes}"
+    )
+}
+
+fn tool_schema_tokens_for_protocol(
+    protocol: crate::config::ToolProtocol,
+    schemas: &[serde_json::Value],
+    textual_contract_tokens: usize,
+) -> usize {
+    if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        crate::network::compaction::estimate_tool_schema_tokens(schemas)
+    } else {
+        textual_contract_tokens
+    }
 }
 
 /// Choose what to write to the debug log for an outbound request: the cheap
@@ -1942,9 +1978,18 @@ pub async fn stream_request(
             .or_else(|| profile.as_ref().map(|p| p.context_budget().thinking_budget))
     };
 
-    let (tool_protocol, native_tool_schemas, mcp_selection) = {
+    let (tool_protocol, native_tool_schemas, mcp_selection, tool_surface) = {
         let mut s = state.lock().await;
         let tool_protocol = s.active_tool_protocol();
+        let agent_tools = crate::tools::agent_tool_count(schema_policy, s.agent_mode);
+        let text_surface = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+            crate::tools::ToolSurface {
+                agent: agent_tools,
+                ..Default::default()
+            }
+        } else {
+            crate::tools::textual_tool_surface(schema_policy, s.agent_mode)
+        };
         if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
             let session_id = s.active_session_id.clone();
             let workspace_root = s
@@ -1957,12 +2002,22 @@ pub async fn stream_request(
                 &session_id,
                 workspace_root.as_deref(),
             );
-            (tool_protocol, schemas, selection)
+            let surface = crate::tools::ToolSurface {
+                builtin: selection.builtin_available,
+                mcp: selection.available,
+                agent: text_surface.agent,
+            };
+            (tool_protocol, schemas, selection, surface)
         } else {
             (
                 tool_protocol,
                 Vec::new(),
                 crate::tools::McpSchemaSelectionStats::default(),
+                if allow_tools {
+                    text_surface
+                } else {
+                    crate::tools::ToolSurface::default()
+                },
             )
         }
     };
@@ -1992,6 +2047,21 @@ pub async fn stream_request(
         let mut buffer = buffer.lock().await;
         buffer.output_token_limit = output_token_limit;
     }
+    let textual_contract_tokens =
+        if allow_tools && !matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+            aligned_messages
+                .iter()
+                .filter_map(|message| {
+                    (message.get("role").and_then(serde_json::Value::as_str) == Some("system"))
+                        .then(|| message.get("content").and_then(serde_json::Value::as_str))
+                        .flatten()
+                })
+                .filter_map(|content| content.find("# Tool Format").map(|start| &content[start..]))
+                .map(count_tokens)
+                .sum::<u32>() as usize
+        } else {
+            0
+        };
     let mut payload = serde_json::json!({
         "model": model,
         "stream": true,
@@ -2039,11 +2109,26 @@ pub async fn stream_request(
         );
     }
 
-    let tool_count = payload
-        .get("tools")
-        .and_then(|t| t.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+        payload
+            .get("tools")
+            .and_then(|tools| tools.as_array())
+            .map_or(0, |tools| tools.len())
+    } else if allow_tools {
+        tool_surface.total()
+    } else {
+        0
+    };
+    let tool_mode = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+        "native"
+    } else {
+        "textual"
+    };
+    let tool_protocol_name = match tool_protocol {
+        crate::config::ToolProtocol::Json => "json",
+        crate::config::ToolProtocol::Native => "native",
+        crate::config::ToolProtocol::ApiNative => "api_native",
+    };
     let payload_bytes = serde_json::to_vec(&payload).map_err(|error| StreamFailure {
         kind: StreamFailureKind::ProviderError,
         status: None,
@@ -2058,15 +2143,32 @@ pub async fn stream_request(
         "{}",
         request_debug_log_line(
             verbose_network_logging,
-            &request_log_summary(model, message_count, tool_count, payload_byte_count),
+            &request_log_summary_with_protocol(
+                model,
+                message_count,
+                tool_count,
+                payload_byte_count,
+                tool_mode,
+                tool_protocol_name,
+                tool_surface.builtin,
+                tool_schema_tokens_for_protocol(
+                    tool_protocol,
+                    &native_tool_schemas,
+                    textual_contract_tokens,
+                ),
+                textual_contract_tokens,
+            ),
             &payload,
         )
     );
 
     let request_start_time = std::time::Instant::now();
     drop(payload);
-    let tool_schema_tokens =
-        crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
+    let tool_schema_tokens = tool_schema_tokens_for_protocol(
+        tool_protocol,
+        &native_tool_schemas,
+        textual_contract_tokens,
+    );
 
     if let Some((configured, provider)) = profile
         .as_ref()
@@ -2088,10 +2190,16 @@ pub async fn stream_request(
         "context.request_composition",
         serde_json::json!({
             "model": model,
+            "tool_mode": tool_mode,
+            "tool_protocol": tool_protocol_name,
             "messages": message_count,
             "tools": tool_count,
+            "available_builtin_tools": tool_surface.builtin,
+            "available_mcp_tools": tool_surface.mcp,
+            "available_agent_tools": tool_surface.agent,
             "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
+            "textual_contract_tokens": textual_contract_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "accounted_prompt_tokens": accounted_prompt_tokens,
             "total_estimated_prompt_tokens": accounted_prompt_tokens,
@@ -2138,17 +2246,26 @@ pub async fn stream_request(
         "provider.request_start",
         serde_json::json!({
             "model": model,
+            "tool_mode": tool_mode,
+            "tool_protocol": tool_protocol_name,
             "messages": message_count,
             "tools": tool_count,
             "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
+            "textual_contract_tokens": textual_contract_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "accounted_prompt_tokens": accounted_prompt_tokens,
             "total_estimated_prompt_tokens": accounted_prompt_tokens,
             "provider_overhead_margin": provider_overhead_margin,
             "tool_schema_phase": format!("{:?}", mcp_selection.phase),
-            "builtin_tools": mcp_selection.builtin_selected,
-            "available_builtin_tools": mcp_selection.builtin_available,
+            "builtin_tools": if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+                mcp_selection.builtin_selected
+            } else {
+                tool_surface.builtin
+            },
+            "available_builtin_tools": tool_surface.builtin,
+            "available_mcp_tools": tool_surface.mcp,
+            "available_agent_tools": tool_surface.agent,
         }),
     );
 
