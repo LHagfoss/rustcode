@@ -31,6 +31,9 @@ pub(crate) struct NativeToolCallCheckpoint {
 
 pub(crate) struct StreamBuffer {
     pub content: String,
+    /// Classification of a successful stream termination. Failures are
+    /// carried by `StreamFailure` and classified by the turn layer.
+    pub termination: Option<crate::network::lifecycle::StreamTermination>,
     pub final_answer_boundary: FinalAnswerBoundary,
     pub provider_final_answer_state: ProviderFinalAnswerState,
     pub thought_time_ms: u64,
@@ -60,6 +63,7 @@ impl StreamBuffer {
     pub fn new() -> Self {
         Self {
             content: String::new(),
+            termination: None,
             final_answer_boundary: FinalAnswerBoundary::None,
             provider_final_answer_state: ProviderFinalAnswerState::None,
             thought_time_ms: 0,
@@ -75,6 +79,7 @@ impl StreamBuffer {
     /// Drops everything carried over from a previous request.
     pub fn reset(&mut self) {
         self.content.clear();
+        self.termination = None;
         self.final_answer_boundary = FinalAnswerBoundary::None;
         self.provider_final_answer_state = ProviderFinalAnswerState::None;
         self.thought_time_ms = 0;
@@ -119,6 +124,7 @@ mod tests {
         buffer.reset();
 
         assert!(buffer.tool_call_ids.is_empty());
+        assert!(buffer.termination.is_none());
         assert!(buffer.native_tool_calls.is_empty());
         assert!(buffer.native_tool_call_checkpoint.is_empty());
         assert_eq!(buffer.thought_time_ms, 0);

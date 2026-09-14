@@ -6,7 +6,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 
-use super::lifecycle::{StreamFailure, StreamFailureKind};
+use super::lifecycle::{StreamFailure, StreamFailureKind, StreamTermination};
 use super::retry;
 use super::stream::{NativeToolCallCheckpoint, StreamBuffer};
 use super::{align_alternating_messages, count_tokens, parse_sse_line};
@@ -2355,7 +2355,7 @@ pub async fn stream_request(
     loop {
         if cancel_token.is_cancelled() {
             dbg_log!("stream_request: Stream reading cancelled via token");
-            return Ok(None);
+            return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
 
         tokio::select! {
@@ -2383,6 +2383,8 @@ pub async fn stream_request(
                         stream_bytes_received += line_buf.len();
                         let trimmed = line_buf.trim();
                         if trimmed == "data: [DONE]" {
+                            buffer.lock().await.termination =
+                                Some(StreamTermination::ProviderStop);
                             line_buf.clear();
                             break;
                         }
@@ -2529,6 +2531,8 @@ pub async fn stream_request(
                                                     }),
                                                 );
                                                 finish_reason = Some("reasoning_budget".to_string());
+                                                buffer.lock().await.termination =
+                                                    Some(StreamTermination::ClientBudget);
                                                 reasoning_budget_cut = true;
                                             }
                                         } else if let Some(c_token) = content {
@@ -2554,10 +2558,13 @@ pub async fn stream_request(
                                             }
                                             chunk.push_str(c_token);
                                         }
-                                        if provider_stop && reasoning.is_none() {
+                                        if provider_stop {
                                             let mut buffer = buffer.lock().await;
-                                            if buffer.final_answer_boundary
-                                                == super::stream::FinalAnswerBoundary::ReasoningClosed
+                                            buffer.termination =
+                                                Some(StreamTermination::ProviderStop);
+                                            if reasoning.is_none()
+                                                && buffer.final_answer_boundary
+                                                    == super::stream::FinalAnswerBoundary::ReasoningClosed
                                             {
                                                 buffer.provider_final_answer_state =
                                                     super::stream::ProviderFinalAnswerState::Terminal;
@@ -2715,7 +2722,7 @@ pub async fn stream_request(
             }
             _ = cancel_token.cancelled() => {
                 dbg_log!("stream_request: Cancelled via select branch");
-                return Ok(None);
+                return Err(StreamFailure::new(StreamFailureKind::Cancelled));
             }
         }
     }

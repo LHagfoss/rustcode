@@ -90,6 +90,7 @@ pub struct CompilerState {
 
 pub struct ResponseState {
     pub last_token_usage: Option<TokenUsage>,
+    pub last_stream_termination: Option<lifecycle::StreamTermination>,
     pub final_content: String,
     pub final_content_persisted: bool,
     pub streamed_call_ids: Vec<String>,
@@ -176,6 +177,7 @@ impl TurnContext {
             },
             response: ResponseState {
                 last_token_usage: None,
+                last_stream_termination: None,
                 final_content: String::new(),
                 final_content_persisted: false,
                 streamed_call_ids: Vec::new(),
@@ -240,6 +242,10 @@ impl TurnContext {
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,
             "empty_response_recovery_attempts": self.recovery.empty_response_recovery_attempts,
+            "last_stream_termination": self
+                .response
+                .last_stream_termination
+                .map(|termination| termination.to_string()),
             "last_progress_reason": self.progress.last_reason.map(|reason| reason.label()),
             "compiler_diagnostic_streak": self.compiler.consecutive_diagnostics,
             "provider_errors": self.metrics.provider_errors, "provider_429s": self.metrics.provider_429s,
