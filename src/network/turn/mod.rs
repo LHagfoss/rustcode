@@ -191,8 +191,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         thought_time_ms,
         thought_tokens,
         native_tool_calls,
+        stream_termination,
     } = round;
     ctx.response.final_content = content;
+    ctx.response.last_stream_termination = stream_termination;
     ctx.response.final_content_persisted = false;
     dbg_log!(
         "Stream completed successfully. Content length: {} chars",

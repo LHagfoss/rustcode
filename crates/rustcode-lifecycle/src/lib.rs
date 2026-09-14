@@ -22,6 +22,45 @@ pub enum StreamFailureKind {
     Cancelled,
 }
 
+/// How a provider response stopped from the turn's point of view.
+///
+/// This is separate from `StreamFailureKind`: a provider stop and a
+/// client-side budget cut are successful HTTP exchanges, while timeout,
+/// cancellation, and transport failure are recovery conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamTermination {
+    ProviderStop,
+    ClientBudget,
+    Timeout(StreamFailureKind),
+    Cancelled,
+    TransportFailure(StreamFailureKind),
+}
+
+impl StreamTermination {
+    pub fn from_failure(kind: StreamFailureKind) -> Self {
+        match kind {
+            StreamFailureKind::ConnectTimeout
+            | StreamFailureKind::HeaderTimeout
+            | StreamFailureKind::FirstEventTimeout
+            | StreamFailureKind::StreamIdleTimeout => Self::Timeout(kind),
+            StreamFailureKind::Cancelled => Self::Cancelled,
+            kind => Self::TransportFailure(kind),
+        }
+    }
+}
+
+impl fmt::Display for StreamTermination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProviderStop => f.write_str("provider_stop"),
+            Self::ClientBudget => f.write_str("client_budget"),
+            Self::Timeout(kind) => write!(f, "timeout:{kind}"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::TransportFailure(kind) => write!(f, "transport_failure:{kind}"),
+        }
+    }
+}
+
 impl fmt::Display for StreamFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -275,6 +314,24 @@ mod tests {
         assert_eq!(
             failure.to_string(),
             "stream_failure:stream_idle_timeout status=none bytes_received=42 events_received=3 partial_event_bytes=7"
+        );
+    }
+
+    #[test]
+    fn stream_termination_distinguishes_budget_timeout_cancellation_and_transport() {
+        assert_eq!(StreamTermination::ProviderStop.to_string(), "provider_stop");
+        assert_eq!(StreamTermination::ClientBudget.to_string(), "client_budget");
+        assert_eq!(
+            StreamTermination::from_failure(StreamFailureKind::StreamIdleTimeout).to_string(),
+            "timeout:stream_idle_timeout"
+        );
+        assert_eq!(
+            StreamTermination::from_failure(StreamFailureKind::Cancelled).to_string(),
+            "cancelled"
+        );
+        assert_eq!(
+            StreamTermination::from_failure(StreamFailureKind::MalformedSse).to_string(),
+            "transport_failure:malformed_sse"
         );
     }
 

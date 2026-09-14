@@ -65,6 +65,21 @@ fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> Stri
     }
 }
 
+fn targeted_no_progress_guidance(
+    reason: loop_detect::ProgressReason,
+    streak: usize,
+    action: &str,
+) -> String {
+    let action = action
+        .char_indices()
+        .nth(160)
+        .map_or(action, |(end, _)| &action[..end]);
+    format!(
+        "The harness observed {} for `{action}` {streak} consecutive result(s) without a state change. Do not replay that action. Continue from the result already in the transcript: choose one different, bounded evidence-producing step or explain the blocker. This recovery is bounded; preserve completed tool results and do not claim an action ran unless its result is present.",
+        reason.label(),
+    )
+}
+
 fn selected_tool_call_indices(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
@@ -1325,13 +1340,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     "repeated tool output".to_string(),
                 ));
-                let recovery_guidance = if reason
-                    == loop_detect::ProgressReason::RepeatedVerification
-                {
-                    "This verification already passed for the unchanged workspace. Do not run it again. Verify a different user-visible behavior, make a necessary edit, or finish."
-                } else {
-                    "Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command."
-                };
+                let recovery_guidance = targeted_no_progress_guidance(reason, streak, &action);
                 let evidence = grounded_recovery.clone().map_or_else(
                     || {
                         format!(
@@ -1691,7 +1700,7 @@ mod tests {
         batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
         grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
-        selected_tool_call_indices, should_apply_loop_recovery,
+        selected_tool_call_indices, should_apply_loop_recovery, targeted_no_progress_guidance,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1925,6 +1934,19 @@ mod tests {
                 recovery.as_ref()
             ));
         }
+    }
+
+    #[test]
+    fn no_progress_recovery_names_the_repeated_action_and_preserves_resumability() {
+        let guidance = targeted_no_progress_guidance(
+            super::loop_detect::ProgressReason::NoNewInformation,
+            3,
+            "read:src/main.rs:1:80",
+        );
+        assert!(guidance.contains("no_new_information"));
+        assert!(guidance.contains("read:src/main.rs:1:80"));
+        assert!(guidance.contains("Do not replay"));
+        assert!(guidance.contains("preserve completed tool results"));
     }
 
     #[test]

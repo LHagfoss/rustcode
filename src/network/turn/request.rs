@@ -54,6 +54,7 @@ pub(super) struct RoundResponse {
     pub final_answer_boundary: FinalAnswerBoundary,
     pub provider_final_answer_state: ProviderFinalAnswerState,
     pub finish_reason: Option<String>,
+    pub stream_termination: Option<lifecycle::StreamTermination>,
     pub response_time_ms: u64,
     pub token_usage: Option<TokenUsage>,
     pub thought_time_ms: Option<u64>,
@@ -444,6 +445,8 @@ pub(super) async fn collect_round(
             dbg_log!("Stream request failed: {error}");
             let error_message = error.to_string();
             let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error_message);
+            ctx.response.last_stream_termination =
+                stream_failure_kind.map(lifecycle::StreamTermination::from_failure);
             if ctx.lifecycle.task_completed {
                 // Required verification already latched completion. A later
                 // optional continuation must not turn an otherwise successful
@@ -535,11 +538,14 @@ pub(super) async fn collect_round(
     let thought_tokens = content
         .contains("<think>")
         .then_some(collected.thought_tokens);
+    let stream_termination = stream_buffer.lock().await.termination;
     crate::logger::operational_event(
         "model.response",
         serde_json::json!({
             "round": ctx.budget.tool_rounds,
             "finish_reason": collected.finish_reason,
+            "stream_termination":
+                stream_termination.map(|termination| termination.to_string()),
             "content_bytes": content.len(),
         }),
     );
@@ -584,6 +590,7 @@ pub(super) async fn collect_round(
         final_answer_boundary: collected.final_answer_boundary,
         provider_final_answer_state: collected.provider_final_answer_state,
         finish_reason: collected.finish_reason,
+        stream_termination,
         response_time_ms: turn_start_time.elapsed().as_millis() as u64,
         token_usage,
         thought_time_ms,
