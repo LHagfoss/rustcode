@@ -7,7 +7,7 @@ use crate::app::{AppState, AppStatus, StreamTracker};
 use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::StreamBuffer;
-use super::super::title::{record_prompt_to_history, spawn_title_generation};
+use super::super::title::record_prompt_to_history;
 use super::{
     run_agent_turn_with_context, save_turn_context_after_run, take_turn_context_for_prompt,
 };
@@ -57,6 +57,8 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
+            let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);
+            s.session_title_tool_available = is_first_prompt;
             let max_tool_rounds = s.config.max_tool_rounds;
             let turn_context = take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
             let turn_session_id = s.active_session_id.clone();
@@ -65,20 +67,10 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         };
 
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
-        let is_first_prompt = if is_wakeup {
-            false
-        } else {
-            state.lock().await.history.is_empty()
-        };
-
         if !record_prompt_to_history(&state, is_wakeup, &next_prompt, &turn_session_id).await {
             break;
         }
         crate::logger::operational_event("turn.start", serde_json::json!({"wakeup": is_wakeup}));
-
-        if is_first_prompt && state.lock().await.active_session_id == turn_session_id {
-            spawn_title_generation(&client, &state, next_prompt.clone()).await;
-        }
 
         let completed_context = if let Some(sender) = ui_events.clone() {
             super::super::ui_adapter::run_agent_turn_with_events_and_context(

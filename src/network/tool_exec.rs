@@ -816,7 +816,19 @@ pub(crate) async fn execute_tool_batch(
             };
             is_repeat = cached_repeat.is_some();
 
-            let (execution, diff_opt, user_wait) = if is_repeat {
+            let session_title_unavailable = name_clone == "set_session_title"
+                && !state_clone.lock().await.session_title_tool_available;
+            let (execution, diff_opt, user_wait) = if session_title_unavailable {
+                (
+                    crate::tools::ToolExecutionOutput::failure_with_kind(
+                        "error: set_session_title is only available during the first turn of a new session".to_string(),
+                        crate::tools::ToolErrorKind::UnavailableDependency,
+                        false,
+                    ),
+                    None,
+                    std::time::Duration::ZERO,
+                )
+            } else if is_repeat {
                 let tuple = match cached_repeat {
                     Some((previous, covered_subrange)) => {
                         let mut content = if covered_subrange {
@@ -974,9 +986,16 @@ pub(crate) async fn execute_tool_batch(
             diff_opt
         };
         let final_diff = final_tool_diff(&execution.content, preview_fallback);
+        let title_was_set = executed_name == "set_session_title" && execution.success;
         let mut result = tool_result_from_execution(&executed_name, args, execution, final_diff);
         result.metadata.full_output_artifact = replay_artifact;
         results.push(result);
+        if title_was_set {
+            let mut s = state.lock().await;
+            s.session_title_tool_available = false;
+            s.invalidate_session_title_cache();
+            s.request_redraw();
+        }
         if cancel_token.is_cancelled() {
             break;
         }

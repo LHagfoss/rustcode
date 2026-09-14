@@ -61,6 +61,7 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
     state
         .history
         .push(ChatMessage::new("user", prompt.to_string()));
+    state.session_title_tool_available = true;
     state
 }
 
@@ -295,18 +296,6 @@ pub async fn run_raw_cli(
         .build()?;
 
     let state = build_state(prompt, model_override);
-
-    let client_clone = client.clone();
-    let config_clone = state.config.clone();
-    let session_id = state.active_session_id.clone();
-    let prompt_str = prompt.to_string();
-    tokio::spawn(async move {
-        if let Some(title) =
-            crate::network::generate_title(&client_clone, &config_clone, &prompt_str).await
-        {
-            crate::config::save_session_title(&session_id, &title);
-        }
-    });
 
     let state_arc = Arc::new(Mutex::new(state));
 

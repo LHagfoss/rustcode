@@ -96,27 +96,3 @@ mod tests {
         assert_eq!(user.content, "continue");
     }
 }
-
-/// Fire-and-forget: generate a session title from the first user message.
-pub(crate) async fn spawn_title_generation(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<AppState>>,
-    first_msg: String,
-) {
-    let client_clone = client.clone();
-    let (config_clone, session_id) = {
-        let s = state.lock().await;
-        (s.config.clone(), s.active_session_id.clone())
-    };
-    let state_clone = Arc::clone(state);
-    tokio::spawn(async move {
-        if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
-            crate::config::save_session_title(&session_id, &title);
-            let mut s = state_clone.lock().await;
-            if s.active_session_id == session_id {
-                s.invalidate_session_title_cache();
-                s.request_redraw();
-            }
-        }
-    });
-}

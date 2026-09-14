@@ -512,6 +512,20 @@ fn validate_value_against_schema(
         return Err(format!("{path} must be {}", expected_types.join(" or ")));
     }
 
+    if let Some(string) = value.as_str() {
+        let length = string.chars().count();
+        if let Some(bound) = schema.get("minLength").and_then(Value::as_u64)
+            && length < bound as usize
+        {
+            return Err(format!("{path} must contain at least {bound} characters"));
+        }
+        if let Some(bound) = schema.get("maxLength").and_then(Value::as_u64)
+            && length > bound as usize
+        {
+            return Err(format!("{path} must contain at most {bound} characters"));
+        }
+    }
+
     let numeric_value = value.as_f64().or_else(|| {
         string_integers
             .then(|| value.as_str()?.parse::<f64>().ok())
@@ -865,6 +879,7 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
 pub const TOOLS: &[Tool] = &[
     misc::ASK_QUESTION,
     misc::GET_TIME,
+    misc::SET_SESSION_TITLE,
     misc::LIST_MCP_TOOLS,
     misc::WAIT_AGENT,
     misc::CANCEL_AGENT,
