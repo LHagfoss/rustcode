@@ -36,6 +36,8 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
     "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
 }
 
+const CLIENT_BUDGET_CONTINUATION_PROMPT: &str = "The client reasoning budget ended this response before the provider reported a stop. Continue from the saved response and tool results with one bounded, action-oriented step; do not restart the same inspection or repeat a completed tool call. If the available evidence is sufficient, answer directly. If not, use one different focused tool action.";
+
 const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
 
 fn explicit_external_action_request(prompt: &str) -> bool {
@@ -334,6 +336,18 @@ pub(super) async fn handle_response_recovery(
                     ctx.compiler.consecutive_diagnostics > 0
                         || ctx.compiler.consecutive_error_gates > 0,
                 );
+                let recovery_prompt = if response_finish_reason == Some("reasoning_budget") {
+                    crate::logger::operational_event(
+                        "turn.client_budget_continuation",
+                        serde_json::json!({
+                            "attempt": ctx.recovery.reasoning_recovery_attempts,
+                            "finish_reason": response_finish_reason,
+                        }),
+                    );
+                    CLIENT_BUDGET_CONTINUATION_PROMPT
+                } else {
+                    recovery_prompt
+                };
                 push_or_replace_recovery_notice(
                     s.history.as_mut_vec(),
                     recovery_prompt.to_string(),
@@ -410,7 +424,7 @@ pub(super) async fn handle_response_recovery(
 mod tests {
     use super::{
         completed_inspection_synthesis, loop_recovery_prompt, reasoning_loop_final_response,
-        reasoning_loop_recovery_prompt,
+        reasoning_loop_recovery_prompt, CLIENT_BUDGET_CONTINUATION_PROMPT,
     };
     use crate::app::ChatMessage;
     use crate::app::ToolResultRecord;
@@ -434,6 +448,13 @@ mod tests {
         let prompt = loop_recovery_prompt(&history, false, false);
         assert_eq!(prompt, LOOP_RECOVERY_PROMPT);
         assert!(!prompt.contains("mutating tool call"));
+    }
+
+    #[test]
+    fn client_budget_recovery_is_an_explicit_continuation_signal() {
+        assert!(CLIENT_BUDGET_CONTINUATION_PROMPT.contains("client reasoning budget"));
+        assert!(CLIENT_BUDGET_CONTINUATION_PROMPT.contains("saved response and tool results"));
+        assert!(CLIENT_BUDGET_CONTINUATION_PROMPT.contains("one different focused tool action"));
     }
 
     #[test]

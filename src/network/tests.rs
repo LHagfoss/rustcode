@@ -2430,6 +2430,7 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
         .changed_paths
         .insert("src/GameScene.ts".to_string());
     ctx.progress.phase_checkpoint = Some("Phase 3: verify placement".to_string());
+    ctx.response.last_stream_termination = Some(lifecycle::StreamTermination::ClientBudget);
     ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
 
     let summary = ctx.benchmark_summary();
@@ -2440,6 +2441,7 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     assert_eq!(summary["grounded_recoveries"], 1);
     assert_eq!(summary["changed_paths"][0], "src/GameScene.ts");
     assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
+    assert_eq!(summary["last_stream_termination"], "client_budget");
     assert_eq!(summary["stop_reason"], "provider_error:429");
 }
 
