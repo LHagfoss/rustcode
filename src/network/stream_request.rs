@@ -503,12 +503,20 @@ impl ToolAccumulatorSet {
                 !call.id.is_empty() || !call.name.is_empty() || !call.arguments.is_empty()
             })
             .map(|call| {
-                let (arguments_complete, diagnostic) =
+                let (parsed_complete, mut diagnostic) =
                     match serde_json::from_str::<serde_json::Value>(&call.arguments) {
                         Ok(value) if value.is_object() => (true, String::new()),
                         Ok(_) => (false, "tool arguments must be a JSON object".to_owned()),
                         Err(error) => (false, bounded_checkpoint_text(&error.to_string())),
                     };
+                let arguments_complete = if call.arguments_overflowed {
+                    if diagnostic.is_empty() {
+                        diagnostic = "tool arguments exceeded the local streaming limit".to_owned();
+                    }
+                    false
+                } else {
+                    parsed_complete
+                };
                 NativeToolCallCheckpoint {
                     index: call.index,
                     call_id: (!call.id.is_empty()).then(|| bounded_checkpoint_text(&call.id)),
