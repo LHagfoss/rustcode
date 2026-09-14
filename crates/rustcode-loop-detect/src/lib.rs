@@ -146,6 +146,7 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
         "replace_file_content"
             | "multi_replace_file_content"
             | "write_to_file"
+            | "write_file_chunk"
             | "delete_file"
             | "move_file"
             | "copy_file"

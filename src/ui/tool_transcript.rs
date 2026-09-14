@@ -45,7 +45,7 @@ pub(super) fn format_pi_tool_action(
         | "patch_file"
         | "patchfile" => "Edit".to_string(),
         "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file"
-        | "createfile" => "Write".to_string(),
+        | "createfile" | "write_file_chunk" => "Write".to_string(),
         "delete_file" | "deletefile" => "Delete".to_string(),
         "move_file" | "movefile" => "Move".to_string(),
         "copy_file" | "copyfile" => "Copy".to_string(),
@@ -77,6 +77,7 @@ pub(super) fn format_pi_tool_action(
         | "multi_replace_file_content"
         | "multireplacefilecontent"
         | "write_to_file"
+        | "write_file_chunk"
         | "writetofile"
         | "write_file"
         | "writefile"

@@ -320,6 +320,7 @@ pub(super) fn render_tool_confirmation_modal_legacy(
 
         let action_label = match confirmation.tool_name.as_str() {
             "write_to_file" => "Write to file",
+            "write_file_chunk" => "Write file chunk",
             "replace_file_content" => "Replace file content",
             "multi_replace_file_content" => "Apply multi-replace",
             "create_file" => "Create file",
@@ -563,6 +564,7 @@ pub(super) fn render_tool_confirmation_modal_legacy(
         for (i, c) in confirmations.iter().enumerate() {
             let action = match c.tool_name.as_str() {
                 "write_to_file" => "Write to file",
+                "write_file_chunk" => "Write file chunk",
                 "replace_file_content" => "Replace file content",
                 "multi_replace_file_content" => "Apply multi-replace",
                 "create_file" => "Create file",

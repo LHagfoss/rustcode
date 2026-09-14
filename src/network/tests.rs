@@ -2323,6 +2323,7 @@ fn test_is_read_only_tool() {
 fn test_delegation_is_checked_as_potentially_mutating() {
     assert!(is_mutating_tool("spawn_agent"));
     assert!(is_mutating_tool("send_agent"));
+    assert!(is_mutating_tool("write_file_chunk"));
     assert!(!is_mutating_tool("todo_write"));
 }
 

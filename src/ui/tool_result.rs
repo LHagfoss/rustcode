@@ -69,6 +69,7 @@ pub(super) fn render_tool_result<'a>(
         "replace_file_content"
         | "multi_replace_file_content"
         | "write_to_file"
+        | "write_file_chunk"
         | "delete_file"
         | "move_file"
         | "copy_file" => render_mutation_result(result, width, show_picker),

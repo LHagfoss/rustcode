@@ -837,6 +837,7 @@ fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
         .collect::<Vec<_>>();
     assert!(names.contains(&"run_command"));
     assert!(names.contains(&"write_to_file"));
+    assert!(names.contains(&"write_file_chunk"));
     assert!(!names.contains(&"find_symbol"));
     assert!(!names.contains(&"get_project_map"));
     assert_eq!(stats.phase, ToolSchemaPhase::Bootstrap);
@@ -1352,6 +1353,7 @@ fn plan_mode_allows_reads_but_denies_mutation_execution_and_unknown_tools() {
     assert!(allowed_in_plan_mode("search_web"));
     assert!(allowed_in_plan_mode("ask_question"));
     assert!(!allowed_in_plan_mode("write_to_file"));
+    assert!(!allowed_in_plan_mode("write_file_chunk"));
     assert!(!allowed_in_plan_mode("run_command"));
     assert!(!allowed_in_plan_mode("spawn_agent"));
     assert!(!allowed_in_plan_mode("unknown_mcp_tool"));
@@ -1370,6 +1372,11 @@ fn tool_safety_is_conservative_and_classifies_reads() {
     assert!(is_read_only_call(&call("view_file")));
     assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
     assert!(!is_read_only_call(&call("write_to_file")));
+    assert_eq!(
+        tool_safety("write_file_chunk"),
+        ToolSafety::WorkspaceMutation
+    );
+    assert!(!is_read_only_call(&call("write_file_chunk")));
     assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
     assert_eq!(tool_safety("unknown_mcp_tool"), ToolSafety::Unknown);
     assert!(!is_read_only_call(&call("unknown_mcp_tool")));

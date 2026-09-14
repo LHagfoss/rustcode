@@ -410,6 +410,7 @@ const TEXT_CODING_TOOLS: &[&str] = &[
     "replace_file_content",
     "multi_replace_file_content",
     "write_to_file",
+    "write_file_chunk",
     "delete_file",
     "move_file",
     "copy_file",
@@ -424,16 +425,19 @@ const TEXT_CODING_TOOLS: &[&str] = &[
 const EDIT_TOOL_TERMS: &[&str] = &[
     "add",
     "change",
+    "chunk",
     "code",
     "create",
     "edit",
     "fix",
     "implement",
     "insert",
+    "large",
     "modify",
     "patch",
     "refactor",
     "replace",
+    "resumable",
     "update",
     "write",
 ];
@@ -453,6 +457,7 @@ const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
     "replace_file_content",
     "multi_replace_file_content",
     "write_to_file",
+    "write_file_chunk",
     "complete_task",
     "list_skills",
     "use_skill",
@@ -589,9 +594,10 @@ fn builtin_tool_is_relevant(
     }
     let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
     match name {
-        "replace_file_content" | "multi_replace_file_content" | "write_to_file" => {
-            relevant(EDIT_TOOL_TERMS)
-        }
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "write_file_chunk" => relevant(EDIT_TOOL_TERMS),
         "delete_file" | "move_file" | "copy_file" => relevant(DELETE_TOOL_TERMS),
         "find_symbol" | "get_project_map" => {
             phase == ToolSchemaPhase::Established
