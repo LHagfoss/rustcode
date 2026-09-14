@@ -514,6 +514,7 @@ fn tool_continuity_note(message: &ChatMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ToolProtocol;
 
     // Regression: replaying a structured call as ```tool prose taught the model
     // that tool calls are text it writes, which is what let it emit a whole
@@ -1065,6 +1066,26 @@ mod tests {
         assert_eq!(messages[2]["role"], "assistant");
         assert!(messages[2]["tool_calls"].is_null());
         assert_eq!(messages[2]["content"], partial);
+    }
+
+    #[test]
+    fn failed_native_tool_checkpoint_replays_as_plain_diagnostic_text() {
+        let checkpoint = "[Partial ApiNative tool-call checkpoint: call id=call-write; tool=write_to_file; arguments incomplete; no tool was executed.]";
+        let history = vec![
+            ChatMessage::new("user", "write the file"),
+            ChatMessage::new("assistant", checkpoint).as_unexecuted_tool_call_checkpoint(),
+        ];
+
+        let messages = to_messages(&history, "system");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert!(messages[2]["tool_calls"].is_null());
+        assert!(
+            messages[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("call-write")
+        );
+        assert!(resolve_tool_calls(&history[1], ToolProtocol::ApiNative).is_empty());
     }
 
     #[test]
