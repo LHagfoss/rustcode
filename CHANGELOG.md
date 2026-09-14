@@ -1,3 +1,8 @@
+## [v0.51.46](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.46) - 2026-09-14
+
+### Fixes
+- Added bounded grounded recovery after malformed or truncated write/read sequences, preserving successful artifacts without replaying side-effecting calls.
+- Rejected reasoning leakage from incomplete textual mutation payloads while allowing complete literal content to remain writable.
 ## [v0.51.45](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.45) - 2026-09-13
 
 ### Fixes
