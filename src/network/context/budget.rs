@@ -1,6 +1,4 @@
-use super::tokens::{
-    estimate_message_tokens, estimate_tokens, estimate_tool_schema_tokens,
-};
+use super::tokens::{estimate_message_tokens, estimate_tokens, estimate_tool_schema_tokens};
 use crate::app::ChatMessage;
 use crate::network::messages::estimate_msg_tokens;
 
