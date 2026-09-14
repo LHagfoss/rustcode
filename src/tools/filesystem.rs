@@ -72,8 +72,8 @@ fn replace_file_content_schema() -> Value {
 
 pub const REPLACE_FILE_CONTENT: Tool = Tool {
     name: "replace_file_content",
-    description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional. This tool only replaces: to INSERT text, target an existing neighbouring line and repeat it in the replacement — to prepend, target the current first line and replace it with the new text followed by that line. An empty target is rejected, since it matches everywhere.",
-    arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string) — never empty; to insert, anchor on an adjacent line and repeat it in the replacement", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
+    description: "Edit an existing file by replacing one precise target_content block with replacement_content. The legacy old_string/new_string names and the edits array remain accepted for compatibility. To insert, anchor on an adjacent line and repeat that line in the replacement; an empty target is rejected.",
+    arguments: r#"{"path": "file path", "target_content": "canonical exact block to replace (legacy old_string is accepted)", "replacement_content": "canonical replacement text (legacy new_string is accepted)", "edits": "optional array of edit objects for multiple replacements"}"#,
     handler: replace_file_content_tool,
     requires_confirmation: true,
     schema: replace_file_content_schema,
@@ -87,7 +87,7 @@ fn multi_replace_file_content_schema() -> Value {
 
 pub const MULTI_REPLACE_FILE_CONTENT: Tool = Tool {
     name: "multi_replace_file_content",
-    description: "Apply multiple non-contiguous edits across a single file in a single tool call.                       Specify each edit as a separate replacement chunk.",
+    description: "Apply multiple non-contiguous edits to one file. Each replacement must include its line range, target_content, and replacement_content.",
     arguments: r#"{"path": "absolute or relative path to file", "replacements": "array of objects, each containing: {start_line, end_line, target_content, replacement_content}"}"#,
     handler: multi_replace_file_content_tool,
     requires_confirmation: true,
@@ -102,7 +102,7 @@ fn write_to_file_schema() -> Value {
 
 pub const WRITE_TO_FILE: Tool = Tool {
     name: "write_to_file",
-    description: "Create a new file or overwrite an existing file with complete content.                       Creates parent directories automatically.",
+    description: "Create or overwrite a file with complete content. Parent directories are created automatically.",
     arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "optional boolean, defaults to true to allow overwriting an existing file"}"#,
     handler: write_to_file_tool,
     requires_confirmation: true,

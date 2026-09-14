@@ -51,10 +51,83 @@ fn batch_invalidates_read_recovery(
             .is_some_and(|(reason, _, _)| *reason == loop_detect::ProgressReason::NoNewInformation)
 }
 
-fn mutation_batch_guidance(limit: usize) -> String {
-    format!(
-        "Emit exactly one tool call per response and wait for its result before choosing the next action. The mutation budget remains {limit} for provider policy compatibility, but it is not a reason to batch calls. Read-only inspection never consumes it."
-    )
+fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> String {
+    if policy.allow_batching {
+        format!(
+            "This trusted profile permits a bounded batch of up to {} read-only and {} workspace-changing tool calls per response. Keep control-plane calls alone, keep mutations grounded and sequential, and never assume an unexecuted call ran.",
+            policy.max_read_only_calls, policy.max_mutating_calls
+        )
+    } else {
+        format!(
+            "Emit exactly one tool call per response and wait for its result before choosing the next action. The mutation budget remains {} for provider policy compatibility, but it is not a reason to batch calls. Read-only inspection never consumes it.",
+            policy.max_mutating_calls
+        )
+    }
+}
+
+fn selected_tool_call_indices(
+    calls: &[crate::tools::ToolCall],
+    validation_errors: &[Option<String>],
+    policy: crate::config::ToolSchedulingPolicy,
+) -> Vec<usize> {
+    let first_control = calls.iter().enumerate().find(|(index, call)| {
+        validation_errors[*index].is_none()
+            && matches!(
+                crate::tools::tool_safety(&call.name),
+                crate::tools::ToolSafety::ControlPlane
+            )
+    });
+    if let Some((index, _)) = first_control {
+        return vec![index];
+    }
+
+    let first_valid = calls
+        .iter()
+        .enumerate()
+        .find(|(index, _)| validation_errors[*index].is_none())
+        .map(|(index, _)| index);
+    let Some(first_valid) = first_valid else {
+        return if calls.is_empty() {
+            Vec::new()
+        } else {
+            vec![0]
+        };
+    };
+    if !policy.allow_batching {
+        return vec![first_valid];
+    }
+
+    let mut selected = Vec::new();
+    let mut read_only = 0;
+    let mut mutating = 0;
+    let mut seen = std::collections::HashSet::new();
+    for (index, call) in calls.iter().enumerate() {
+        if validation_errors[index].is_some()
+            || matches!(
+                crate::tools::tool_safety(&call.name),
+                crate::tools::ToolSafety::ControlPlane
+            )
+        {
+            continue;
+        }
+        if !seen.insert(crate::tools::duplicate_tool_call_key(call)) {
+            continue;
+        }
+        if crate::tools::is_read_only_call(call) {
+            if read_only >= policy.max_read_only_calls {
+                continue;
+            }
+            read_only += 1;
+        } else {
+            if mutating >= policy.max_mutating_calls {
+                continue;
+            }
+            mutating += 1;
+        }
+        selected.push(index);
+    }
+
+    selected
 }
 
 const MAX_MALFORMED_TOOL_HISTORY_BYTES: usize = 4096;
@@ -311,33 +384,23 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
     let requested_calls = parsed_tool_calls.len();
     let validation_errors = crate::tools::validation_errors_by_call(&parsed_tool_calls);
-    // Preserve the control-plane priority (for example, load a requested
-    // skill before acting), but never execute more than one call from a model
-    // response. The complete call list remains in the transcript and the
-    // calls not selected below receive explicit non-executed results.
-    let selected_call_index = parsed_tool_calls
+    let scheduling_policy = {
+        let s = state.lock().await;
+        s.active_model_profile()
+            .map(|profile| profile.tool_scheduling_policy())
+            .unwrap_or_default()
+    };
+    // Preserve control-plane priority (for example, load a requested skill
+    // before acting). The default policy selects one valid call; explicitly
+    // trusted profiles may select a bounded read/mutation batch. Invalid or
+    // over-budget calls remain in the transcript as non-executed results.
+    let selected_call_indices =
+        selected_tool_call_indices(&parsed_tool_calls, &validation_errors, scheduling_policy);
+    let selected_call_index = selected_call_indices.first().copied();
+    let executable_tool_calls = selected_call_indices
         .iter()
-        .enumerate()
-        .find(|(index, call)| {
-            validation_errors[*index].is_none()
-                && matches!(
-                    crate::tools::tool_safety(&call.name),
-                    crate::tools::ToolSafety::ControlPlane
-                )
-        })
-        .map(|(index, _)| index)
-        .or_else(|| {
-            parsed_tool_calls
-                .iter()
-                .enumerate()
-                .find(|(index, _)| validation_errors[*index].is_none())
-                .map(|(index, _)| index)
-        })
-        .or_else(|| (!parsed_tool_calls.is_empty()).then_some(0));
-    let executable_tool_calls = selected_call_index
-        .filter(|index| validation_errors[*index].is_none())
-        .map(|index| vec![parsed_tool_calls[index].clone()])
-        .unwrap_or_default();
+        .map(|index| parsed_tool_calls[*index].clone())
+        .collect::<Vec<_>>();
     if let Some(reason) = selected_call_index.and_then(|index| validation_errors[index].clone()) {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
@@ -375,7 +438,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "system",
                     format!(
                         "[Tool call rejected before execution: {reason}] Emit one corrected tool call. {}{}",
-                        mutation_batch_guidance(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE),
+                        mutation_batch_guidance(&scheduling_policy),
                         repeat_guidance
                     ),
                 ));
@@ -390,11 +453,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     let tool_calls = parsed_tool_calls;
     let deferred_call_count = tool_calls.len().saturating_sub(executable_tool_calls.len());
     let unexecuted_call_count = deferred_call_count;
-    let read_only_batch = selected_call_index.is_some_and(|index| {
-        tool_calls
-            .get(index)
-            .is_some_and(|call| loop_detect::is_read_only_call(&call.name, &call.arguments))
-    });
+    let read_only_batch = !selected_call_indices.is_empty()
+        && selected_call_indices.iter().all(|index| {
+            tool_calls
+                .get(*index)
+                .is_some_and(|call| loop_detect::is_read_only_call(&call.name, &call.arguments))
+        });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -425,7 +489,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
         let mut loop_status = loop_detect::LoopStatus::Ok;
         let mut loop_offender: Option<String> = None;
-        for call in &tool_calls {
+        for index in &selected_call_indices {
+            let call = &tool_calls[*index];
             let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
             let s = ctx
                 .recovery
@@ -564,9 +629,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
             }
 
-            // Phase 4: execute exactly the selected call and record progress
-            // evidence. The other calls are closed below, never silently
-            // dropped or described as if they ran.
+            // Phase 4: execute only the selected, complete calls and record
+            // progress evidence. The other calls are closed below, never
+            // silently dropped or described as if they ran.
             let results = execute_tool_batch(
                 client,
                 state,
@@ -581,10 +646,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             )
             .await;
             let mut executed_results = results.into_iter();
-            let results = selected_call_index
+            let results = selected_call_indices
+                .iter()
                 .map(|index| {
-                    vec![executed_results.next().unwrap_or_else(|| ToolResult {
-                        tool_name: tool_calls[index].name.clone(),
+                    executed_results.next().unwrap_or_else(|| ToolResult {
+                        tool_name: tool_calls[*index].name.clone(),
                         content: format!("error: tool execution missing for this call ({index})"),
                         diff: None,
                         file_preview: None,
@@ -594,9 +660,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             retryable: true,
                             ..Default::default()
                         },
-                    })]
+                    })
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
 
             ctx.metrics.tool_calls += results.len();
             let mutation_batch = results
@@ -628,14 +694,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Orchestrator: Cancelled during tool execution");
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
-                let selected_refs = selected_call_index
-                    .and_then(|index| call_refs.get(index))
-                    .cloned()
-                    .into_iter()
+                let selected_refs = selected_call_indices
+                    .iter()
+                    .filter_map(|index| call_refs.get(*index).cloned())
                     .collect::<Vec<_>>();
                 append_cancelled_batch_results(s.history.as_mut_vec(), results, &selected_refs);
                 for (index, call_ref) in call_refs.iter().enumerate() {
-                    if Some(index) != selected_call_index {
+                    if !selected_call_indices.contains(&index) {
                         s.history.extend(unanswered_call_results_with_kind(
                             std::slice::from_ref(call_ref),
                             "not executed because the model round was cancelled",
@@ -695,7 +760,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut cross_turn_tool_count = 0;
             let mut result_messages = Vec::with_capacity(results.len() + deferred_call_count);
             for (position, result) in results.into_iter().enumerate() {
-                let call_position = selected_call_index.unwrap_or(position);
+                let call_position = selected_call_indices
+                    .get(position)
+                    .copied()
+                    .unwrap_or(position);
                 let call = tool_calls.get(call_position);
                 let answered_call = call_refs.get(call_position).map(|call| call.id.clone());
                 let name = result.tool_name;
@@ -1126,7 +1194,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             }
 
             for (index, call_ref) in call_refs.iter().enumerate() {
-                if Some(index) == selected_call_index {
+                if selected_call_indices.contains(&index) {
                     continue;
                 }
                 let (reason, error_kind) = validation_errors[index]
@@ -1155,7 +1223,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let deferred = tool_calls
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| Some(*index) != selected_call_index)
+                    .filter(|(index, _)| !selected_call_indices.contains(index))
                     .map(|(index, call)| {
                         call_refs
                             .get(index)
@@ -1167,7 +1235,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 s.history.push(ChatMessage::new(
                     "system",
                     format!(
-                        "[The model emitted {requested_calls} tool calls. Only one was executed this round; the remaining calls ({deferred}) were not executed or scheduled. Reissue one at a time after reviewing the real result.]"
+                        "[The model emitted {requested_calls} tool calls. {} were executed this round; the remaining calls ({deferred}) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
+                        selected_call_indices.len()
                     ),
                 ));
             }
@@ -1622,7 +1691,7 @@ mod tests {
         batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
         grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
-        should_apply_loop_recovery,
+        selected_tool_call_indices, should_apply_loop_recovery,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1694,12 +1763,80 @@ mod tests {
     #[test]
     fn single_call_guidance_preserves_mutation_policy() {
         for limit in [1, 3] {
-            let guidance = mutation_batch_guidance(limit);
+            let guidance = mutation_batch_guidance(&crate::config::ToolSchedulingPolicy {
+                max_mutating_calls: limit,
+                ..Default::default()
+            });
             assert!(guidance.contains("exactly one tool call per response"));
             assert!(guidance.contains(&format!("mutation budget remains {limit}")));
             assert!(guidance.contains("Read-only inspection never consumes it"));
             assert!(!guidance.contains("parallel"));
         }
+    }
+
+    #[test]
+    fn default_scheduler_keeps_one_valid_call() {
+        let calls = vec![read_call("git status"), read_call("git diff")];
+        let errors = vec![None, None];
+        let selected = selected_tool_call_indices(
+            &calls,
+            &errors,
+            crate::config::ToolSchedulingPolicy::default(),
+        );
+        assert_eq!(selected, vec![0]);
+    }
+
+    #[test]
+    fn trusted_scheduler_applies_separate_read_and_mutation_limits() {
+        let calls = vec![
+            read_call("git status"),
+            read_call("git diff"),
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "a", "content": "a"}),
+                call_id: None,
+            },
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "b", "content": "b"}),
+                call_id: None,
+            },
+        ];
+        let errors = vec![None, None, None, None];
+        let selected = selected_tool_call_indices(
+            &calls,
+            &errors,
+            crate::config::ToolSchedulingPolicy {
+                allow_batching: true,
+                max_read_only_calls: 1,
+                max_mutating_calls: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(selected, vec![0, 2]);
+    }
+
+    #[test]
+    fn scheduler_isolates_control_plane_calls() {
+        let calls = vec![
+            read_call("git status"),
+            ToolCall {
+                name: "use_skill".to_string(),
+                arguments: serde_json::json!({"name": "rust"}),
+                call_id: None,
+            },
+            read_call("git diff"),
+        ];
+        let errors = vec![None, None, None];
+        let selected = selected_tool_call_indices(
+            &calls,
+            &errors,
+            crate::config::ToolSchedulingPolicy {
+                allow_batching: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(selected, vec![1]);
     }
 
     #[test]

@@ -13,6 +13,16 @@ pub(crate) fn has_intended_tool_call(content: &str) -> bool {
         || lower.contains("<function_call>")
 }
 
+/// A closed tool envelope whose arguments still cannot be parsed. This is
+/// intentionally separate from `has_incomplete_actionable_tool_call`, which
+/// identifies an unclosed fence/tag and therefore an incomplete envelope.
+fn has_incomplete_tool_arguments(content: &str) -> bool {
+    has_intended_tool_call(content)
+        && !crate::tools::has_incomplete_actionable_tool_call(content)
+        && crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty()
+        && crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty()
+}
+
 pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     if matches!(finish_reason, Some("reasoning_loop" | "reasoning_budget")) {
         return false;
@@ -404,14 +414,18 @@ pub(crate) fn continuation_nudge_for_category(
     previous: &str,
     finish_reason: Option<&str>,
 ) -> &'static str {
-    if finish_reason == Some("length") {
-        "Your previous response was cut off by the token limit. Continue directly from where you left off."
-    } else if is_reasoning_only(previous) {
+    if is_reasoning_only(previous) {
         "Stop planning and do not restate your plan again. Call the tool now."
     } else if previous.matches("```").count() % 2 != 0
         || (previous.contains("<tool_call>") && !previous.contains("</tool_call>"))
     {
-        "Your tool call syntax was cut off. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
+        "Your tool call syntax was incomplete, so no tool was executed. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
+    } else if matches!(finish_reason, Some("length" | "tool_arguments_limit"))
+        && has_incomplete_tool_arguments(previous)
+    {
+        "Your tool call arguments were incomplete, so no tool was executed. Continue with one complete JSON argument object from the cutoff; do not repeat or assume the partial call succeeded."
+    } else if finish_reason == Some("length") {
+        "Your previous response was cut off by the token limit. Continue directly from where you left off."
     } else if !has_intended_tool_call(previous) && ends_with_stated_intent(previous) {
         "You stated your intended action. Please execute the tool call now."
     } else {
@@ -588,6 +602,28 @@ mod tests {
             "<tool_call><function=write_to_file>{\"path\":\"x\",\"content\":\"partial",
             Some("context_length_exceeded")
         ));
+    }
+
+    #[test]
+    fn continuation_nudge_explains_incomplete_tool_syntax() {
+        let nudge = continuation_nudge_for_category(
+            "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"x\"}",
+            Some("length"),
+        );
+
+        assert!(nudge.contains("syntax was incomplete"));
+        assert!(nudge.contains("no tool was executed"));
+    }
+
+    #[test]
+    fn continuation_nudge_explains_incomplete_tool_arguments() {
+        let nudge = continuation_nudge_for_category(
+            "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"x\",oops}}\n```",
+            Some("length"),
+        );
+
+        assert!(nudge.contains("arguments were incomplete"));
+        assert!(nudge.contains("no tool was executed"));
     }
 
     #[test]

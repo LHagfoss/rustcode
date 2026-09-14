@@ -30,9 +30,10 @@ pub(crate) use dispatch::{
 pub(crate) use parser::find_closing_tool_fence;
 pub(crate) use schema::{
     MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
-    append_tool_response_limit, mcp_tool_display_name, mcp_tool_read_only_hint,
-    native_tools_schema_for_context, native_tools_schema_for_context_with_sticky_at,
-    tool_schema_phase, tool_system_prompt_for_policy,
+    append_tool_response_limit, append_tool_response_policy, mcp_tool_display_name,
+    mcp_tool_read_only_hint, native_tools_schema_for_context,
+    native_tools_schema_for_context_with_sticky_at, tool_schema_phase,
+    tool_system_prompt_for_policy,
 };
 
 use schema::{AGENT_TOOL_SPECS, collect_mcp_tools, schema_for_agent_tool, schema_for_tool};
@@ -212,36 +213,26 @@ pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
 /// mutation budget limits only mutating calls (see [`is_read_only_call`]), so
 /// a later read — or a read-only shell inspection such as `git status` — is
 /// not lost merely because an earlier mutation used the budget. Order among
-/// retained calls is kept. The root orchestrator still executes exactly one
-/// call per model round; this helper also serves consumers that need to retain
-/// the complete parsed response.
-///
-/// A control-plane call must execute alone, so it is either the entire kept
-/// batch — when it leads — or the boundary where the retained prefix stops.
+/// retained calls is kept. The root orchestrator uses strict one-call
+/// scheduling by default; explicit trusted profiles may select a separate
+/// bounded batch before calling the executor. This helper also serves
+/// consumers that need to retain the complete parsed response.
 pub fn partition_tool_batch(
     mut calls: Vec<ToolCall>,
     max_mutating_calls: usize,
 ) -> (Vec<ToolCall>, Vec<ToolCall>) {
     let total = calls.len();
-    let is_control = |call: &ToolCall| matches!(tool_safety(&call.name), ToolSafety::ControlPlane);
     let mut keep = vec![false; total];
 
-    if calls.first().is_some_and(is_control) {
-        keep[0] = true;
-    } else {
-        let mut mutating = 0;
-        for (index, call) in calls.iter().enumerate() {
-            if is_control(call) {
-                break;
+    let mut mutating = 0;
+    for (index, call) in calls.iter().enumerate() {
+        if !is_read_only_call(call) {
+            if mutating >= max_mutating_calls {
+                continue;
             }
-            if !is_read_only_call(call) {
-                if mutating >= max_mutating_calls {
-                    continue;
-                }
-                mutating += 1;
-            }
-            keep[index] = true;
+            mutating += 1;
         }
+        keep[index] = true;
     }
 
     let mut dropped = Vec::new();
@@ -270,7 +261,6 @@ pub fn truncate_tool_batch(
 /// fail closed when the model emits an unknown tool or malformed arguments.
 pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
-    validate_control_plane_batch(calls)?;
 
     for call in calls {
         let fingerprint = duplicate_tool_call_key(call);
@@ -296,7 +286,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
 /// handlers also accept string-encoded integers and `view_file` defaults a
 /// missing `start_line` to 1. Normalize those equivalent forms before the
 /// duplicate check so they cannot race through the parallel read scheduler.
-fn duplicate_tool_call_key(call: &ToolCall) -> String {
+pub(crate) fn duplicate_tool_call_key(call: &ToolCall) -> String {
     let mut arguments = call.arguments.clone();
     if call.name == "view_file"
         && let Some(object) = arguments.as_object_mut()
@@ -324,23 +314,6 @@ fn normalize_integer_argument(
     if let Some(value) = normalized {
         object.insert(name.to_string(), Value::from(value));
     }
-}
-
-/// Control-plane calls must remain batch-wide barriers even when a sibling
-/// call has an independent schema-validation failure.
-pub(crate) fn validate_control_plane_batch(calls: &[ToolCall]) -> Result<(), String> {
-    let has_control_plane = calls
-        .iter()
-        .any(|call| matches!(tool_safety(&call.name), ToolSafety::ControlPlane));
-
-    if has_control_plane && calls.len() > 1 {
-        return Err(
-            "control-plane calls such as use_skill must be emitted alone; retry the deferred action in the next turn"
-                .to_string(),
-        );
-    }
-
-    Ok(())
 }
 
 /// Return validation failures in input order so callers can answer each

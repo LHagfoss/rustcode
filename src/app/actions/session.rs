@@ -233,15 +233,14 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
     tokio::spawn(async move {
         let (name, url, model, engine) = {
             let s = state.lock().await;
-            let name = s.config.default.big().to_string();
-            let Some(profile) = s.config.models.iter().find(|m| m.name == name) else {
+            let Some(profile) = s.active_model_profile() else {
                 return;
             };
             if profile.provider_context_window.is_some() {
                 return;
             }
             (
-                name,
+                profile.name.clone(),
                 profile.url.clone(),
                 profile.model.clone(),
                 profile.engine.clone(),
@@ -253,7 +252,11 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
             return;
         };
         let mut s = state.lock().await;
-        if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == name)
+        if let Some(profile) = s
+            .config
+            .models
+            .iter_mut()
+            .find(|profile| profile.matches_request(&url, &model))
             && profile.provider_context_window.is_none()
         {
             let mismatch = profile

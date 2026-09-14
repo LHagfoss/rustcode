@@ -71,6 +71,9 @@ pub(crate) struct ContinuationPolicy {
     /// Prevent repeated continuation requests from creating an unbounded
     /// logical response even when the provider keeps stopping at length.
     pub(crate) max_total_output_tokens: u32,
+    /// Provider/profile-specific continuation ceiling. The default remains
+    /// intentionally small because every continuation replays the prefix.
+    pub(crate) max_continuations: usize,
 }
 
 impl Default for ContinuationPolicy {
@@ -79,6 +82,7 @@ impl Default for ContinuationPolicy {
             adaptive_tool_output_limit: None,
             context_output_limit: None,
             max_total_output_tokens: 32_768,
+            max_continuations: crate::config::DEFAULT_MAX_TOOL_CONTINUATIONS,
         }
     }
 }
@@ -112,14 +116,20 @@ pub(crate) struct CollectedResponse {
 
 impl TurnRunner {
     pub(crate) fn new() -> Self {
+        Self::with_max_continuations(crate::config::DEFAULT_MAX_TOOL_CONTINUATIONS)
+    }
+
+    pub(crate) fn with_max_continuations(max_continuations: usize) -> Self {
         Self {
             continuation_count: 0,
             adaptive_continuation_count: 0,
-            // More than two provider continuations tends to amplify an
-            // incomplete structured tool call. In particular, local models
-            // often restart a large write from byte zero instead of resuming
-            // its JSON arguments, growing context without making progress.
-            max_continuations: 2,
+            // Replaying a provider prefix can amplify an incomplete
+            // structured tool call. In particular, local models often
+            // restart a large write from byte zero instead of resuming its
+            // JSON arguments, growing context without making progress.
+            max_continuations: max_continuations
+                .max(1)
+                .min(crate::config::MAX_CONFIGURED_TOOL_CONTINUATIONS),
         }
     }
 
@@ -179,7 +189,7 @@ where
     let mut has_native_tool_calls = false;
     let mut thought_time_ms: u64 = 0;
     let mut thought_tokens: u32 = 0;
-    let mut runner = TurnRunner::new();
+    let mut runner = TurnRunner::with_max_continuations(policy.max_continuations);
     let mut next_output_token_limit = None;
     loop {
         let output_token_limit = next_output_token_limit.take();
@@ -326,6 +336,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(100_000),
                 max_total_output_tokens: 32_768,
+                max_continuations: 2,
             },
             |_request| {
                 calls += 1;
@@ -524,6 +535,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(100_000),
                 max_total_output_tokens: 32_768,
+                max_continuations: 2,
             },
             |request| {
                 calls += 1;
@@ -568,6 +580,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(100_000),
                 max_total_output_tokens: 32_768,
+                max_continuations: 2,
             },
             |request| {
                 calls += 1;
@@ -609,6 +622,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(100_000),
                 max_total_output_tokens: 32_768,
+                max_continuations: 2,
             },
             |request| {
                 calls += 1;
@@ -642,6 +656,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(1),
                 max_total_output_tokens: 32_768,
+                max_continuations: 2,
             },
             |request| {
                 calls += 1;
@@ -675,6 +690,7 @@ mod tests {
                 adaptive_tool_output_limit: Some(16_000),
                 context_output_limit: Some(100_000),
                 max_total_output_tokens: 8_192,
+                max_continuations: 2,
             },
             |request| {
                 calls += 1;

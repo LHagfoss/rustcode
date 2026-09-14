@@ -292,7 +292,7 @@ pub(super) async fn collect_round(
     // retry policy cannot safely replay it. Retry once from the last coherent
     // history checkpoint, after clearing speculative UI output. No tool has
     // executed yet at this point, so this cannot duplicate a mutation.
-    let (adaptive_tool_output_limit, hard_context_limit) = {
+    let (adaptive_tool_output_limit, hard_context_limit, max_continuations) = {
         let s = request_state.lock().await;
         let profile = s
             .config
@@ -309,6 +309,9 @@ pub(super) async fn collect_round(
                 })
                 .map(|profile| profile.tool_output_ceiling()),
             profile.map(|profile| profile.context_budget().hard_effective_limit),
+            profile
+                .map(|profile| profile.max_tool_continuations())
+                .unwrap_or(crate::config::DEFAULT_MAX_TOOL_CONTINUATIONS),
         )
     };
     let base_prompt_tokens = estimate_token_usage(&request_msgs, "")
@@ -327,6 +330,7 @@ pub(super) async fn collect_round(
         adaptive_tool_output_limit,
         context_output_limit,
         max_total_output_tokens: 32_768,
+        max_continuations,
     };
     let mut transport_retry_attempts = 0usize;
     let collected = loop {
