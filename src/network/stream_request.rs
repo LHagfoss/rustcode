@@ -2047,22 +2047,25 @@ pub async fn stream_request(
         let mut buffer = buffer.lock().await;
         buffer.output_token_limit = output_token_limit;
     }
-    let textual_contract_tokens = if allow_tools
-        && !matches!(tool_protocol, crate::config::ToolProtocol::ApiNative)
-    {
-        aligned_messages
-            .iter()
-            .filter_map(|message| {
-                (message.get("role").and_then(serde_json::Value::as_str) == Some("system"))
-                    .then(|| message.get("content").and_then(serde_json::Value::as_str))
-                    .flatten()
-            })
-            .filter_map(|content| content.find("# Tool Format").map(|start| &content[start..]))
-            .map(count_tokens)
-            .sum::<u32>() as usize
-    } else {
-        0
-    };
+    let textual_contract_tokens =
+        if allow_tools && !matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+            aligned_messages
+                .iter()
+                .filter_map(|message| {
+                    (message.get("role").and_then(serde_json::Value::as_str) == Some("system"))
+                        .then(|| message.get("content").and_then(serde_json::Value::as_str))
+                        .flatten()
+                })
+                .filter_map(|content| {
+                    content
+                        .find("# Tool Format")
+                        .map(|start| &content[start..])
+                })
+                .map(count_tokens)
+                .sum::<u32>() as usize
+        } else {
+            0
+        };
     let mut payload = serde_json::json!({
         "model": model,
         "stream": true,

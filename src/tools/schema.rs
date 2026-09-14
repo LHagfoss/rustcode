@@ -506,8 +506,7 @@ fn text_builtin_is_advertised(
     {
         return false;
     }
-    if tool.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
-    {
+    if tool.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools {
         return false;
     }
     agent_mode != crate::config::AgentMode::Plan || allowed_in_plan_mode(tool.name)
