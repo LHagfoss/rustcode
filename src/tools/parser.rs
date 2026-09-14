@@ -12,6 +12,9 @@ pub use rustcode_tool_protocol::{
 pub(crate) use rustcode_tool_protocol::{find_closing_tool_fence, repair_json};
 
 pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
+    if let Some(diagnostic) = rustcode_tool_protocol::diagnose_reasoning_leakage(text) {
+        return Some(diagnostic);
+    }
     rustcode_tool_protocol::diagnose_failed_tool_call_with_validator(text, |calls| {
         super::validate_tool_calls(
             calls,

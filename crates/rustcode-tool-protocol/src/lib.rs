@@ -161,7 +161,14 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
                 let name = caps.get(1).unwrap().as_str().to_string();
                 let raw_args = caps.get(2).unwrap().as_str();
 
-                let repaired = repair_json(raw_args);
+                // A completed tagged call may be followed by a separate
+                // reasoning block. Bound the JSON object before repairing so
+                // that the following prose cannot make an otherwise valid
+                // call look malformed (or get folded into its arguments).
+                let json_source = find_complete_json_object(raw_args)
+                    .map(|end| &raw_args[..end])
+                    .unwrap_or(raw_args);
+                let repaired = repair_json(json_source);
                 if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
                     calls.push(ToolCall {
                         name,
@@ -183,6 +190,44 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
             }
         }
     }
+}
+
+/// Return the end of the first balanced JSON object, respecting quoted
+/// strings and escapes. A missing quote/brace deliberately returns `None`, so
+/// the caller can retain the existing tolerant-repair path for truncated
+/// calls.
+fn find_complete_json_object(text: &str) -> Option<usize> {
+    let start = text.find('{')?;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (offset, ch) in text[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(start + offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// Locate the matching closing fence for a tool block.
@@ -394,7 +439,182 @@ fn parse_tool_calls_impl(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
     }
 
     calls.dedup();
+    calls.retain(|call| !is_suspicious_reasoning_call(text, call));
     calls
+}
+
+const MUTATING_PAYLOAD_FIELDS: &[&str] = &["content", "replacement_content", "new_string"];
+
+fn reasoning_payload_text(args: &Value) -> impl Iterator<Item = &str> {
+    let direct = MUTATING_PAYLOAD_FIELDS
+        .iter()
+        .filter_map(|field| args.get(*field).and_then(Value::as_str));
+    let nested = args
+        .get("edits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|edits| edits.iter())
+        .flat_map(|edit| {
+            MUTATING_PAYLOAD_FIELDS
+                .iter()
+                .filter_map(move |field| edit.get(*field).and_then(Value::as_str))
+        });
+    direct.chain(nested)
+}
+
+/// This intentionally recognizes only a narrow transition shape: a repaired
+/// code-edit payload whose new text ends with a `<think>` block beginning with
+/// common model-planning language. Literal tags in a complete JSON value, tags
+/// in target/old text, and ordinary source prose remain writable.
+fn suspicious_reasoning_payload_text(call: &ToolCall) -> Option<&str> {
+    if !is_code_editing_tool(&call.name) {
+        return None;
+    }
+
+    reasoning_payload_text(&call.arguments).find(|payload| {
+        let lower = payload.to_ascii_lowercase();
+        let Some(start) = lower.rfind("<think>") else {
+            return false;
+        };
+        let body_start = start + "<think>".len();
+        let body_end = lower[body_start..]
+            .find("</think>")
+            .map(|end| body_start + end);
+        let body = payload[body_start..body_end.unwrap_or(payload.len())].trim_start();
+        let body_lower = body.to_ascii_lowercase();
+        let reasoning_prefix = [
+            "the user wants me",
+            "the user asked me",
+            "let me ",
+            "i need to ",
+            "i should ",
+            "i will ",
+            "i'll ",
+            "now i ",
+        ];
+        let looks_like_reasoning = reasoning_prefix
+            .iter()
+            .any(|prefix| body_lower.starts_with(prefix));
+        let trailing = body_end
+            .map(|end| payload[end + "</think>".len()..].trim())
+            .unwrap_or("");
+        looks_like_reasoning && trailing.is_empty()
+    })
+}
+
+fn has_suspicious_reasoning_payload(call: &ToolCall) -> bool {
+    suspicious_reasoning_payload_text(call).is_some()
+}
+
+#[derive(Debug)]
+struct TextualCallCandidate {
+    call: ToolCall,
+    repaired: bool,
+}
+
+fn parse_json_candidate(raw: &str, forced_name: Option<String>) -> Option<TextualCallCandidate> {
+    // Raw newlines inside a string are normalized by `repair_json`, but they
+    // do not mean the model crossed a payload boundary. Only use repair as
+    // leakage evidence when the JSON object itself is structurally incomplete.
+    let boundary_incomplete = find_complete_json_object(raw).is_none();
+    let exact = serde_json::from_str::<Value>(raw.trim()).ok();
+    let (json, repaired) = match exact {
+        Some(json) => (json, false),
+        None => (
+            serde_json::from_str::<Value>(&repair_json(raw.trim())).ok()?,
+            boundary_incomplete,
+        ),
+    };
+    let (inferred_name, arguments) = extract_tool_call(&json)?;
+    Some(TextualCallCandidate {
+        call: ToolCall {
+            name: forced_name.unwrap_or(inferred_name),
+            arguments,
+            call_id: None,
+        },
+        repaired,
+    })
+}
+
+fn tagged_candidates(text: &str) -> impl Iterator<Item = TextualCallCandidate> + '_ {
+    text.split("[TOOL_CALLS]").skip(1).filter_map(|chunk| {
+        let full = format!("[TOOL_CALLS]{chunk}");
+        let caps = TOOL_CALLS_RE.captures(&full)?;
+        let name = caps.get(1)?.as_str().to_string();
+        let raw_args = caps.get(2)?.as_str();
+        let json_source = find_complete_json_object(raw_args)
+            .map(|end| &raw_args[..end])
+            .unwrap_or(raw_args);
+        parse_json_candidate(json_source, Some(name))
+    })
+}
+
+fn fenced_candidates(text: &str) -> impl Iterator<Item = TextualCallCandidate> + '_ {
+    let mut search = text;
+    std::iter::from_fn(move || {
+        loop {
+            let rel = search.find("```tool")?;
+            let after_tag = &search[rel + 7..];
+            let (rel_end, next_rel) = find_closing_tool_fence(after_tag);
+            search = if next_rel < after_tag.len() {
+                &after_tag[next_rel..]
+            } else {
+                ""
+            };
+            if after_tag.chars().next().is_none_or(|c| c.is_whitespace()) {
+                let block = &after_tag[..rel_end];
+                if let Some(candidate) = parse_json_candidate(block, None) {
+                    return Some(candidate);
+                }
+            }
+            if search.is_empty() {
+                return None;
+            }
+        }
+    })
+}
+
+fn is_suspicious_reasoning_call(text: &str, call: &ToolCall) -> bool {
+    tagged_candidates(text)
+        .chain(fenced_candidates(text))
+        .any(|candidate| {
+            candidate.repaired
+                && candidate.call == *call
+                && has_suspicious_reasoning_payload(&candidate.call)
+        })
+}
+
+fn bounded_reasoning_snippet(payload: &str) -> String {
+    let marker = payload.to_ascii_lowercase().rfind("<think>").unwrap_or(0);
+    let mut start = marker.saturating_sub(80);
+    while start > 0 && !payload.is_char_boundary(start) {
+        start -= 1;
+    }
+    payload[start..].chars().take(240).collect()
+}
+
+/// Return a bounded, actionable diagnostic for a repaired mutating payload
+/// whose tail is recognizable model reasoning rather than file content.
+pub fn diagnose_reasoning_leakage(text: &str) -> Option<String> {
+    tagged_candidates(text)
+        .chain(fenced_candidates(text))
+        .find(|candidate| {
+            candidate.repaired && has_suspicious_reasoning_payload(&candidate.call)
+        })
+        .map(|candidate| {
+            let target = candidate
+                .call
+                .arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("the requested target");
+            let payload = suspicious_reasoning_payload_text(&candidate.call).unwrap_or("");
+            let snippet = bounded_reasoning_snippet(payload);
+            format!(
+                "Reasoning leakage detected in mutating tool '{}' for target '{}'; the mutation was not executed. Reissue one smaller, complete, targeted call. Bounded payload diagnostic: {}",
+                candidate.call.name, target, snippet
+            )
+        })
 }
 
 pub fn parse_tool_calls(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
@@ -498,8 +718,9 @@ pub fn parse_tool_call(text: &str, protocol: ToolProtocol) -> Option<ToolCall> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCall, ToolProtocol, find_closing_tool_fence, has_incomplete_actionable_tool_call,
-        is_code_editing_tool, is_tool_call_start, parse_tool_calls, repair_json,
+        ToolCall, ToolProtocol, diagnose_reasoning_leakage, find_closing_tool_fence,
+        has_incomplete_actionable_tool_call, is_code_editing_tool, is_tool_call_start,
+        parse_tool_calls, repair_json,
     };
 
     #[test]
@@ -595,5 +816,37 @@ mod tests {
         let (end, next) = find_closing_tool_fence("\n{\"content\":\"```\"}\n```tail");
         assert!(end > 0);
         assert!(next > end);
+    }
+
+    #[test]
+    fn rejects_repaired_mutation_with_reasoning_at_payload_boundary() {
+        let text = "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"index.html\",\"content\":\"l.x += l<think>\\nThe user wants me to continue the file that was being written.\\n</think>";
+        assert!(parse_tool_calls(text, ToolProtocol::Native).is_empty());
+
+        let diagnostic = diagnose_reasoning_leakage(text).expect("leakage should be diagnosed");
+        assert!(diagnostic.contains("index.html"), "got: {diagnostic}");
+        assert!(diagnostic.contains("not executed"), "got: {diagnostic}");
+        assert!(
+            diagnostic.contains("smaller, complete, targeted"),
+            "got: {diagnostic}"
+        );
+        assert!(diagnostic.len() < 600, "diagnostic must stay bounded");
+    }
+
+    #[test]
+    fn literal_think_content_in_complete_mutation_remains_writable() {
+        let text = "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"index.html\",\"content\":\"<think>\nThe user wants me to continue the file that was being written.\n</think>\"}";
+        let calls = parse_tool_calls(text, ToolProtocol::Native);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write_to_file");
+        assert!(diagnose_reasoning_leakage(text).is_none());
+    }
+
+    #[test]
+    fn complete_tagged_mutation_followed_by_reasoning_stays_a_call() {
+        let text = "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"index.html\",\"content\":\"complete body\"}\n<think>planning the next step</think>";
+        let calls = parse_tool_calls(text, ToolProtocol::Native);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["content"], "complete body");
     }
 }
