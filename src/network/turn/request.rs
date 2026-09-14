@@ -253,10 +253,14 @@ pub(super) async fn collect_round(
     stream_buffer.lock().await.reset();
     let (api_base_url, model_name, request_schema_policy, request_session_id) = {
         let s = state.lock().await;
+        let protocol = s.active_tool_protocol();
+        let local_model = s.active_model_is_local();
         let compact_tool_prompt = s
             .active_model_profile()
             .as_ref()
-            .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
+            .map(|profile| profile.compact_tool_prompt.unwrap_or(local_model))
+            .unwrap_or(local_model)
+            && !matches!(protocol, crate::config::ToolProtocol::ApiNative);
         (
             s.api_base_url.clone(),
             s.model_name.clone(),
