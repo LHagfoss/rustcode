@@ -2965,7 +2965,11 @@ fn proactive_history_budget_leaves_soft_target_headroom() {
     let proactive = super::proactive_history_budget(&budget);
 
     assert!(proactive < budget.history_tokens);
-    assert_eq!(proactive, 24_000 - budget.tool_reserve - 1_024 - 2_048);
+    assert_eq!(
+        proactive,
+        (24_000 - budget.tool_reserve - 1_024 - 2_048)
+            .min(budget.history_tokens.saturating_sub(1).max(1))
+    );
 }
 
 #[test]
@@ -5410,7 +5414,7 @@ fn test_continuation_nudges_are_category_aware() {
     // Incomplete tool call
     assert_eq!(
         continuation_nudge_for_category("```tool\n{\"name\": \"view_file\"", None),
-        "Your tool call syntax was cut off. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
+        "Your tool call syntax was incomplete, so no tool was executed. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
     );
 
     // Stated intent without tool call

@@ -883,15 +883,15 @@ impl AppState {
         self.config
             .models
             .iter()
-            .find(|p| {
-                p.url == self.api_base_url
-                    && (p.model == self.model_name || p.name == self.model_name)
-            })
+            .find(|p| p.matches_request(&self.api_base_url, &self.model_name))
             .or_else(|| {
-                self.config
+                let mut candidates = self
+                    .config
                     .models
                     .iter()
-                    .find(|p| p.model == self.model_name || p.name == self.model_name)
+                    .filter(|p| p.model == self.model_name || p.name == self.model_name);
+                let candidate = candidates.next()?;
+                candidates.next().is_none().then_some(candidate)
             })
             .cloned()
     }

@@ -23,14 +23,41 @@ pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
 const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
 const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
 const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
-/// Safe default for workspace-changing calls emitted in one model response.
-/// Read-only inspection (`grep`, `glob`, `view_file`, and read-only shell
-/// commands) is classified separately and never consumes this budget, so the
-/// default covers a small focused sequence of edits or mutating commands.
+/// Safe mutation cap for explicitly enabled response batching. The scheduler
+/// remains strict one-call by default; read-only inspection (`grep`, `glob`,
+/// `view_file`, and read-only shell commands) is classified separately and
+/// never consumes this budget.
 pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
 /// Keep profile overrides bounded even when a config typo requests an
 /// unreasonably large mutation batch.
 pub const MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE: usize = 8;
+/// Read-only calls are independently bounded for explicitly trusted profiles.
+pub const DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE: usize = 4;
+pub const MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE: usize = 8;
+/// A response may be continued twice by default. Larger values require an
+/// explicit profile opt-in because continuation requests replay the response
+/// prefix and can amplify incomplete structured calls.
+pub const DEFAULT_MAX_TOOL_CONTINUATIONS: usize = 2;
+pub const MAX_CONFIGURED_TOOL_CONTINUATIONS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSchedulingPolicy {
+    pub allow_batching: bool,
+    pub max_read_only_calls: usize,
+    pub max_mutating_calls: usize,
+    pub max_continuations: usize,
+}
+
+impl Default for ToolSchedulingPolicy {
+    fn default() -> Self {
+        Self {
+            allow_batching: false,
+            max_read_only_calls: 1,
+            max_mutating_calls: 1,
+            max_continuations: DEFAULT_MAX_TOOL_CONTINUATIONS,
+        }
+    }
+}
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
@@ -156,9 +183,25 @@ pub struct ModelProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_context_window: Option<u32>,
     /// Maximum number of workspace-changing tool calls accepted from one
-    /// response. Omitted profiles retain the safe four-call default.
+    /// response when batching is enabled. Omitted profiles retain the safe
+    /// four-call cap, while scheduling remains strict by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
+    /// Explicitly identify an OpenAI-compatible endpoint as local. This is
+    /// needed for self-hosted gateways whose URL and engine name look remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
+    /// Explicitly allow this profile to batch multiple tool calls in one
+    /// response. Omitted profiles retain strict one-call scheduling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_tool_batching: Option<bool>,
+    /// Maximum read-only calls in one response when batching is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_read_only_calls_per_response: Option<usize>,
+    /// Maximum response continuations for this profile. Omitted profiles
+    /// retain the conservative default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_continuations: Option<usize>,
     /// Use a compact text-protocol tool menu for providers with small request
     /// bodies, omitting long descriptions and MCP tool listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,8 +291,10 @@ impl ModelProfile {
     /// the identity so a model name alone cannot inherit another profile's
     /// output or provider capability settings.
     pub fn matches_request(&self, url: &str, model: &str) -> bool {
+        let configured_url = self.url.trim_end_matches('/');
+        let request_url = url.trim_end_matches('/');
         (self.model == model || self.name == model)
-            && (self.url == url || self.endpoint_url() == url)
+            && (configured_url == request_url || self.endpoint_url() == request_url)
     }
 
     /// Resolve the per-profile mutation policy once at the orchestration
@@ -260,6 +305,43 @@ impl ModelProfile {
             .filter(|limit| *limit > 0)
             .unwrap_or(DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE)
             .min(MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE)
+    }
+
+    /// Whether this explicitly trusted profile may schedule a bounded batch
+    /// instead of the default one-call-per-response policy.
+    pub fn tool_batching_enabled(&self) -> bool {
+        self.allow_tool_batching == Some(true)
+    }
+
+    pub fn max_read_only_calls_per_response(&self) -> usize {
+        self.max_read_only_calls_per_response
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE)
+            .min(MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE)
+    }
+
+    pub fn max_tool_continuations(&self) -> usize {
+        self.max_tool_continuations
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_TOOL_CONTINUATIONS)
+            .min(MAX_CONFIGURED_TOOL_CONTINUATIONS)
+    }
+
+    pub fn tool_scheduling_policy(&self) -> ToolSchedulingPolicy {
+        ToolSchedulingPolicy {
+            allow_batching: self.tool_batching_enabled(),
+            max_read_only_calls: if self.tool_batching_enabled() {
+                self.max_read_only_calls_per_response()
+            } else {
+                1
+            },
+            max_mutating_calls: if self.tool_batching_enabled() {
+                self.max_mutating_calls_per_response()
+            } else {
+                1
+            },
+            max_continuations: self.max_tool_continuations(),
+        }
     }
 
     /// Return the completion cap for one request. Tool-enabled requests are
@@ -390,17 +472,16 @@ impl ModelProfile {
                 }
             })
             .min(requested_completion);
-        let requested_tool = (context_window / 16).clamp(1, 4096);
-        let requested_safety = (context_window / 32).clamp(1, 1024);
+        let requested_tool = (context_window / 16).min(4096);
+        let requested_safety = (context_window / 32).min(1024);
 
         let provider_overhead_margin = self
             .provider_overhead_margin
             .unwrap_or_else(|| {
                 let proportional = (u64::from(context_window)
-                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT)
-                    + 99)
+                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT))
                     / 100;
-                (proportional as u32).clamp(1024, MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
+                (proportional as u32).min(MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
             })
             .min(context_window.saturating_sub(1));
 
@@ -423,13 +504,13 @@ impl ModelProfile {
         // Keep the fields honest even for synthetic or unusually small model
         // profiles: the published reserves must never add up to more than the
         // context window, and history always retains a small inspectable tail.
-        let mut reserve_capacity = context_window.saturating_sub(requested_completion);
-        let completion_reserve = requested_completion;
+        let completion_reserve = requested_completion.min(hard_effective_limit);
+        let mut reserve_capacity = hard_effective_limit.saturating_sub(completion_reserve);
         // Thinking and visible answer tokens share max_output_tokens; they
         // must not be double-counted against the prompt context. The fields
         // below describe the split within that output reservation.
         let thinking_reserve =
-            requested_thinking.min(requested_completion.saturating_sub(minimum_answer_tokens));
+            requested_thinking.min(completion_reserve.saturating_sub(minimum_answer_tokens));
         let thinking_budget = thinking_reserve;
         let tool_reserve = requested_tool.min(reserve_capacity);
         reserve_capacity = reserve_capacity.saturating_sub(tool_reserve);
@@ -437,7 +518,10 @@ impl ModelProfile {
         let reserved = completion_reserve
             .saturating_add(tool_reserve)
             .saturating_add(safety_reserve);
-        let history_tokens = context_window.saturating_sub(reserved);
+        // `hard_effective_limit` already excludes provider framing overhead.
+        // Keep the early history/compaction trigger on that safe side of the
+        // boundary; final request trimming uses the exact projected payload.
+        let history_tokens = hard_effective_limit.saturating_sub(reserved);
         ContextBudget {
             context_window,
             soft_context_target,
@@ -489,6 +573,9 @@ impl ModelProfile {
     }
 
     pub fn is_local(&self) -> bool {
+        if let Some(local) = self.local {
+            return local;
+        }
         if let Some(ref engine) = self.engine {
             let eng = engine.to_ascii_lowercase();
             if matches!(
@@ -507,7 +594,26 @@ impl ModelProfile {
             }
         }
         let url_lower = self.url.to_ascii_lowercase();
-        url_lower.contains("ollama") || url_lower.contains(":11434") || url_lower.contains(":1234")
+        let authority = url_lower
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(url_lower.as_str())
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .rsplit('@')
+            .next()
+            .unwrap_or_default();
+        let host = authority
+            .strip_prefix('[')
+            .and_then(|value| value.split(']').next())
+            .or_else(|| authority.rsplit_once(':').map(|(host, _)| host))
+            .unwrap_or(authority);
+        let loopback = matches!(host, "localhost" | "::1" | "0.0.0.0") || host.starts_with("127.");
+        url_lower.contains("ollama")
+            || url_lower.contains(":11434")
+            || url_lower.contains(":1234")
+            || (self.engine.is_none() && loopback)
     }
 
     pub fn endpoint_url(&self) -> String {

@@ -1,8 +1,11 @@
 use crate::app::ChatMessage;
 
 use super::super::events::{ToolResult, ToolResultMetadata};
-use super::super::is_mutating_tool;
-use super::super::output::{INCOMPLETE_TOOL_RESULT_MARKER, truncate_tool_output_for_message};
+use super::super::output::{
+    COMPLETED_MUTATION_MARKER, COMPLETED_MUTATION_NOTICE, INCOMPLETE_TOOL_RESULT_MARKER,
+    truncate_tool_output_for_message_with_completion,
+};
+use super::super::{is_mutating_tool, mutation_made_progress};
 use super::preview::get_file_preview;
 use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
 
@@ -401,7 +404,14 @@ pub(crate) fn finalize_tool_result_for_prefix(
         result.content.push_str(notice);
     }
     let original_content = result.content.clone();
-    let bounded = truncate_tool_output_for_message(&result.tool_name, result.content, prefix);
+    let completed_mutation = is_mutating_tool(&result.tool_name)
+        && mutation_made_progress(result.metadata.success, &result.content);
+    let bounded = truncate_tool_output_for_message_with_completion(
+        &result.tool_name,
+        result.content,
+        prefix,
+        completed_mutation.then_some(COMPLETED_MUTATION_NOTICE),
+    );
     result.content = bounded.content;
     if bounded.truncated {
         result.metadata.truncated = true;
@@ -409,7 +419,7 @@ pub(crate) fn finalize_tool_result_for_prefix(
         if result.metadata.full_output_artifact.is_none() {
             result.metadata.full_output_artifact = bounded.full_output_artifact;
         }
-        if result.metadata.error_kind.is_none() {
+        if result.metadata.error_kind.is_none() && !completed_mutation {
             result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
         }
         if let Some(inspection) = result.metadata.inspection.as_mut() {
@@ -454,6 +464,14 @@ fn normalize_incomplete_metadata(result: &mut ToolResult) {
                     completeness.as_str()
                 }
             ));
+        }
+        if result.metadata.payload_truncated
+            && is_mutating_tool(&result.tool_name)
+            && mutation_made_progress(result.metadata.success, &result.content)
+            && !result.content.contains(COMPLETED_MUTATION_MARKER)
+        {
+            result.content.push_str("\n\n");
+            result.content.push_str(COMPLETED_MUTATION_NOTICE);
         }
     }
 }

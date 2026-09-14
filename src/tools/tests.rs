@@ -120,7 +120,7 @@ fn policy_tables_match_registry() {
     assert!(needs_confirmation("run_command"));
 
     assert_eq!(tool_capabilities("use_skill"), &[SessionState]);
-    assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
+    assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
     assert!(!needs_confirmation("use_skill"));
 
     assert_eq!(tool_capabilities("manage_task"), &[ExecuteCommands]);
@@ -1364,9 +1364,9 @@ fn tool_safety_is_conservative_and_classifies_reads() {
         arguments: serde_json::json!({}),
         call_id: None,
     };
-    assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
+    assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
     assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
-    assert!(is_read_only_call(&call("use_skill")));
+    assert!(!is_read_only_call(&call("use_skill")));
     assert!(is_read_only_call(&call("view_file")));
     assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
     assert!(!is_read_only_call(&call("write_to_file")));
@@ -1376,7 +1376,7 @@ fn tool_safety_is_conservative_and_classifies_reads() {
 }
 
 #[test]
-fn skills_are_read_only_and_not_isolated_as_control_plane() {
+fn skills_are_control_plane_and_isolated() {
     let calls = vec![
         ToolCall {
             name: "use_skill".to_string(),
@@ -1392,8 +1392,9 @@ fn skills_are_read_only_and_not_isolated_as_control_plane() {
 
     let (isolated, deferred) = isolate_control_plane_call(calls);
 
-    assert_eq!(isolated.len(), 2);
-    assert_eq!(deferred, 0);
+    assert_eq!(isolated.len(), 1);
+    assert_eq!(isolated[0].name, "use_skill");
+    assert_eq!(deferred, 1);
 }
 
 // Regression: session 1785595713111. Asked to plan a --json flag, the model
@@ -1597,24 +1598,21 @@ fn the_edit_tool_spec_explains_how_to_insert() {
         .expect("tool exists");
 
     assert!(
-        spec.description.contains("to INSERT text"),
+        spec.description.contains(
+            "To insert, anchor on an adjacent line and repeat that line in the replacement"
+        ),
         "got: {}",
         spec.description
     );
     assert!(
-        spec.description.contains("prepend"),
+        spec.description.contains("an empty target is rejected"),
         "got: {}",
         spec.description
     );
     assert!(
-        spec.description.contains("An empty target is rejected"),
+        spec.arguments.contains("target_content"),
         "got: {}",
         spec.description
-    );
-    assert!(
-        spec.arguments.contains("never empty"),
-        "got: {}",
-        spec.arguments
     );
 }
 
