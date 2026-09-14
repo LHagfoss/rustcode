@@ -73,6 +73,12 @@ impl CapturedOutput {
 pub struct CommandOutput {
     pub success: bool,
     pub exit_code: Option<i32>,
+    /// The native terminating signal, or the signal encoded by a pipefail
+    /// status such as 141 (SIGPIPE).
+    pub signal: Option<i32>,
+    /// True when SIGPIPE came from a downstream pipeline consumer stopping
+    /// after receiving the requested amount of output.
+    pub downstream_consumer_terminated: bool,
     pub stdout: CapturedOutput,
     pub stderr: CapturedOutput,
 }
@@ -231,12 +237,83 @@ fn run_internal(
 
     let stdout = out_handle.join().unwrap_or_default().finish();
     let stderr = err_handle.join().unwrap_or_default().finish();
+    let signal = terminating_signal(&status, &request.command);
+    let downstream_consumer_terminated =
+        is_downstream_consumer_termination(signal, &request.command);
     Ok(CommandOutput {
-        success: status.success(),
+        success: status.success() || downstream_consumer_terminated,
         exit_code: status.code(),
+        signal,
+        downstream_consumer_terminated,
         stdout,
         stderr,
     })
+}
+
+#[cfg(unix)]
+fn terminating_signal(status: &std::process::ExitStatus, command: &str) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+
+    status.signal().or_else(|| {
+        // With bash's `pipefail`, an upstream process killed by SIGPIPE is
+        // reported by the shell as 128 + SIGPIPE rather than as a native
+        // signal on the shell's ExitStatus.
+        (status.code() == Some(128 + libc::SIGPIPE) && has_shell_pipeline(command))
+            .then_some(libc::SIGPIPE)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn terminating_signal(_status: &std::process::ExitStatus, _command: &str) -> Option<i32> {
+    None
+}
+
+fn is_downstream_consumer_termination(signal: Option<i32>, command: &str) -> bool {
+    #[cfg(unix)]
+    {
+        signal == Some(libc::SIGPIPE) && has_shell_pipeline(command)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (signal, command);
+        false
+    }
+}
+
+fn has_shell_pipeline(command: &str) -> bool {
+    let bytes = command.as_bytes();
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escaped = false;
+
+    for (index, &byte) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && !single_quote {
+            escaped = true;
+            continue;
+        }
+        if byte == b'\'' && !double_quote {
+            single_quote = !single_quote;
+            continue;
+        }
+        if byte == b'"' && !single_quote {
+            double_quote = !double_quote;
+            continue;
+        }
+        if byte != b'|' || single_quote || double_quote {
+            continue;
+        }
+
+        let previous = index.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+        let next = bytes.get(index + 1).copied();
+        if previous != Some(b'|') && next != Some(b'|') {
+            return true;
+        }
+    }
+    false
 }
 
 fn terminate_process_tree(child: &mut std::process::Child, process_group: bool) {
@@ -351,6 +428,39 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn downstream_sigpipe_is_explicit_and_not_a_command_failure() {
+        let output = run_with_timeout(&request("yes | head -n 1"), None).unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.exit_code, Some(141));
+        assert_eq!(output.signal, Some(libc::SIGPIPE));
+        assert!(output.downstream_consumer_terminated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn encoded_signal_without_a_pipeline_remains_an_exit_code() {
+        let output = run_with_timeout(&request("exit 141"), None).unwrap();
+
+        assert!(!output.success);
+        assert_eq!(output.exit_code, Some(141));
+        assert_eq!(output.signal, None);
+        assert!(!output.downstream_consumer_terminated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_signal_is_separate_from_exit_code() {
+        let output = run_with_timeout(&request("kill -TERM $$"), None).unwrap();
+
+        assert!(!output.success);
+        assert_eq!(output.exit_code, None);
+        assert_eq!(output.signal, Some(libc::SIGTERM));
+        assert!(!output.downstream_consumer_terminated);
+    }
+
     #[test]
     fn explicit_environment_is_visible_to_the_shell() {
         #[cfg(not(target_os = "windows"))]
@@ -395,6 +505,7 @@ mod tests {
             .unwrap();
             assert!(output.stdout.captured_len() <= MAX_OUTPUT_BYTES);
             assert!(output.stdout.is_truncated());
+            assert!(output.stdout.total_bytes() > output.stdout.captured_len());
             let formatted = format_bounded_output(&output.stdout);
             assert!(formatted.contains("START_MARKER"));
             assert!(formatted.contains("END_MARKER"));

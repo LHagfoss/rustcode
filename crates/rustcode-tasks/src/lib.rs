@@ -1094,6 +1094,8 @@ mod tests {
         CommandOutput {
             success: true,
             exit_code: Some(0),
+            signal: None,
+            downstream_consumer_terminated: false,
             stdout: Default::default(),
             stderr: Default::default(),
         }

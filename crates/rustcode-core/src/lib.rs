@@ -177,6 +177,29 @@ impl ToolErrorKind {
     }
 }
 
+/// Execution facts specific to a completed command invocation.
+///
+/// `output_truncated` describes the bounded capture performed by RustCode
+/// while the process was running. Request-level clipping is kept separately
+/// on [`ToolResultRecord::payload_truncated`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandResultMetadata {
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(default)]
+    pub downstream_consumer_terminated: bool,
+    #[serde(default)]
+    pub bytes_returned: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_output_bytes: Option<u64>,
+    #[serde(default)]
+    pub output_truncated: bool,
+}
+
 /// Authoritative metadata for one tool result, persisted with history.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolResultRecord {
@@ -209,6 +232,8 @@ pub struct ToolResultRecord {
     pub replayed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspection: Option<InspectionResultMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_status: Option<CommandResultMetadata>,
 }
 
 /// The stable identity of the first message retained after a compaction.

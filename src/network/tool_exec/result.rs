@@ -389,6 +389,7 @@ pub(crate) fn tool_result_from_execution(
             },
             retryable: execution.retryable,
             inspection,
+            command_status: execution.command_status,
         },
     }
 }
@@ -526,6 +527,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             retryable: envelope.retryable,
             replayed: envelope.replayed,
             inspection: envelope.inspection,
+            command_status: envelope.command_status,
         })
 }
 

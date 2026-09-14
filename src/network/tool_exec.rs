@@ -895,6 +895,7 @@ pub(crate) async fn execute_tool_batch(
                                 replayed: true,
                                 error_kind: previous.error_kind,
                                 retryable: previous.retryable,
+                                command_status: None,
                             },
                             None,
                         )
