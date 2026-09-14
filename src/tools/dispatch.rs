@@ -148,6 +148,7 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                             replayed: false,
                             error_kind: (!success).then_some(ToolErrorKind::McpFailed),
                             retryable: false,
+                            command_status: None,
                         }
                     }
                     Err(e) => ToolExecutionOutput::failure_with_kind(
@@ -183,6 +184,7 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 replayed: false,
                 error_kind: None,
                 retryable: false,
+                command_status: None,
             },
             Err(error) => ToolExecutionOutput::failure_with_kind(
                 as_error_message(&error),

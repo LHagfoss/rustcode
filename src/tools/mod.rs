@@ -148,6 +148,7 @@ pub(crate) struct ToolExecutionOutput {
     pub(crate) replayed: bool,
     pub(crate) error_kind: Option<ToolErrorKind>,
     pub(crate) retryable: bool,
+    pub(crate) command_status: Option<rustcode_core::CommandResultMetadata>,
 }
 
 impl ToolExecutionOutput {
@@ -163,6 +164,7 @@ impl ToolExecutionOutput {
             replayed: false,
             error_kind: None,
             retryable: false,
+            command_status: None,
         }
     }
 
@@ -178,6 +180,7 @@ impl ToolExecutionOutput {
             replayed: false,
             error_kind: Some(ToolErrorKind::Internal),
             retryable: false,
+            command_status: None,
         }
     }
 

@@ -146,14 +146,16 @@ fn command_output_to_tool_output(
     command: &str,
     output: rustcode_command::CommandOutput,
 ) -> super::ToolExecutionOutput {
+    let command_status = command_result_metadata(&output);
     let out_str = rustcode_command::format_bounded_output(&output.stdout);
     let err_str = rustcode_command::format_bounded_output(&output.stderr);
-    let mut full = out_str;
+    let mut full = format!(
+        "{}\n{}",
+        format_command_status(output.success, &command_status),
+        out_str
+    );
     if !err_str.is_empty() {
-        if !full.is_empty() {
-            full.push('\n');
-        }
-        full.push_str("stderr:\n");
+        full.push_str("\nstderr:\n");
         full.push_str(&err_str);
     }
     if !output.success {
@@ -174,7 +176,53 @@ fn command_output_to_tool_output(
         replayed: false,
         error_kind: (!output.success).then_some(super::ToolErrorKind::CommandFailed),
         retryable: false,
+        command_status: Some(command_status),
     }
+}
+
+fn command_result_metadata(
+    output: &rustcode_command::CommandOutput,
+) -> rustcode_core::CommandResultMetadata {
+    let output_truncated = output.stdout.is_truncated() || output.stderr.is_truncated();
+    rustcode_core::CommandResultMetadata {
+        completed: true,
+        exit_code: output.exit_code,
+        signal: output.signal,
+        downstream_consumer_terminated: output.downstream_consumer_terminated,
+        bytes_returned: output
+            .stdout
+            .captured_len()
+            .saturating_add(output.stderr.captured_len()) as u64,
+        total_output_bytes: Some(
+            output
+                .stdout
+                .total_bytes()
+                .saturating_add(output.stderr.total_bytes()) as u64,
+        ),
+        output_truncated,
+    }
+}
+
+fn format_command_status(
+    success: bool,
+    status: &rustcode_core::CommandResultMetadata,
+) -> String {
+    let signal = status.signal.map_or_else(
+        || "none".to_string(),
+        |signal| match signal {
+            13 => "13 (SIGPIPE)".to_string(),
+            signal => signal.to_string(),
+        },
+    );
+    format!(
+        "[command status: completed={}; success={success}; exit_code={:?}; signal={signal}; downstream_consumer_terminated={}; bytes_returned={}; total_output_bytes={:?}; output_truncated_by_rustcode={}]",
+        status.completed,
+        status.exit_code,
+        status.downstream_consumer_terminated,
+        status.bytes_returned,
+        status.total_output_bytes,
+        status.output_truncated,
+    )
 }
 
 fn run_command_schema() -> Value {
@@ -515,6 +563,10 @@ fn run_command_output_inner(
                 replayed: false,
                 error_kind: None,
                 retryable: false,
+                command_status: Some(rustcode_core::CommandResultMetadata {
+                    completed: false,
+                    ..Default::default()
+                }),
             });
         }
 
@@ -531,6 +583,10 @@ fn run_command_output_inner(
             replayed: false,
             error_kind: None,
             retryable: false,
+            command_status: Some(rustcode_core::CommandResultMetadata {
+                completed: false,
+                ..Default::default()
+            }),
         });
     }
 
@@ -541,8 +597,12 @@ fn run_command_output_inner(
         rustcode_command::run_with_timeout_cancellable(&command_request, progress, cancellation)?;
     let exit_code = output.exit_code.unwrap_or(-1);
 
+    let command_status = command_result_metadata(&output);
     let mut result = String::new();
-    result.push_str(&format!("exit code: {exit_code}\n"));
+    result.push_str(&format!(
+        "{}\nexit code: {exit_code}\n",
+        format_command_status(output.success, &command_status)
+    ));
 
     let failed = !output.success;
     let truncated = output.stdout.is_truncated() || output.stderr.is_truncated();
@@ -581,6 +641,7 @@ fn run_command_output_inner(
         replayed: false,
         error_kind: failed.then_some(super::ToolErrorKind::CommandFailed),
         retryable: false,
+        command_status: Some(command_status),
     })
 }
 
@@ -1046,6 +1107,40 @@ mod tests {
             .expect("true should return a structured command result");
         assert!(passed.success);
         assert_eq!(passed.error_kind, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_result_envelope_marks_sigpipe_as_downstream_completion() {
+        let output = run_command_output(&serde_json::json!({
+            "command": "yes | head -n 1"
+        }))
+        .expect("pipeline should return a structured command result");
+
+        assert!(output.success);
+        let status = output.command_status.expect("command status metadata");
+        assert!(status.completed);
+        assert_eq!(status.exit_code, Some(141));
+        assert_eq!(status.signal, Some(libc::SIGPIPE));
+        assert!(status.downstream_consumer_terminated);
+        assert!(output.content.contains("SIGPIPE"));
+        assert!(output.content.contains("output_truncated_by_rustcode=false"));
+    }
+
+    #[test]
+    fn command_result_envelope_marks_a_successful_completion() {
+        let output = run_command_output(&serde_json::json!({
+            "command": "printf complete"
+        }))
+        .expect("command should return a structured result");
+
+        let status = output.command_status.expect("command status metadata");
+        assert!(output.success);
+        assert!(status.completed);
+        assert_eq!(status.exit_code, Some(0));
+        assert_eq!(status.bytes_returned, 8);
+        assert_eq!(status.total_output_bytes, Some(8));
+        assert!(!status.output_truncated);
     }
 
     #[test]

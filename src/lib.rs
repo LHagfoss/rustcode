@@ -92,6 +92,7 @@ pub(crate) fn background_task_history_message_with_call_id(
                 replayed: output.replayed,
                 error_kind: output.error_kind,
                 retryable: output.retryable,
+                command_status: output.command_status,
                 ..Default::default()
             },
         },
@@ -555,6 +556,7 @@ mod draw_loop_tests {
                 replayed: false,
                 error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
                 retryable: false,
+                command_status: None,
             },
         );
 
@@ -598,6 +600,7 @@ mod draw_loop_tests {
                 replayed: false,
                 error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
                 retryable: false,
+                command_status: None,
             },
         );
 

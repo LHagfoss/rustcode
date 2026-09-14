@@ -29,6 +29,7 @@ fn background_task_history_message(
                 replayed: output.replayed,
                 error_kind: output.error_kind,
                 retryable: output.retryable,
+                command_status: output.command_status,
                 ..Default::default()
             },
         },
@@ -439,6 +440,7 @@ mod tests {
                 replayed: false,
                 error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
                 retryable: false,
+                command_status: None,
             },
         );
 
@@ -465,6 +467,8 @@ mod tests {
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
+                signal: None,
+                downstream_consumer_terminated: false,
                 stdout: Default::default(),
                 stderr: Default::default(),
             }),
@@ -495,6 +499,8 @@ mod tests {
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
+                signal: None,
+                downstream_consumer_terminated: false,
                 stdout: Default::default(),
                 stderr: Default::default(),
             }),

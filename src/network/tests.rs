@@ -568,6 +568,13 @@ fn execution_envelope_keeps_typed_state_separate_from_display_text() {
             exit_code: Some(0),
             changed_paths: vec!["src/main.rs".to_string()],
             replayed: true,
+            command_status: Some(rustcode_core::CommandResultMetadata {
+                completed: true,
+                exit_code: Some(0),
+                bytes_returned: 12,
+                total_output_bytes: Some(12),
+                ..Default::default()
+            }),
             ..Default::default()
         },
     };
@@ -578,6 +585,10 @@ fn execution_envelope_keeps_typed_state_separate_from_display_text() {
     assert!(envelope.replayed);
     assert_eq!(envelope.changed_paths, ["src/main.rs"]);
     assert_eq!(envelope.error_kind, None);
+    assert_eq!(
+        envelope.command_status.as_ref().map(|status| status.bytes_returned),
+        Some(12)
+    );
 }
 
 #[test]
@@ -1689,6 +1700,7 @@ fn execution_metadata_does_not_parse_spoofed_display_text() {
             replayed: false,
             error_kind: None,
             retryable: false,
+            command_status: None,
         },
         None,
     );
@@ -1735,6 +1747,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             replayed: false,
             error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
             retryable: false,
+            command_status: None,
         },
         Some("real diff".to_string()),
         None,
@@ -1770,6 +1783,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             replayed: false,
             error_kind: Some(crate::tools::ToolErrorKind::Internal),
             retryable: false,
+            command_status: None,
         },
         None,
         None,
@@ -5478,6 +5492,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         replayed: false,
         retryable: false,
         inspection: None,
+        command_status: None,
     });
     history.push(failed_tool);
 

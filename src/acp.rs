@@ -142,6 +142,7 @@ impl SessionTaskSink {
                             "exitCode": output.exit_code,
                             "changedPaths": [],
                             "truncated": output.truncated,
+                            "commandStatus": output.command_status,
                         })),
                 ),
             );
@@ -508,6 +509,8 @@ mod tests {
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
+                signal: None,
+                downstream_consumer_terminated: false,
                 stdout: Default::default(),
                 stderr: Default::default(),
             }),
@@ -895,6 +898,7 @@ mod tests {
                     error_kind: None,
                     retryable: false,
                     inspection: None,
+                    command_status: None,
                 },
             },
         });
@@ -1007,6 +1011,7 @@ mod tests {
                     error_kind: None,
                     retryable: false,
                     inspection: None,
+                    command_status: None,
                 },
             },
         });

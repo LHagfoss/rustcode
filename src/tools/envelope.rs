@@ -1,6 +1,8 @@
 /// Typed tool call/result envelope — preserves call IDs end-to-end.
 /// ApiNative calls never go through fenced Markdown internally.
-use rustcode_core::{InspectionResultMetadata, ToolErrorKind, ToolResultCompleteness};
+use rustcode_core::{
+    CommandResultMetadata, InspectionResultMetadata, ToolErrorKind, ToolResultCompleteness,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCallEnvelope {
@@ -28,6 +30,7 @@ pub struct ToolResultEnvelope {
     pub full_output_artifact: Option<String>,
     pub replayed: bool,
     pub inspection: Option<InspectionResultMetadata>,
+    pub command_status: Option<CommandResultMetadata>,
 }
 
 #[allow(dead_code)]

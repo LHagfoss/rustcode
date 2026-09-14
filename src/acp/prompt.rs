@@ -417,6 +417,8 @@ mod tests {
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
+                signal: None,
+                downstream_consumer_terminated: false,
                 stdout: Default::default(),
                 stderr: Default::default(),
             }),
@@ -460,6 +462,8 @@ mod tests {
                 output: Ok(rustcode_command::CommandOutput {
                     success: true,
                     exit_code: Some(0),
+                    signal: None,
+                    downstream_consumer_terminated: false,
                     stdout: Default::default(),
                     stderr: Default::default(),
                 }),

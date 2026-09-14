@@ -156,6 +156,7 @@ pub(crate) fn view_file_output(args: &Value) -> Result<super::ToolExecutionOutpu
         replayed: false,
         error_kind: None,
         retryable: false,
+        command_status: None,
     })
 }
 
