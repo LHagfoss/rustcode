@@ -582,20 +582,13 @@ pub fn animation_trail(frame: u64, width: usize) -> Vec<AnimationCell> {
 
 pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64) -> String {
     let session = sanitize_session_name(session_name, 32);
-    let prefix = match kind {
-        ActivityKind::Ready => "rustcode · Idle".to_string(),
-        ActivityKind::Queued => "[>] Queued".to_string(),
-        ActivityKind::Working => format!(
-            "{} Working",
+    match kind {
+        ActivityKind::Working | ActivityKind::RunningTool => format!(
+            "{} · {session}",
             TERMINAL_SPINNER[frame as usize % TERMINAL_SPINNER.len()]
         ),
-        ActivityKind::RunningTool => format!(
-            "{} Running",
-            TERMINAL_SPINNER[frame as usize % TERMINAL_SPINNER.len()]
-        ),
-        ActivityKind::ActionRequired => "[!] Action Required".to_string(),
-    };
-    format!("{prefix} · {session}")
+        ActivityKind::Ready | ActivityKind::Queued | ActivityKind::ActionRequired => session,
+    }
 }
 
 #[cfg(test)]
@@ -679,9 +672,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_title_contains_state_and_short_name() {
+    fn terminal_title_contains_spinner_and_short_name_while_working() {
         let title = format_terminal_title(ActivityKind::Working, "tower defense", 2);
-        assert_eq!(title, "⠹ Working · tower defense");
+        assert_eq!(title, "⠹ · tower defense");
     }
 
     #[test]
@@ -689,10 +682,10 @@ mod tests {
         let expected = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         for (frame, spinner) in expected.into_iter().enumerate() {
             let title = format_terminal_title(ActivityKind::Working, "bench", frame as u64);
-            assert!(title.starts_with(&format!("{spinner} Working")));
+            assert_eq!(title, format!("{spinner} · bench"));
             assert_eq!(
                 format_terminal_title(ActivityKind::RunningTool, "bench", frame as u64),
-                format!("{spinner} Running · bench")
+                format!("{spinner} · bench")
             );
         }
         assert_eq!(
@@ -709,7 +702,7 @@ mod tests {
         ] {
             assert_eq!(
                 format_terminal_title(ActivityKind::Ready, raw, 0),
-                "rustcode · Idle · Build chess MCP"
+                "Build chess MCP"
             );
         }
         assert_eq!(
@@ -763,18 +756,18 @@ mod tests {
     }
 
     #[test]
-    fn title_states_are_compact_and_distinct() {
+    fn inactive_title_states_show_only_the_session_name() {
         assert_eq!(
             format_terminal_title(ActivityKind::Queued, "bench", 0),
-            "[>] Queued · bench"
+            "bench"
         );
         assert_eq!(
             format_terminal_title(ActivityKind::ActionRequired, "bench", 0),
-            "[!] Action Required · bench"
+            "bench"
         );
         assert_eq!(
             format_terminal_title(ActivityKind::Ready, "bench", 0),
-            "rustcode · Idle · bench"
+            "bench"
         );
     }
 
