@@ -16,6 +16,22 @@ fn search_variants_share_category() {
 }
 
 #[test]
+fn use_skill_is_read_only_and_normalized_by_skill_name() {
+    let (first_exact, first_category) =
+        signatures("use_skill", &json!({"name": "openai-docs", "extra": true}));
+    let (second_exact, second_category) = signatures("use_skill", &json!({"name": "openai-docs"}));
+
+    assert!(is_read_only("use_skill"));
+    assert!(is_read_only_call(
+        "use_skill",
+        &json!({"name": "openai-docs"})
+    ));
+    assert_ne!(first_exact, second_exact);
+    assert_eq!(first_category, "skill:openai-docs");
+    assert_eq!(first_category, second_category);
+}
+
+#[test]
 fn verification_flag_variants_share_category() {
     let (_, all_tests) = signatures("run_command", &json!({"command": "cargo test"}));
     let (_, library_tests) = signatures("run_command", &json!({"command": "cargo test --lib"}));
