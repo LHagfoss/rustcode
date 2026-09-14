@@ -908,6 +908,41 @@ fn test_parse_truncated_tool_call() {
 }
 
 #[test]
+fn suspicious_textual_mutation_never_reaches_dispatch() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("rustcode_reasoning_payload_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let target = temp_dir.join("index.html");
+    let text = format!(
+        "[TOOL_CALLS]write_to_file[ARGS]{{\"path\":{:?},\"content\":\"partial body<think>\\nThe user wants me to continue the file.\\n</think>",
+        target.to_string_lossy()
+    );
+
+    let calls = parse_tool_calls(&text, crate::config::ToolProtocol::Native);
+    assert!(calls.is_empty(), "contaminated call must not be dispatched");
+    let diagnostic = diagnose_failed_tool_call(&text).expect("recovery needs a diagnostic");
+    assert!(diagnostic.contains(target.to_string_lossy().as_ref()));
+    assert!(diagnostic.contains("smaller, complete, targeted"));
+    assert!(!target.exists(), "rejected mutation must not create a file");
+
+    let literal_args = serde_json::json!({
+        "path": target,
+        "content": "literal <think> marker in a requested document"
+    });
+    let result = execute_with_metadata("write_to_file", &literal_args);
+    assert!(
+        result.success,
+        "literal content should remain writable: {result:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&literal_args["path"].as_str().unwrap()).unwrap(),
+        "literal <think> marker in a requested document"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_parse_tool_call_with_nested_code_fences_in_arguments() {
     let text = "```tool\n{\"name\": \"replace_file_content\", \"arguments\": {\"path\": \"SKILL.md\", \"target_content\": \"```sh\\nT=$(cut -d'\\\"' -f2 .env)\\n```\\n\", \"replacement_content\": \"## Auth\\n```sh\\nT=\\\"$TOKEN\\\"\\n```\"}}\n```\nFollow-up prose.";
     let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
