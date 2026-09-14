@@ -203,10 +203,7 @@ fn command_result_metadata(
     }
 }
 
-fn format_command_status(
-    success: bool,
-    status: &rustcode_core::CommandResultMetadata,
-) -> String {
+fn format_command_status(success: bool, status: &rustcode_core::CommandResultMetadata) -> String {
     let signal = status.signal.map_or_else(
         || "none".to_string(),
         |signal| match signal {
@@ -1124,7 +1121,11 @@ mod tests {
         assert_eq!(status.signal, Some(libc::SIGPIPE));
         assert!(status.downstream_consumer_terminated);
         assert!(output.content.contains("SIGPIPE"));
-        assert!(output.content.contains("output_truncated_by_rustcode=false"));
+        assert!(
+            output
+                .content
+                .contains("output_truncated_by_rustcode=false")
+        );
     }
 
     #[test]

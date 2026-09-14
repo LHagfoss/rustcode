@@ -586,7 +586,10 @@ fn execution_envelope_keeps_typed_state_separate_from_display_text() {
     assert_eq!(envelope.changed_paths, ["src/main.rs"]);
     assert_eq!(envelope.error_kind, None);
     assert_eq!(
-        envelope.command_status.as_ref().map(|status| status.bytes_returned),
+        envelope
+            .command_status
+            .as_ref()
+            .map(|status| status.bytes_returned),
         Some(12)
     );
 }
