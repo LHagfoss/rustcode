@@ -1,3 +1,10 @@
+## [v0.52.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.2) - 2026-09-14
+
+### Fixes
+- Expose the active tool protocol and capabilities to the model.
+- Support chunked, resumable large-file edits.
+- Recover from stalled streams and no-progress turns.
+- Make tool-result status explicit, including truncation and write completion.
 ## [v0.52.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.1) - 2026-09-14
 
 ### Fixes
