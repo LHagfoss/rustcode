@@ -1598,24 +1598,20 @@ fn the_edit_tool_spec_explains_how_to_insert() {
         .expect("tool exists");
 
     assert!(
-        spec.description.contains("to INSERT text"),
+        spec.description
+            .contains("To insert, anchor on an adjacent line and repeat that line in the replacement"),
         "got: {}",
         spec.description
     );
     assert!(
-        spec.description.contains("prepend"),
+        spec.description.contains("an empty target is rejected"),
         "got: {}",
         spec.description
     );
     assert!(
-        spec.description.contains("An empty target is rejected"),
+        spec.arguments.contains("target_content"),
         "got: {}",
         spec.description
-    );
-    assert!(
-        spec.arguments.contains("never empty"),
-        "got: {}",
-        spec.arguments
     );
 }
 

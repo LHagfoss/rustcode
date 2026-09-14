@@ -605,11 +605,11 @@ impl ModelProfile {
             .and_then(|value| value.split(']').next())
             .or_else(|| authority.rsplit_once(':').map(|(host, _)| host))
             .unwrap_or(authority);
+        let loopback = matches!(host, "localhost" | "::1" | "0.0.0.0") || host.starts_with("127.");
         url_lower.contains("ollama")
             || url_lower.contains(":11434")
             || url_lower.contains(":1234")
-            || matches!(host, "localhost" | "::1" | "0.0.0.0")
-            || host.starts_with("127.")
+            || (self.engine.is_none() && loopback)
     }
 
     pub fn endpoint_url(&self) -> String {
