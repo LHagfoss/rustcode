@@ -474,9 +474,9 @@ impl ModelProfile {
         let provider_overhead_margin = self
             .provider_overhead_margin
             .unwrap_or_else(|| {
-                let proportional =
-                    (u64::from(context_window) * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT))
-                        / 100;
+                let proportional = (u64::from(context_window)
+                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT))
+                    / 100;
                 (proportional as u32).min(MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
             })
             .min(context_window.saturating_sub(1));

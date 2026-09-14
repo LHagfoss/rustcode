@@ -155,10 +155,7 @@ fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
     let default_policy = profile.tool_scheduling_policy();
     assert!(!default_policy.allow_batching);
     assert_eq!(default_policy.max_read_only_calls, 1);
-    assert_eq!(
-        default_policy.max_mutating_calls,
-        1
-    );
+    assert_eq!(default_policy.max_mutating_calls, 1);
     assert_eq!(
         default_policy.max_continuations,
         DEFAULT_MAX_TOOL_CONTINUATIONS
