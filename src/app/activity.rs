@@ -91,6 +91,7 @@ pub fn is_editing_tool(tool_name: &str) -> bool {
             | "multi_replace_file_content"
             | "multireplacefilecontent"
             | "write_to_file"
+            | "write_file_chunk"
             | "writetofile"
             | "write_file"
             | "writefile"
@@ -323,7 +324,7 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
             ),
         ),
         "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file"
-        | "createfile" => (
+        | "createfile" | "write_file_chunk" => (
             "Write",
             value(
                 &[

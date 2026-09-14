@@ -1297,6 +1297,63 @@ fn write_to_file_defaults_to_overwrite_true() {
 }
 
 #[test]
+fn write_file_chunk_resumes_without_duplication_and_returns_metadata() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.txt");
+    let path = file.to_string_lossy().to_string();
+
+    let first = write_file_chunk_tool(&serde_json::json!({
+        "path": path,
+        "content": "hello ",
+        "offset": 0,
+        "truncate": true,
+    }))
+    .expect("first chunk should succeed");
+    assert!(first.contains("offset=0"), "got: {first}");
+    assert!(first.contains("next_offset=6"), "got: {first}");
+    assert!(first.contains("bytes=6"), "got: {first}");
+    assert!(first.contains("size=6"), "got: {first}");
+    assert!(first.contains("sha256="), "got: {first}");
+
+    let second_args = serde_json::json!({
+        "path": path,
+        "content": "world",
+        "offset": 6,
+    });
+    write_file_chunk_tool(&second_args).expect("second chunk should succeed");
+    let retry = write_file_chunk_tool(&second_args).expect("retry should be idempotent");
+
+    assert!(retry.contains("bytes=0"), "got: {retry}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read completed file"),
+        "hello world"
+    );
+}
+
+#[test]
+fn write_file_chunk_rejects_oversized_and_noncontiguous_chunks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.txt");
+    let path = file.to_string_lossy().to_string();
+
+    let oversized = "x".repeat(MAX_FILE_CHUNK_BYTES + 1);
+    let error = write_file_chunk_tool(&serde_json::json!({
+        "path": path,
+        "content": oversized,
+    }))
+    .expect_err("oversized chunk must be rejected");
+    assert!(error.contains("capped"), "got: {error}");
+
+    let error = write_file_chunk_tool(&serde_json::json!({
+        "path": path,
+        "content": "gap",
+        "offset": 3,
+    }))
+    .expect_err("chunk with a gap must be rejected");
+    assert!(error.contains("exceeds current file size"), "got: {error}");
+}
+
+#[test]
 fn replace_file_content_schema_has_root_old_and_new_string() {
     let schema = replace_file_content_schema();
     assert!(schema["properties"].get("old_string").is_some());

@@ -3064,6 +3064,7 @@ version = "0.52.1"
 dependencies = [
  "rustcode-core",
  "serde_json",
+ "sha2",
  "similar",
  "tempfile",
 ]
