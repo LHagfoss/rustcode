@@ -1,3 +1,9 @@
+## [v0.52.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.0) - 2026-09-14
+
+### Features
+- Added safe first-turn session title generation through a dedicated bounded tool.
+- Preserved resumable recovery for truncated textual and native provider tool streams.
+- Prevented incomplete or duplicate side-effecting tool calls after stream failures.
 ## [v0.51.47](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.47) - 2026-09-14
 
 ### Fixes
