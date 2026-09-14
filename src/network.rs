@@ -19,7 +19,8 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 pub(crate) mod messages;
 pub(crate) use messages::{
     PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail,
-    inject_bootstrap_action_nudge, inject_system_reminder, trim_msgs_to_budget,
+    inject_bootstrap_action_nudge, inject_system_reminder, replace_request_context_tail,
+    trim_msgs_to_budget, truncate_context_tail_to_tokens,
 };
 
 #[path = "network/text.rs"]
@@ -875,7 +876,6 @@ fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
     budget
         .soft_context_target
         .saturating_sub(budget.tool_reserve)
-        .saturating_sub(budget.provider_overhead_margin)
         .saturating_sub(SYSTEM_PROMPT_HEADROOM)
         .max(1)
         .min(budget.history_tokens)
@@ -950,13 +950,18 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             provider_usage,
         ) = {
             let s = state.lock().await;
-            let local_model = s
-                .active_model_profile()
-                .is_some_and(|profile| profile.is_local())
+            let local_model = s.active_model_profile().map_or_else(
                 || {
-                    let lower = s.api_base_url.to_ascii_lowercase();
-                    lower.contains("11434") || lower.contains("ollama")
-                };
+                    crate::config::ModelProfile {
+                        name: s.model_name.clone(),
+                        url: s.api_base_url.clone(),
+                        model: s.model_name.clone(),
+                        ..Default::default()
+                    }
+                    .is_local()
+                },
+                |profile| profile.is_local(),
+            );
             let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),
@@ -1291,7 +1296,17 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             messages
         });
 
-    let (native_tool_schemas, context_budget) = {
+    // These are request-local instructions and must be included before the
+    // final projection is measured. The context tail is a separate synthetic
+    // message, so the helpers deliberately target the last non-context entry.
+    inject_system_reminder(&mut msgs);
+    let bootstrap_phase = native_schema_policy.is_some_and(|_| {
+        crate::tools::tool_schema_phase(&msgs, workspace_root.as_deref())
+            == crate::tools::ToolSchemaPhase::Bootstrap
+    });
+    inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
+
+    let (mut native_tool_schemas, context_budget) = {
         let mut s = state.lock().await;
         let native_tool_schemas = native_schema_policy
             .map(|policy| {
@@ -1303,51 +1318,95 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .unwrap_or_default();
         (native_tool_schemas, s.active_context_budget())
     };
-    let instruction_budget_text = developer_instructions
-        .as_deref()
-        .map(|developer| format!("{system_prompt}\n\n{developer}"))
-        .unwrap_or_else(|| system_prompt.clone());
-    let preflight = compaction::calculate_preflight_budget(
-        &instruction_budget_text,
+    let prompt_budget = (context_budget.hard_effective_limit as usize)
+        .saturating_sub(context_budget.completion_reserve as usize);
+    let initial_preflight = compaction::calculate_preflight_budget_for_projection(
+        &msgs,
         &native_tool_schemas,
-        &history_snapshot,
-        &dynamic_context,
         0,
         &context_budget,
     );
+    // Native schemas are not messages, so leave their exact measured cost out
+    // of the message trim allowance. Provider overhead is already represented
+    // by hard_effective_limit and is not subtracted a second time here.
+    let mut message_budget = prompt_budget
+        .saturating_sub(initial_preflight.tool_schema_tokens)
+        .saturating_sub(initial_preflight.continuation_overhead_tokens);
+    let mut dropped = trim_msgs_to_budget(&mut msgs, message_budget.min(u32::MAX as usize) as u32);
+
+    // History projection can affect relevance-based native schema selection.
+    // Rebuild once after the first trim so the schema cost and selected set
+    // describe the same request that will be sent, rather than the raw
+    // pre-trim projection.
+    if let Some(policy) = native_schema_policy {
+        let mut s = state.lock().await;
+        let session_id = s.active_session_id.clone();
+        native_tool_schemas = s
+            .prompt_cache
+            .native_tool_schemas(policy, &msgs, &session_id, workspace_root.as_deref())
+            .0;
+        let schema_preflight = compaction::calculate_preflight_budget_for_projection(
+            &msgs,
+            &native_tool_schemas,
+            0,
+            &context_budget,
+        );
+        message_budget = prompt_budget
+            .saturating_sub(schema_preflight.tool_schema_tokens)
+            .saturating_sub(schema_preflight.continuation_overhead_tokens);
+        dropped += trim_msgs_to_budget(&mut msgs, message_budget.min(u32::MAX as usize) as u32);
+    }
+
+    let mut preflight = compaction::calculate_preflight_budget_for_projection(
+        &msgs,
+        &native_tool_schemas,
+        0,
+        &context_budget,
+    );
+    let mut dynamic_context_omitted = false;
+    if preflight.total_estimated_prompt > prompt_budget {
+        let fixed_prompt = preflight
+            .total_estimated_prompt
+            .saturating_sub(preflight.dynamic_tail_tokens);
+        let dynamic_budget = prompt_budget.saturating_sub(fixed_prompt);
+        let (reduced_context, omitted) =
+            truncate_context_tail_to_tokens(&dynamic_context, dynamic_budget);
+        if omitted {
+            dynamic_context = reduced_context;
+            dynamic_context_omitted = replace_request_context_tail(&mut msgs, &dynamic_context);
+            preflight = compaction::calculate_preflight_budget_for_projection(
+                &msgs,
+                &native_tool_schemas,
+                0,
+                &context_budget,
+            );
+            crate::logger::operational_event(
+                "context.dynamic_tail_trim",
+                serde_json::json!({
+                    "reason": "final_projection_exceeded_prompt_budget",
+                    "dynamic_tail_tokens_before": initial_preflight.dynamic_tail_tokens,
+                    "dynamic_tail_tokens_after": preflight.dynamic_tail_tokens,
+                    "dynamic_tail_budget": dynamic_budget,
+                    "omission_marker": true,
+                }),
+            );
+        }
+    }
     crate::logger::operational_event(
         "context.preflight_budget",
         serde_json::to_value(&preflight).unwrap_or_default(),
     );
-
-    // `budget_token_limit` already reserves completion, thinking, tool-schema,
-    // and provider safety headroom from the active model profile. Keep this
-    // final trim on the effective history budget.
-    inject_system_reminder(&mut msgs);
-    let bootstrap_phase = native_schema_policy.is_some_and(|_| {
-        crate::tools::tool_schema_phase(&msgs, workspace_root.as_deref())
-            == crate::tools::ToolSchemaPhase::Bootstrap
-    });
-    inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
-    let schema_over_reserve = preflight
-        .tool_schema_tokens
-        .saturating_sub(context_budget.tool_reserve as usize);
-    let schema_adjusted_history_budget = budget_token_limit
-        .min(context_budget.history_tokens)
-        .saturating_sub(schema_over_reserve as u32);
-    let budget = schema_adjusted_history_budget;
-    let dropped = trim_msgs_to_budget(&mut msgs, budget);
     if dropped > 0 {
         dbg_log!(
             "context budget {} tokens exceeded: dropped {} oldest message(s)",
-            budget,
+            message_budget,
             dropped
         );
         crate::logger::operational_event(
             "context.hard_trim",
             serde_json::json!({
-                "reason": "model_aware_history_budget_after_deterministic_pruning",
-                "budget": budget,
+                "reason": "final_projection_budget_after_deterministic_pruning",
+                "budget": message_budget,
                 "dropped_messages": dropped,
                 "preflight": preflight,
             }),
@@ -1397,6 +1456,19 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             "runtime_tail_bytes": dynamic_context.len(),
             "runtime_tail_count": runtime_tail_count,
             "estimated_prompt_tokens": preflight.total_estimated_prompt,
+            "prompt_with_provider_overhead": preflight.prompt_with_provider_overhead,
+            "projected_message_tokens": preflight.projected_message_tokens,
+            "system_tokens": preflight.system_tokens,
+            "projected_history_tokens": preflight.history_tokens,
+            "dynamic_tail_tokens": preflight.dynamic_tail_tokens,
+            "tool_schema_tokens": preflight.tool_schema_tokens,
+            "metadata_tokens": preflight.metadata_tokens,
+            "completion_reserve": preflight.completion_reserve,
+            "hard_effective_limit": preflight.hard_effective_limit,
+            "context_window": preflight.context_window,
+            "fits_hard_limit": preflight.fits_hard_limit(),
+            "fits_soft_target": preflight.fits_soft_target(),
+            "dynamic_context_omitted": dynamic_context_omitted,
             "cache_decision": cache_decision.label(),
             "cache_reused": cache_decision == PrefixCacheDecision::Reused,
             "cache_context_updates": prefix_cache

@@ -159,6 +159,10 @@ pub struct ModelProfile {
     /// response. Omitted profiles retain the safe four-call default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
+    /// Explicitly identify an OpenAI-compatible endpoint as local. This is
+    /// needed for self-hosted gateways whose URL and engine name look remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
     /// Use a compact text-protocol tool menu for providers with small request
     /// bodies, omitting long descriptions and MCP tool listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,8 +252,10 @@ impl ModelProfile {
     /// the identity so a model name alone cannot inherit another profile's
     /// output or provider capability settings.
     pub fn matches_request(&self, url: &str, model: &str) -> bool {
+        let configured_url = self.url.trim_end_matches('/');
+        let request_url = url.trim_end_matches('/');
         (self.model == model || self.name == model)
-            && (self.url == url || self.endpoint_url() == url)
+            && (configured_url == request_url || self.endpoint_url() == request_url)
     }
 
     /// Resolve the per-profile mutation policy once at the orchestration
@@ -437,7 +443,10 @@ impl ModelProfile {
         let reserved = completion_reserve
             .saturating_add(tool_reserve)
             .saturating_add(safety_reserve);
-        let history_tokens = context_window.saturating_sub(reserved);
+        // `hard_effective_limit` already excludes provider framing overhead.
+        // Keep the early history/compaction trigger on that safe side of the
+        // boundary; final request trimming uses the exact projected payload.
+        let history_tokens = hard_effective_limit.saturating_sub(reserved);
         ContextBudget {
             context_window,
             soft_context_target,
@@ -489,6 +498,9 @@ impl ModelProfile {
     }
 
     pub fn is_local(&self) -> bool {
+        if let Some(local) = self.local {
+            return local;
+        }
         if let Some(ref engine) = self.engine {
             let eng = engine.to_ascii_lowercase();
             if matches!(
@@ -507,7 +519,26 @@ impl ModelProfile {
             }
         }
         let url_lower = self.url.to_ascii_lowercase();
-        url_lower.contains("ollama") || url_lower.contains(":11434") || url_lower.contains(":1234")
+        let authority = url_lower
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(url_lower.as_str())
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .rsplit('@')
+            .next()
+            .unwrap_or_default();
+        let host = authority
+            .strip_prefix('[')
+            .and_then(|value| value.split(']').next())
+            .or_else(|| authority.rsplit_once(':').map(|(host, _)| host))
+            .unwrap_or(authority);
+        url_lower.contains("ollama")
+            || url_lower.contains(":11434")
+            || url_lower.contains(":1234")
+            || matches!(host, "localhost" | "::1" | "0.0.0.0")
+            || host.starts_with("127.")
     }
 
     pub fn endpoint_url(&self) -> String {

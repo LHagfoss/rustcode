@@ -5,7 +5,9 @@ mod prune;
 mod tokens;
 
 #[allow(unused_imports)]
-pub use budget::{PreflightBudget, calculate_preflight_budget};
+pub use budget::{
+    PreflightBudget, calculate_preflight_budget, calculate_preflight_budget_for_projection,
+};
 pub(crate) use compact::valid_compaction_boundary;
 pub(crate) use compact::{SUMMARY_MARKER, durable_compaction_record_message};
 pub use compact::{

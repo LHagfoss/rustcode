@@ -290,6 +290,72 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
     )
 }
 
+const CONTEXT_OMISSION_MARKER: &str =
+    "[Some runtime context was omitted to stay within the active request budget. The current request and active tool transaction were preserved.]";
+
+/// Deterministically shrink the request-local context tail while keeping the
+/// beginning of the workspace context and the volatile runtime block visible.
+/// The explicit marker prevents a model from mistaking omitted context for an
+/// empty workspace or for a failed tool transaction.
+pub(crate) fn truncate_context_tail_to_tokens(text: &str, max_tokens: usize) -> (String, bool) {
+    let wrapped = wrap_runtime_context(text);
+    if crate::network::count_tokens(&wrapped) as usize <= max_tokens {
+        return (text.to_string(), false);
+    }
+
+    let runtime_start = text
+        .find("\n# Runtime Context (volatile")
+        .unwrap_or(text.len());
+    let stable = &text[..runtime_start];
+    let runtime = &text[runtime_start..];
+    let suffix = format!("{CONTEXT_OMISSION_MARKER}{runtime}");
+
+    let mut best = String::new();
+    let mut low = 0usize;
+    let mut high = stable.len();
+    while low <= high {
+        let midpoint = low.saturating_add(high.saturating_sub(low) / 2);
+        let prefix_len = stable.floor_char_boundary(midpoint);
+        let candidate = format!("{}{suffix}", &stable[..prefix_len]);
+        let candidate_tokens = crate::network::count_tokens(&wrap_runtime_context(&candidate));
+        if candidate_tokens as usize <= max_tokens {
+            best = candidate;
+            low = prefix_len.saturating_add(1);
+        } else if prefix_len == 0 {
+            break;
+        } else {
+            high = prefix_len.saturating_sub(1);
+        }
+    }
+
+    if best.is_empty() {
+        // The budget is smaller than the marker plus the volatile block. Keep
+        // the marker as the least ambiguous recoverable projection; normal
+        // model budgets are large enough to retain the runtime block too.
+        best = CONTEXT_OMISSION_MARKER.to_string();
+    }
+    (best, true)
+}
+
+/// Replace the synthetic context message in a final request projection. This
+/// intentionally leaves the persisted history and the current tool exchange
+/// untouched.
+pub(crate) fn replace_request_context_tail(
+    msgs: &mut [serde_json::Value],
+    text: &str,
+) -> bool {
+    let Some(message) = msgs.iter_mut().rev().find(|message| {
+        message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| content.starts_with("<rustcode_context>"))
+    }) else {
+        return false;
+    };
+    message["content"] = serde_json::Value::String(wrap_runtime_context(text));
+    true
+}
+
 #[cfg(test)]
 mod request_prefix_tests {
     use super::{PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail};
@@ -483,7 +549,12 @@ pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
     if msgs.len() >= 4 {
         let reminder_text = "REMINDER: Follow the configured tool protocol exactly. Use tools only when needed, inspect results before choosing the next action, and report relevant verification when finished.";
 
-        if let Some(last_msg) = msgs.last_mut()
+        if let Some(last_msg) = msgs.iter_mut().rev().find(|message| {
+            !message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        })
             && let Some(content) = last_msg.get_mut("content")
         {
             match content {
@@ -530,7 +601,13 @@ pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], boot
         return;
     }
     let nudge = "BOOTSTRAP ACTION: execute the smallest concrete setup step now (for example, create the project manifest or first source file). Keep reasoning concise and do not restate the architecture plan.";
-    if let Some(last_msg) = msgs.last_mut()
+    if let Some(last_msg) = msgs.iter_mut().rev().find(|message| {
+        message.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+            && !message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+    })
         && let Some(content) = last_msg.get_mut("content")
     {
         match content {
