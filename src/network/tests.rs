@@ -4965,7 +4965,7 @@ fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt()
         description: "Solidtime workflow".to_string(),
         path: std::path::PathBuf::from("/skills/solidtime"),
     }];
-    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills)
+    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills, &[])
         .expect("named skill route");
     let mut dynamic_context = "# Environment\nworkspace".to_string();
     prepend_skill_routing_hint(&mut dynamic_context, Some(&hint));
@@ -4982,6 +4982,40 @@ fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt()
         .expect("tail text");
     assert!(tail.contains("use_skill"));
     assert!(tail.find("Priority skill route") < tail.find("# Environment"));
+}
+
+#[tokio::test]
+async fn repeated_use_skill_returns_actionable_success_after_same_turn_load() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state
+            .history
+            .push(ChatMessage::new("user", "Use synthetic-skill"));
+        state.history.push(
+            ChatMessage::new(
+                "tool",
+                "use_skill: <skill_content name=\"synthetic-skill\">\ninstructions",
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "use_skill".to_string(),
+                success: true,
+                ..Default::default()
+            }),
+        );
+    }
+
+    let result = run_one_tool_with_state(
+        &state,
+        test_tool_call("use_skill", serde_json::json!({"name": "synthetic-skill"})),
+    )
+    .await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    assert!(!result.metadata.replayed);
+    assert!(result.metadata.inspection.is_none());
+    assert!(result.content.contains("already loaded and active"));
+    assert!(result.content.contains("do not call `use_skill` again"));
 }
 
 #[test]

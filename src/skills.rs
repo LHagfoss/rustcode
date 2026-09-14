@@ -84,14 +84,47 @@ fn prompt_mentions_skill(prompt: &str, skill_name: &str) -> bool {
     false
 }
 
-pub fn skill_routing_hint(prompt: &str, skills: &[SkillMetadata]) -> Option<String> {
-    let skill = skills
-        .iter()
-        .find(|skill| prompt_mentions_skill(prompt, &skill.name))?;
+pub fn skill_routing_hint(
+    prompt: &str,
+    skills: &[SkillMetadata],
+    loaded_skills: &[String],
+) -> Option<String> {
+    let skill = skills.iter().find(|skill| {
+        prompt_mentions_skill(prompt, &skill.name)
+            && !loaded_skills
+                .iter()
+                .any(|loaded| loaded.eq_ignore_ascii_case(&skill.name))
+    })?;
     Some(format!(
         "# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.",
         skill.name, skill.name
     ))
+}
+
+/// Return the names successfully loaded after the latest explicit user prompt.
+/// Keeping this boundary local avoids suppressing routing for a new request
+/// merely because an earlier request used the same skill.
+pub(crate) fn loaded_skills_since_latest_user(history: &[crate::app::ChatMessage]) -> Vec<String> {
+    let Some(latest_user) = history.iter().rposition(|message| message.role == "user") else {
+        return Vec::new();
+    };
+
+    history[latest_user + 1..]
+        .iter()
+        .filter_map(|message| {
+            let result = message.tool_result.as_ref()?;
+            if !result.tool_name.eq_ignore_ascii_case("use_skill")
+                || !result.success
+                || result.pending
+            {
+                return None;
+            }
+            let marker = "<skill_content name=\"";
+            let start = message.content.find(marker)? + marker.len();
+            let end = message.content[start..].find('\"')? + start;
+            Some(message.content[start..end].to_string())
+        })
+        .collect()
 }
 
 fn split_skill_dirs(value: &OsStr) -> Vec<PathBuf> {
@@ -376,7 +409,7 @@ mod tests {
             path: PathBuf::from("/skills/solidtime"),
         }];
 
-        let hint = skill_routing_hint("Please check Solidtime for this week.", &skills)
+        let hint = skill_routing_hint("Please check Solidtime for this week.", &skills, &[])
             .expect("explicitly named skill should route");
 
         assert!(hint.contains("use_skill"));
@@ -391,9 +424,11 @@ mod tests {
             path: PathBuf::from("/skills/solidtime"),
         }];
 
-        assert!(skill_routing_hint("Please inspect the time module.", &skills).is_none());
-        assert!(skill_routing_hint("Please inspect solidtimes.", &skills).is_none());
-        assert!(skill_routing_hint("Please inspect solidtime-like behavior.", &skills).is_none());
+        assert!(skill_routing_hint("Please inspect the time module.", &skills, &[]).is_none());
+        assert!(skill_routing_hint("Please inspect solidtimes.", &skills, &[]).is_none());
+        assert!(
+            skill_routing_hint("Please inspect solidtime-like behavior.", &skills, &[]).is_none()
+        );
     }
 
     #[test]
@@ -404,7 +439,7 @@ mod tests {
             path: PathBuf::from("/skills/release-automation"),
         }];
 
-        assert!(skill_routing_hint("Clean this up and release it.", &skills).is_none());
+        assert!(skill_routing_hint("Clean this up and release it.", &skills, &[]).is_none());
     }
 
     #[test]
@@ -416,10 +451,74 @@ mod tests {
         }];
 
         assert!(
-            skill_routing_hint("Build a Bun API that stores email addresses.", &skills).is_none()
+            skill_routing_hint("Build a Bun API that stores email addresses.", &skills, &[])
+                .is_none()
         );
         assert!(
-            skill_routing_hint("Use cloudflare-email-service for delivery.", &skills).is_some()
+            skill_routing_hint("Use cloudflare-email-service for delivery.", &skills, &[],)
+                .is_some()
         );
+    }
+
+    #[test]
+    fn successful_load_suppresses_same_turn_routing_hint() {
+        let skills = [SkillMetadata {
+            name: "solidtime".to_string(),
+            description: "Solidtime workflow".to_string(),
+            path: PathBuf::from("/skills/solidtime"),
+        }];
+
+        assert!(
+            skill_routing_hint(
+                "Please check Solidtime for this week.",
+                &skills,
+                &["solidtime".to_string()],
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn successful_load_only_suppresses_the_current_user_turn() {
+        let loaded = |name: &str| {
+            crate::app::ChatMessage::new(
+                "tool",
+                format!("use_skill: <skill_content name=\"{name}\">\ninstructions"),
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "use_skill".to_string(),
+                success: true,
+                ..Default::default()
+            })
+        };
+        let history = vec![
+            crate::app::ChatMessage::new("user", "old request"),
+            loaded("solidtime"),
+            crate::app::ChatMessage::new("user", "new request: use solidtime"),
+        ];
+        let skills = [SkillMetadata {
+            name: "solidtime".to_string(),
+            description: "Solidtime workflow".to_string(),
+            path: PathBuf::from("/skills/solidtime"),
+        }];
+
+        let loaded_skills = loaded_skills_since_latest_user(&history);
+        assert!(loaded_skills.is_empty());
+        assert!(skill_routing_hint("use solidtime", &skills, &loaded_skills).is_some());
+    }
+
+    #[test]
+    fn failed_load_does_not_suppress_routing_hint() {
+        let history = vec![
+            crate::app::ChatMessage::new("user", "use solidtime"),
+            crate::app::ChatMessage::new("tool", "use_skill: Skill not found").with_tool_result(
+                crate::app::ToolResultRecord {
+                    tool_name: "use_skill".to_string(),
+                    success: false,
+                    ..Default::default()
+                },
+            ),
+        ];
+        assert!(loaded_skills_since_latest_user(&history).is_empty());
     }
 }

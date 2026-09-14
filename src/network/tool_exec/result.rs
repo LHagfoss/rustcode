@@ -27,7 +27,7 @@ fn inspection_result_metadata(
     completeness: ToolResultCompleteness,
 ) -> Option<InspectionResultMetadata> {
     let fingerprint = if crate::network::loop_detect::inspection_target(tool_name, args).is_some()
-        || crate::network::loop_detect::is_read_only(tool_name)
+        || (crate::network::loop_detect::is_read_only(tool_name) && tool_name != "use_skill")
     {
         // Use the detector's category rather than the exact range identity so
         // native reads and equivalent shell reads share one stable fingerprint.
