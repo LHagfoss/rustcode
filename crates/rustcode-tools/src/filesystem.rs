@@ -1460,7 +1460,8 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
     if content.len() > MAX_FILE_CHUNK_BYTES {
         return Err(format!(
             "content is {} bytes; one write_file_chunk call is capped at {} bytes",
-            content.len(), MAX_FILE_CHUNK_BYTES
+            content.len(),
+            MAX_FILE_CHUNK_BYTES
         ));
     }
 
@@ -1489,7 +1490,9 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
         let expected_size = parse_json_number(value)
             .ok_or_else(|| "expected_size must be a non-negative integer".to_string())?;
         if expected_size != current_size {
-            return Err(format!("expected file size {expected_size}, found {current_size}"));
+            return Err(format!(
+                "expected file size {expected_size}, found {current_size}"
+            ));
         }
     }
     if let Some(value) = args.get("expected_sha256") {
