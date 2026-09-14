@@ -39,6 +39,7 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
 pub(crate) struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
+    pub(crate) include_session_title_tool: bool,
     pub(crate) profile: ToolSchemaProfile,
     pub(crate) compact_text_prompt: bool,
 }
@@ -66,6 +67,7 @@ impl ToolSchemaPolicy {
         Self {
             include_agent_tools,
             include_mcp_tools: true,
+            include_session_title_tool: false,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
         }
@@ -83,6 +85,7 @@ impl ToolSchemaPolicy {
         Self {
             include_agent_tools: false,
             include_mcp_tools: false,
+            include_session_title_tool: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
@@ -92,9 +95,15 @@ impl ToolSchemaPolicy {
         Self {
             include_agent_tools: false,
             include_mcp_tools: false,
+            include_session_title_tool: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
+    }
+
+    pub(crate) const fn with_session_title_tool(mut self) -> Self {
+        self.include_session_title_tool = true;
+        self
     }
 
     pub(crate) fn root_for_mode_with_compact_prompt(
@@ -582,6 +591,9 @@ fn build_builtin_native_tools_schema(
 ) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
+        if t.name == "set_session_title" && !policy.include_session_title_tool {
+            continue;
+        }
         if policy.profile == ToolSchemaProfile::ReadOnlyInspection
             && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
         {
@@ -1117,8 +1129,9 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     let builtin_available = TOOLS
         .iter()
         .filter(|tool| {
-            !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
-                && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
+            (policy.include_session_title_tool || tool.name != "set_session_title")
+                && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
+                    && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
                 && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
                     && !policy.include_agent_tools)
         })
@@ -1294,6 +1307,12 @@ If the request context names a skill, load it first. For a likely specialized wo
         }
     }
 
+    if policy.include_session_title_tool && agent_mode != crate::config::AgentMode::Plan {
+        p.push_str(
+            "First-turn session title: call `set_session_title` exactly once with a concise title derived from the user's request before doing other work. Do not copy the full prompt, transcript, or secrets into the title.\n\n",
+        );
+    }
+
     // Text protocols enumerate tools in the prompt. ApiNative carries the full
     // tool schema in the request's `tools` field instead, so listing them here
     // would only duplicate that and waste context.
@@ -1303,6 +1322,9 @@ If the request context names a skill, load it first. For a likely specialized wo
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
+        if t.name == "set_session_title" && !policy.include_session_title_tool {
+            continue;
+        }
         if policy.profile == ToolSchemaProfile::ReadOnlyInspection
             && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
         {

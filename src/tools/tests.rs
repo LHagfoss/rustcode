@@ -684,6 +684,73 @@ fn read_only_inspection_profile_is_small_and_deterministic() {
 }
 
 #[test]
+fn session_title_tool_is_first_turn_only_in_native_and_text_menus() {
+    let regular = ToolSchemaPolicy::root(false);
+    let first_turn = regular.with_session_title_tool();
+
+    let regular_native = native_tools_schema_for_context(regular, &[]).0;
+    let first_turn_native = native_tools_schema_for_context(first_turn, &[]).0;
+    let native_has_title = |schemas: &[serde_json::Value]| {
+        schemas
+            .iter()
+            .any(|tool| tool["function"]["name"] == "set_session_title")
+    };
+    assert!(!native_has_title(&regular_native));
+    assert!(native_has_title(&first_turn_native));
+
+    for protocol in [
+        crate::config::ToolProtocol::Json,
+        crate::config::ToolProtocol::Native,
+    ] {
+        let regular_prompt =
+            tool_system_prompt_for_policy(regular, protocol, crate::config::AgentMode::Build);
+        let first_turn_prompt =
+            tool_system_prompt_for_policy(first_turn, protocol, crate::config::AgentMode::Build);
+        assert!(!regular_prompt.contains("set_session_title"));
+        assert!(first_turn_prompt.contains("set_session_title"));
+        assert!(first_turn_prompt.contains("Do not copy the full prompt"));
+    }
+
+    let plan_prompt = tool_system_prompt_for_policy(
+        first_turn,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Plan,
+    );
+    assert!(!plan_prompt.contains("set_session_title"));
+}
+
+#[test]
+fn session_title_tool_schema_bounds_and_rejects_oversized_calls() {
+    let schema = super::misc::SET_SESSION_TITLE.schema;
+    let schema = schema();
+    assert_eq!(schema["properties"]["title"]["minLength"], 1);
+    assert_eq!(
+        schema["properties"]["title"]["maxLength"],
+        super::misc::MAX_SESSION_TITLE_CHARS
+    );
+    assert_eq!(schema["required"], serde_json::json!(["title"]));
+    assert_eq!(schema["additionalProperties"], false);
+
+    let call = ToolCall {
+        name: "set_session_title".to_string(),
+        arguments: serde_json::json!({
+            "title": "x".repeat(super::misc::MAX_SESSION_TITLE_CHARS + 1)
+        }),
+        call_id: None,
+    };
+    let error = validate_tool_calls(&[call], 4).expect_err("oversized title must be rejected");
+    assert!(error.contains("set_session_title"));
+    assert!(error.contains("at most"));
+
+    for invalid in ["   ", "line one\nline two"] {
+        let error =
+            (super::misc::SET_SESSION_TITLE.handler)(&serde_json::json!({"title": invalid}))
+                .expect_err("unsafe title must be rejected");
+        assert!(error.contains("title"));
+    }
+}
+
+#[test]
 fn inspection_schemas_use_strict_typed_arguments() {
     let schemas = native_tools_schema_for_context(ToolSchemaPolicy::read_only_inspection(), &[]).0;
     for tool in schemas {

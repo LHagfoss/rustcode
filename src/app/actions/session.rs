@@ -158,6 +158,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.subagent_supervisor =
         crate::app::SubagentSupervisor::new(s.config.subagent_concurrency_limit);
     s.pending_queue.clear();
+    s.session_title_tool_available = false;
     s.background_wakeup_ids.clear();
     s.background_turn_context = None;
     s.last_user_activity_at = std::time::Instant::now();
