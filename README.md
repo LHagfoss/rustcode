@@ -25,7 +25,7 @@ Now supports ollama or openai compatible APIs.
 Run the one-line installer in your terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 ```
 
 ### Windows (PowerShell)
@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh |
 Run the one-line installer in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.ps1 | iex
+irm https://rustcode.lhagfoss.com/install.ps1 | iex
 ```
 
 ### macOS via Homebrew
@@ -54,7 +54,7 @@ brew install rustcode
 For Arch x86_64, the verified prebuilt installer is the fastest option:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 ```
 
 If another `rustcode` installation already appears earlier in `PATH`, refresh
@@ -120,7 +120,7 @@ release, then `rustcode --update` will use the matching GitHub archive for
 future upgrades:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 ```
 
 The installer verifies the downloaded archive with the release SHA256 manifest
