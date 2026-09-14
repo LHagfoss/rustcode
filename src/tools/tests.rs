@@ -710,6 +710,13 @@ fn session_title_tool_is_first_turn_only_in_native_and_text_menus() {
         assert!(first_turn_prompt.contains("set_session_title"));
         assert!(first_turn_prompt.contains("Do not copy the full prompt"));
     }
+
+    let plan_prompt = tool_system_prompt_for_policy(
+        first_turn,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Plan,
+    );
+    assert!(!plan_prompt.contains("set_session_title"));
 }
 
 #[test]
