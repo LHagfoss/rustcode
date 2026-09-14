@@ -342,11 +342,15 @@ pub(crate) fn tool_result_from_execution(
     // bounding is recorded independently during finalization below.
     let completeness = execution.completeness;
     let changed_paths = if is_mutating_tool(tool_name) && execution.success {
-        args.get("path")
-            .or_else(|| args.get("output_path"))
-            .and_then(|value| value.as_str())
-            .map(|path| vec![path.to_string()])
-            .unwrap_or_default()
+        if !crate::network::mutation_made_progress(execution.success, &execution.content) {
+            Vec::new()
+        } else {
+            args.get("path")
+                .or_else(|| args.get("output_path"))
+                .and_then(|value| value.as_str())
+                .map(|path| vec![path.to_string()])
+                .unwrap_or_default()
+        }
     } else {
         Vec::new()
     };

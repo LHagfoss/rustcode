@@ -48,6 +48,10 @@ pub struct RecoveryState {
 pub struct ProgressState {
     pub ledger: loop_detect::ProgressLedger,
     pub file_evidence: loop_detect::FileEvidenceLedger,
+    /// Compact evidence for a successful file mutation that the model later
+    /// reports as malformed. This lets a failed repair recover against the
+    /// known artifact instead of opening another whole-file inspection loop.
+    pub grounded_artifact: Option<GroundedArtifactEvidence>,
     /// Complete read-only source results that can support a final review.
     /// Incomplete inspection results stay separately tracked so a truncated
     /// review can never be promoted to a successful headless completion.
@@ -60,6 +64,14 @@ pub struct ProgressState {
     pub last_reason: Option<loop_detect::ProgressReason>,
     pub changed_paths: BTreeSet<String>,
     pub phase_checkpoint: Option<String>,
+}
+
+pub struct GroundedArtifactEvidence {
+    pub path: String,
+    pub write_lines: Option<usize>,
+    pub write_bytes: Option<usize>,
+    pub read_range: Option<(usize, usize)>,
+    pub repair_attempts: usize,
 }
 
 pub struct VerificationState {
@@ -89,6 +101,7 @@ pub struct MetricsState {
     pub no_progress_results: usize,
     pub failure_replans: usize,
     pub evidence_recoveries: usize,
+    pub grounded_recoveries: usize,
     pub provider_errors: usize,
     pub provider_429s: usize,
 }
@@ -138,6 +151,7 @@ impl TurnContext {
             progress: ProgressState {
                 ledger: loop_detect::ProgressLedger::default(),
                 file_evidence: loop_detect::FileEvidenceLedger::default(),
+                grounded_artifact: None,
                 complete_inspection_results: 0,
                 incomplete_inspection_results: 0,
                 made_edits: false,
@@ -172,6 +186,7 @@ impl TurnContext {
                 no_progress_results: 0,
                 failure_replans: 0,
                 evidence_recoveries: 0,
+                grounded_recoveries: 0,
                 provider_errors: 0,
                 provider_429s: 0,
             },
@@ -220,6 +235,7 @@ impl TurnContext {
             "tokens_used": self.budget.tokens_used, "malformed_calls": self.metrics.malformed_calls,
             "no_progress_results": self.metrics.no_progress_results, "failure_replans": self.metrics.failure_replans,
             "evidence_recoveries": self.metrics.evidence_recoveries,
+            "grounded_recoveries": self.metrics.grounded_recoveries,
             "progress_no_information_streak": self.progress.ledger.no_progress_streak(),
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,

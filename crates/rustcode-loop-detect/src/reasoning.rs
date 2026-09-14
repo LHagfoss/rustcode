@@ -965,6 +965,7 @@ pub fn claims_corrupt_or_incomplete_inspection(text: &str) -> bool {
     [
         "corrupt",
         "corrupted",
+        "malformed",
         "damaged",
         "garbled",
         "mangled",
