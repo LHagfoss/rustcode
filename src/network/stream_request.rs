@@ -781,6 +781,17 @@ mod tests {
     }
 
     #[test]
+    fn native_argument_markers_distinguish_syntax_from_shape() {
+        let incomplete = parse_native_tool_arguments(r#"{"path":"src/main.rs""#);
+        assert_eq!(incomplete["_invalid_arguments"]["kind"], "incomplete_syntax");
+        assert_eq!(incomplete["_invalid_arguments"]["execution"], "rejected");
+        assert!(incomplete["_recovery"].as_str().is_some());
+
+        let scalar = parse_native_tool_arguments("[]");
+        assert_eq!(scalar["_invalid_arguments"]["kind"], "invalid_shape");
+    }
+
+    #[test]
     fn parse_speculative_text_tool_call_extracts_in_flight_fences() {
         let in_flight = "Let me search the codebase:\n```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"AppConfig\"";
         let (name, args) =
@@ -1604,15 +1615,22 @@ pub(crate) fn request_debug_log_line(
     }
 }
 
-fn invalid_argument_marker(raw: &str, error: impl Into<String>) -> serde_json::Value {
+fn invalid_argument_marker(
+    raw: &str,
+    kind: &str,
+    error: impl Into<String>,
+) -> serde_json::Value {
     let preview_end = raw.floor_char_boundary(raw.len().min(MAX_INVALID_ARGUMENT_PREVIEW_BYTES));
     serde_json::json!({
         "_invalid_arguments": {
+            "kind": kind,
             "original_bytes": raw.len(),
             "preview": &raw[..preview_end],
             "truncated": raw.len() > preview_end,
+            "execution": "rejected",
         },
         "_parse_error": error.into(),
+        "_recovery": "No tool was executed. Emit one complete JSON object with the full arguments; do not rely on the preview.",
     })
 }
 
@@ -1628,8 +1646,20 @@ fn append_bounded_native_arguments(target: &mut String, chunk: &str) -> bool {
 pub(crate) fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) if value.is_object() => value,
-        Ok(_) => invalid_argument_marker(raw, "tool arguments must be a JSON object"),
-        Err(error) => invalid_argument_marker(raw, error.to_string()),
+        Ok(_) => invalid_argument_marker(
+            raw,
+            "invalid_shape",
+            "tool arguments must be a JSON object",
+        ),
+        Err(error) => invalid_argument_marker(
+            raw,
+            if error.is_eof() {
+                "incomplete_syntax"
+            } else {
+                "invalid_syntax"
+            },
+            error.to_string(),
+        ),
     }
 }
 
@@ -2743,11 +2773,14 @@ pub async fn stream_request(
         let args_json = if acc.arguments_overflowed {
             serde_json::json!({
                 "_invalid_arguments": {
+                    "kind": "argument_limit",
                     "original_bytes_at_least": acc.argument_bytes,
                     "max_bytes": MAX_NATIVE_TOOL_ARGUMENT_BYTES,
                     "truncated": true,
+                    "execution": "rejected",
                 },
                 "_parse_error": "tool arguments exceeded the local streaming limit",
+                "_recovery": "No tool was executed. Emit one smaller complete call or use a focused edit; never continue from the truncated preview.",
             })
         } else {
             parse_native_tool_arguments(&acc.arguments)

@@ -6,6 +6,9 @@ use regex::Regex;
 const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
 pub(crate) const INCOMPLETE_TOOL_RESULT_MARKER: &str = "[tool_result_incomplete:";
+pub(crate) const COMPLETED_MUTATION_MARKER: &str = "[mutation_completed_with_clipped_output]";
+pub(crate) const COMPLETED_MUTATION_NOTICE: &str =
+    "[mutation_completed_with_clipped_output] Mutation completed successfully. Only the output or diff preview was clipped for context; do not retry the mutation. Use the saved artifact or a focused read if more detail is needed.";
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SENSITIVE_ASSIGNMENT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
@@ -51,11 +54,27 @@ pub(crate) fn truncate_tool_output_for_message(
     result: String,
     message_prefix: &str,
 ) -> BoundedToolOutput {
+    truncate_tool_output_for_message_with_completion(name, result, message_prefix, None)
+}
+
+/// Bound a tool payload while preserving an explicit completion fact for a
+/// mutation whose display output or diff was clipped after execution.
+pub(crate) fn truncate_tool_output_for_message_with_completion(
+    name: &str,
+    result: String,
+    message_prefix: &str,
+    completion_notice: Option<&str>,
+) -> BoundedToolOutput {
     let result = sanitize_tool_output(&result);
     let max_bytes = MAX_TOOL_OUTPUT_BYTES.saturating_sub(message_prefix.len());
     // Leave room for the bounded-output explanation and its machine-readable
     // incomplete marker in the final model-visible message.
-    let max_lines = MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count() + 2);
+    let suffix_lines = 2
+        + completion_notice
+            .filter(|notice| !notice.is_empty())
+            .map_or(0, |notice| notice.lines().count() + 2);
+    let max_lines =
+        MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count() + suffix_lines);
     let bytes = result.len();
     let lines: Vec<&str> = result.lines().collect();
     let line_count = lines.len();
@@ -89,8 +108,12 @@ pub(crate) fn truncate_tool_output_for_message(
             };
         let omitted_lines = line_count.saturating_sub(head_count + tail_count);
         let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
+        let completion_note = completion_notice
+            .filter(|notice| !notice.is_empty())
+            .map(|notice| format!("{notice}\n\n"))
+            .unwrap_or_default();
         let mut output = format!(
-            "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]\n\n{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
+            "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]\n\n{completion_note}{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
         );
 
         if output.len() <= max_bytes {
@@ -106,7 +129,7 @@ pub(crate) fn truncate_tool_output_for_message(
             tail_count -= 1;
         } else {
             let marker = format!(
-                "{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
+                "{completion_note}{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
             );
             let content_budget = max_bytes.saturating_sub(marker.len() + 2);
             while !output.is_char_boundary(content_budget) {
@@ -298,6 +321,22 @@ token usage: 1234
             out.contains("Full output saved to:") || out.contains("Use grep"),
             "must tell the model how to recover the omitted content, got: {out}"
         );
+    }
+
+    #[test]
+    fn clipped_mutation_output_preserves_completion_semantics() {
+        let content: String = (1..=2000).map(|n| format!("diff line {n}\n")).collect();
+        let bounded = truncate_tool_output_for_message_with_completion(
+            "write_to_file",
+            content,
+            "write_to_file: ",
+            Some(COMPLETED_MUTATION_NOTICE),
+        );
+
+        assert!(bounded.truncated);
+        assert!(bounded.content.contains(COMPLETED_MUTATION_MARKER));
+        assert!(bounded.content.contains("do not retry the mutation"));
+        assert!(bounded.content.contains(INCOMPLETE_TOOL_RESULT_MARKER));
     }
 
     #[test]
