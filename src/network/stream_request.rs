@@ -2383,7 +2383,8 @@ pub async fn stream_request(
                         stream_bytes_received += line_buf.len();
                         let trimmed = line_buf.trim();
                         if trimmed == "data: [DONE]" {
-                            buffer.lock().await.termination = Some(StreamTermination::ProviderStop);
+                            buffer.lock().await.termination =
+                                Some(StreamTermination::ProviderStop);
                             line_buf.clear();
                             break;
                         }
@@ -2559,7 +2560,8 @@ pub async fn stream_request(
                                         }
                                         if provider_stop {
                                             let mut buffer = buffer.lock().await;
-                                            buffer.termination = Some(StreamTermination::ProviderStop);
+                                            buffer.termination =
+                                                Some(StreamTermination::ProviderStop);
                                             if reasoning.is_none()
                                                 && buffer.final_answer_boundary
                                                     == super::stream::FinalAnswerBoundary::ReasoningClosed

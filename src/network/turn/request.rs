@@ -544,7 +544,8 @@ pub(super) async fn collect_round(
         serde_json::json!({
             "round": ctx.budget.tool_rounds,
             "finish_reason": collected.finish_reason,
-            "stream_termination": stream_termination.map(|termination| termination.to_string()),
+            "stream_termination":
+                stream_termination.map(|termination| termination.to_string()),
             "content_bytes": content.len(),
         }),
     );
