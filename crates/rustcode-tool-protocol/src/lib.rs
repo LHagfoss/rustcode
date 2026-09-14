@@ -513,12 +513,16 @@ struct TextualCallCandidate {
 }
 
 fn parse_json_candidate(raw: &str, forced_name: Option<String>) -> Option<TextualCallCandidate> {
+    // Raw newlines inside a string are normalized by `repair_json`, but they
+    // do not mean the model crossed a payload boundary. Only use repair as
+    // leakage evidence when the JSON object itself is structurally incomplete.
+    let boundary_incomplete = find_complete_json_object(raw).is_none();
     let exact = serde_json::from_str::<Value>(raw.trim()).ok();
     let (json, repaired) = match exact {
         Some(json) => (json, false),
         None => (
             serde_json::from_str::<Value>(&repair_json(raw.trim())).ok()?,
-            true,
+            boundary_incomplete,
         ),
     };
     let (inferred_name, arguments) = extract_tool_call(&json)?;
