@@ -2,6 +2,8 @@ use serde_json::Value;
 
 use super::{Tool, ToolCapability, ToolSafety};
 
+pub(crate) const MAX_SESSION_TITLE_CHARS: usize = 80;
+
 fn ask_question_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -41,6 +43,56 @@ pub const GET_TIME: Tool = Tool {
     capabilities: &[],
     safety: ToolSafety::ReadOnly,
 };
+
+fn set_session_title_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_SESSION_TITLE_CHARS,
+                "description": "Concise session title; do not copy the full user prompt"
+            }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+    })
+}
+
+pub const SET_SESSION_TITLE: Tool = Tool {
+    name: "set_session_title",
+    description: "Set a concise title for this new session's first turn. Derive it from the user's request without copying the full prompt, transcript, or secrets.",
+    arguments: r#"{"title": "concise session title (1-80 characters)"}"#,
+    handler: set_session_title,
+    requires_confirmation: false,
+    schema: set_session_title_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::ControlPlane,
+};
+
+fn set_session_title(args: &Value) -> Result<String, String> {
+    let title = args
+        .get("title")
+        .and_then(Value::as_str)
+        .ok_or("missing 'title'")?
+        .trim();
+    if title.is_empty() {
+        return Err("title must not be empty".to_string());
+    }
+    if title.chars().count() > MAX_SESSION_TITLE_CHARS {
+        return Err(format!(
+            "title must be at most {MAX_SESSION_TITLE_CHARS} characters"
+        ));
+    }
+    if title.chars().any(char::is_control) {
+        return Err("title must be a single line without control characters".to_string());
+    }
+    let session_id = super::get_active_session_id()
+        .ok_or("active session is unavailable for setting a title")?;
+    crate::config::save_session_title(&session_id, title);
+    Ok("Session title saved.".to_string())
+}
 
 fn list_mcp_tools_schema() -> Value {
     serde_json::json!({

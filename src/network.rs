@@ -101,7 +101,7 @@ pub(crate) use subagents::{handle_agent_tool, run_subagent, set_subagent_status}
 pub(crate) mod title;
 pub use title::generate_title;
 #[allow(unused_imports)]
-pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
+pub(crate) use title::record_prompt_to_history;
 
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
@@ -1109,16 +1109,17 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .active_model_profile()
             .as_ref()
             .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
-        let mut system_prompt = if compact_tool_prompt {
-            crate::tools::tool_system_prompt_for_policy(
-                crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
-                    delegation_active,
-                    agent_mode,
-                    true,
-                ),
-                protocol,
-                agent_mode,
-            )
+        let session_title_tool_available = s.session_title_tool_available;
+        let mut schema_policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+            delegation_active,
+            agent_mode,
+            compact_tool_prompt,
+        );
+        if session_title_tool_available {
+            schema_policy = schema_policy.with_session_title_tool();
+        }
+        let mut system_prompt = if compact_tool_prompt || session_title_tool_available {
+            crate::tools::tool_system_prompt_for_policy(schema_policy, protocol, agent_mode)
         } else {
             s.prompt_cache
                 .system_prompt(delegation_active, protocol, agent_mode)
@@ -1132,13 +1133,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
         let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
-            Some(
-                crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
-                    delegation_active,
-                    agent_mode,
-                    compact_tool_prompt,
-                ),
-            )
+            Some(schema_policy)
         } else {
             None
         };

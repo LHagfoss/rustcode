@@ -662,6 +662,91 @@ async fn denied_tool_batch_records_permission_denied_metadata() {
 }
 
 #[tokio::test]
+async fn session_title_tool_is_rejected_after_first_turn_without_running() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let session_id = state.lock().await.active_session_id.clone();
+    {
+        let mut state = state.lock().await;
+        state.session_title_cache = Some((session_id, Some("existing".to_string())));
+        state.session_title_tool_available = false;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "set_session_title".to_string(),
+        arguments: serde_json::json!({"title": "should not run"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(!results[0].metadata.success);
+    assert_eq!(
+        results[0].metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::UnavailableDependency)
+    );
+    assert!(
+        results[0]
+            .content
+            .contains("only available during the first turn")
+    );
+    assert!(state.lock().await.session_title_cache.is_some());
+}
+
+#[tokio::test]
+async fn successful_first_turn_session_title_invalidates_ui_cache() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let session_id = state.lock().await.active_session_id.clone();
+    {
+        let mut state = state.lock().await;
+        state.session_title_cache = Some((session_id, Some("old title".to_string())));
+        state.session_title_tool_available = true;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "set_session_title".to_string(),
+        arguments: serde_json::json!({"title": "Focused session title"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(results[0].metadata.success, "{results:?}");
+    let state = state.lock().await;
+    assert!(!state.session_title_tool_available);
+    assert!(state.session_title_cache.is_none());
+}
+
+#[tokio::test]
 async fn cancelled_tool_batch_removes_its_live_projection() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let cancel = tokio_util::sync::CancellationToken::new();
