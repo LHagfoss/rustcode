@@ -389,6 +389,24 @@ const CORE_CODING_TOOLS: &[&str] = &[
     "find_symbol",
     "get_project_map",
     "view_file",
+    "run_command",
+    "manage_task",
+    "ask_question",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+/// The compact text protocol keeps the normal coding surface, but leaves
+/// specialized media, memory, web, and lifecycle tools out of the prompt.
+/// Native requests apply the finer-grained relevance filter below.
+const TEXT_CODING_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
     "replace_file_content",
     "multi_replace_file_content",
     "write_to_file",
@@ -402,6 +420,25 @@ const CORE_CODING_TOOLS: &[&str] = &[
     "list_skills",
     "use_skill",
 ];
+
+const EDIT_TOOL_TERMS: &[&str] = &[
+    "add",
+    "change",
+    "code",
+    "create",
+    "edit",
+    "fix",
+    "implement",
+    "insert",
+    "modify",
+    "patch",
+    "refactor",
+    "replace",
+    "update",
+    "write",
+];
+
+const DELETE_TOOL_TERMS: &[&str] = &["copy", "delete", "remove", "rename", "move"];
 
 const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
     "grep",
@@ -552,6 +589,10 @@ fn builtin_tool_is_relevant(
     }
     let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
     match name {
+        "replace_file_content" | "multi_replace_file_content" | "write_to_file" => {
+            relevant(EDIT_TOOL_TERMS)
+        }
+        "delete_file" | "move_file" | "copy_file" => relevant(DELETE_TOOL_TERMS),
         "find_symbol" | "get_project_map" => {
             phase == ToolSchemaPhase::Established
                 || relevant(&[
@@ -748,6 +789,21 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
         {
             if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
                 terms.insert(token);
+            }
+        }
+        // Structured tool turns often have an empty assistant content field.
+        // Keep their names in the relevance set so the next request retains
+        // the exact schema needed to continue the active tool exchange.
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                if let Some(name) = call
+                    .get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .or_else(|| call.get("name").and_then(Value::as_str))
+                {
+                    terms.insert(name.to_ascii_lowercase());
+                }
             }
         }
     }
@@ -1347,7 +1403,9 @@ If the request context names a skill, load it first. For a likely specialized wo
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
-        if t.name == "set_session_title" && !policy.include_session_title_tool {
+        if (t.name == "set_session_title" && !policy.include_session_title_tool)
+            || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&t.name))
+        {
             continue;
         }
         if policy.profile == ToolSchemaProfile::ReadOnlyInspection

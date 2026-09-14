@@ -77,6 +77,54 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
     }
 }
 
+/// Persisted tool records are intentionally rich for replay, UI, and
+/// diagnostics. The model only needs the small execution contract that
+/// explains whether the result is usable and how to recover from it. Keeping
+/// this projection at the provider boundary avoids repeating hashes, tool
+/// names, and other durable bookkeeping in every subsequent request.
+fn compact_tool_result_metadata(metadata: &ToolResultRecord) -> String {
+    let mut compact = serde_json::Map::new();
+    compact.insert("success".into(), serde_json::json!(metadata.success));
+    compact.insert(
+        "completeness".into(),
+        serde_json::json!(metadata.resolved_completeness().as_str()),
+    );
+    if metadata.pending {
+        compact.insert("pending".into(), serde_json::json!(true));
+    }
+    if metadata.payload_truncated {
+        compact.insert("payload_truncated".into(), serde_json::json!(true));
+    }
+    if let Some(exit_code) = metadata.exit_code {
+        compact.insert("exit_code".into(), serde_json::json!(exit_code));
+    }
+    if !metadata.changed_paths.is_empty() {
+        compact.insert(
+            "changed_paths".into(),
+            serde_json::json!(metadata.changed_paths),
+        );
+    }
+    if let Some(error_kind) = metadata.error_kind.as_deref() {
+        compact.insert("error_kind".into(), serde_json::json!(error_kind));
+    }
+    if metadata.retryable {
+        compact.insert("retryable".into(), serde_json::json!(true));
+    }
+    if metadata.replayed {
+        compact.insert("replayed".into(), serde_json::json!(true));
+    }
+    if let Some(artifact) = metadata.full_output_artifact.as_deref() {
+        compact.insert("full_output_artifact".into(), serde_json::json!(artifact));
+    }
+    if let Some(inspection) = metadata.inspection.as_ref() {
+        compact.insert(
+            "inspection".into(),
+            serde_json::to_value(inspection).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    serde_json::to_string(&compact).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Indices of older exact-duplicate file reads excluded from the request.
 ///
 /// Pure, non-mutating selection (#985): storage keeps every message verbatim
@@ -294,14 +342,7 @@ fn to_messages_with_scope(
         messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
-                .map(|value| {
-                    let mut value = value.clone();
-                    value.completeness = value.resolved_completeness();
-                    format!(
-                        "\nmetadata: {}",
-                        serde_json::to_string(&value).unwrap_or_default()
-                    )
-                })
+                .map(|value| format!("\nmetadata: {}", compact_tool_result_metadata(value)))
                 .unwrap_or_default();
             serde_json::json!({
                 "role": "user",
@@ -466,11 +507,9 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
             // include the durable execution contract in the model payload so
             // completeness cannot be inferred from a collapsed UI row.
             let content = if let Some(metadata) = message.tool_result.as_ref() {
-                let mut metadata = metadata.clone();
-                metadata.completeness = metadata.resolved_completeness();
                 format!(
                     "{content}\n[result_metadata: {}]",
-                    serde_json::to_string(&metadata).unwrap_or_default()
+                    compact_tool_result_metadata(metadata)
                 )
             } else {
                 content
@@ -1165,12 +1204,10 @@ mod tests {
             }
         ));
         let messages = to_messages(&[message], "system");
-        assert!(
-            messages[1]["content"]
-                .as_str()
-                .unwrap()
-                .contains("metadata:")
-        );
+        let content = messages[1]["content"].as_str().unwrap();
+        assert!(content.contains("metadata:"));
+        assert!(content.contains("completeness"));
+        assert!(!content.contains("arguments_hash"));
     }
 
     fn structured_read(id: &str, content: &str) -> (ChatMessage, ChatMessage) {
