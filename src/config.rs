@@ -23,14 +23,41 @@ pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
 const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
 const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
 const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
-/// Safe default for workspace-changing calls emitted in one model response.
-/// Read-only inspection (`grep`, `glob`, `view_file`, and read-only shell
-/// commands) is classified separately and never consumes this budget, so the
-/// default covers a small focused sequence of edits or mutating commands.
+/// Safe mutation cap for explicitly enabled response batching. The scheduler
+/// remains strict one-call by default; read-only inspection (`grep`, `glob`,
+/// `view_file`, and read-only shell commands) is classified separately and
+/// never consumes this budget.
 pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
 /// Keep profile overrides bounded even when a config typo requests an
 /// unreasonably large mutation batch.
 pub const MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE: usize = 8;
+/// Read-only calls are independently bounded for explicitly trusted profiles.
+pub const DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE: usize = 4;
+pub const MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE: usize = 8;
+/// A response may be continued twice by default. Larger values require an
+/// explicit profile opt-in because continuation requests replay the response
+/// prefix and can amplify incomplete structured calls.
+pub const DEFAULT_MAX_TOOL_CONTINUATIONS: usize = 2;
+pub const MAX_CONFIGURED_TOOL_CONTINUATIONS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSchedulingPolicy {
+    pub allow_batching: bool,
+    pub max_read_only_calls: usize,
+    pub max_mutating_calls: usize,
+    pub max_continuations: usize,
+}
+
+impl Default for ToolSchedulingPolicy {
+    fn default() -> Self {
+        Self {
+            allow_batching: false,
+            max_read_only_calls: 1,
+            max_mutating_calls: DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
+            max_continuations: DEFAULT_MAX_TOOL_CONTINUATIONS,
+        }
+    }
+}
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
@@ -156,13 +183,25 @@ pub struct ModelProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_context_window: Option<u32>,
     /// Maximum number of workspace-changing tool calls accepted from one
-    /// response. Omitted profiles retain the safe four-call default.
+    /// response when batching is enabled. Omitted profiles retain the safe
+    /// four-call cap, while scheduling remains strict by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
     /// Explicitly identify an OpenAI-compatible endpoint as local. This is
     /// needed for self-hosted gateways whose URL and engine name look remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<bool>,
+    /// Explicitly allow this profile to batch multiple tool calls in one
+    /// response. Omitted profiles retain strict one-call scheduling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_tool_batching: Option<bool>,
+    /// Maximum read-only calls in one response when batching is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_read_only_calls_per_response: Option<usize>,
+    /// Maximum response continuations for this profile. Omitted profiles
+    /// retain the conservative default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_continuations: Option<usize>,
     /// Use a compact text-protocol tool menu for providers with small request
     /// bodies, omitting long descriptions and MCP tool listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,6 +305,35 @@ impl ModelProfile {
             .filter(|limit| *limit > 0)
             .unwrap_or(DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE)
             .min(MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE)
+    }
+
+    /// Whether this explicitly trusted profile may schedule a bounded batch
+    /// instead of the default one-call-per-response policy.
+    pub fn tool_batching_enabled(&self) -> bool {
+        self.allow_tool_batching == Some(true)
+    }
+
+    pub fn max_read_only_calls_per_response(&self) -> usize {
+        self.max_read_only_calls_per_response
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE)
+            .min(MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE)
+    }
+
+    pub fn max_tool_continuations(&self) -> usize {
+        self.max_tool_continuations
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_TOOL_CONTINUATIONS)
+            .min(MAX_CONFIGURED_TOOL_CONTINUATIONS)
+    }
+
+    pub fn tool_scheduling_policy(&self) -> ToolSchedulingPolicy {
+        ToolSchedulingPolicy {
+            allow_batching: self.tool_batching_enabled(),
+            max_read_only_calls: self.max_read_only_calls_per_response(),
+            max_mutating_calls: self.max_mutating_calls_per_response(),
+            max_continuations: self.max_tool_continuations(),
+        }
     }
 
     /// Return the completion cap for one request. Tool-enabled requests are

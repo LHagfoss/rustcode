@@ -1131,12 +1131,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 .system_prompt(delegation_active, protocol, agent_mode)
                 .to_string()
         };
-        let max_mutating_calls = s
+        let tool_scheduling_policy = s
             .active_model_profile()
             .as_ref()
-            .map(|profile| profile.max_mutating_calls_per_response())
-            .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
-        crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
+            .map(|profile| profile.tool_scheduling_policy())
+            .unwrap_or_default();
+        crate::tools::append_tool_response_policy(&mut system_prompt, tool_scheduling_policy);
         let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
             Some(schema_policy)

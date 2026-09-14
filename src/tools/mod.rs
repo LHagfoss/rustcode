@@ -212,9 +212,10 @@ pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
 /// mutation budget limits only mutating calls (see [`is_read_only_call`]), so
 /// a later read — or a read-only shell inspection such as `git status` — is
 /// not lost merely because an earlier mutation used the budget. Order among
-/// retained calls is kept. The root orchestrator still executes exactly one
-/// call per model round; this helper also serves consumers that need to retain
-/// the complete parsed response.
+/// retained calls is kept. The root orchestrator uses strict one-call
+/// scheduling by default; explicit trusted profiles may select a separate
+/// bounded batch before calling the executor. This helper also serves
+/// consumers that need to retain the complete parsed response.
 ///
 /// A control-plane call must execute alone, so it is either the entire kept
 /// batch — when it leads — or the boundary where the retained prefix stops.
@@ -296,7 +297,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
 /// handlers also accept string-encoded integers and `view_file` defaults a
 /// missing `start_line` to 1. Normalize those equivalent forms before the
 /// duplicate check so they cannot race through the parallel read scheduler.
-fn duplicate_tool_call_key(call: &ToolCall) -> String {
+pub(crate) fn duplicate_tool_call_key(call: &ToolCall) -> String {
     let mut arguments = call.arguments.clone();
     if call.name == "view_file"
         && let Some(object) = arguments.as_object_mut()

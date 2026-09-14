@@ -1216,16 +1216,41 @@ pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
 /// Append the resolved execution policy after the cached, profile-independent
 /// prompt so model switches cannot retain another profile's mutation limit.
 pub(crate) fn append_tool_response_limit(prompt: &mut String, max_mutating_calls: usize) {
+    append_tool_response_policy(
+        prompt,
+        crate::config::ToolSchedulingPolicy {
+            max_mutating_calls,
+            ..Default::default()
+        },
+    );
+}
+
+pub(crate) fn append_tool_response_policy(
+    prompt: &mut String,
+    policy: crate::config::ToolSchedulingPolicy,
+) {
     use std::fmt::Write;
 
-    write!(
-        prompt,
-        "\n\n# Tool response limit\n\
-The effective max_mutating_calls_per_response is {max_mutating_calls}. \
+    if policy.allow_batching {
+        write!(
+            prompt,
+            "\n\n# Tool response limit\n\
+This trusted profile permits a bounded batch of up to {} read-only calls and {} workspace-changing calls in one assistant response. \
+Keep control-plane calls alone, keep workspace changes grounded and sequential, and never assume an unexecuted call ran. \
+Read-only calls do not consume the workspace-changing limit.\n",
+            policy.max_read_only_calls, policy.max_mutating_calls
+        )
+    } else {
+        write!(
+            prompt,
+            "\n\n# Tool response limit\n\
+The effective max_mutating_calls_per_response is {}. \
 Emit exactly one tool call in each assistant response and wait for its result before choosing the next action. \
 This includes mutating `run_command` calls, file writes/edits, \
-and other tools with side effects. Read-only inspection never consumes this limit, but it also must be issued one call at a time. Never assume an unexecuted call ran.\n"
-    )
+and other tools with side effects. Read-only inspection never consumes this limit, but it also must be issued one call at a time. Never assume an unexecuted call ran.\n",
+            policy.max_mutating_calls
+        )
+    }
     .expect("writing to a String cannot fail");
 }
 
