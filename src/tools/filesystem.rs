@@ -72,8 +72,8 @@ fn replace_file_content_schema() -> Value {
 
 pub const REPLACE_FILE_CONTENT: Tool = Tool {
     name: "replace_file_content",
-    description: "Edit an existing file by replacing one precise target_content block with replacement_content. The legacy old_string/new_string names and the edits array remain accepted for compatibility. To insert, anchor on an adjacent line and repeat that line in the replacement; an empty target is rejected.",
-    arguments: r#"{"path": "file path", "target_content": "canonical exact block to replace (legacy old_string is accepted)", "replacement_content": "canonical replacement text (legacy new_string is accepted)", "edits": "optional array of edit objects for multiple replacements"}"#,
+    description: "Edit an existing file by replacing one precise target_content block with replacement_content. The legacy old_string/new_string names and the edits array remain accepted for compatibility. To INSERT text, anchor on an adjacent line, prepend the new text, and repeat that line in the replacement; an empty target is rejected.",
+    arguments: r#"{"path": "file path", "target_content": "canonical exact block to replace (legacy old_string is accepted; never empty)", "replacement_content": "canonical replacement text (legacy new_string is accepted)", "edits": "optional array of edit objects for multiple replacements"}"#,
     handler: replace_file_content_tool,
     requires_confirmation: true,
     schema: replace_file_content_schema,

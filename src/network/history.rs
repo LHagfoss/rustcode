@@ -80,8 +80,10 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
 /// Persisted tool records are intentionally rich for replay, UI, and
 /// diagnostics. The model only needs the small execution contract that
 /// explains whether the result is usable and how to recover from it. Keeping
-/// this projection at the provider boundary avoids repeating hashes, tool
-/// names, and other durable bookkeeping in every subsequent request.
+/// this projection at the provider boundary avoids repeating tool names and
+/// other durable bookkeeping in every subsequent request. The compact
+/// arguments hash remains because replay and duplicate-call recovery use it as
+/// the stable identity of the tool invocation.
 fn compact_tool_result_metadata(metadata: &ToolResultRecord) -> String {
     let mut compact = serde_json::Map::new();
     compact.insert("success".into(), serde_json::json!(metadata.success));
@@ -89,6 +91,12 @@ fn compact_tool_result_metadata(metadata: &ToolResultRecord) -> String {
         "completeness".into(),
         serde_json::json!(metadata.resolved_completeness().as_str()),
     );
+    if !metadata.arguments_hash.is_empty() {
+        compact.insert(
+            "arguments_hash".into(),
+            serde_json::json!(metadata.arguments_hash),
+        );
+    }
     if metadata.pending {
         compact.insert("pending".into(), serde_json::json!(true));
     }
@@ -1207,7 +1215,7 @@ mod tests {
         let content = messages[1]["content"].as_str().unwrap();
         assert!(content.contains("metadata:"));
         assert!(content.contains("completeness"));
-        assert!(!content.contains("arguments_hash"));
+        assert!(content.contains("arguments_hash"));
     }
 
     fn structured_read(id: &str, content: &str) -> (ChatMessage, ChatMessage) {

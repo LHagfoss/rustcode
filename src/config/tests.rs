@@ -157,7 +157,7 @@ fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
     assert_eq!(default_policy.max_read_only_calls, 1);
     assert_eq!(
         default_policy.max_mutating_calls,
-        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+        1
     );
     assert_eq!(
         default_policy.max_continuations,
@@ -200,14 +200,14 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
             + budget.completion_reserve
             + budget.tool_reserve
             + budget.safety_reserve,
-        budget.context_window
+        budget.hard_effective_limit
     );
 
     profile.context_window = Some(512);
     let tiny = profile.context_budget();
     assert_eq!(
         tiny.history_tokens + tiny.completion_reserve + tiny.tool_reserve + tiny.safety_reserve,
-        tiny.context_window
+        tiny.hard_effective_limit
     );
 }
 
@@ -409,7 +409,7 @@ fn verified_kat_profile_derives_tool_ceiling_but_mismatched_profiles_fall_back()
             + budget.completion_reserve
             + budget.tool_reserve
             + budget.safety_reserve,
-        budget.context_window
+        budget.hard_effective_limit
     );
     assert!(kat.matches_request(&kat.url, &kat.model));
 
@@ -567,7 +567,7 @@ fn context_budget_scales_without_double_reserving_large_or_small_windows() {
                 + budget.completion_reserve
                 + budget.tool_reserve
                 + budget.safety_reserve,
-            budget.context_window
+            budget.hard_effective_limit
         );
         assert!(
             budget.context_window < 4 || budget.completion_reserve <= budget.context_window / 4

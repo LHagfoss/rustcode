@@ -290,13 +290,13 @@ pub const LIST_SKILLS: Tool = Tool {
 
 pub const USE_SKILL: Tool = Tool {
     name: "use_skill",
-    description: "Load a skill by name to get its instructions and available files. Read-only call: can be issued in parallel with other read operations or multiple skills.",
+    description: "Load a skill by name to get its instructions and available files. This control-plane call must be emitted alone so the loaded instructions apply before the next action.",
     arguments: r#"{"name": "skill name"}"#,
     handler: use_skill,
     requires_confirmation: false,
     schema: use_skill_schema,
     capabilities: &[ToolCapability::SessionState],
-    safety: ToolSafety::ReadOnly,
+    safety: ToolSafety::ControlPlane,
 };
 
 pub fn list_skills(args: &Value) -> Result<String, String> {

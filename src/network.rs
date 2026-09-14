@@ -876,9 +876,10 @@ fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
     budget
         .soft_context_target
         .saturating_sub(budget.tool_reserve)
+        .saturating_sub(budget.provider_overhead_margin)
         .saturating_sub(SYSTEM_PROMPT_HEADROOM)
         .max(1)
-        .min(budget.history_tokens)
+        .min(budget.history_tokens.saturating_sub(1).max(1))
 }
 
 /// Assemble the full provider request for one agent turn.
@@ -950,18 +951,13 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             provider_usage,
         ) = {
             let s = state.lock().await;
-            let local_model = s.active_model_profile().map_or_else(
+            let local_model = s
+                .active_model_profile()
+                .is_some_and(|profile| profile.is_local())
                 || {
-                    crate::config::ModelProfile {
-                        name: s.model_name.clone(),
-                        url: s.api_base_url.clone(),
-                        model: s.model_name.clone(),
-                        ..Default::default()
-                    }
-                    .is_local()
-                },
-                |profile| profile.is_local(),
-            );
+                    let lower = s.api_base_url.to_ascii_lowercase();
+                    lower.contains("11434") || lower.contains("ollama")
+                };
             let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),

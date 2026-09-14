@@ -53,7 +53,7 @@ impl Default for ToolSchedulingPolicy {
         Self {
             allow_batching: false,
             max_read_only_calls: 1,
-            max_mutating_calls: DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
+            max_mutating_calls: 1,
             max_continuations: DEFAULT_MAX_TOOL_CONTINUATIONS,
         }
     }
@@ -331,7 +331,11 @@ impl ModelProfile {
         ToolSchedulingPolicy {
             allow_batching: self.tool_batching_enabled(),
             max_read_only_calls: self.max_read_only_calls_per_response(),
-            max_mutating_calls: self.max_mutating_calls_per_response(),
+            max_mutating_calls: if self.tool_batching_enabled() {
+                self.max_mutating_calls_per_response()
+            } else {
+                1
+            },
             max_continuations: self.max_tool_continuations(),
         }
     }
@@ -464,17 +468,16 @@ impl ModelProfile {
                 }
             })
             .min(requested_completion);
-        let requested_tool = (context_window / 16).clamp(1, 4096);
-        let requested_safety = (context_window / 32).clamp(1, 1024);
+        let requested_tool = (context_window / 16).min(4096);
+        let requested_safety = (context_window / 32).min(1024);
 
         let provider_overhead_margin = self
             .provider_overhead_margin
             .unwrap_or_else(|| {
-                let proportional = (u64::from(context_window)
-                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT)
-                    + 99)
-                    / 100;
-                (proportional as u32).clamp(1024, MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
+                let proportional =
+                    (u64::from(context_window) * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT))
+                        / 100;
+                (proportional as u32).min(MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
             })
             .min(context_window.saturating_sub(1));
 
@@ -497,13 +500,13 @@ impl ModelProfile {
         // Keep the fields honest even for synthetic or unusually small model
         // profiles: the published reserves must never add up to more than the
         // context window, and history always retains a small inspectable tail.
-        let mut reserve_capacity = context_window.saturating_sub(requested_completion);
-        let completion_reserve = requested_completion;
+        let completion_reserve = requested_completion.min(hard_effective_limit);
+        let mut reserve_capacity = hard_effective_limit.saturating_sub(completion_reserve);
         // Thinking and visible answer tokens share max_output_tokens; they
         // must not be double-counted against the prompt context. The fields
         // below describe the split within that output reservation.
         let thinking_reserve =
-            requested_thinking.min(requested_completion.saturating_sub(minimum_answer_tokens));
+            requested_thinking.min(completion_reserve.saturating_sub(minimum_answer_tokens));
         let thinking_budget = thinking_reserve;
         let tool_reserve = requested_tool.min(reserve_capacity);
         reserve_capacity = reserve_capacity.saturating_sub(tool_reserve);

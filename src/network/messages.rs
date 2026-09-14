@@ -597,11 +597,10 @@ pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], boot
     }
     let nudge = "BOOTSTRAP ACTION: execute the smallest concrete setup step now (for example, create the project manifest or first source file). Keep reasoning concise and do not restate the architecture plan.";
     if let Some(last_msg) = msgs.iter_mut().rev().find(|message| {
-        message.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
-            && !message
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        !message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| content.starts_with("<rustcode_context>"))
     }) && let Some(content) = last_msg.get_mut("content")
     {
         match content {
