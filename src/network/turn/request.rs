@@ -445,8 +445,8 @@ pub(super) async fn collect_round(
             dbg_log!("Stream request failed: {error}");
             let error_message = error.to_string();
             let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error_message);
-            ctx.response.last_stream_termination = stream_failure_kind
-                .map(lifecycle::StreamTermination::from_failure);
+            ctx.response.last_stream_termination =
+                stream_failure_kind.map(lifecycle::StreamTermination::from_failure);
             if ctx.lifecycle.task_completed {
                 // Required verification already latched completion. A later
                 // optional continuation must not turn an otherwise successful

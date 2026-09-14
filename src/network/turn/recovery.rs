@@ -423,8 +423,8 @@ pub(super) async fn handle_response_recovery(
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_inspection_synthesis, loop_recovery_prompt, reasoning_loop_final_response,
-        reasoning_loop_recovery_prompt, CLIENT_BUDGET_CONTINUATION_PROMPT,
+        CLIENT_BUDGET_CONTINUATION_PROMPT, completed_inspection_synthesis, loop_recovery_prompt,
+        reasoning_loop_final_response, reasoning_loop_recovery_prompt,
     };
     use crate::app::ChatMessage;
     use crate::app::ToolResultRecord;
