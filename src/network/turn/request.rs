@@ -107,6 +107,63 @@ fn bounded_error_detail(error: &runner::ResponseError) -> String {
     }
 }
 
+fn native_stream_checkpoint_content(
+    checkpoints: &[super::super::stream::NativeToolCallCheckpoint],
+    error: &runner::ResponseError,
+) -> String {
+    let mut content = String::from(
+        "[Partial ApiNative tool-call checkpoint: no tool from this failed stream was executed. This is diagnostic state only; do not dispatch or replay it as a completed call.]",
+    );
+    for (position, checkpoint) in checkpoints.iter().enumerate() {
+        use std::fmt::Write;
+        let _ = write!(
+            content,
+            "\n- call {}: id={}, tool={}, arguments_received={}, complete={}, overflowed={}, fingerprint={}",
+            checkpoint.index.unwrap_or(position),
+            checkpoint.call_id.as_deref().unwrap_or("missing"),
+            if checkpoint.tool_name.is_empty() {
+                "missing"
+            } else {
+                checkpoint.tool_name.as_str()
+            },
+            checkpoint.argument_bytes,
+            checkpoint.arguments_complete,
+            checkpoint.arguments_overflowed,
+            checkpoint.argument_fingerprint,
+        );
+        if !checkpoint.diagnostic.is_empty() {
+            let _ = write!(content, ", diagnostic={}", checkpoint.diagnostic);
+        }
+    }
+    let _ = std::fmt::Write::write_fmt(
+        &mut content,
+        format_args!("\nProvider detail: {}", bounded_error_detail(error)),
+    );
+    bounded_stream_recovery_checkpoint(&content)
+}
+
+async fn checkpoint_native_stream_recovery(
+    state: &Arc<Mutex<AppState>>,
+    checkpoints: &[super::super::stream::NativeToolCallCheckpoint],
+    error: &runner::ResponseError,
+) {
+    let content = native_stream_checkpoint_content(checkpoints, error);
+    let notice = format!(
+        "[Recoverable provider interruption: the ApiNative tool-call stream failed before normal completion. No tool ran and the bounded call identity/diagnostic checkpoint was saved for the next prompt or --resume. Issue a fresh complete tool call if the action is still needed. Provider detail: {}]",
+        bounded_error_detail(error)
+    );
+    let mut s = state.lock().await;
+    s.replace_current_response(content.clone());
+    s.history
+        .push(ChatMessage::new("assistant", content).as_unexecuted_tool_call_checkpoint());
+    s.history.push(ChatMessage::new("system", notice));
+    let active_id = s.active_session_id.clone();
+    crate::config::save_session_history(&active_id, &s.history);
+    s.current_token_usage = None;
+    s.status = crate::app::AppStatus::Streaming;
+    s.stream_tracker = Some(crate::app::StreamTracker::new());
+}
+
 async fn checkpoint_stream_recovery(
     state: &Arc<Mutex<AppState>>,
     content: String,
@@ -313,10 +370,17 @@ pub(super) async fn collect_round(
                 let finish_reason = match stream_result {
                     Ok(finish_reason) => finish_reason,
                     Err(error) => {
-                        let partial_content = request_buffer.lock().await.content.clone();
-                        return Err(runner::ResponseError::with_partial(
+                        let (partial_content, partial_native_tool_calls) = {
+                            let buffer = request_buffer.lock().await;
+                            (
+                                buffer.content.clone(),
+                                buffer.native_tool_call_checkpoint.clone(),
+                            )
+                        };
+                        return Err(runner::ResponseError::with_partial_native(
                             error.to_string(),
                             partial_content,
+                            partial_native_tool_calls,
                         ));
                     }
                 };
@@ -341,6 +405,7 @@ pub(super) async fn collect_round(
                     // request can duplicate a textual call. Preserve it and
                     // recover from the checkpoint instead.
                     && error.partial_content.is_empty()
+                    && error.partial_native_tool_calls.is_empty()
                     && retryable_stream_failure(&error.to_string())
                     && !request_cancel.is_cancelled() =>
             {
@@ -410,6 +475,19 @@ pub(super) async fn collect_round(
                 );
             } else {
                 record_provider_error(ctx, &error.to_string());
+            }
+            if !cancel_token.is_cancelled() && !error.partial_native_tool_calls.is_empty() {
+                ctx.response.final_content_persisted = true;
+                crate::logger::operational_event(
+                    "turn.native_stream_checkpoint",
+                    serde_json::json!({
+                        "call_count": error.partial_native_tool_calls.len(),
+                        "outcome": "saved_unexecuted_checkpoint",
+                    }),
+                );
+                checkpoint_native_stream_recovery(state, &error.partial_native_tool_calls, &error)
+                    .await;
+                return Err(RoundCollectionError::Stop);
             }
             if !cancel_token.is_cancelled()
                 && ctx.recovery.stream_recovery_attempts < MAX_STREAM_RECOVERY_ATTEMPTS
@@ -512,7 +590,10 @@ pub(super) async fn collect_round(
 
 #[cfg(test)]
 mod tests {
-    use super::{recoverable_textual_stream_failure, retryable_stream_failure};
+    use super::{
+        native_stream_checkpoint_content, recoverable_textual_stream_failure,
+        retryable_stream_failure,
+    };
 
     #[test]
     fn only_an_incomplete_actionable_textual_call_is_auto_recoverable() {
@@ -553,5 +634,30 @@ mod tests {
         assert!(!retryable_stream_failure(
             "stream_failure:cancelled status=none"
         ));
+    }
+
+    #[test]
+    fn native_checkpoint_is_actionable_but_contains_no_partial_arguments() {
+        let error = crate::network::runner::ResponseError::with_partial_native(
+            "stream_failure:provider_error status=200 events_received=2",
+            String::new(),
+            vec![crate::network::stream::NativeToolCallCheckpoint {
+                index: Some(1),
+                call_id: Some("call-write".to_owned()),
+                tool_name: "write_to_file".to_owned(),
+                argument_bytes: 32,
+                arguments_complete: false,
+                arguments_overflowed: false,
+                argument_fingerprint: "fingerprint".to_owned(),
+                diagnostic: "unexpected end of json".to_owned(),
+            }],
+        );
+
+        let content = native_stream_checkpoint_content(&error.partial_native_tool_calls, &error);
+        assert!(content.contains("call-write"));
+        assert!(content.contains("write_to_file"));
+        assert!(content.contains("unexpected end of json"));
+        assert!(content.contains("do not dispatch or replay"));
+        assert!(!content.contains("partial arguments"));
     }
 }
