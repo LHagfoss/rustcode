@@ -2056,11 +2056,7 @@ pub async fn stream_request(
                         .then(|| message.get("content").and_then(serde_json::Value::as_str))
                         .flatten()
                 })
-                .filter_map(|content| {
-                    content
-                        .find("# Tool Format")
-                        .map(|start| &content[start..])
-                })
+                .filter_map(|content| content.find("# Tool Format").map(|start| &content[start..]))
                 .map(count_tokens)
                 .sum::<u32>() as usize
         } else {
