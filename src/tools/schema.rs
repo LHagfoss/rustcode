@@ -1307,7 +1307,7 @@ If the request context names a skill, load it first. For a likely specialized wo
         }
     }
 
-    if policy.include_session_title_tool {
+    if policy.include_session_title_tool && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "First-turn session title: call `set_session_title` exactly once with a concise title derived from the user's request before doing other work. Do not copy the full prompt, transcript, or secrets into the title.\n\n",
         );

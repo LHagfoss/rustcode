@@ -1109,7 +1109,8 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .active_model_profile()
             .as_ref()
             .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
-        let session_title_tool_available = s.session_title_tool_available;
+        let session_title_tool_available =
+            s.session_title_tool_available && agent_mode != crate::config::AgentMode::Plan;
         let mut schema_policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
             delegation_active,
             agent_mode,
