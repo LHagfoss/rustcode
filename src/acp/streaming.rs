@@ -133,6 +133,7 @@ impl AcpEventStream {
                             "changedPaths": result.metadata.changed_paths,
                             "truncated": result.metadata.truncated,
                             "completeness": result.metadata.completeness.as_str(),
+                            "commandStatus": result.metadata.command_status,
                         })),
                 )));
                 updates

@@ -134,6 +134,7 @@ fn execution_output(output: SearchOutput) -> super::ToolExecutionOutput {
         replayed: false,
         error_kind: None,
         retryable: false,
+        command_status: None,
     }
 }
 
@@ -730,6 +731,7 @@ pub(crate) fn list_directory_output(args: &Value) -> Result<ToolExecutionOutput,
         replayed: false,
         error_kind: None,
         retryable: false,
+        command_status: None,
     })
 }
 

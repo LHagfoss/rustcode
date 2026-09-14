@@ -1,5 +1,5 @@
 use crate::tools::ToolCall;
-use rustcode_core::{InspectionResultMetadata, ToolResultCompleteness};
+use rustcode_core::{CommandResultMetadata, InspectionResultMetadata, ToolResultCompleteness};
 
 /// Structured result produced by a tool execution.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +37,7 @@ impl ToolResult {
             full_output_artifact: self.metadata.full_output_artifact.clone(),
             replayed: self.metadata.replayed,
             inspection: self.metadata.inspection.clone(),
+            command_status: self.metadata.command_status.clone(),
         }
     }
 }
@@ -60,6 +61,7 @@ pub(crate) struct ToolResultMetadata {
     pub error_kind: Option<crate::tools::ToolErrorKind>,
     pub retryable: bool,
     pub inspection: Option<InspectionResultMetadata>,
+    pub command_status: Option<CommandResultMetadata>,
 }
 
 /// Provider-independent reason that a model response stopped.
