@@ -1,3 +1,10 @@
+## [v0.52.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.1) - 2026-09-14
+
+### Fixes
+- Improved local-model context budgeting, tool scheduling, and continuation limits.
+- Distinguish truncated tool arguments, clipped results, and successful writes.
+- Reduced tool-schema and context overhead while preserving skill-routing compatibility.
+- Made skill routing turn-safe.
 ## [v0.52.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.0) - 2026-09-14
 
 ### Features
