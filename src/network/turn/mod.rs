@@ -5,7 +5,7 @@ mod recovery;
 mod request;
 pub(crate) mod tools;
 
-pub use context::TurnContext;
+pub use context::{GroundedArtifactEvidence, TurnContext};
 pub use finish::run_agent_turn;
 pub(crate) use finish::run_agent_turn_with_context;
 pub use queue::process_queue_orchestrator;

@@ -377,6 +377,13 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
         .progress
         .changed_paths
         .insert("README.md".to_string());
+    context.progress.grounded_artifact = Some(super::turn_engine::GroundedArtifactEvidence {
+        path: "README.md".to_string(),
+        write_lines: Some(10),
+        write_bytes: Some(120),
+        read_range: Some((1, 10)),
+        repair_attempts: 1,
+    });
     context
         .recovery
         .loop_detector
@@ -424,6 +431,14 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
     assert_eq!(
         resumed.progress.changed_paths.iter().collect::<Vec<_>>(),
         ["README.md"]
+    );
+    assert_eq!(
+        resumed
+            .progress
+            .grounded_artifact
+            .as_ref()
+            .map(|evidence| evidence.path.as_str()),
+        Some("README.md")
     );
     assert_eq!(
         resumed
@@ -1109,6 +1124,137 @@ async fn output_truncated_text_response_never_executes_salvaged_call() {
             .iter()
             .any(|message| message.content.contains("No tool ran"))
     );
+}
+
+#[tokio::test]
+async fn grounded_recovery_targets_failed_repair_after_complete_malformed_write_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("index.html");
+    let content = format!(
+        "{}l.x += l<think>\n",
+        (1..=698)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>()
+    );
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        state.workspace_root = Some(dir.path().to_path_buf());
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+
+    let native_call = |call_id: &str, tool_name: &str, arguments: serde_json::Value| {
+        vec![crate::tools::ToolCallEnvelope {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            arguments,
+        }]
+    };
+
+    ctx.response.final_content = "Writing the artifact.".to_string();
+    super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call(
+            "write-1",
+            "write_to_file",
+            serde_json::json!({"path": target, "content": content}),
+        ),
+    )
+    .await;
+
+    ctx.response.final_content =
+        "The complete read shows a malformed artifact at the end.".to_string();
+    super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call("read-1", "view_file", serde_json::json!({"path": target})),
+    )
+    .await;
+
+    ctx.response.final_content = "Attempting the repair.".to_string();
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call(
+            "repair-1",
+            "replace_file_content",
+            serde_json::json!({
+                "path": target,
+                "old_string": "the malformed suffix",
+                "new_string": "the malformed suffix"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert_eq!(ctx.metrics.grounded_recoveries, 1);
+    assert_eq!(ctx.progress.failed_mutations, 1);
+    assert_eq!(ctx.progress.consecutive_no_progress, 1);
+    let history = state.lock().await;
+    let recovery = history
+        .history
+        .iter()
+        .find(|message| message.content.starts_with("[Evidence-based recovery:"))
+        .expect("grounded recovery notice");
+    assert!(recovery.content.contains("index.html"));
+    assert!(
+        recovery
+            .content
+            .contains(&format!("699 lines / {} bytes", content.len()))
+    );
+    assert!(recovery.content.contains("complete read of lines 1-699"));
+    assert!(
+        recovery
+            .content
+            .contains("last repair attempt made no change")
+    );
+    assert!(
+        recovery
+            .content
+            .contains("old_string and new_string are identical")
+    );
+    assert!(
+        recovery
+            .content
+            .contains("exactly one narrow replace_file_content")
+    );
+    assert!(recovery.content.contains("Do not reread the whole file"));
+    assert_eq!(std::fs::read_to_string(&target).expect("artifact"), content);
 }
 
 #[tokio::test]
@@ -2192,6 +2338,7 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     ctx.metrics.tool_calls = 9;
     ctx.metrics.malformed_calls = 2;
     ctx.metrics.no_progress_results = 3;
+    ctx.metrics.grounded_recoveries = 1;
     ctx.metrics.provider_errors = 1;
     ctx.metrics.provider_429s = 1;
     ctx.progress
@@ -2205,6 +2352,7 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     assert_eq!(summary["tokens_used"], 1234);
     assert_eq!(summary["tool_calls"], 9);
     assert_eq!(summary["provider_429s"], 1);
+    assert_eq!(summary["grounded_recoveries"], 1);
     assert_eq!(summary["changed_paths"][0], "src/GameScene.ts");
     assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
     assert_eq!(summary["stop_reason"], "provider_error:429");

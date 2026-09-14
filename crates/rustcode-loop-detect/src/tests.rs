@@ -367,6 +367,16 @@ fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are
 }
 
 #[test]
+fn malformed_artifact_claim_is_grounding_evidence() {
+    assert!(claims_corrupt_or_incomplete_inspection(
+        "The complete file read shows a malformed artifact at the end."
+    ));
+    assert!(!claims_corrupt_or_incomplete_inspection(
+        "The complete file read is valid and ready for verification."
+    ));
+}
+
+#[test]
 fn same_batch_inspections_do_not_trigger_cross_tool_inspection_cycle() {
     let mut detector = ReasoningLoopDetector::default();
     for tool in ["view_file", "run_command", "run_command"] {

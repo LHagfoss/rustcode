@@ -23,7 +23,8 @@ use super::super::{
 };
 use super::recovery::{loop_recovery_prompt, record_malformed_call};
 use super::{
-    TurnContext, append_cancelled_batch_results, hydrate_explicit_verification_from_history,
+    GroundedArtifactEvidence, TurnContext, append_cancelled_batch_results,
+    hydrate_explicit_verification_from_history,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +151,52 @@ fn content_bearing_inspection_status(
         return None;
     }
     Some(inspection.complete && !incomplete_tool_result(metadata))
+}
+
+fn bounded_repair_failure(content: &str) -> String {
+    const MAX_FAILURE_CHARS: usize = 512;
+    let first_line = content.lines().next().unwrap_or(content).trim();
+    if first_line.len() <= MAX_FAILURE_CHARS {
+        return first_line.to_string();
+    }
+    let mut end = MAX_FAILURE_CHARS;
+    while end > 0 && !first_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &first_line[..end])
+}
+
+fn grounded_artifact_recovery_message(
+    evidence: &GroundedArtifactEvidence,
+    failure: &str,
+    exhausted: bool,
+) -> String {
+    let failure = bounded_repair_failure(failure);
+    let write_evidence = match (evidence.write_lines, evidence.write_bytes) {
+        (Some(lines), Some(bytes)) => format!("{lines} lines / {bytes} bytes"),
+        (Some(lines), None) => format!("{lines} lines"),
+        (None, Some(bytes)) => format!("{bytes} bytes"),
+        (None, None) => "known successful mutation".to_string(),
+    };
+    let read_evidence = evidence
+        .read_range
+        .map(|(start, end)| format!("complete read of lines {start}-{end}"))
+        .unwrap_or_else(|| "complete read evidence".to_string());
+    if exhausted {
+        format!(
+            "[Grounded artifact recovery exhausted: '{}' was successfully written ({write_evidence}); {read_evidence} confirmed the artifact needs repair; the last repair attempt made no change ({failure}). No safe targeted repair has succeeded. Do not reread the whole file or replay the successful write. Stop with an actionable incomplete/recoverable response.]",
+            evidence.path
+        )
+    } else {
+        format!(
+            "[Grounded artifact recovery: '{}' was successfully written ({write_evidence}); {read_evidence} was returned and the artifact was reported malformed; the last repair attempt made no change ({failure}). Use that existing evidence to issue exactly one narrow replace_file_content for the malformed suffix. Do not reread the whole file or replay the successful write; if the exact replacement is not provable, report the blocker instead of guessing.]",
+            evidence.path
+        )
+    }
+}
+
+fn same_recovery_path(left: &str, right: &str) -> bool {
+    left == right || crate::tools::resolve_tool_path(left) == crate::tools::resolve_tool_path(right)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -638,6 +685,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut failure_replan = None;
             let mut evidence_recovery = None;
             let mut grounded_recovery = None;
+            let mut targeted_recovery = false;
+            let mut targeted_recovery_exhausted = false;
             let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
@@ -731,13 +780,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
                 let mut mutation_progress = false;
                 if is_mutating_tool(&name) {
-                    let failed = !metadata.success
-                        || content
-                            .trim_start()
-                            .to_ascii_lowercase()
-                            .starts_with("error");
                     let made_progress = mutation_made_progress(metadata.success, &content);
-                    mutation_progress = made_progress && diff_opt.is_some();
+                    let failed = !made_progress;
+                    mutation_progress =
+                        made_progress && (!metadata.changed_paths.is_empty() || diff_opt.is_some());
                     if failed {
                         ctx.progress.failed_mutations += 1;
                         ctx.progress.consecutive_failed_mutations += 1;
@@ -752,6 +798,25 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                                 failure_replan =
                                     Some(failure_replan_message(&call.name, &category, repeats));
                             }
+                            if let Some(evidence) = ctx.progress.grounded_artifact.as_mut()
+                                && evidence.read_range.is_some()
+                                && call
+                                    .arguments
+                                    .get("path")
+                                    .and_then(|value| value.as_str())
+                                    .is_some_and(|path| same_recovery_path(path, &evidence.path))
+                            {
+                                let exhausted = evidence.repair_attempts > 0;
+                                evidence.repair_attempts =
+                                    evidence.repair_attempts.saturating_add(1);
+                                grounded_recovery = Some(grounded_artifact_recovery_message(
+                                    evidence,
+                                    &bounded_repair_failure(&content),
+                                    exhausted,
+                                ));
+                                targeted_recovery = true;
+                                targeted_recovery_exhausted = exhausted;
+                            }
                         }
                     } else {
                         ctx.progress.made_edits = true;
@@ -764,18 +829,26 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();
                         ctx.recovery.reasoning_recovery_attempts = 0;
+                        ctx.progress.grounded_artifact = None;
                     }
                 }
 
                 // Keep authoritative write metadata separate from display
                 // output. A later read can then prove that it is checking the
                 // same revision without replaying source into recovery.
-                if is_mutating_tool(&name) && metadata.success {
+                if is_mutating_tool(&name) && mutation_progress {
                     for path in &metadata.changed_paths {
                         let content = file_preview.as_ref().and_then(|(preview_path, content)| {
                             (preview_path == path).then_some(content.as_str())
                         });
                         ctx.progress.file_evidence.record_mutation(path, content);
+                        ctx.progress.grounded_artifact = Some(GroundedArtifactEvidence {
+                            path: path.clone(),
+                            write_lines: content.map(|content| content.lines().count()),
+                            write_bytes: content.map(str::len),
+                            read_range: None,
+                            repair_attempts: 0,
+                        });
                     }
                 }
 
@@ -845,11 +918,52 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     && let Some(call) = call
                     && let Some((path, start_line, end_line)) =
                         loop_detect::read_target(&call.name, &call.arguments)
+                {
+                    let inspection = metadata.inspection.as_ref();
+                    let returned_start = inspection
+                        .and_then(|inspection| inspection.returned_range.as_ref())
+                        .and_then(|range| range.start)
+                        .and_then(|line| usize::try_from(line).ok())
+                        .unwrap_or(start_line);
+                    let returned_end = inspection
+                        .and_then(|inspection| inspection.returned_range.as_ref())
+                        .and_then(|range| range.end)
+                        .and_then(|line| usize::try_from(line).ok())
+                        .or(end_line);
+                    let complete_content_read =
+                        content_bearing_inspection_status(Some(call), &metadata, &content)
+                            == Some(true);
+                    if complete_content_read
+                        && loop_detect::claims_corrupt_or_incomplete_inspection(
+                            &ctx.response.final_content,
+                        )
+                        && let Some(evidence) = ctx.progress.grounded_artifact.as_mut()
+                        && same_recovery_path(&path, &evidence.path)
+                        && returned_start == 1
+                        && returned_end.is_some_and(|end| {
+                            evidence
+                                .write_lines
+                                .is_none_or(|write_lines| end >= write_lines)
+                        })
+                    {
+                        evidence.read_range = returned_end.map(|end| (returned_start, end));
+                    }
+                }
+                if metadata.success
+                    && let Some(call) = call
+                    && let Some((path, start_line, end_line)) =
+                        loop_detect::read_target(&call.name, &call.arguments)
                     && let Some(recovery) = ctx.progress.file_evidence.record_read_with_kind(
                         &path,
                         start_line,
-                        end_line,
-                        !metadata.truncated,
+                        metadata
+                            .inspection
+                            .as_ref()
+                            .and_then(|inspection| inspection.returned_range.as_ref())
+                            .and_then(|range| range.end)
+                            .and_then(|line| usize::try_from(line).ok())
+                            .or(end_line),
+                        !incomplete_tool_result(&metadata),
                         loop_detect::read_returns_content(&call.name, &call.arguments),
                     )
                 {
@@ -1122,6 +1236,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
             }
 
+            if targeted_recovery && evidence_recovery.is_none() {
+                evidence_recovery = Some((
+                    loop_detect::ProgressReason::NoNewInformation,
+                    1,
+                    "grounded malformed-artifact repair".to_string(),
+                ));
+            }
+
             let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
             if should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some()) {
                 let (reason, streak, action) = evidence_recovery.unwrap_or((
@@ -1152,12 +1274,19 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     |notice| format!("[Evidence-based recovery: {notice}]"),
                 );
-                match loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
-                {
+                let recovery_action = if targeted_recovery_exhausted {
+                    LoopRecoveryAction::ForceFinal
+                } else {
+                    loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
+                };
+                match recovery_action {
                     LoopRecoveryAction::Recover => {
                         ctx.recovery.loop_recovery_attempts =
                             ctx.recovery.loop_recovery_attempts.saturating_add(1);
                         ctx.metrics.evidence_recoveries += 1;
+                        if targeted_recovery {
+                            ctx.metrics.grounded_recoveries += 1;
+                        }
                         log_recovery_decision(ctx, "evidence", "recover", reason.label());
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();
@@ -1182,6 +1311,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                     LoopRecoveryAction::ForceFinal => {
                         log_recovery_decision(ctx, "evidence", "force_final", reason.label());
+                        if targeted_recovery {
+                            ctx.metrics.grounded_recoveries += 1;
+                        }
                         crate::logger::operational_event(
                             loop_detect::DIAG_RECOVERY_EXHAUSTED,
                             serde_json::json!({
@@ -1485,10 +1617,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::GroundedArtifactEvidence;
     use super::{
         batch_invalidates_read_recovery, benign_shell_wrapper_failure,
-        bounded_malformed_tool_history, content_bearing_inspection_status, incomplete_tool_result,
-        mutation_batch_guidance, should_apply_loop_recovery,
+        bounded_malformed_tool_history, content_bearing_inspection_status,
+        grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
+        should_apply_loop_recovery,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1531,6 +1665,30 @@ mod tests {
         assert!(should_apply_loop_recovery(false, true, false));
         assert!(should_apply_loop_recovery(false, false, true));
         assert!(!should_apply_loop_recovery(false, false, false));
+    }
+
+    #[test]
+    fn grounded_artifact_recovery_is_bounded_and_targeted() {
+        let evidence = GroundedArtifactEvidence {
+            path: "src/index.html".to_string(),
+            write_lines: Some(699),
+            write_bytes: Some(23_785),
+            read_range: Some((1, 699)),
+            repair_attempts: 0,
+        };
+        let message = grounded_artifact_recovery_message(
+            &evidence,
+            &format!("error: {}", "x".repeat(10_000)),
+            false,
+        );
+
+        assert!(message.contains("src/index.html"));
+        assert!(message.contains("699 lines / 23785 bytes"));
+        assert!(message.contains("complete read of lines 1-699"));
+        assert!(message.contains("last repair attempt made no change"));
+        assert!(message.contains("exactly one narrow replace_file_content"));
+        assert!(message.contains("Do not reread the whole file"));
+        assert!(message.len() < 2_000, "recovery notice was not bounded");
     }
 
     #[test]

@@ -6,8 +6,8 @@ use super::compiler::{append_compiler_diagnostics, cached_compiler_check, run_co
 use super::events::{ToolResult, ToolResultMetadata};
 use super::subagents::handle_agent_tool;
 use super::{
-    REPLAYABLE_READ_LIMIT, is_mutating_tool, is_read_only_tool, path_mtime, tool_signature,
-    view_file_unchanged_since_last_read,
+    REPLAYABLE_READ_LIMIT, is_mutating_tool, is_read_only_tool, mutation_made_progress, path_mtime,
+    tool_signature, view_file_unchanged_since_last_read,
 };
 
 #[cfg(test)]
@@ -983,12 +983,7 @@ pub(crate) async fn execute_tool_batch(
     }
     let batch_changed_files = results.iter().any(|result| {
         is_mutating_tool(&result.tool_name)
-            && result.metadata.success
-            && !result
-                .content
-                .trim_start()
-                .to_ascii_lowercase()
-                .starts_with("error")
+            && mutation_made_progress(result.metadata.success, &result.content)
     });
     if batch_changed_files {
         {
@@ -1002,7 +997,10 @@ pub(crate) async fn execute_tool_batch(
         let root = tool_calls
             .iter()
             .zip(&results)
-            .find(|(_, result)| is_mutating_tool(&result.tool_name) && result.metadata.success)
+            .find(|(_, result)| {
+                is_mutating_tool(&result.tool_name)
+                    && mutation_made_progress(result.metadata.success, &result.content)
+            })
             .and_then(|(call, _)| get_tool_project_root(&call.name, &call.arguments))
             .or_else(|| edit_root.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
