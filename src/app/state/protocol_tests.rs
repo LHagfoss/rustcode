@@ -196,3 +196,11 @@ fn a_profile_override_beats_detection() {
         ToolProtocol::ApiNative
     );
 }
+
+#[test]
+fn local_model_detection_is_available_without_a_matching_profile() {
+    let mut s = AppState::new();
+    s.api_base_url = "http://localhost:11434/v1/chat/completions".to_string();
+
+    assert!(s.active_model_is_local());
+}

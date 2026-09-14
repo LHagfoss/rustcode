@@ -44,6 +44,22 @@ pub(crate) struct ToolSchemaPolicy {
     pub(crate) compact_text_prompt: bool,
 }
 
+/// Counts the capabilities advertised by a textual tool contract. Native
+/// requests derive the equivalent counts from the selected schema result, but
+/// textual requests still need an explicit inventory for diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ToolSurface {
+    pub(crate) builtin: usize,
+    pub(crate) mcp: usize,
+    pub(crate) agent: usize,
+}
+
+impl ToolSurface {
+    pub(crate) const fn total(self) -> usize {
+        self.builtin + self.mcp + self.agent
+    }
+}
+
 /// Deterministic provider-facing tool menu for the read-only inspection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ToolSchemaProfile {
@@ -401,6 +417,7 @@ const CORE_CODING_TOOLS: &[&str] = &[
 /// specialized media, memory, web, and lifecycle tools out of the prompt.
 /// Native requests apply the finer-grained relevance filter below.
 const TEXT_CODING_TOOLS: &[&str] = &[
+    "set_session_title",
     "grep",
     "glob",
     "list_directory",
@@ -473,6 +490,50 @@ const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
 ];
 
 const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
+
+fn text_builtin_is_advertised(
+    tool: &super::Tool,
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> bool {
+    if (tool.name == "set_session_title" && !policy.include_session_title_tool)
+        || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&tool.name))
+    {
+        return false;
+    }
+    if policy.profile == ToolSchemaProfile::ReadOnlyInspection
+        && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name)
+    {
+        return false;
+    }
+    if tool.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools {
+        return false;
+    }
+    agent_mode != crate::config::AgentMode::Plan || allowed_in_plan_mode(tool.name)
+}
+
+pub(crate) fn textual_tool_surface(
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> ToolSurface {
+    ToolSurface {
+        builtin: TOOLS
+            .iter()
+            .filter(|tool| text_builtin_is_advertised(tool, policy, agent_mode))
+            .count(),
+        mcp: usize::from(policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan)
+            * collect_mcp_tools().len(),
+        agent: agent_tool_count(policy, agent_mode),
+    }
+}
+
+pub(crate) fn agent_tool_count(
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> usize {
+    usize::from(policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan)
+        * AGENT_TOOL_SPECS.len()
+}
 
 fn source_file_count(root: &Path) -> usize {
     let mut pending = vec![root.to_path_buf()];
@@ -1373,7 +1434,7 @@ If the request context names a skill, load it first. For a likely specialized wo
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "Call tools only as fenced `tool` blocks containing one JSON object; emit no prose before/after.\n\n\
+                "Active tool protocol: textual JSON fence. Call tools only as fenced `tool` blocks containing one JSON object; emit no prose before/after.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
@@ -1382,14 +1443,14 @@ If the request context names a skill, load it first. For a likely specialized wo
         }
         crate::config::ToolProtocol::Native => {
             p.push_str(
-                "Call tools only with native tags; emit no prose before/after.\n\n\
+                "Active tool protocol: textual native tags. Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
                 Rules: emit exactly one [TOOL_CALLS] marker in each response. After its single [ARGS] JSON object, stop immediately: emit no second marker and no prose. The next tool call belongs in the next model turn, after the result is provided. Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Issue exactly one tool call per response and wait for its result before choosing the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
+                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Issue exactly one tool call per response and wait for its result before choosing the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
@@ -1409,21 +1470,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
-        if (t.name == "set_session_title" && !policy.include_session_title_tool)
-            || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&t.name))
-        {
-            continue;
-        }
-        if policy.profile == ToolSchemaProfile::ReadOnlyInspection
-            && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
-        {
-            continue;
-        }
-        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
-        {
-            continue;
-        }
-        if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
+        if !text_builtin_is_advertised(t, policy, agent_mode) {
             continue;
         }
         if policy.compact_text_prompt {
@@ -1440,12 +1487,20 @@ If the request context names a skill, load it first. For a likely specialized wo
             if agent_mode == crate::config::AgentMode::Plan {
                 continue;
             }
-            p.push_str(&format!(
-                "- {} | Args: {} | {}\n",
-                name,
-                serde_json::to_string(&schema).unwrap_or_default(),
-                desc
-            ));
+            if policy.compact_text_prompt {
+                p.push_str(&format!(
+                    "- {} | Args: {}\n",
+                    name,
+                    serde_json::to_string(&schema).unwrap_or_default()
+                ));
+            } else {
+                p.push_str(&format!(
+                    "- {} | Args: {} | {}\n",
+                    name,
+                    serde_json::to_string(&schema).unwrap_or_default(),
+                    desc
+                ));
+            }
         }
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {

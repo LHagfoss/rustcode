@@ -952,13 +952,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             provider_usage,
         ) = {
             let s = state.lock().await;
-            let local_model = s
-                .active_model_profile()
-                .is_some_and(|profile| profile.is_local())
-                || {
-                    let lower = s.api_base_url.to_ascii_lowercase();
-                    lower.contains("11434") || lower.contains("ollama")
-                };
+            let local_model = s.active_model_is_local();
             let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),
@@ -1107,10 +1101,13 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
         let delegation_active = s.delegation_active;
+        let local_model = s.active_model_is_local();
         let compact_tool_prompt = s
             .active_model_profile()
             .as_ref()
-            .is_some_and(|profile| profile.compact_tool_prompt == Some(true));
+            .map(|profile| profile.compact_tool_prompt.unwrap_or(local_model))
+            .unwrap_or(local_model)
+            && !matches!(protocol, crate::config::ToolProtocol::ApiNative);
         let session_title_tool_available =
             s.session_title_tool_available && agent_mode != crate::config::AgentMode::Plan;
         let mut schema_policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(

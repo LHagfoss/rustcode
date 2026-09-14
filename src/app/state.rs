@@ -896,6 +896,17 @@ impl AppState {
             .cloned()
     }
 
+    /// Whether the active endpoint/model should receive the local-model
+    /// compatibility contract when no profile override says otherwise.
+    pub fn active_model_is_local(&self) -> bool {
+        self.active_model_profile()
+            .is_some_and(|profile| profile.is_local())
+            || {
+                let lower = self.api_base_url.to_ascii_lowercase();
+                lower.contains("11434") || lower.contains("ollama")
+            }
+    }
+
     pub fn vision_model_profile(&self) -> Option<crate::config::ModelProfile> {
         let name = self.config.vision_model.as_deref()?;
         self.config
