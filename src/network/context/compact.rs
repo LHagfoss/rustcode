@@ -908,6 +908,7 @@ mod preserved_user_request_tests {
             completion_tokens: 20,
             total_tokens: 1_020,
             cached_tokens: None,
+            ..Default::default()
         };
         let mut measured = ChatMessage::new("assistant", "measured response");
         measured.token_usage = Some(usage.clone());
@@ -946,6 +947,7 @@ mod preserved_user_request_tests {
             completion_tokens: 100,
             total_tokens: 57_834,
             cached_tokens: None,
+            ..Default::default()
         };
         history.last_mut().unwrap().token_usage = Some(usage.clone());
         let before = serde_json::to_string(&history).unwrap();
@@ -983,6 +985,7 @@ mod preserved_user_request_tests {
             completion_tokens: 100,
             total_tokens: 21_100,
             cached_tokens: None,
+            ..Default::default()
         };
         history.last_mut().unwrap().token_usage = Some(usage.clone());
         let original = history.clone();
