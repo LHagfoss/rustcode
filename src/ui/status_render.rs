@@ -319,11 +319,26 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Line::from(line_spans)
     };
 
-    // Blank line after title
+    // Session identity is useful when copying a report or resuming a run, so
+    // keep it visually separate from the mutable model/workspace settings.
+    let label_w = 15;
+    let session_id = fit_to_width(state.active_session_id(), inner_w.saturating_sub(label_w));
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  session:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(
+            session_id,
+            Style::default()
+                .fg(text_c)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
     banner.push(make_row(vec![]));
 
-    // Row 1: model
-    let label_w = 15;
+    // Model and reasoning settings
     let mut model_spans = vec![
         Span::styled(
             fit_to_width("  model:", label_w),
@@ -351,7 +366,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     }
     banner.push(make_row(model_spans));
 
-    // Row 2: reasoning effort
     let effort = state
         .active_model_profile()
         .and_then(|profile| profile.reasoning_effort.clone())
@@ -373,7 +387,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
     ]));
 
-    // Row 3: context window
     let context_window = format!(
         "{} tokens",
         format_token_count(state.active_context_window())
@@ -405,7 +418,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     }
     banner.push(make_row(context_spans));
 
-    // Row 4: directory
+    // Workspace location
     let (dir_display, _) = state
         .cwd_and_branch()
         .rsplit_once(':')
@@ -426,7 +439,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Span::styled(dir_fitted, Style::default().fg(text_c).bg(reset_bg)),
     ]));
 
-    // Row 5: branch
     let branch_name = state
         .cwd_and_branch()
         .rsplit_once(':')
@@ -442,7 +454,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Span::styled(branch_fitted, Style::default().fg(text_c).bg(reset_bg)),
     ]));
 
-    // Row 6: permissions
+    // Access mode
     let (perm_text, perm_style) = if state.auto_confirm() {
         (
             "YOLO mode",
