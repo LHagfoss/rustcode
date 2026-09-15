@@ -1,3 +1,7 @@
+## [v0.52.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.8) - 2026-09-15
+
+### Fixes
+- Improved session status visibility with live session IDs, branch updates, and explicit tool intent.
 ## [v0.52.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.7) - 2026-09-15
 
 ### Fixes
