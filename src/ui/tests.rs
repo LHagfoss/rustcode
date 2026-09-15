@@ -2128,7 +2128,7 @@ fn status_panels_render_minimal_inline() {
     assert_eq!(stream_recovery_lines[0].spans[0].content, "! ");
     assert_eq!(
         stream_recovery_lines[0].spans[1].content,
-        "Provider stream interrupted — partial tool call saved safely; retrying once (next prompt or --resume can continue)"
+        "Provider stream interrupted — output saved safely; no tool was replayed (send `continue` or use --resume)"
     );
 
     let mut yolo_enabled_lines = Vec::new();

@@ -25,7 +25,6 @@ const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RoundCollectionError {
-    Continue,
     Stop,
 }
 
@@ -72,6 +71,41 @@ fn retryable_stream_failure(message: &str) -> bool {
                 | lifecycle::StreamFailureKind::ResponseBodyDecode
         )
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamOutputPhase {
+    BeforeOutput,
+    TextOutput,
+    ToolCall,
+}
+
+impl StreamOutputPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::BeforeOutput => "before_output",
+            Self::TextOutput => "text_output",
+            Self::ToolCall => "tool_call",
+        }
+    }
+}
+
+fn stream_output_phase(error: &runner::ResponseError) -> StreamOutputPhase {
+    if !error.partial_native_tool_calls.is_empty()
+        || crate::network::text::has_intended_tool_call(&error.partial_content)
+    {
+        StreamOutputPhase::ToolCall
+    } else if error.partial_content.is_empty() {
+        StreamOutputPhase::BeforeOutput
+    } else {
+        StreamOutputPhase::TextOutput
+    }
+}
+
+fn should_retry_stream_transport(error: &runner::ResponseError, attempts: usize) -> bool {
+    attempts < usize::from(MAX_STREAM_RECOVERY_ATTEMPTS)
+        && retryable_stream_failure(&error.to_string())
+        && matches!(stream_output_phase(error), StreamOutputPhase::BeforeOutput)
 }
 
 fn bounded_stream_recovery_checkpoint(content: &str) -> String {
@@ -159,7 +193,7 @@ async fn checkpoint_native_stream_recovery(
 ) {
     let content = native_stream_checkpoint_content(checkpoints, error);
     let notice = format!(
-        "[Recoverable provider interruption: the ApiNative tool-call stream failed before normal completion. No tool ran and the bounded call identity/diagnostic checkpoint was saved for the next prompt or --resume. Issue a fresh complete tool call if the action is still needed. Provider detail: {}]",
+        "[Recoverable provider interruption: the ApiNative tool-call stream failed during a tool call. No tool ran and the bounded call identity/diagnostic checkpoint was saved. It will not be replayed. To continue safely, send `continue` or run `rustcode --resume`, then issue a fresh complete tool call if the action is still needed. Provider detail: {}]",
         bounded_error_detail(error)
     );
     let mut s = state.lock().await;
@@ -181,7 +215,7 @@ async fn checkpoint_stream_recovery(
 ) {
     let content = bounded_stream_recovery_checkpoint(&content);
     let notice = format!(
-        "[Recoverable provider interruption: the response stream failed after a partial textual tool call. The partial response was saved, but no tool call from it was executed. RustCode will make one bounded recovery request. If recovery fails, send the next prompt or use --resume; completed tool calls will not be replayed. Provider detail: {}]",
+        "[Recoverable provider interruption: the response stream failed during a partial textual tool call. The partial response was saved as an unexecuted checkpoint; no tool call from it ran and it will not be replayed. To continue safely, send `continue` or run `rustcode --resume`, then issue a fresh complete tool call if the action is still needed. Provider detail: {}]",
         bounded_error_detail(error)
     );
     let mut s = state.lock().await;
@@ -194,6 +228,44 @@ async fn checkpoint_stream_recovery(
     s.current_token_usage = None;
     s.status = crate::app::AppStatus::Streaming;
     s.stream_tracker = Some(crate::app::StreamTracker::new());
+}
+
+async fn checkpoint_text_stream_recovery(
+    state: &Arc<Mutex<AppState>>,
+    content: String,
+    error: &runner::ResponseError,
+) {
+    let content = bounded_stream_recovery_checkpoint(&content);
+    let notice = format!(
+        "[Recoverable provider interruption: the response stream failed during text output. The partial response was saved, no tool ran, and RustCode will not replay the emitted bytes. To continue from this checkpoint, send `continue` or run `rustcode --resume`. Provider detail: {}]",
+        bounded_error_detail(error)
+    );
+    let mut s = state.lock().await;
+    s.replace_current_response(content.clone());
+    s.history.push(ChatMessage::new("assistant", content));
+    s.history.push(ChatMessage::new("system", notice));
+    let active_id = s.active_session_id.clone();
+    crate::config::save_session_history(&active_id, &s.history);
+    s.current_token_usage = None;
+    s.status = crate::app::AppStatus::Streaming;
+    s.stream_tracker = Some(crate::app::StreamTracker::new());
+}
+
+fn stream_interruption_notice(
+    error: &runner::ResponseError,
+    phase: StreamOutputPhase,
+    retry_used: bool,
+) -> String {
+    let action = if retry_used {
+        "RustCode already used its one safe automatic retry. Send `continue` or run `rustcode --resume` to try again."
+    } else {
+        "Send `continue` or run `rustcode --resume` to try again."
+    };
+    format!(
+        "[Recoverable provider interruption: the SSE stream failed {phase} before a complete response was available. No tool from this failed stream ran; emitted bytes will not be replayed. {action} Provider detail: {}]",
+        bounded_error_detail(error),
+        phase = phase.label(),
+    )
 }
 
 pub(super) async fn collect_round(
@@ -418,13 +490,7 @@ pub(super) async fn collect_round(
         .await;
         match attempt {
             Err(error)
-                if transport_retry_attempts < 1
-                    // Once a response has emitted bytes, replaying the
-                    // request can duplicate a textual call. Preserve it and
-                    // recover from the checkpoint instead.
-                    && error.partial_content.is_empty()
-                    && error.partial_native_tool_calls.is_empty()
-                    && retryable_stream_failure(&error.to_string())
+                if should_retry_stream_transport(&error, transport_retry_attempts)
                     && !request_cancel.is_cancelled() =>
             {
                 transport_retry_attempts += 1;
@@ -432,6 +498,7 @@ pub(super) async fn collect_round(
                     "turn.stream_retry",
                     serde_json::json!({
                         "attempt": transport_retry_attempts,
+                        "output_phase": stream_output_phase(&error).label(),
                         "reason": lifecycle::stream_failure_kind_from_message(&error.to_string())
                             .map(|kind| kind.to_string()),
                         "error": error.to_string(),
@@ -528,14 +595,33 @@ pub(super) async fn collect_round(
                     }),
                 );
                 checkpoint_stream_recovery(state, error.partial_content.clone(), &error).await;
-                ctx.budget.tool_rounds += 1;
-                return Err(RoundCollectionError::Continue);
+                return Err(RoundCollectionError::Stop);
+            }
+            if !cancel_token.is_cancelled() && !error.partial_content.is_empty() {
+                ctx.response.final_content_persisted = true;
+                crate::logger::operational_event(
+                    "turn.stream_checkpoint",
+                    serde_json::json!({
+                        "kind": stream_failure_kind.map(|kind| kind.to_string()),
+                        "output_phase": stream_output_phase(&error).label(),
+                        "partial_content_bytes": error.partial_content.len(),
+                        "outcome": "saved_text_checkpoint",
+                    }),
+                );
+                checkpoint_text_stream_recovery(state, error.partial_content.clone(), &error).await;
+                return Err(RoundCollectionError::Stop);
             }
             let mut s = state.lock().await;
             let notice = if error_message == "cancelled"
                 || stream_failure_kind == Some(lifecycle::StreamFailureKind::Cancelled)
             {
                 "Request cancelled by user".to_string()
+            } else if retryable_stream_failure(&error_message) {
+                stream_interruption_notice(
+                    &error,
+                    stream_output_phase(&error),
+                    transport_retry_attempts >= usize::from(MAX_STREAM_RECOVERY_ATTEMPTS),
+                )
             } else {
                 format!("Error from LLM Provider: {error_message}")
             };
@@ -615,8 +701,9 @@ pub(super) async fn collect_round(
 #[cfg(test)]
 mod tests {
     use super::{
-        native_stream_checkpoint_content, recoverable_textual_stream_failure,
-        retryable_stream_failure,
+        StreamOutputPhase, native_stream_checkpoint_content, recoverable_textual_stream_failure,
+        retryable_stream_failure, should_retry_stream_transport, stream_interruption_notice,
+        stream_output_phase,
     };
 
     #[test]
@@ -661,6 +748,38 @@ mod tests {
         assert!(!retryable_stream_failure(
             "stream_failure:cancelled status=none"
         ));
+    }
+
+    #[test]
+    fn zero_byte_transport_failure_gets_one_retry_but_emitted_output_does_not() {
+        let empty = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:response_body_decode status=200 bytes_received=0 events_received=0 partial_event_bytes=0",
+            String::new(),
+        );
+        assert_eq!(stream_output_phase(&empty), StreamOutputPhase::BeforeOutput);
+        assert!(should_retry_stream_transport(&empty, 0));
+        assert!(!should_retry_stream_transport(&empty, 1));
+
+        let partial = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:response_body_decode status=200 bytes_received=32 events_received=1 partial_event_bytes=0",
+            "partial answer".to_owned(),
+        );
+        assert_eq!(stream_output_phase(&partial), StreamOutputPhase::TextOutput);
+        assert!(!should_retry_stream_transport(&partial, 0));
+    }
+
+    #[test]
+    fn ambiguous_tool_output_is_never_eligible_for_transport_replay() {
+        let partial = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:premature_eof status=200 bytes_received=64 events_received=2 partial_event_bytes=0",
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial".to_owned(),
+        );
+        assert_eq!(stream_output_phase(&partial), StreamOutputPhase::ToolCall);
+        assert!(!should_retry_stream_transport(&partial, 0));
+        let notice = stream_interruption_notice(&partial, stream_output_phase(&partial), false);
+        assert!(notice.contains("before a complete response was available"));
+        assert!(notice.contains("continue"));
+        assert!(notice.contains("will not be replayed"));
     }
 
     #[test]

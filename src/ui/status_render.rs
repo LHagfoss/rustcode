@@ -33,7 +33,7 @@ pub(super) fn render_status_panel<'a>(
         Some("Repetitive tool loop detected — stopping tools and requesting final response")
     } else if content.contains("[Recoverable provider interruption:") {
         Some(
-            "Provider stream interrupted — partial tool call saved safely; retrying once (next prompt or --resume can continue)",
+            "Provider stream interrupted — output saved safely; no tool was replayed (send `continue` or use --resume)",
         )
     } else if content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")

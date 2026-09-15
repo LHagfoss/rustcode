@@ -2092,7 +2092,7 @@ impl SseReadError {
         match self {
             Self::Timeout { kind, .. } => *kind,
             Self::Io(error) if error.contains("invalid UTF-8") => StreamFailureKind::MalformedSse,
-            Self::Io(error) if error == RESPONSE_BODY_DECODE_ERROR => {
+            Self::Io(error) if error.contains(RESPONSE_BODY_DECODE_ERROR) => {
                 StreamFailureKind::ResponseBodyDecode
             }
             Self::Io(_) => StreamFailureKind::ProviderError,
@@ -2131,7 +2131,7 @@ mod sse_read_error_tests {
     use crate::network::lifecycle::StreamFailureKind;
 
     #[test]
-    fn classifies_only_the_exact_response_body_decode_error() {
+    fn classifies_response_body_decode_errors_without_misclassifying_utf8() {
         assert_eq!(
             SseReadError::Io(RESPONSE_BODY_DECODE_ERROR.to_owned()).kind(),
             StreamFailureKind::ResponseBodyDecode
@@ -2146,6 +2146,10 @@ mod sse_read_error_tests {
             )
             .kind(),
             StreamFailureKind::MalformedSse
+        );
+        assert_eq!(
+            SseReadError::Io("error decoding response body: connection reset".to_owned()).kind(),
+            StreamFailureKind::ResponseBodyDecode
         );
         assert_eq!(
             SseReadError::Io("connection reset by peer".to_owned()).kind(),
