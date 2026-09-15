@@ -76,6 +76,11 @@ pub(super) async fn render_frame(
             guard.clear_screen_requested = false;
         }
         let clear_history_display_start = guard.history_display_start;
+        // Keep the cached location fresh even when the next frame was
+        // requested by another state change (for example a completed tool).
+        // The cache still debounces Git discovery; this only makes the frame
+        // boundary the final source of truth for the footer and welcome panel.
+        guard.refresh_workspace_location(std::time::Instant::now());
         let custom_title = (guard.active_session_id == title_session_id)
             .then_some(loaded_title)
             .flatten()

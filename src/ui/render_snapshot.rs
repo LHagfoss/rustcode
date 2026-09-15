@@ -26,6 +26,7 @@ pub(crate) struct RenderSnapshot {
     config: crate::config::AppConfig,
     model_name: String,
     api_base_url: String,
+    active_session_id: String,
     cwd_and_branch: String,
     home_path: Option<String>,
     overlay: OverlaySnapshot,
@@ -177,6 +178,7 @@ impl RenderSnapshot {
             config: state.config.clone(),
             model_name: state.model_name.clone(),
             api_base_url: state.api_base_url.clone(),
+            active_session_id: state.active_session_id.clone(),
             cwd_and_branch: state.cwd_and_branch.clone(),
             home_path: std::env::var("HOME").ok(),
             overlay: OverlaySnapshot::new(state),
@@ -274,6 +276,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn api_base_url(&self) -> &str {
         &self.api_base_url
+    }
+    pub(crate) fn active_session_id(&self) -> &str {
+        &self.active_session_id
     }
     pub(crate) fn cwd_and_branch(&self) -> &str {
         &self.cwd_and_branch
