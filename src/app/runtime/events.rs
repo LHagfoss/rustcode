@@ -52,7 +52,7 @@ pub(super) async fn apply_question_answer(
     }
     state.pending_question = None;
     if cancelled {
-        state.status = AppStatus::Idle;
+        state.enter_idle();
     }
     state.request_redraw();
 }
@@ -80,7 +80,7 @@ impl AppRuntime {
                 state.pending_queue.clear();
                 state.background_turn_context = None;
                 state.clear_active_turn_projection();
-                state.status = AppStatus::Idle;
+                state.enter_idle();
                 state.request_redraw();
                 Ok(AppRunControl::Continue)
             }

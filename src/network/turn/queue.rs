@@ -44,7 +44,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
-                s.status = AppStatus::Idle;
+                s.enter_idle();
                 s.delegation_active = false;
                 s.orchestrator_running = false;
                 break;
@@ -56,6 +56,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
+            s.last_turn_had_model_final_response = false;
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
             let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);
             s.session_title_tool_available = is_first_prompt;
