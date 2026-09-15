@@ -75,6 +75,8 @@ pub struct AppState {
 
     #[allow(dead_code)]
     pub cwd_and_branch: String,
+    /// Cached workspace path and Git branch used by the composer footer.
+    pub(crate) workspace_location: crate::app::workspace::WorkspaceLocationCache,
     /// Workspace root supplied by an external frontend such as ACP.
     pub workspace_root: Option<std::path::PathBuf>,
 
@@ -239,36 +241,6 @@ pub struct AppState {
     /// Warning or informational notices collected from background operations (e.g. MCP startup timeouts)
     /// to be displayed cleanly upon application exit instead of interrupting active terminal rendering.
     pub exit_warnings: Vec<String>,
-}
-
-fn get_cwd_and_branch() -> String {
-    let absolute_path = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let path_with_tildes = match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && absolute_path.starts_with(&home) => {
-            absolute_path.replacen(&home, "~", 1)
-        }
-        _ => absolute_path,
-    };
-
-    let branch = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|out| {
-            if out.status.success() {
-                std::str::from_utf8(&out.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "main".to_string());
-
-    format!("{}:{}", path_with_tildes, branch)
 }
 
 impl AppState {
@@ -448,6 +420,20 @@ impl AppState {
 
     pub(crate) fn render_snapshot(&self) -> crate::ui::render_snapshot::RenderSnapshot {
         crate::ui::render_snapshot::RenderSnapshot::new(self)
+    }
+
+    /// Refresh the cached footer location when its debounce window expires.
+    /// Git discovery happens here, before rendering, so a frame only reads
+    /// the already-resolved display string.
+    pub(crate) fn refresh_workspace_location(&mut self, now: std::time::Instant) -> bool {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if self.workspace_location.refresh_if_due(&cwd, now) {
+            self.cwd_and_branch = self.workspace_location.display();
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
     }
 
     /// Publish layout information only if the state rendered to obtain it is
@@ -717,7 +703,11 @@ impl AppState {
         let subagent_supervisor =
             crate::app::SubagentSupervisor::new(config.subagent_concurrency_limit);
         let history = History::default();
-        let cwd_and_branch = get_cwd_and_branch();
+        let workspace_location = crate::app::workspace::WorkspaceLocationCache::new(
+            &workspace,
+            std::time::Instant::now(),
+        );
+        let cwd_and_branch = workspace_location.display();
         crate::ui::theme::ensure_themes_dir();
         crate::ui::theme::set_active_theme(&config.theme);
 
@@ -757,6 +747,7 @@ impl AppState {
             model_name,
             config,
             cwd_and_branch,
+            workspace_location,
             workspace_root: None,
             update_check: crate::update::UpdateState::Unknown,
             show_update_prompt: false,
