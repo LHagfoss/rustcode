@@ -773,6 +773,30 @@ fn session_title_tool_schema_bounds_and_rejects_oversized_calls() {
 }
 
 #[test]
+fn large_complete_writes_are_rejected_before_dispatch() {
+    let oversized = ToolCall {
+        name: "write_to_file".to_string(),
+        arguments: serde_json::json!({
+            "path": "artifacts/large.txt",
+            "content": "x".repeat(rustcode_tools::filesystem::MAX_FILE_CHUNK_BYTES + 1),
+        }),
+        call_id: None,
+    };
+    let error = validate_tool_calls(&[oversized], 1)
+        .expect_err("large write_to_file calls must be rejected before dispatch");
+    assert!(error.contains("no file was changed"));
+    assert!(error.contains("write_file_chunk"));
+    assert!(error.contains("next_offset"));
+
+    let small = ToolCall {
+        name: "write_to_file".to_string(),
+        arguments: serde_json::json!({"path": "small.txt", "content": "hello"}),
+        call_id: None,
+    };
+    validate_tool_calls(&[small], 1).expect("small complete writes keep the convenience path");
+}
+
+#[test]
 fn inspection_schemas_use_strict_typed_arguments() {
     let schemas = native_tools_schema_for_context(ToolSchemaPolicy::read_only_inspection(), &[]).0;
     for tool in schemas {

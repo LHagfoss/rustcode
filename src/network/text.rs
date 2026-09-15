@@ -13,6 +13,11 @@ pub(crate) fn has_intended_tool_call(content: &str) -> bool {
         || lower.contains("<function_call>")
 }
 
+fn has_textual_write_call(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("write_to_file") && has_intended_tool_call(content)
+}
+
 /// A closed tool envelope whose arguments still cannot be parsed. This is
 /// intentionally separate from `has_incomplete_actionable_tool_call`, which
 /// identifies an unclosed fence/tag and therefore an incomplete envelope.
@@ -416,6 +421,8 @@ pub(crate) fn continuation_nudge_for_category(
 ) -> &'static str {
     if is_reasoning_only(previous) {
         "Stop planning and do not restate your plan again. Call the tool now."
+    } else if has_textual_write_call(previous) {
+        "The previous textual file-write call was interrupted before execution; no file was changed and no tool was executed. Discard that partial call and emit one fresh complete call. Keep each write_file_chunk content at or below 16384 bytes, start at offset 0 with truncate=true, then use each returned next_offset for the next chunk. Use write_to_file only for small complete files."
     } else if previous.matches("```").count() % 2 != 0
         || (previous.contains("<tool_call>") && !previous.contains("</tool_call>"))
     {
@@ -605,20 +612,22 @@ mod tests {
     }
 
     #[test]
-    fn continuation_nudge_explains_incomplete_tool_syntax() {
+    fn continuation_nudge_explains_large_file_recovery() {
         let nudge = continuation_nudge_for_category(
-            "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"x\"}",
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial",
             Some("length"),
         );
 
-        assert!(nudge.contains("syntax was incomplete"));
+        assert!(nudge.contains("no file was changed"));
+        assert!(nudge.contains("write_file_chunk"));
+        assert!(nudge.contains("16384"));
         assert!(nudge.contains("no tool was executed"));
     }
 
     #[test]
     fn continuation_nudge_explains_incomplete_tool_arguments() {
         let nudge = continuation_nudge_for_category(
-            "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"x\",oops}}\n```",
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":oops}}\n```",
             Some("length"),
         );
 
