@@ -12,6 +12,7 @@ pub mod state;
 pub mod status;
 pub mod subagent_controller;
 pub mod transcript;
+pub(crate) mod workspace;
 pub use state::Verbosity;
 pub mod suggestion;
 

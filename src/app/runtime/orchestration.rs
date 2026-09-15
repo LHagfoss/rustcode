@@ -166,7 +166,11 @@ impl AppRuntime {
 
             {
                 let mut state = app_state.lock().await;
-                if state.expire_ctrl_c_exit_arming(std::time::Instant::now()) {
+                let now = std::time::Instant::now();
+                if state.expire_ctrl_c_exit_arming(now) {
+                    needs_redraw = true;
+                }
+                if state.refresh_workspace_location(now) {
                     needs_redraw = true;
                 }
             }

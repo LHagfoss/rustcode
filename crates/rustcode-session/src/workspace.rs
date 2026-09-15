@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const WORKSPACES_DIR: &str = "workspaces";
 const DESCRIPTOR_VERSION: u32 = 1;
+const MAX_HANDOFF_CHANGED_FILES: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceError {
@@ -407,13 +408,32 @@ impl WorkspaceManager {
         });
         validate_branch(&branch)?;
         let base_sha = resolve_base(&repository.source_worktree, &request.base_sha)?;
+        let expected_branch = format!("refs/heads/{branch}");
         if git_ok(
             &repository.source_worktree,
             &["show-ref", "--verify", &format!("refs/heads/{branch}")],
         ) {
-            return Err(WorkspaceError::Collision(format!(
-                "branch `{branch}` already exists"
-            )));
+            let checked_out_at =
+                worktree_entries(&repository.source_worktree)
+                    .ok()
+                    .and_then(|entries| {
+                        entries
+                            .into_iter()
+                            .find(|entry| entry.branch.as_deref() == Some(expected_branch.as_str()))
+                    });
+            let detail = checked_out_at
+                .map(|entry| {
+                    format!(
+                        "branch `{branch}` is already checked out at {}; use that worktree or choose a different branch; do not retry checkout",
+                        entry.path.display()
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "branch `{branch}` already exists but is not available for a new worktree; choose a different branch; do not retry checkout"
+                    )
+                });
+            return Err(WorkspaceError::Collision(detail));
         }
         let workspace_path = request.workspace_path.clone().unwrap_or_else(|| {
             metadata_dir
@@ -712,8 +732,17 @@ impl WorkspaceManager {
     }
 
     pub fn handoff(&self, id: &str) -> Result<String, WorkspaceError> {
-        let status = self.status(id)?;
-        let descriptor = &status.descriptor;
+        let descriptor = self.load_descriptor(id)?.ok_or_else(|| {
+            WorkspaceError::StaleDescriptor(
+                self.workspace_metadata_root().join(format!("{id}.json")),
+            )
+        })?;
+        let inspection = self.inspect_worktree(&descriptor)?;
+        let status = inspection.owned.then(|| self.status(id)).transpose()?;
+        let descriptor = status
+            .as_ref()
+            .map(|status| &status.descriptor)
+            .unwrap_or(&descriptor);
         let verification = descriptor
             .verification
             .as_ref()
@@ -725,25 +754,61 @@ impl WorkspaceManager {
                 )
             })
             .unwrap_or_else(|| "not recorded".to_string());
+        let changed_files = status
+            .as_ref()
+            .map(|status| status.changed_files.as_slice())
+            .unwrap_or(&descriptor.changed_files);
+        let worktree_state = inspection.describe();
+        let working_state = if inspection.owned {
+            if descriptor.has_uncommitted_changes {
+                format!("dirty ({} changed path(s))", changed_files.len())
+            } else {
+                "clean".to_string()
+            }
+        } else {
+            "unknown until ownership is restored".to_string()
+        };
+        let removal = removal_guidance(descriptor, &inspection);
+        let next_action = next_action(descriptor, &inspection);
         Ok(format!(
-            "Workspace {}\npath: {}\nbranch: {}\nbase: {}\nhead: {}\nstatus: {:?}\nchanged files: {}\n{}verification: {}\nnext actions: inspect, retain, archive, or explicitly approve cleanup/publish operations.",
+            "Workspace {}\nowner: {} (session {}, task {})\npath: {}\nworktree: {}\nbranch: {}\nbase: {}\nhead: {}\nlifecycle: {:?}\nworking tree: {}\nchanged files: {}\n{}verification: {}\nremoval: {}\nnext action: {}",
             descriptor.id,
+            descriptor.owner,
+            descriptor.owner_session_id,
+            descriptor.owner_task_id,
             descriptor.workspace_path.display(),
+            worktree_state,
             descriptor.branch,
             descriptor.base_sha,
             descriptor.current_head,
             descriptor.lifecycle,
-            if status.changed_files.is_empty() {
+            working_state,
+            if changed_files.is_empty() {
                 "none".to_string()
             } else {
-                status.changed_files.join(", ")
+                format_changed_files(changed_files)
             },
-            if status.diff_stat.is_empty() {
+            if status
+                .as_ref()
+                .map(|status| status.diff_stat.is_empty())
+                .unwrap_or(descriptor.diff_stat.is_empty())
+            {
                 String::new()
             } else {
-                format!("diff stat: {}\n", status.diff_stat.trim())
+                format!(
+                    "diff stat: {}\n",
+                    format_bounded_lines(
+                        status
+                            .as_ref()
+                            .map(|status| status.diff_stat.as_str())
+                            .unwrap_or(&descriptor.diff_stat)
+                            .trim(),
+                    )
+                )
             },
-            verification
+            verification,
+            removal,
+            next_action,
         ))
     }
 
@@ -753,6 +818,7 @@ impl WorkspaceManager {
         action: CleanupAction,
         confirmed: bool,
     ) -> Result<WorkspaceDescriptor, WorkspaceError> {
+        let mut force_remove = false;
         let mut descriptor = self.load_descriptor(id)?.ok_or_else(|| {
             WorkspaceError::StaleDescriptor(
                 self.workspace_metadata_root().join(format!("{id}.json")),
@@ -762,14 +828,14 @@ impl WorkspaceManager {
             && descriptor.lifecycle != WorkspaceLifecycle::Removed
         {
             let status = self.status(id)?;
-            if (status.descriptor.has_uncommitted_changes || status.descriptor.has_unpushed_commits)
-                && !confirmed
-            {
-                return Err(WorkspaceError::CleanupRefused(
-                    "uncommitted or unpushed work remains; inspect or confirm explicitly"
-                        .to_string(),
-                ));
+            let inspection = self.inspect_worktree(&status.descriptor)?;
+            if let Some(detail) = cleanup_blocker(&status.descriptor, &inspection, confirmed) {
+                return Err(WorkspaceError::CleanupRefused(detail));
             }
+            force_remove = confirmed
+                && (status.descriptor.has_uncommitted_changes
+                    || status.descriptor.has_unpushed_commits
+                    || inspection.entry.as_ref().is_some_and(|entry| entry.locked));
             descriptor = status.descriptor;
             self.verify_owned_worktree(&descriptor)?;
         }
@@ -786,9 +852,7 @@ impl WorkspaceManager {
                 }
                 if descriptor.lifecycle != WorkspaceLifecycle::Removed {
                     let mut remove_args = vec!["worktree", "remove"];
-                    if confirmed
-                        && (descriptor.has_uncommitted_changes || descriptor.has_unpushed_commits)
-                    {
+                    if force_remove {
                         remove_args.push("--force");
                     }
                     let workspace_path = descriptor.workspace_path.to_string_lossy().to_string();
@@ -818,30 +882,182 @@ impl WorkspaceManager {
         &self,
         descriptor: &WorkspaceDescriptor,
     ) -> Result<(), WorkspaceError> {
-        let metadata_root = fs::canonicalize(self.workspace_metadata_root())
-            .unwrap_or_else(|_| self.workspace_metadata_root());
-        let path = fs::canonicalize(absolute_target(&descriptor.workspace_path)?)
-            .map_err(|_| WorkspaceError::StaleDescriptor(descriptor.workspace_path.clone()))?;
-        if !path.starts_with(&metadata_root)
-            || path.starts_with(&descriptor.repository_root)
-            || descriptor.descriptor_path.parent() != Some(self.workspace_metadata_root().as_path())
-        {
-            return Err(WorkspaceError::NotOwned(path));
-        }
-        if !path.is_dir() {
-            return Err(WorkspaceError::StaleDescriptor(path));
-        }
-        let worktrees = git_stdout(
-            &descriptor.source_worktree,
-            &["worktree", "list", "--porcelain"],
-        )?;
-        let owned = worktree_entry(&worktrees, &path)
-            .is_some_and(|branch| branch == format!("refs/heads/{}", descriptor.branch));
-        if !owned {
-            return Err(WorkspaceError::NotOwned(path));
+        let inspection = self.inspect_worktree(descriptor)?;
+        if !inspection.owned {
+            return Err(WorkspaceError::NotOwned(inspection.path));
         }
         Ok(())
     }
+
+    fn inspect_worktree(
+        &self,
+        descriptor: &WorkspaceDescriptor,
+    ) -> Result<WorktreeInspection, WorkspaceError> {
+        let path = absolute_target(&descriptor.workspace_path)?;
+        let metadata_root = fs::canonicalize(self.workspace_metadata_root())
+            .unwrap_or_else(|_| self.workspace_metadata_root());
+        let canonical_path = fs::canonicalize(&path).ok();
+        let path_is_allowed = canonical_path.as_ref().is_some_and(|path| {
+            path.starts_with(&metadata_root) && !path.starts_with(&descriptor.repository_root)
+        }) && descriptor.descriptor_path.parent()
+            == Some(self.workspace_metadata_root().as_path());
+        let entries = worktree_entries(&descriptor.source_worktree)?;
+        let at_path = entries.iter().find(|entry| paths_equal(&entry.path, &path));
+        let expected_branch = format!("refs/heads/{}", descriptor.branch);
+        let branch_elsewhere = entries
+            .iter()
+            .find(|entry| entry.branch.as_deref() == Some(expected_branch.as_str()));
+        let owned = path_is_allowed
+            && path.is_dir()
+            && at_path
+                .is_some_and(|entry| entry.branch.as_deref() == Some(expected_branch.as_str()));
+        Ok(WorktreeInspection {
+            path,
+            entry: at_path.cloned(),
+            branch_elsewhere: (!owned).then(|| branch_elsewhere.cloned()).flatten(),
+            path_is_allowed,
+            owned,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeEntry {
+    path: PathBuf,
+    head: Option<String>,
+    branch: Option<String>,
+    locked: bool,
+    prunable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeInspection {
+    path: PathBuf,
+    entry: Option<WorktreeEntry>,
+    branch_elsewhere: Option<WorktreeEntry>,
+    path_is_allowed: bool,
+    owned: bool,
+}
+
+impl WorktreeInspection {
+    fn describe(&self) -> String {
+        if self.owned {
+            return format_entry(self.entry.as_ref().expect("owned worktree entry"), "owned");
+        }
+        if !self.path_is_allowed {
+            return format!("not owned; descriptor path is outside RustCode workspace storage");
+        }
+        if let Some(entry) = &self.entry {
+            return format_entry(entry, "not owned; path is registered to another branch");
+        }
+        if let Some(entry) = &self.branch_elsewhere {
+            return format_entry(entry, "not owned; branch is checked out elsewhere");
+        }
+        if !self.path.is_dir() {
+            return "not owned; descriptor path is missing from Git worktree registry".to_string();
+        }
+        "not owned; descriptor path is not registered as a Git worktree".to_string()
+    }
+}
+
+fn format_entry(entry: &WorktreeEntry, state: &str) -> String {
+    let branch = entry.branch.as_deref().unwrap_or("detached");
+    let head = entry.head.as_deref().unwrap_or("unknown");
+    let mut flags = Vec::new();
+    if entry.locked {
+        flags.push("locked");
+    }
+    if entry.prunable {
+        flags.push("prunable");
+    }
+    let flags = if flags.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", flags.join(", "))
+    };
+    format!(
+        "{state} at {} (branch {branch}, HEAD {head}{flags})",
+        entry.path.display()
+    )
+}
+
+fn removal_guidance(descriptor: &WorkspaceDescriptor, inspection: &WorktreeInspection) -> String {
+    if !inspection.owned {
+        return "blocked: ownership/path mismatch; inspect before any removal".to_string();
+    }
+    let mut blockers = Vec::new();
+    if descriptor.lifecycle == WorkspaceLifecycle::Running {
+        blockers.push("active workspace");
+    }
+    if descriptor.has_uncommitted_changes {
+        blockers.push("uncommitted changes");
+    }
+    if descriptor.has_unpushed_commits {
+        blockers.push("unpushed commits");
+    }
+    if inspection.entry.as_ref().is_some_and(|entry| entry.locked) {
+        blockers.push("locked worktree");
+    }
+    if blockers.is_empty() {
+        "safe: clean, no unpushed commits, and inactive; explicitly confirm removal when done"
+            .to_string()
+    } else {
+        format!(
+            "unsafe: {}; stop/inspect, then explicitly confirm removal",
+            blockers.join(", ")
+        )
+    }
+}
+
+fn next_action(descriptor: &WorkspaceDescriptor, inspection: &WorktreeInspection) -> String {
+    if !inspection.owned {
+        if let Some(entry) = &inspection.branch_elsewhere {
+            return format!(
+                "use the existing checkout at {} or choose another branch; do not retry checkout",
+                entry.path.display()
+            );
+        }
+        return "inspect `git worktree list --porcelain`; do not remove or retry checkout"
+            .to_string();
+    }
+    if descriptor.lifecycle == WorkspaceLifecycle::Running
+        || descriptor.has_uncommitted_changes
+        || descriptor.has_unpushed_commits
+        || inspection.entry.as_ref().is_some_and(|entry| entry.locked)
+    {
+        "inspect changes and stop the active task before cleanup".to_string()
+    } else {
+        "continue work, archive it, or use cleanup with explicit confirmation".to_string()
+    }
+}
+
+fn cleanup_blocker(
+    descriptor: &WorkspaceDescriptor,
+    inspection: &WorktreeInspection,
+    confirmed: bool,
+) -> Option<String> {
+    if confirmed {
+        return None;
+    }
+    let mut blockers = Vec::new();
+    if descriptor.lifecycle == WorkspaceLifecycle::Running {
+        blockers.push("workspace is active");
+    }
+    if descriptor.has_uncommitted_changes {
+        blockers.push("uncommitted changes remain");
+    }
+    if descriptor.has_unpushed_commits {
+        blockers.push("unpushed commits remain");
+    }
+    if inspection.entry.as_ref().is_some_and(|entry| entry.locked) {
+        blockers.push("worktree is locked");
+    }
+    (!blockers.is_empty()).then(|| {
+        format!(
+            "{}; inspect/stop work, or explicitly confirm removal",
+            blockers.join(", ")
+        )
+    })
 }
 
 struct CreationLock {
@@ -1000,6 +1216,37 @@ fn parse_status_path(line: &str) -> Option<String> {
         .filter(|path| !path.is_empty())
 }
 
+fn format_changed_files(changed_files: &[String]) -> String {
+    let shown = changed_files
+        .iter()
+        .take(MAX_HANDOFF_CHANGED_FILES)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if changed_files.len() > MAX_HANDOFF_CHANGED_FILES {
+        format!(
+            "{shown} (+{} more; truncated)",
+            changed_files.len() - MAX_HANDOFF_CHANGED_FILES
+        )
+    } else {
+        shown
+    }
+}
+
+fn format_bounded_lines(value: &str) -> String {
+    const MAX_LINES: usize = MAX_HANDOFF_CHANGED_FILES;
+    let lines = value.lines().collect::<Vec<_>>();
+    let shown = lines.iter().take(MAX_LINES).copied().collect::<Vec<_>>();
+    let mut output = shown.join("\n");
+    if lines.len() > MAX_LINES {
+        output.push_str(&format!(
+            "\n... ({} more lines; truncated)",
+            lines.len() - MAX_LINES
+        ));
+    }
+    output
+}
+
 fn format_diff_stat(cwd: &Path, base: &str) -> Result<String, WorkspaceError> {
     let committed = git_stdout(cwd, &["diff", "--stat", &format!("{base}..HEAD")])?;
     let working = git_stdout(cwd, &["diff", "--stat"])?;
@@ -1010,20 +1257,42 @@ fn format_diff_stat(cwd: &Path, base: &str) -> Result<String, WorkspaceError> {
         .join("\n"))
 }
 
-fn worktree_entry(output: &str, expected: &Path) -> Option<String> {
-    let mut path = None;
-    let mut branch = None;
+fn worktree_entries(cwd: &Path) -> Result<Vec<WorktreeEntry>, WorkspaceError> {
+    let output = git_stdout(cwd, &["worktree", "list", "--porcelain"])?;
+    let mut entries = Vec::new();
+    let mut current = None;
     for line in output.lines().chain(std::iter::once("")) {
         if let Some(value) = line.strip_prefix("worktree ") {
-            path = Some(PathBuf::from(value));
-            branch = None;
-        } else if let Some(value) = line.strip_prefix("branch ") {
-            branch = Some(value.to_string());
-        } else if line.is_empty() && path.as_deref() == Some(expected) {
-            return branch;
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(value),
+                head: None,
+                branch: None,
+                locked: false,
+                prunable: false,
+            });
+        } else if let Some(entry) = current.as_mut() {
+            if let Some(value) = line.strip_prefix("HEAD ") {
+                entry.head = Some(value.to_string());
+            } else if let Some(value) = line.strip_prefix("branch ") {
+                entry.branch = Some(value.to_string());
+            } else if line == "locked" || line.starts_with("locked ") {
+                entry.locked = true;
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                entry.prunable = true;
+            } else if line.is_empty() {
+                entries.push(current.take().expect("current worktree entry"));
+            }
         }
     }
-    None
+    Ok(entries)
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    fs::canonicalize(left).ok().as_deref() == fs::canonicalize(right).ok().as_deref()
+        || absolute_target(left).ok() == absolute_target(right).ok()
 }
 
 #[cfg(test)]
@@ -1081,6 +1350,100 @@ mod tests {
         assert!(linked.linked_worktree);
         assert_eq!(linked.common_git_dir, regular.common_git_dir);
         assert_eq!(linked.repository_root, regular.repository_root);
+    }
+
+    #[test]
+    fn handoff_reports_owned_worktree_and_safe_removal() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let request =
+            WorkspaceRequest::for_task(root.path(), "owned", &base, "rustcode", "session", "owned");
+        let descriptor = manager.create(&request).expect("workspace");
+
+        let handoff = manager.handoff(&descriptor.id).expect("handoff");
+        assert!(handoff.contains("owner: rustcode (session session, task owned)"));
+        assert!(handoff.contains("worktree: owned at "));
+        assert!(handoff.contains("working tree: clean"));
+        assert!(handoff.contains("removal: safe: clean, no unpushed commits"));
+        assert!(handoff.contains("next action: continue work, archive it"));
+    }
+
+    #[test]
+    fn branch_collision_identifies_worktree_checked_out_elsewhere() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let mut first_request =
+            WorkspaceRequest::for_task(root.path(), "first", &base, "rustcode", "session", "first");
+        first_request.branch = Some("feature/already-checked-out".to_string());
+        let first = manager.create(&first_request).expect("first workspace");
+
+        let mut second_request = WorkspaceRequest::for_task(
+            root.path(),
+            "second",
+            &base,
+            "rustcode",
+            "session",
+            "second",
+        );
+        second_request.branch = first_request.branch.clone();
+        let error = manager
+            .create(&second_request)
+            .expect_err("branch collision");
+        let detail = error.to_string();
+        assert!(detail.contains("already checked out at"), "{detail}");
+        assert!(
+            detail.contains(first.workspace_path.to_string_lossy().as_ref()),
+            "{detail}"
+        );
+        assert!(detail.contains("choose a different branch"), "{detail}");
+    }
+
+    #[test]
+    fn removal_guidance_marks_dirty_work_unsafe_and_refuses_without_confirmation() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let request = WorkspaceRequest::for_task(
+            root.path(),
+            "dirty-guidance",
+            &base,
+            "rustcode",
+            "session",
+            "dirty-guidance",
+        );
+        let descriptor = manager.create(&request).expect("workspace");
+        fs::write(descriptor.workspace_path.join("keep.txt"), "keep\n").expect("change");
+        manager
+            .set_lifecycle(&descriptor.id, WorkspaceLifecycle::Running)
+            .expect("active workspace");
+
+        let handoff = manager.handoff(&descriptor.id).expect("handoff");
+        assert!(handoff.contains("working tree: dirty (1 changed path(s))"));
+        assert!(handoff.contains("removal: unsafe: active workspace, uncommitted changes"));
+        assert!(handoff.contains("explicitly confirm removal"));
+        assert!(matches!(
+            manager.cleanup(
+                &descriptor.id,
+                CleanupAction::Remove {
+                    delete_branch: false,
+                },
+                false,
+            ),
+            Err(WorkspaceError::CleanupRefused(detail))
+                if detail.contains("workspace is active")
+                    && detail.contains("uncommitted changes remain")
+        ));
     }
 
     #[test]
