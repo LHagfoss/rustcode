@@ -39,9 +39,13 @@ pub struct AppState {
     /// concurrent orchestrator — two turns streaming the same history produced
     /// duplicate assistant messages. Spawns gate on this instead.
     pub orchestrator_running: bool,
-    /// Time of the most recent keyboard or paste activity. This only controls
-    /// the interactive idle-summary timer and is not persisted.
-    pub(crate) last_user_activity_at: std::time::Instant,
+    /// Time at which the app most recently entered an eligible idle state.
+    /// Unlike user activity, this cannot be stale from before a turn ran.
+    pub(crate) idle_since: std::time::Instant,
+    /// Whether the latest logical turn completed with a model-facing final
+    /// response. Tool-only, interrupted, and failed turns must not trigger an
+    /// automatic presentation recap.
+    pub(crate) last_turn_had_model_final_response: bool,
     /// Prevents manual and automatic summaries from running concurrently.
     pub(crate) summary_in_flight: bool,
     /// Count of conversational messages at which the last summary completed.
@@ -332,7 +336,15 @@ impl AppState {
     }
 
     pub(crate) fn mark_user_activity(&mut self) {
-        self.last_user_activity_at = std::time::Instant::now();
+        let now = std::time::Instant::now();
+        if self.status == AppStatus::Idle {
+            self.idle_since = now;
+        }
+    }
+
+    pub(crate) fn enter_idle(&mut self) {
+        self.status = AppStatus::Idle;
+        self.idle_since = std::time::Instant::now();
     }
 
     pub(crate) fn should_start_idle_summary(
@@ -348,9 +360,10 @@ impl AppState {
             && !background_tasks_active
             && !self.modal_open()
             && self.input_buffer.trim().is_empty()
+            && self.last_turn_had_model_final_response
             && self.summary_history_len() >= 2
             && self.last_summary_history_len != Some(self.summary_history_len())
-            && now.duration_since(self.last_user_activity_at) >= idle_after
+            && now.duration_since(self.idle_since) >= idle_after
     }
 
     fn summary_history_len(&self) -> usize {
@@ -371,7 +384,7 @@ impl AppState {
     pub(crate) fn finish_summary(&mut self) {
         self.summary_in_flight = false;
         self.last_summary_history_len = Some(self.summary_history_len());
-        self.last_user_activity_at = std::time::Instant::now();
+        self.enter_idle();
     }
 
     /// Clear the pending Ctrl+C exit confirmation, invalidating the footer
@@ -728,7 +741,8 @@ impl AppState {
             background_turn_context: None,
             status: AppStatus::Idle,
             orchestrator_running: false,
-            last_user_activity_at: std::time::Instant::now(),
+            idle_since: std::time::Instant::now(),
+            last_turn_had_model_final_response: false,
             summary_in_flight: false,
             last_summary_history_len: None,
             cursor_position: 0,
