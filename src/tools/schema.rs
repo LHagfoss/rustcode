@@ -375,6 +375,11 @@ pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
 }
 
 pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
+/// Keep the selected MCP contract bounded by measured serialized bytes as well
+/// as count. A single verbose MCP schema must not consume the whole request
+/// budget or make the menu unstable across providers.
+pub(crate) const MAX_MCP_NATIVE_SCHEMA_BYTES: usize = 24 * 1024;
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 32 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -396,6 +401,10 @@ pub(crate) struct McpSchemaSelectionStats {
     pub phase: ToolSchemaPhase,
     pub builtin_available: usize,
     pub builtin_selected: usize,
+    pub builtin_schema_bytes: usize,
+    pub mcp_schema_bytes: usize,
+    pub mcp_schema_budget_bytes: usize,
+    pub schema_budget_exhausted: bool,
 }
 
 const CORE_CODING_TOOLS: &[&str] = &[
@@ -726,7 +735,31 @@ fn build_builtin_native_tools_schema(
             }
         }));
     }
+    // Preserve the core menu and deterministic TOOLS order, but drop the last
+    // specialized entries if the measured provider contract exceeds its
+    // budget. This is only schema pruning; execution validation remains based
+    // on the complete authoritative registry.
+    while serialized_schema_bytes(&tools) > MAX_BUILTIN_NATIVE_SCHEMA_BYTES {
+        let removable = tools.iter().rposition(|tool| {
+            tool["function"]["name"]
+                .as_str()
+                .is_some_and(|name| !CORE_CODING_TOOLS.contains(&name))
+        });
+        let Some(index) = removable.or_else(|| (!tools.is_empty()).then_some(tools.len() - 1))
+        else {
+            break;
+        };
+        tools.remove(index);
+    }
     tools
+}
+
+fn serialized_schema_bytes(schemas: &[Value]) -> usize {
+    serde_json::to_vec(schemas).map_or(0, |bytes| bytes.len())
+}
+
+fn mcp_schema_bytes(name: &str, description: &str, schema: &Value) -> usize {
+    serde_json::to_vec(&mcp_schema_value(name, description, schema)).map_or(0, |bytes| bytes.len())
 }
 
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
@@ -1084,24 +1117,42 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
             .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
     });
 
-    let mut selected = requested
+    let mut candidates = requested
         .iter()
         .copied()
         .take(MAX_MCP_NATIVE_SCHEMAS)
         .collect::<Vec<_>>();
-    selected.extend(
+    candidates.extend(
         previous
             .iter()
             .copied()
-            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
+            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(candidates.len())),
     );
-    let previously_used_count = selected.len().saturating_sub(requested.len());
-    selected.extend(
+    let previously_used_count = candidates.len().saturating_sub(requested.len());
+    candidates.extend(
         relevant
             .iter()
             .map(|(index, _)| *index)
-            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
+            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(candidates.len())),
     );
+    candidates.dedup();
+
+    let mut selected = Vec::new();
+    let mut selected_schema_bytes: usize = 0;
+    let mut schema_budget_exhausted = false;
+    for index in candidates {
+        if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
+            break;
+        }
+        let (name, description, schema) = &tools[index];
+        let bytes = mcp_schema_bytes(name, description, schema);
+        if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+            schema_budget_exhausted = true;
+            continue;
+        }
+        selected.push(index);
+        selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+    }
     let relevant_count = selected
         .iter()
         .filter(|index| !requested.contains(index) && !previous.contains(index))
@@ -1113,15 +1164,14 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
                 break;
             }
             if let Some(index) = tools.iter().position(|(name, _, _)| name == preferred) {
-                selected.push(index);
-            }
-        }
-        for index in 0..tools.len() {
-            if selected.len() >= MCP_DISCOVERY_FALLBACK_COUNT {
-                break;
-            }
-            if !selected.contains(&index) {
-                selected.push(index);
+                let (name, description, schema) = &tools[index];
+                let bytes = mcp_schema_bytes(name, description, schema);
+                if selected_schema_bytes.saturating_add(bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES {
+                    selected.push(index);
+                    selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+                } else {
+                    schema_budget_exhausted = true;
+                }
             }
         }
         fallback_count = selected.len();
@@ -1142,6 +1192,9 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
         omitted: tools.len().saturating_sub(selected.len()),
         selected_names,
         phase,
+        mcp_schema_bytes: selected_schema_bytes,
+        mcp_schema_budget_bytes: MAX_MCP_NATIVE_SCHEMA_BYTES,
+        schema_budget_exhausted,
         ..Default::default()
     };
     (selected, stats)
@@ -1201,10 +1254,25 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
             prioritized.push(index);
         }
     }
-    let mut selected = prioritized;
+    let mut selected = Vec::new();
+    let mut selected_schema_bytes: usize = 0;
+    let mut schema_budget_exhausted = false;
+    for index in prioritized {
+        let (name, description, schema) = &tools[index];
+        let bytes = mcp_schema_bytes(name, description, schema);
+        if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+            schema_budget_exhausted = true;
+            continue;
+        }
+        selected.push(index);
+        selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+    }
     selected.sort_unstable();
     stats.selected = selected.len();
     stats.omitted = tools.len().saturating_sub(selected.len());
+    stats.mcp_schema_bytes = selected_schema_bytes;
+    stats.mcp_schema_budget_bytes = MAX_MCP_NATIVE_SCHEMA_BYTES;
+    stats.schema_budget_exhausted |= schema_budget_exhausted;
     stats.selected_names = selected
         .iter()
         .map(|index| tools[*index].0.clone())
@@ -1249,6 +1317,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     let phase = tool_schema_phase(messages, workspace_root);
     let terms = context_terms(messages);
     let mut tools = build_builtin_native_tools_schema(policy, Some(&terms), phase);
+    let builtin_schema_bytes = serialized_schema_bytes(&tools);
     let builtin_available = TOOLS
         .iter()
         .filter(|tool| {
@@ -1285,6 +1354,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     stats.builtin_available = builtin_available;
     stats.builtin_selected =
         builtin_selected + usize::from(policy.include_agent_tools) * AGENT_TOOL_SPECS.len();
+    stats.builtin_schema_bytes = builtin_schema_bytes;
     (tools, stats)
 }
 
