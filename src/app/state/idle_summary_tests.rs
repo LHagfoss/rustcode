@@ -66,9 +66,7 @@ fn idle_summary_waits_while_work_or_draft_is_present() {
 fn idle_summary_requires_a_completed_model_response() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "request"));
-    state
-        .history
-        .push(ChatMessage::new("tool", "tool output"));
+    state.history.push(ChatMessage::new("tool", "tool output"));
     state.idle_since = Instant::now() - Duration::from_secs(601);
 
     assert!(!state.should_start_idle_summary(Instant::now(), false, Duration::from_secs(600),));
