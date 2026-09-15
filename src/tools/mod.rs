@@ -44,9 +44,9 @@ use dispatch::as_error_message;
 use parser::repair_json;
 #[cfg(test)]
 use schema::{
-    MCP_DISCOVERY_FALLBACK_COUNT, mcp_canonical_name, provider_compatible_schema,
-    schema_from_arguments, select_mcp_tools_for_context, select_mcp_tools_for_context_in_phase,
-    select_mcp_tools_for_context_with_sticky,
+    MAX_MCP_NATIVE_SCHEMA_BYTES, MCP_DISCOVERY_FALLBACK_COUNT, mcp_canonical_name,
+    provider_compatible_schema, schema_from_arguments, select_mcp_tools_for_context,
+    select_mcp_tools_for_context_in_phase, select_mcp_tools_for_context_with_sticky,
 };
 
 #[cfg(test)]
@@ -336,6 +336,18 @@ fn validate_tool_call(call: &ToolCall) -> Result<(), String> {
         ));
     };
 
+    // ApiNative parsing deliberately preserves malformed provider arguments as
+    // a bounded marker. Report that marker before schema validation would turn
+    // it into a misleading "missing path" or "additional property" error.
+    // Never attempt to repair or execute the malformed payload.
+    if let Some(reason) = malformed_arguments_reason(&call.arguments) {
+        let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
+        return Err(format!(
+            "malformed arguments for '{}': {reason}. No tool was executed. Emit one complete JSON object.{guidance}",
+            call.name
+        ));
+    }
+
     // A complete textual call can otherwise carry an unbounded JSON string all
     // the way to the filesystem handler. Keep the small-file convenience path,
     // but force large writes through the resumable chunk protocol before any
@@ -367,6 +379,21 @@ fn validate_tool_call(call: &ToolCall) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn malformed_arguments_reason(arguments: &Value) -> Option<String> {
+    let marker = arguments.get("_invalid_arguments")?.as_object()?;
+    let kind = marker
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("invalid");
+    let parse_error = arguments
+        .get("_parse_error")
+        .and_then(Value::as_str)
+        .unwrap_or("provider arguments were not valid JSON");
+    Some(format!(
+        "provider emitted {kind} JSON arguments: {parse_error}"
+    ))
 }
 
 fn registered_tool_schema(name: &str) -> Option<Value> {
@@ -418,13 +445,26 @@ fn tool_argument_guidance(name: &str) -> Option<String> {
         .map(|key| format!("\"{key}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let example = if name == "replace_file_content" {
-        serde_json::json!({
+    let example = match name {
+        "view_file" => serde_json::json!({
+            "path": "src/example.rs",
+            "start_line": 1,
+            "end_line": 40
+        }),
+        "multi_replace_file_content" => serde_json::json!({
+            "path": "src/example.rs",
+            "replacements": [{
+                "start_line": 10,
+                "end_line": 10,
+                "target_content": "old",
+                "replacement_content": "new"
+            }]
+        }),
+        "replace_file_content" => serde_json::json!({
             "path": "src/example.ts",
             "edits": [{"old_string": "old", "new_string": "new"}]
-        })
-    } else {
-        example_value_for_schema(&schema)
+        }),
+        _ => example_value_for_schema(&schema),
     };
     let example = serde_json::to_string(&example).unwrap_or_else(|_| "{}".to_string());
     Some(format!(
