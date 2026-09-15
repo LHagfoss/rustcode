@@ -549,6 +549,50 @@ fn explicit_output_field_overrides_native_google_capability() {
 }
 
 #[test]
+fn responses_profiles_resolve_endpoint_and_output_field() {
+    let profile = ModelProfile {
+        name: "opencode-muse-spark-1.3".to_string(),
+        url: "https://opencode.ai/zen/v1/responses".to_string(),
+        model: "muse-spark-1.3".to_string(),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.resolved_api_protocol(), ApiProtocol::Responses);
+    assert_eq!(profile.endpoint_url(), profile.url);
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxOutputTokens
+    );
+
+    let mut explicit = profile.clone();
+    explicit.url = "https://opencode.ai/zen/v1/chat/completions".to_string();
+    explicit.api_protocol = Some(ApiProtocol::Responses);
+    assert_eq!(
+        explicit.endpoint_url(),
+        "https://opencode.ai/zen/v1/responses"
+    );
+
+    let encoded = serde_json::to_value(&explicit).unwrap();
+    assert_eq!(encoded["api_protocol"], "responses");
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.api_protocol, Some(ApiProtocol::Responses));
+}
+
+#[test]
+fn built_in_opencode_profile_uses_paid_responses_model() {
+    let profile = AppConfig::default()
+        .models
+        .into_iter()
+        .find(|profile| profile.name == "opencode-muse-spark-1.3")
+        .expect("OpenCode profile should be available by default");
+
+    assert_eq!(profile.model, "muse-spark-1.3");
+    assert_eq!(profile.env_key.as_deref(), Some("OPENCODE_API_KEY"));
+    assert_eq!(profile.resolved_api_protocol(), ApiProtocol::Responses);
+    assert_eq!(profile.tool_protocol, Some(ToolProtocol::ApiNative));
+}
+
+#[test]
 fn context_budget_scales_without_double_reserving_large_or_small_windows() {
     let mut profile = AppConfig::default().models[0].clone();
     profile.max_tokens = Some(u32::MAX);

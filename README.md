@@ -212,6 +212,25 @@ model = "trusted-model"
 max_mutating_calls_per_response = 2
 ```
 
+OpenCode Zen's paid Muse model uses the OpenAI Responses API. RustCode includes
+this profile by default; add `OPENCODE_API_KEY` to the environment and select
+`opencode-muse-spark-1.3` as the model:
+
+```toml
+[[models]]
+name = "opencode-muse-spark-1.3"
+url = "https://opencode.ai/zen/v1/responses"
+model = "muse-spark-1.3"
+engine = "openai"
+env_key = "OPENCODE_API_KEY"
+api_protocol = "responses"
+tool_protocol = "apinative"
+```
+
+OpenCode's temporary free models are restricted by OpenCode's service to the
+OpenCode client session. RustCode does not bypass that restriction; use a paid
+Zen model and valid billing/API credentials for this provider profile.
+
 ### Project configuration
 
 Create a project-local override with:

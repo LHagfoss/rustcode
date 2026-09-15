@@ -347,7 +347,7 @@ async fn summarize_session_inner(
             s.request_redraw();
             return;
         }
-        s.status = AppStatus::Idle;
+        s.enter_idle();
         s.generation_start_time = None;
         s.clear_current_response();
         if let Some(content) = deterministic_recap.filter(|content| !content.is_empty()) {
@@ -363,7 +363,7 @@ async fn summarize_session_inner(
 
     if transcript.trim().is_empty() {
         let mut s = state_arc.lock().await;
-        s.status = AppStatus::Idle;
+        s.enter_idle();
         s.generation_start_time = None;
         s.history
             .push(ChatMessage::new("system", "Nothing to summarize yet."));
@@ -415,7 +415,7 @@ async fn summarize_session_inner(
         s.request_redraw();
         return;
     }
-    s.status = AppStatus::Idle;
+    s.enter_idle();
     s.generation_start_time = None;
     s.clear_current_response();
 

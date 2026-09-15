@@ -106,7 +106,7 @@ pub(super) async fn handle_app_event(
             state.pending_queue.clear();
             state.background_turn_context = None;
             state.clear_active_turn_projection();
-            state.status = AppStatus::Idle;
+            state.enter_idle();
             state.request_redraw();
             *needs_redraw = true;
         }
@@ -1207,7 +1207,7 @@ pub(super) async fn handle_app_event(
                                         s.history_display_start = s.history.len();
                                         s.clear_current_response();
                                         s.current_token_usage = None;
-                                        s.status = crate::app::AppStatus::Idle;
+                                        s.enter_idle();
                                     }
                                     "/cancel" => {
                                         current_cancel_token.cancel();

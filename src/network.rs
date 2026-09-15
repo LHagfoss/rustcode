@@ -303,7 +303,7 @@ pub(crate) async fn stop_turn_for_budget(
     ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
     let mut s = _state.lock().await;
     s.continuous_mode = false;
-    s.status = AppStatus::Idle;
+    s.enter_idle();
     drop(s);
     false
 }
@@ -797,14 +797,27 @@ pub async fn probe_function_calling(
             format!("{trimmed}/chat/completions")
         }
     };
-    let api_key = {
+    let (api_key, responses_api) = {
         let s = state.lock().await;
-        s.config
+        let profile = s
+            .config
             .models
             .iter()
-            .find(|m| m.url == url || m.endpoint_url() == resolved_url)
-            .and_then(|m| m.resolved_api_key())
+            .find(|m| m.url == url || m.endpoint_url() == resolved_url);
+        (
+            profile.and_then(|m| m.resolved_api_key()),
+            profile.is_some_and(|m| {
+                m.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+            }),
+        )
     };
+    if responses_api {
+        dbg_log!(
+            "probe_function_calling: {} uses Responses function calling; skipping chat probe",
+            resolved_url
+        );
+        return true;
+    }
 
     let payload = serde_json::json!({
         "model": model,
