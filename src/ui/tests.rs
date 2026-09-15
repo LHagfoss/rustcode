@@ -1942,6 +1942,7 @@ fn test_thinking_renders_metadata_and_summary() {
                 completion_tokens: 400,
                 total_tokens: 1400,
                 cached_tokens: None,
+                ..Default::default()
             }),
             response_time_ms: Some(3000),
             thought_time_ms: None,
@@ -1984,6 +1985,7 @@ fn thinking_metadata_uses_thought_stats_not_full_response_stats() {
                 completion_tokens: 900,
                 total_tokens: 1900,
                 cached_tokens: None,
+                ..Default::default()
             }),
             response_time_ms: Some(9000),
             thought_time_ms: Some(1250),

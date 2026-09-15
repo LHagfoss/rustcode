@@ -258,6 +258,7 @@ mod tests {
             completion_tokens,
             total_tokens,
             cached_tokens: None,
+            ..Default::default()
         }
     }
 

@@ -366,6 +366,7 @@ fn manual_compaction_discards_result_after_token_usage_change() {
         completion_tokens: 8,
         total_tokens: 20,
         cached_tokens: Some(4),
+        ..Default::default()
     });
     let expected = live_history.clone();
     let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];

@@ -140,10 +140,9 @@ fn compact_tool_result_metadata(metadata: &ToolResultRecord) -> String {
 /// newer identical read is retained verbatim. Reads with different content
 /// remain intact, as do errors, truncated reads, and recent raw context.
 ///
-/// `answered`/`announced` id sets in [`to_messages`] are still computed over
-/// the full history, so excluding an older duplicate never orphans its
-/// announcing call into a synthetic "did not run" error and never disturbs
-/// the `tool_call_id` mapping of the retained pairs.
+/// Excluded duplicate results still count as answers when their own announcing
+/// call remains in the request projection; an answer from another scope must
+/// not satisfy a reused id in the active request.
 pub(crate) fn redundant_tool_result_indices(
     history: &[ChatMessage],
     keep_recent_count: usize,
@@ -180,6 +179,19 @@ fn duplicate_file_read_key(content: &str) -> Option<String> {
         return None;
     }
     Some(format!("{name}\0{header}\0{body}"))
+}
+
+fn announcing_call_index(
+    history: &[ChatMessage],
+    result_index: usize,
+    call_id: &str,
+) -> Option<usize> {
+    history[..result_index]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.tool_calls.iter().any(|call| call.id == call_id))
+        .map(|(index, _)| index)
 }
 
 /// A bounded, named piece of turn-varying context.
@@ -292,31 +304,41 @@ fn to_messages_with_scope(
     // and an unanswered id makes the whole request invalid. Rather than trusting
     // every path that records a call to also record its outcome, the gap is
     // closed here, where the request is actually built.
+    let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
+    let turn_starts = request_turn_starts(history);
+    let included: std::collections::HashSet<usize> = history
+        .iter()
+        .enumerate()
+        .filter(|(index, message)| {
+            should_include_request_message(*index, message, scope, turn_starts)
+                && !redundant.contains(index)
+        })
+        .map(|(index, _)| index)
+        .collect();
     let answered: std::collections::HashSet<&str> = history
         .iter()
-        .filter_map(|message| message.tool_call_id.as_deref())
+        .enumerate()
+        .filter_map(|(index, message)| {
+            let call_id = message.tool_call_id.as_deref()?;
+            let announcement = announcing_call_index(history, index, call_id)?;
+            (included.contains(&announcement)
+                && (included.contains(&index) || redundant.contains(&index)))
+            .then_some(call_id)
+        })
         .collect();
     // Compaction can drop the assistant message that announced a call while
     // keeping its result. An answer to a call the request never mentions is just
     // as invalid as an unanswered call, so those fall back to the text form.
     let announced: std::collections::HashSet<&str> = history
         .iter()
-        .flat_map(|message| message.tool_calls.iter())
+        .enumerate()
+        .filter(|(index, _)| included.contains(index))
+        .flat_map(|(_, message)| message.tool_calls.iter())
         .map(|call| call.id.as_str())
         .collect();
 
-    // Older exact-duplicate file reads are excluded from the request while
-    // storage keeps them verbatim (#985). The id sets above still cover the
-    // full history, so an excluded duplicate never synthesizes a spurious
-    // "did not run" error for its announcer.
-    let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
-    let turn_starts = request_turn_starts(history);
-
     for (index, message) in history.iter().enumerate() {
-        if !should_include_request_message(index, message, scope, turn_starts) {
-            continue;
-        }
-        if redundant.contains(&index) {
+        if !included.contains(&index) {
             continue;
         }
         if message.conversation_recap {
@@ -952,6 +974,50 @@ mod tests {
         assert!(!rendered.contains("previous recovery"));
         assert!(rendered.contains("current recovery"));
         assert_eq!(serde_json::to_string(&history).unwrap(), stored);
+    }
+
+    #[test]
+    fn request_projection_does_not_use_an_out_of_scope_result_to_answer_a_call() {
+        let call_id = "reused-view-call";
+        let current_call =
+            ChatMessage::new("assistant", "read the current file").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: call_id.to_string(),
+                    name: "view_file".to_string(),
+                    arguments: r#"{"path":"src/current.rs"}"#.to_string(),
+                },
+            ]);
+        let history = vec![
+            ChatMessage::new("user", "old task"),
+            ChatMessage::new("tool", "view_file: old result").answering(Some(call_id.into())),
+            ChatMessage::new("assistant", "old task complete"),
+            ChatMessage::new("user", "previous task"),
+            ChatMessage::new("assistant", "previous task complete"),
+            ChatMessage::new("user", "current task"),
+            current_call,
+        ];
+
+        let messages = to_messages_for_request(&history, RequestInstructions::new("base", None));
+        let assistant_index = messages
+            .iter()
+            .position(|message| message.get("tool_calls").is_some())
+            .expect("current structured call is retained");
+        let result = messages
+            .get(assistant_index + 1)
+            .expect("retained call has a following result");
+
+        assert_eq!(result["role"], "tool");
+        assert_eq!(result["tool_call_id"], call_id);
+        assert!(
+            result["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("did not run"))
+        );
+        assert!(!messages.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("old result"))
+        }));
     }
 
     #[test]
