@@ -1333,6 +1333,12 @@ impl AppState {
         {
             return protocol;
         }
+        if self.config.models.iter().any(|profile| {
+            (profile.url == url || profile.endpoint_url() == url)
+                && profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+        }) {
+            return crate::config::ToolProtocol::ApiNative;
+        }
         let detected_support = self.function_calling_support.get(url).copied();
         if crate::config::provider_supports_function_calling(url) || detected_support == Some(true)
         {
@@ -1349,6 +1355,13 @@ impl AppState {
     /// True when this endpoint's function-calling support is still unknown, so
     /// the caller should probe before building a turn.
     pub fn function_calling_unknown(&self, url: &str) -> bool {
+        let responses_api = self.config.models.iter().any(|profile| {
+            (profile.url == url || profile.endpoint_url() == url)
+                && profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+        });
+        if responses_api {
+            return false;
+        }
         let overridden = self
             .config
             .models

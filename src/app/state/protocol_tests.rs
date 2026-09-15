@@ -198,6 +198,22 @@ fn a_profile_override_beats_detection() {
 }
 
 #[test]
+fn responses_profiles_use_native_tools_without_a_chat_probe() {
+    let mut s = AppState::new();
+    s.config.models.push(crate::config::ModelProfile {
+        name: "opencode".to_string(),
+        url: "https://opencode.ai/zen/v1/responses".to_string(),
+        model: "muse-spark-1.3".to_string(),
+        api_protocol: Some(crate::config::ApiProtocol::Responses),
+        ..Default::default()
+    });
+
+    let endpoint = "https://opencode.ai/zen/v1/responses";
+    assert_eq!(s.tool_protocol_for(endpoint), ToolProtocol::ApiNative);
+    assert!(!s.function_calling_unknown(endpoint));
+}
+
+#[test]
 fn local_model_detection_is_available_without_a_matching_profile() {
     let mut s = AppState::new();
     s.api_base_url = "http://localhost:11434/v1/chat/completions".to_string();

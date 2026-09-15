@@ -1,6 +1,6 @@
 use crate::app::{AppState, TokenUsage};
 use futures_util::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -155,6 +155,306 @@ fn apply_api_native_tools(
     if allow_tools && !schema.is_empty() {
         payload["tools"] = serde_json::Value::Array(schema);
         payload["tool_choice"] = serde_json::json!("auto");
+    }
+}
+
+/// Convert the internal Chat Completions-shaped history into the stateless
+/// input-item form accepted by the OpenAI Responses API.
+fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut input = Vec::new();
+
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("user");
+
+        if role == "tool" {
+            if let Some(call_id) = message
+                .get("tool_call_id")
+                .and_then(serde_json::Value::as_str)
+            {
+                let output = response_message_text(message.get("content"));
+                input.push(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                }));
+            }
+            continue;
+        }
+
+        if role == "assistant"
+            && let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
+        {
+            for tool_call in tool_calls {
+                let Some(function) = tool_call.get("function") else {
+                    continue;
+                };
+                let Some(name) = function.get("name").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("call_unknown");
+                let arguments = function
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        function
+                            .get("arguments")
+                            .map_or_else(|| "{}".to_owned(), serde_json::Value::to_string)
+                    });
+                input.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                }));
+            }
+        }
+
+        let text = response_message_text(message.get("content"));
+        if !text.is_empty() {
+            let content_type = if role == "assistant" {
+                "output_text"
+            } else {
+                "input_text"
+            };
+            input.push(serde_json::json!({
+                "role": role,
+                "content": [{"type": content_type, "text": text}],
+            }));
+        }
+    }
+
+    input
+}
+
+fn response_message_text(content: Option<&serde_json::Value>) -> String {
+    let Some(content) = content else {
+        return String::new();
+    };
+    if let Some(text) = content.as_str() {
+        return text.to_owned();
+    }
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get("text")
+                .and_then(|text| text.as_str())
+                .or_else(|| item.get("content").and_then(|text| text.as_str()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn responses_tool_schemas(schemas: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    schemas
+        .iter()
+        .filter_map(|schema| {
+            let function = schema.get("function")?;
+            let name = function.get("name")?.as_str()?;
+            let mut response_schema = serde_json::json!({
+                "type": "function",
+                "name": name,
+                "description": function.get("description").cloned().unwrap_or(serde_json::Value::Null),
+                "parameters": function.get("parameters").cloned().unwrap_or_else(|| serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                })),
+            });
+            if let Some(strict) = function.get("strict") {
+                response_schema["strict"] = strict.clone();
+            }
+            Some(response_schema)
+        })
+        .collect()
+}
+
+fn apply_responses_generation_options(
+    payload: &mut serde_json::Value,
+    profile: Option<&crate::config::ModelProfile>,
+    thinking_mode: ThinkingMode,
+) {
+    if thinking_mode != ThinkingMode::Normal {
+        return;
+    }
+    if let Some(effort) = profile
+        .filter(|p| p.supports_reasoning_effort_wire())
+        .and_then(|p| p.reasoning_effort.as_ref())
+    {
+        payload["reasoning"] = serde_json::json!({"effort": effort});
+    }
+}
+
+fn apply_responses_sampling_options(
+    payload: &mut serde_json::Value,
+    profile: Option<&crate::config::ModelProfile>,
+) {
+    if let Some(temperature) = profile.and_then(|p| p.temperature) {
+        payload["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(top_p) = profile.and_then(|p| p.top_p) {
+        payload["top_p"] = serde_json::json!(top_p);
+    }
+}
+
+fn responses_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let usage = value
+        .get("response")
+        .and_then(|response| response.get("usage"))?;
+    let prompt = usage.get("input_tokens").and_then(|v| v.as_u64())?;
+    let completion = usage.get("output_tokens").and_then(|v| v.as_u64())?;
+    let total = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(prompt.saturating_add(completion));
+    let mut normalized = serde_json::json!({
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    });
+    if let Some(cached) = usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+    {
+        normalized["prompt_tokens_details"] = serde_json::json!({"cached_tokens": cached});
+    }
+    if let Some(reasoning) = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(|v| v.as_u64())
+    {
+        normalized["completion_tokens_details"] =
+            serde_json::json!({"reasoning_tokens": reasoning});
+    }
+    Some(normalized)
+}
+
+/// Normalize Responses stream events to the small internal shape consumed by
+/// the existing stream/tool/reasoning state machine.
+fn normalize_responses_event(
+    value: &serde_json::Value,
+    response_call_ids: &mut HashMap<String, String>,
+    response_argument_deltas: &mut HashSet<usize>,
+) -> Option<serde_json::Value> {
+    let event_type = value.get("type").and_then(|v| v.as_str())?;
+    let delta = value.get("delta").and_then(|v| v.as_str());
+    match event_type {
+        "response.output_text.delta" => {
+            delta.map(|delta| serde_json::json!({"choices": [{"delta": {"content": delta}}]}))
+        }
+        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+            delta.map(|delta| serde_json::json!({"choices": [{"delta": {"reasoning": delta}}]}))
+        }
+        "response.output_item.added" => {
+            let item = value.get("item")?;
+            if item.get("type").and_then(|v| v.as_str()) != Some("function_call") {
+                return None;
+            }
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            let call_id = item
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(item_id);
+            if !item_id.is_empty() {
+                response_call_ids.insert(item_id.to_owned(), call_id.to_owned());
+            }
+            let index = value
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_default();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            Some(serde_json::json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": index,
+                    "id": call_id,
+                    "function": {"name": name, "arguments": ""}
+                }]}}]
+            }))
+        }
+        "response.function_call_arguments.delta" => {
+            let index = value
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_default() as usize;
+            response_argument_deltas.insert(index);
+            let item_id = value
+                .get("item_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let call_id = response_call_ids
+                .get(item_id)
+                .map(String::as_str)
+                .unwrap_or(item_id);
+            delta.map(|delta| {
+                serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                    "index": index,
+                    "id": call_id,
+                    "function": {"arguments": delta}
+                }]}}]})
+            })
+        }
+        "response.function_call_arguments.done" => {
+            let index = value
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_default() as usize;
+            if response_argument_deltas.contains(&index) {
+                return None;
+            }
+            let item_id = value
+                .get("item_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let call_id = response_call_ids
+                .get(item_id)
+                .map(String::as_str)
+                .unwrap_or(item_id);
+            let arguments = value
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+            Some(serde_json::json!({"choices": [{"delta": {"tool_calls": [{
+                "index": index,
+                "id": call_id,
+                "function": {"arguments": arguments}
+            }]}}]}))
+        }
+        "response.completed" => Some(serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": responses_usage(value),
+        })),
+        "response.incomplete" => Some(serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "length"}],
+            "usage": responses_usage(value),
+        })),
+        "response.failed" => {
+            let message = value
+                .get("response")
+                .and_then(|response| response.get("error"))
+                .and_then(|error| error.get("message"))
+                .and_then(|message| message.as_str())
+                .unwrap_or("Responses API request failed");
+            Some(serde_json::json!({"error": {"message": message}}))
+        }
+        "error" => {
+            let message = value
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("Responses API request failed");
+            Some(serde_json::json!({"error": {"message": message}}))
+        }
+        _ => None,
     }
 }
 
@@ -824,6 +1124,156 @@ mod tests {
                 .expect("partial native arguments should be repaired");
         assert_eq!(partial.0, "grep");
         assert_eq!(partial.1["pattern"], "AppConfig");
+    }
+
+    #[test]
+    fn responses_input_preserves_messages_and_tool_transactions() {
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": "You are RustCode."}),
+            serde_json::json!({"role": "user", "content": "Inspect the project."}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "arguments": "{\"pattern\":\"src/**\"}"
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "src/main.rs"
+            }),
+        ];
+
+        let input = responses_input_from_messages(&messages);
+
+        assert_eq!(input[0]["role"], "system");
+        assert_eq!(input[1]["content"][0]["type"], "input_text");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call-1");
+        assert_eq!(input[2]["arguments"], "{\"pattern\":\"src/**\"}");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["call_id"], "call-1");
+    }
+
+    #[test]
+    fn responses_tools_flatten_chat_function_schemas() {
+        let schemas = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "view_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": true
+            }
+        })];
+
+        let tools = responses_tool_schemas(&schemas);
+
+        assert_eq!(
+            tools,
+            vec![serde_json::json!({
+                "type": "function",
+                "name": "view_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": true
+            })]
+        );
+    }
+
+    #[test]
+    fn responses_events_normalize_text_tools_usage_and_errors() {
+        let mut call_ids = HashMap::new();
+        let mut argument_deltas = HashSet::new();
+        let text = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": "hello"
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(text["choices"][0]["delta"]["content"], "hello");
+
+        let added = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc-item-1",
+                    "call_id": "call-1",
+                    "name": "glob"
+                }
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(
+            added["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call-1"
+        );
+
+        let arguments = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 0,
+                "item_id": "fc-item-1",
+                "delta": "{}"
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(
+            arguments["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            "{}"
+        );
+        assert!(
+            normalize_responses_event(
+                &serde_json::json!({
+                    "type": "response.function_call_arguments.done",
+                    "output_index": 0,
+                    "item_id": "fc-item-1",
+                    "arguments": "{}"
+                }),
+                &mut call_ids,
+                &mut argument_deltas,
+            )
+            .is_none()
+        );
+
+        let completed = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.completed",
+                "response": {"usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "total_tokens": 14
+                }}
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(completed["choices"][0]["finish_reason"], "stop");
+        assert_eq!(completed["usage"]["prompt_tokens"], 10);
+
+        let error = normalize_responses_event(
+            &serde_json::json!({"type": "error", "message": "bad request"}),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(error["error"]["message"], "bad request");
     }
 
     #[test]
@@ -1898,9 +2348,6 @@ pub async fn stream_request(
     expected_session_id: Option<&str>,
     tool_output_limit_override: Option<u32>,
 ) -> Result<Option<String>, StreamFailure> {
-    let aligned_messages = align_alternating_messages(messages);
-    let message_count = aligned_messages.len();
-
     let profile = {
         state
             .lock()
@@ -1911,6 +2358,18 @@ pub async fn stream_request(
             .find(|p| p.matches_request(url, model))
             .cloned()
     };
+    let api_protocol = profile
+        .as_ref()
+        .map(crate::config::ModelProfile::resolved_api_protocol)
+        .unwrap_or_else(|| {
+            url.trim_end_matches('/')
+                .ends_with("/responses")
+                .then_some(crate::config::ApiProtocol::Responses)
+                .unwrap_or_default()
+        });
+    let responses_api = matches!(api_protocol, crate::config::ApiProtocol::Responses);
+    let aligned_messages = align_alternating_messages(messages);
+    let message_count = aligned_messages.len();
     let mut max_tokens = profile
         .as_ref()
         .map(|p| p.completion_token_limit(allow_tools))
@@ -2062,34 +2521,67 @@ pub async fn stream_request(
         } else {
             0
         };
-    let mut payload = serde_json::json!({
-        "model": model,
-        "stream": true,
-        "stream_options": {
-            "include_usage": true
-        },
-    });
-    payload["messages"] = serde_json::Value::Array(aligned_messages);
+    let mut payload = if responses_api {
+        let mut payload = serde_json::json!({
+            "model": model,
+            "stream": true,
+            "input": responses_input_from_messages(&aligned_messages),
+        });
+        if let Some(limit) = output_token_limit {
+            payload["max_output_tokens"] = serde_json::json!(limit);
+        }
+        apply_responses_generation_options(&mut payload, profile.as_ref(), thinking_mode);
+        apply_responses_sampling_options(&mut payload, profile.as_ref());
+        if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative)
+            && allow_tools
+            && !native_tool_schemas.is_empty()
+        {
+            payload["tools"] =
+                serde_json::Value::Array(responses_tool_schemas(&native_tool_schemas));
+            payload["tool_choice"] = serde_json::json!("auto");
+        }
+        payload
+    } else {
+        let mut payload = serde_json::json!({
+            "model": model,
+            "stream": true,
+            "stream_options": {
+                "include_usage": true
+            },
+        });
+        payload["messages"] = serde_json::Value::Array(aligned_messages);
 
-    apply_output_token_limit(&mut payload, output_token_field, output_token_limit);
+        apply_output_token_limit(&mut payload, output_token_field, output_token_limit);
 
-    apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
-    apply_profile_sampling_options(&mut payload, profile.as_ref());
+        apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
+        apply_profile_sampling_options(&mut payload, profile.as_ref());
 
-    if !url.contains("generativelanguage.googleapis.com") {
-        payload["frequency_penalty"] = serde_json::json!(
-            profile
-                .as_ref()
-                .and_then(|p| p.frequency_penalty)
-                .unwrap_or(0.3)
-        );
-    }
+        if !url.contains("generativelanguage.googleapis.com") {
+            payload["frequency_penalty"] = serde_json::json!(
+                profile
+                    .as_ref()
+                    .and_then(|p| p.frequency_penalty)
+                    .unwrap_or(0.3)
+            );
+        }
+        if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+            // A recovery turn may legitimately be the final answer for a
+            // read-only task. Keep tools available, but do not require a tool call
+            // after the recovery prompt explicitly asks for prose when no action
+            // remains.
+            apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
+        }
+        payload
+    };
+
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         // A recovery turn may legitimately be the final answer for a
         // read-only task. Keep tools available, but do not require a tool call
         // after the recovery prompt explicitly asks for prose when no action
         // remains.
-        apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
+        if !responses_api {
+            apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
+        }
         crate::logger::operational_event(
             "mcp.native_schema_selection",
             serde_json::json!({
@@ -2269,21 +2761,41 @@ pub async fn stream_request(
         }),
     );
 
-    let resolved_url = {
-        let trimmed = url.trim_end_matches('/');
-        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
-            trimmed.to_string()
-        } else {
-            format!("{trimmed}/chat/completions")
-        }
-    };
+    let resolved_url = profile
+        .as_ref()
+        .map(crate::config::ModelProfile::endpoint_url)
+        .unwrap_or_else(|| {
+            let trimmed = url.trim_end_matches('/');
+            if responses_api {
+                if trimmed.ends_with("/responses") {
+                    trimmed.to_string()
+                } else if let Some(base) = trimmed.strip_suffix("/chat/completions") {
+                    format!("{base}/responses")
+                } else if let Some(base) = trimmed.strip_suffix("/chats/completion") {
+                    format!("{base}/responses")
+                } else {
+                    format!("{trimmed}/responses")
+                }
+            } else if trimmed.ends_with("/chat/completions")
+                || trimmed.ends_with("/chats/completion")
+            {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}/chat/completions")
+            }
+        });
 
     let api_key = {
         let s = state.lock().await;
         s.config
             .models
             .iter()
-            .find(|m| m.url == url || m.name == s.model_name || m.endpoint_url() == resolved_url)
+            .find(|m| {
+                m.matches_request(url, model)
+                    || m.url == url
+                    || m.name == s.model_name
+                    || m.endpoint_url() == resolved_url
+            })
             .and_then(|m| m.resolved_api_key())
     };
     let (trace_session_id, assistant_turn) = {
@@ -2465,6 +2977,8 @@ pub async fn stream_request(
     let mut stream_events_received = 0usize;
 
     let mut accumulators = ToolAccumulatorSet::default();
+    let mut response_call_ids = HashMap::new();
+    let mut response_argument_deltas = HashSet::new();
     let mut tool_argument_limit_reached = false;
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
 
@@ -2506,9 +3020,19 @@ pub async fn stream_request(
                             break;
                         }
                         if let Some(json_str) = parse_sse_line(trimmed) {
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
-                                stream_trace.record(line_buf.len(), &val);
+                                stream_trace.record(line_buf.len(), &value);
+                                let val = if responses_api {
+                                    normalize_responses_event(
+                                        &value,
+                                        &mut response_call_ids,
+                                        &mut response_argument_deltas,
+                                    )
+                                    .unwrap_or_else(|| serde_json::json!({}))
+                                } else {
+                                    value
+                                };
                                 if let Some(error) = val.get("error") {
                                     let status = error
                                         .get("status_code")
@@ -2921,6 +3445,12 @@ pub async fn stream_request(
     }
 
     if !native_tool_calls.is_empty() {
+        // Responses emits `response.completed` for both text and function-call
+        // output. The downstream turn runner uses `tool_calls` to distinguish
+        // an actionable response from a final prose response.
+        if finish_reason.is_none() || finish_reason.as_deref() == Some("stop") {
+            finish_reason = Some("tool_calls".to_string());
+        }
         dbg_log!(
             "stream_request: preserving {} native tool call envelope(s)",
             native_tool_calls.len()
