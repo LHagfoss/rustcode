@@ -750,8 +750,9 @@ wait_for_required_pr_checks() {
         if output="$(gh pr checks "$branch" --required \
             --json name,state,bucket,link 2>&1)"; then
             :
-        elif [[ "$output" == *"no required checks reported"* ]]; then
-            # GitHub returns this plain-text response briefly before the
+        elif [[ "$output" == *"no required checks reported"* ||
+            "$output" == *"no checks reported"* ]]; then
+            # GitHub returns one of these plain-text responses briefly before
             # workflow check runs have registered on a newly created PR.
             output='[]'
         elif ! jq -e . >/dev/null 2>&1 <<<"$output"; then
@@ -1179,11 +1180,19 @@ run_tests() {
                         0) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
                         *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
                     esac ;;
+                generic)
+                    case "$mock_tick" in
+                        0) printf '%s' "no checks reported on the 'test-branch' branch"; return 1 ;;
+                        *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
+                    esac ;;
                 failed) printf '%s' '[{"name":"test","state":"FAILURE","bucket":"fail","link":""}]' ;;
                 missing) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
                 api_error) printf '%s' 'not-json'; return 1 ;;
             esac
         }
+        wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 1 ]] || exit 1
+        mock_mode=generic mock_tick=0
         wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
         [[ "$mock_tick" -eq 1 ]] || exit 1
         mock_mode=failed
