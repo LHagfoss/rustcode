@@ -178,7 +178,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let round = match request::collect_round(client, state, cancel_token, stream_buffer, ctx).await
     {
         Ok(round) => round,
-        Err(request::RoundCollectionError::Continue) => return true,
         Err(request::RoundCollectionError::Stop) => return false,
     };
     let request::RoundResponse {
