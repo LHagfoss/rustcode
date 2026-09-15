@@ -1,3 +1,9 @@
+## [v0.52.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.4) - 2026-09-15
+
+### Features
+## Features
+
+- Add first-class OpenCode Zen support via the OpenAI Responses API, including the built-in paid `opencode-muse-spark-1.3` profile with native function calling. Free Zen models remain restricted to the OpenCode client session.
 ## [v0.52.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.3) - 2026-09-15
 
 ### Fixes
