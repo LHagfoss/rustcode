@@ -1,3 +1,9 @@
+## [v0.52.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.5) - 2026-09-15
+
+### Fixes
+- Preserve tool-call/result transactions when projecting provider history, preventing `TOOL_CALLS_MISSING_RESULTS` failures after multi-file edits.
+- Add OpenRouter session affinity and normalize cache usage telemetry (`cached_tokens`, cache writes, and discounts) for provider diagnostics.
+- Keep cache and tool-history behavior covered by regression tests.
 ## [v0.52.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.4) - 2026-09-15
 
 ### Features
