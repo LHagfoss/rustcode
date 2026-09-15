@@ -1,3 +1,9 @@
+## [v0.52.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.7) - 2026-09-15
+
+### Fixes
+- Refresh the composer workspace path and Git branch while RustCode is running.
+- Recover safely from interrupted provider SSE streams without replaying ambiguous tool calls.
+- Add bounded, actionable Git worktree ownership and cleanup diagnostics.
 ## [v0.52.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.6) - 2026-09-15
 
 ### Fixes
