@@ -1,3 +1,9 @@
+## [v0.52.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.6) - 2026-09-15
+
+### Fixes
+- Hardened malformed model tool-call recovery with clearer parse diagnostics and typed examples.
+- Stabilized MCP tool selection with deterministic zero-relevance behavior and measured schema budgets.
+- Added repeated-verification recovery guidance and provider cache metric/status telemetry.
 ## [v0.52.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.5) - 2026-09-15
 
 ### Fixes
