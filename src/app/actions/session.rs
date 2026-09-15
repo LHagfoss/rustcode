@@ -161,7 +161,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.session_title_tool_available = false;
     s.background_wakeup_ids.clear();
     s.background_turn_context = None;
-    s.last_user_activity_at = std::time::Instant::now();
+    s.last_turn_had_model_final_response = false;
     s.last_summary_history_len = None;
     s.image_analysis_cache.clear();
     s.clear_current_response();
@@ -174,7 +174,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.expanded_thoughts.clear();
-    s.status = AppStatus::Idle;
+    s.enter_idle();
     s.subagents.clear();
     s.selected_subagent_id = None;
     s.show_history_picker = false;

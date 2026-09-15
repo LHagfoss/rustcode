@@ -50,12 +50,12 @@ pub async fn handle_escape(
     s.clear_active_turn_projection();
 
     if s.status == AppStatus::Streaming {
-        s.status = AppStatus::Idle;
+        s.enter_idle();
         s.pending_queue.clear();
     } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
         if s.pending_queue.is_empty() {
-            s.status = AppStatus::Idle;
+            s.enter_idle();
         }
     }
     s.background_turn_context = None;

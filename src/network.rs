@@ -303,7 +303,7 @@ pub(crate) async fn stop_turn_for_budget(
     ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
     let mut s = _state.lock().await;
     s.continuous_mode = false;
-    s.status = AppStatus::Idle;
+    s.enter_idle();
     drop(s);
     false
 }

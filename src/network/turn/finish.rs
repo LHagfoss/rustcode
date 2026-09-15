@@ -128,6 +128,23 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
         }
         s.history.push(msg);
     }
+    let latest_user_index = s
+        .history
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role == "user" && !message.conversation_recap)
+        .map(|(index, _)| index);
+    s.last_turn_had_model_final_response = ctx.lifecycle.task_completed
+        && latest_user_index.is_some_and(|index| {
+            s.history.iter().skip(index + 1).any(|message| {
+                message.role == "assistant"
+                    && !message.conversation_recap
+                    && !message.unexecuted_tool_call_checkpoint
+                    && message.tool_calls.is_empty()
+                    && !message.content.trim().is_empty()
+            })
+        });
     drop(s);
 
     let usage = {
@@ -151,7 +168,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     crate::config::flush_history_async();
     s.clear_current_response();
     s.clear_live_tool_calls();
-    s.status = AppStatus::Idle;
+    s.enter_idle();
     s.request_redraw();
     if let Some(u) = &usage {
         crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);

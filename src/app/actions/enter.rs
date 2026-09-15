@@ -1025,7 +1025,7 @@ pub async fn handle_enter(
                 crate::app::SubagentId::from_raw(selected_id),
                 status,
             );
-            state.status = AppStatus::Idle;
+            state.enter_idle();
             state.request_redraw();
         });
         return false;
