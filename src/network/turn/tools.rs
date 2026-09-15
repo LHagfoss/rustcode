@@ -74,6 +74,12 @@ fn targeted_no_progress_guidance(
         .char_indices()
         .nth(160)
         .map_or(action, |(end, _)| &action[..end]);
+    let repeated_verification = action.starts_with("verification:");
+    if repeated_verification {
+        return format!(
+            "The harness observed a repeated successful verification for `{action}`. That check already passed after the latest edit; do not rerun it unless the workspace changes or new evidence invalidates it. Continue from the result already in the transcript, or explain the blocker. This recovery is bounded and preserves completed tool results."
+        );
+    }
     format!(
         "The harness observed {} for `{action}` {streak} consecutive result(s) without a state change. Do not replay that action. Continue from the result already in the transcript: choose one different, bounded evidence-producing step or explain the blocker. This recovery is bounded; preserve completed tool results and do not claim an action ran unless its result is present.",
         reason.label(),
@@ -820,12 +826,20 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     continue;
                 }
                 let mut verification_command = false;
+                let mut repeated_successful_verification = false;
                 if (name == "run_command" || metadata.command.is_some())
                     && let Some(command) = call
                         .and_then(|call| call.arguments.get("command"))
                         .and_then(|command| command.as_str())
                         .or(metadata.command.as_deref())
                 {
+                    verification_command = verification::is_verification_command(command)
+                        || loop_detect::is_stable_inspection_command(command);
+                    repeated_successful_verification = ctx
+                        .verification
+                        .ledger
+                        .is_repeated_successful_command(command, metadata.exit_code)
+                        && verification_command;
                     ctx.verification
                         .ledger
                         .record_command(command, metadata.exit_code);
@@ -839,8 +853,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             .ledger
                             .record_explicit_command(command, metadata.exit_code);
                     }
-                    verification_command = verification::is_verification_command(command)
-                        || loop_detect::is_stable_inspection_command(command);
                 }
                 dbg_log!(
                     "Tool '{}' finished with result length: {} chars",
@@ -1128,6 +1140,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         "streak": assessment.streak,
                         "replayed": metadata.replayed,
                         "success": metadata.success && semantic_failure.is_none(),
+                        "repeated_successful_verification": repeated_successful_verification,
                         "failure_class": semantic_failure,
                     }),
                 );
@@ -1142,6 +1155,20 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         || assessment.streak >= loop_detect::ProgressLedger::RECOVERY_STREAK)
                 {
                     evidence_recovery = Some((assessment.reason, assessment.streak, name.clone()));
+                }
+                if repeated_successful_verification && metadata.success {
+                    let action = format!(
+                        "verification:{}",
+                        call.and_then(|call| call.arguments.get("command"))
+                            .and_then(|command| command.as_str())
+                            .or(metadata.command.as_deref())
+                            .unwrap_or(name.as_str())
+                    );
+                    evidence_recovery.get_or_insert((
+                        loop_detect::ProgressReason::NoNewInformation,
+                        1,
+                        action,
+                    ));
                 }
                 if !assessment.suppress_stagnation && !benign_shell_failure {
                     match ctx

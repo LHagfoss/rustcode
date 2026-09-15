@@ -67,6 +67,23 @@ impl VerificationLedger {
         })
     }
 
+    /// True when the same successful verification is being requested again
+    /// without an intervening edit. Repeating a clean check adds no evidence;
+    /// callers can turn this into targeted recovery instead of another blind
+    /// verification round.
+    pub(crate) fn is_repeated_successful_command(
+        &self,
+        command: &str,
+        exit_code: Option<i32>,
+    ) -> bool {
+        self.last.as_ref().is_some_and(|evidence| {
+            evidence.generation == self.generation
+                && evidence.exit_code == Some(0)
+                && exit_code == Some(0)
+                && evidence.command == command.trim()
+        })
+    }
+
     pub(crate) fn explicit_last_failure(&self) -> Option<&VerificationEvidence> {
         self.explicit_last.as_ref().filter(|evidence| {
             evidence.generation == self.generation && evidence.exit_code != Some(0)
@@ -432,6 +449,15 @@ mod tests {
             ledger.last_failure().map(|e| e.command.as_str()),
             Some("cargo fmt --check")
         );
+    }
+
+    #[test]
+    fn repeated_successful_verification_is_detected_until_an_edit() {
+        let mut ledger = VerificationLedger::default();
+        ledger.record_command("cargo check --tests", Some(0));
+        assert!(ledger.is_repeated_successful_command("cargo check --tests", Some(0)));
+        ledger.record_edit();
+        assert!(!ledger.is_repeated_successful_command("cargo check --tests", Some(0)));
     }
 
     #[test]

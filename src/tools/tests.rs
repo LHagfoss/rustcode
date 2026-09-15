@@ -419,7 +419,7 @@ fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
 }
 
 #[test]
-fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
+fn mcp_schema_selection_avoids_arbitrary_zero_relevance_fallback() {
     let mcp: Vec<_> = (0..(MAX_MCP_NATIVE_SCHEMAS + 4))
         .map(|index| {
             (
@@ -432,13 +432,39 @@ fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
     let messages = vec![serde_json::json!({"role":"user","content":"unmatched request"})];
 
     let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
-    assert_eq!(selected.len(), MCP_DISCOVERY_FALLBACK_COUNT);
-    assert_eq!(stats.fallback, MCP_DISCOVERY_FALLBACK_COUNT);
-    assert_eq!(stats.omitted, mcp.len() - MCP_DISCOVERY_FALLBACK_COUNT);
-    assert_eq!(
-        stats.selected_names,
-        vec!["tool_00", "tool_01", "tool_02", "tool_03"]
+    assert!(
+        selected.is_empty(),
+        "zero relevance must not expose arbitrary MCP tools"
     );
+    assert_eq!(stats.fallback, 0);
+    assert_eq!(stats.omitted, mcp.len());
+    assert!(stats.selected_names.is_empty());
+}
+
+#[test]
+fn mcp_schema_selection_enforces_a_measured_schema_byte_budget() {
+    let large_description = "x".repeat(MAX_MCP_NATIVE_SCHEMA_BYTES);
+    let tools = vec![
+        (
+            "first_tool".to_string(),
+            large_description,
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "second_tool".to_string(),
+            "small relevant tool".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+    ];
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Use the first_tool and second_tool"
+    })];
+
+    let (_, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert!(stats.mcp_schema_bytes <= stats.mcp_schema_budget_bytes);
+    assert!(stats.schema_budget_exhausted);
+    assert!(stats.selected_names.contains(&"second_tool".to_string()));
 }
 
 #[test]
@@ -527,11 +553,8 @@ fn mcp_schema_selection_retains_sticky_tools_and_adds_newly_relevant_tools() {
         &["weather_forecast".to_string()],
     );
 
-    assert_eq!(selected, vec![0, 1]);
-    assert_eq!(
-        stats.selected_names,
-        vec!["search_issues", "weather_forecast"]
-    );
+    assert_eq!(selected, vec![1]);
+    assert_eq!(stats.selected_names, vec!["weather_forecast"]);
 
     let messages = vec![serde_json::json!({
         "role":"user",
@@ -1138,6 +1161,43 @@ fn diagnose_reports_schema_guidance_for_an_invalid_edit_shape() {
         diag.contains("Example"),
         "must include a minimal valid example: {diag}"
     );
+}
+
+#[test]
+fn malformed_native_arguments_preserve_parse_diagnostics_and_recovery_shape() {
+    let call = ToolCall {
+        name: "multi_replace_file_content".to_string(),
+        arguments: serde_json::json!({
+            "_invalid_arguments": {
+                "kind": "incomplete_syntax",
+                "execution": "rejected"
+            },
+            "_parse_error": "EOF while parsing an object",
+            "_recovery": "No tool was executed"
+        }),
+        call_id: Some("call-1".to_string()),
+    };
+    let error = validate_tool_calls(&[call], 1).expect_err("malformed arguments must fail closed");
+    assert!(error.contains("malformed arguments"), "{error}");
+    assert!(error.contains("incomplete_syntax"), "{error}");
+    assert!(error.contains("EOF while parsing an object"), "{error}");
+    assert!(error.contains("No tool was executed"), "{error}");
+    assert!(error.contains("start_line"), "{error}");
+    assert!(error.contains("replacement_content"), "{error}");
+    assert!(error.contains("replacements"), "{error}");
+}
+
+#[test]
+fn view_file_guidance_uses_typed_line_ranges() {
+    let call = ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({"path": "src/lib.rs", "start_line": [340, 380]}),
+        call_id: None,
+    };
+    let error = validate_tool_calls(&[call], 1).expect_err("line range arrays are invalid");
+    assert!(error.contains("start_line"), "{error}");
+    assert!(error.contains("\"start_line\":1"), "{error}");
+    assert!(error.contains("\"end_line\":40"), "{error}");
 }
 
 #[test]
