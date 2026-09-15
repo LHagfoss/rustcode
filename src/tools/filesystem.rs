@@ -106,8 +106,8 @@ fn write_file_chunk_schema() -> Value {
 
 pub const WRITE_TO_FILE: Tool = Tool {
     name: "write_to_file",
-    description: "Create or overwrite a file with complete content. Parent directories are created automatically.",
-    arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "optional boolean, defaults to true to allow overwriting an existing file"}"#,
+    description: "Create or overwrite a small file with complete content. For content larger than 16 KiB, use write_file_chunk repeatedly so an interrupted response cannot lose the whole write. Parent directories are created automatically.",
+    arguments: r#"{"path": "absolute or relative path to file", "content": "complete contents (keep at or below 16384 bytes; use write_file_chunk for larger files)", "overwrite": "optional boolean, defaults to true to allow overwriting an existing file"}"#,
     handler: write_to_file_tool,
     requires_confirmation: true,
     schema: write_to_file_schema,
