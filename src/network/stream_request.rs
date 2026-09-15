@@ -158,6 +158,68 @@ fn apply_api_native_tools(
     }
 }
 
+fn is_openrouter_endpoint(url: &str) -> bool {
+    let authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    host.eq_ignore_ascii_case("openrouter.ai") || host.ends_with(".openrouter.ai")
+}
+
+fn bounded_openrouter_session_id(session_id: Option<&str>) -> Option<String> {
+    let session_id = session_id?.trim();
+    (!session_id.is_empty()).then(|| session_id.chars().take(256).collect())
+}
+
+fn apply_openrouter_session_affinity(
+    payload: &mut serde_json::Value,
+    url: &str,
+    session_id: Option<&str>,
+) {
+    if is_openrouter_endpoint(url)
+        && let Some(session_id) = bounded_openrouter_session_id(session_id)
+    {
+        payload["session_id"] = serde_json::json!(session_id);
+    }
+}
+
+fn cache_usage_metrics(usage: &serde_json::Value) -> (Option<u32>, Option<u32>, Option<f64>) {
+    let input_details = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"));
+    let cached_tokens = input_details
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            usage
+                .get("cached_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .map(|value| value as u32);
+    let cache_write_tokens = input_details
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            usage
+                .get("cache_write_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .map(|value| value as u32);
+    let cache_discount = usage
+        .get("cache_discount")
+        .and_then(serde_json::Value::as_f64);
+    (cached_tokens, cache_write_tokens, cache_discount)
+}
+
 /// Convert the internal Chat Completions-shaped history into the stateless
 /// input-item form accepted by the OpenAI Responses API.
 fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -319,12 +381,15 @@ fn responses_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
         "completion_tokens": completion,
         "total_tokens": total,
     });
-    if let Some(cached) = usage
-        .get("input_tokens_details")
-        .and_then(|details| details.get("cached_tokens"))
-        .and_then(|v| v.as_u64())
-    {
-        normalized["prompt_tokens_details"] = serde_json::json!({"cached_tokens": cached});
+    let (cached, cache_write, cache_discount) = cache_usage_metrics(usage);
+    if cached.is_some() || cache_write.is_some() {
+        normalized["prompt_tokens_details"] = serde_json::json!({
+            "cached_tokens": cached,
+            "cache_write_tokens": cache_write,
+        });
+    }
+    if let Some(cache_discount) = cache_discount {
+        normalized["cache_discount"] = serde_json::json!(cache_discount);
     }
     if let Some(reasoning) = usage
         .get("output_tokens_details")
@@ -562,10 +627,9 @@ fn sanitized_provider_stream_event(
                 "prompt_tokens": number("prompt_tokens"),
                 "completion_tokens": number("completion_tokens"),
                 "total_tokens": number("total_tokens"),
-                "cached_tokens": usage.get("prompt_tokens_details")
-                    .and_then(|details| details.get("cached_tokens"))
-                    .and_then(|value| value.as_u64())
-                    .or_else(|| number("cached_tokens")),
+                "cached_tokens": cache_usage_metrics(usage).0,
+                "cache_write_tokens": cache_usage_metrics(usage).1,
+                "cache_discount": cache_usage_metrics(usage).2,
             }))
         } else {
             None
@@ -1858,6 +1922,55 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_requests_carry_a_bounded_session_id() {
+        let mut payload = serde_json::json!({});
+        apply_openrouter_session_affinity(
+            &mut payload,
+            "https://openrouter.ai/api/v1/chat/completions",
+            Some("  session-123  "),
+        );
+        assert_eq!(payload["session_id"], "session-123");
+
+        let mut payload = serde_json::json!({});
+        apply_openrouter_session_affinity(
+            &mut payload,
+            "https://provider.example/v1/chat/completions",
+            Some("session-123"),
+        );
+        assert!(payload.get("session_id").is_none());
+
+        let mut payload = serde_json::json!({});
+        apply_openrouter_session_affinity(
+            &mut payload,
+            "https://openrouter.ai/api/v1/chat/completions",
+            Some(&"x".repeat(300)),
+        );
+        assert_eq!(payload["session_id"].as_str().map(str::len), Some(256));
+    }
+
+    #[test]
+    fn provider_usage_preserves_cache_write_and_discount_metrics() {
+        let value = serde_json::json!({
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "input_tokens_details": {
+                        "cached_tokens": 80,
+                        "cache_write_tokens": 20
+                    },
+                    "cache_discount": 0.25
+                }
+            }
+        });
+
+        let usage = responses_usage(&value).expect("usage should normalize");
+        assert_eq!(usage["prompt_tokens_details"]["cached_tokens"], 80);
+        assert_eq!(usage["prompt_tokens_details"]["cache_write_tokens"], 20);
+        assert_eq!(usage["cache_discount"], 0.25);
+    }
+
+    #[test]
     fn recovery_tool_requests_allow_a_final_answer() {
         let mut payload = serde_json::json!({});
         let schema = vec![serde_json::json!({
@@ -2323,6 +2436,7 @@ pub(crate) async fn estimate_token_usage_with_tool_schemas(
         completion_tokens: total.saturating_sub(prompt),
         total_tokens: total,
         cached_tokens: None,
+        ..Default::default()
     })
 }
 
@@ -2601,6 +2715,8 @@ pub async fn stream_request(
         );
     }
 
+    apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
+
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         payload
             .get("tools")
@@ -2731,6 +2847,8 @@ pub async fn stream_request(
             "thinking_budget": thinking_budget,
             "thinking_budget_wire_supported": profile.as_ref().map(|p| p.supports_thinking_budget_wire()),
             "minimum_answer_tokens": profile.as_ref().map(|p| p.context_budget().minimum_answer_tokens),
+            "openrouter_session_affinity": is_openrouter_endpoint(url)
+                && bounded_openrouter_session_id(expected_session_id).is_some(),
         }),
     );
 
@@ -2758,6 +2876,8 @@ pub async fn stream_request(
             "available_builtin_tools": tool_surface.builtin,
             "available_mcp_tools": tool_surface.mcp,
             "available_agent_tools": tool_surface.agent,
+            "openrouter_session_affinity": is_openrouter_endpoint(url)
+                && bounded_openrouter_session_id(expected_session_id).is_some(),
         }),
     );
 
@@ -3264,11 +3384,8 @@ pub async fn stream_request(
                                         usage.get("completion_tokens").and_then(|v| v.as_u64()),
                                         usage.get("total_tokens").and_then(|v| v.as_u64()),
                                     ) {
-                                        let cached = usage.get("prompt_tokens_details")
-                                            .and_then(|details| details.get("cached_tokens"))
-                                            .and_then(|v| v.as_u64())
-                                            .or_else(|| usage.get("cached_tokens").and_then(|v| v.as_u64()))
-                                            .map(|n| n as u32);
+                                        let (cached, cache_write_tokens, cache_discount) =
+                                            cache_usage_metrics(usage);
                                         let observed_reasoning_tokens = usage
                                             .get("completion_tokens_details")
                                             .and_then(|details| details.get("reasoning_tokens"))
@@ -3290,6 +3407,8 @@ pub async fn stream_request(
                                             completion_tokens: c as u32,
                                             total_tokens: t as u32,
                                             cached_tokens: cached,
+                                            cache_write_tokens,
+                                            cache_discount,
                                         });
 
                                         let estimation_delta = if estimated_prompt_tokens > 0 {
@@ -3308,6 +3427,8 @@ pub async fn stream_request(
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
                                                 "cached_tokens": cached,
+                                                "cache_write_tokens": cache_write_tokens,
+                                                "cache_discount": cache_discount,
                                                 "requested_max_output_tokens": output_token_limit,
                                                 "requested_max_tokens": output_token_limit,
                                                 "requested_thinking_budget": thinking_budget,
