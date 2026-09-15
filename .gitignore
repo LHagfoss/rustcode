@@ -21,3 +21,4 @@ docs/superpowers/
 /benchmarks/
 /tests/
 /AGENT_HARNESS_CONTRACTS.md
+.codexignore
