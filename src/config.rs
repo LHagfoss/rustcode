@@ -84,6 +84,11 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
+    /// Request API dialect used by the endpoint. Omitted profiles retain the
+    /// OpenAI-compatible chat-completions behavior; a `/responses` URL also
+    /// selects the Responses dialect for convenient hand-written configs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
     /// Forces a tool protocol for this profile, overriding provider detection.
     /// Set it when a self-hosted server implements OpenAI-style function
     /// calling (or advertises it but gets it wrong).
@@ -223,6 +228,24 @@ pub enum OutputTokenField {
     GoogleMaxOutputTokens,
 }
 
+/// Wire protocol used to exchange model requests and streamed responses.
+///
+/// Most RustCode profiles use the OpenAI-compatible Chat Completions API.
+/// OpenCode Zen's Muse and GPT profiles use the OpenAI Responses API instead,
+/// so the dialect must be explicit rather than inferred from the model name.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiProtocol {
+    ChatCompletions,
+    Responses,
+}
+
+impl Default for ApiProtocol {
+    fn default() -> Self {
+        Self::ChatCompletions
+    }
+}
+
 impl OutputTokenField {
     pub const fn wire_name(self) -> &'static str {
         match self {
@@ -295,6 +318,19 @@ impl ModelProfile {
         let request_url = url.trim_end_matches('/');
         (self.model == model || self.name == model)
             && (configured_url == request_url || self.endpoint_url() == request_url)
+    }
+
+    /// Resolve the request dialect without requiring every legacy profile to
+    /// add a new field. Explicit metadata wins, then a `/responses` endpoint
+    /// is recognized as the OpenAI Responses API.
+    pub fn resolved_api_protocol(&self) -> ApiProtocol {
+        self.api_protocol.unwrap_or_else(|| {
+            self.url
+                .trim_end_matches('/')
+                .ends_with("/responses")
+                .then_some(ApiProtocol::Responses)
+                .unwrap_or_default()
+        })
     }
 
     /// Resolve the per-profile mutation policy once at the orchestration
@@ -387,13 +423,17 @@ impl ModelProfile {
     /// wins; otherwise recognize only a stable endpoint dialect and keep the
     /// generic OpenAI-compatible field for local gateways and other proxies.
     pub fn resolved_output_token_field(&self) -> OutputTokenField {
-        self.output_token_field.unwrap_or_else(|| {
-            if self.is_google_native_endpoint() {
-                OutputTokenField::GoogleMaxOutputTokens
-            } else {
-                OutputTokenField::MaxTokens
-            }
-        })
+        self.output_token_field
+            .unwrap_or_else(|| match self.resolved_api_protocol() {
+                ApiProtocol::Responses => OutputTokenField::MaxOutputTokens,
+                ApiProtocol::ChatCompletions => {
+                    if self.is_google_native_endpoint() {
+                        OutputTokenField::GoogleMaxOutputTokens
+                    } else {
+                        OutputTokenField::MaxTokens
+                    }
+                }
+            })
     }
 
     /// Whether this profile points at Google's native Generative Language
@@ -618,10 +658,28 @@ impl ModelProfile {
 
     pub fn endpoint_url(&self) -> String {
         let trimmed = self.url.trim_end_matches('/');
-        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
-            trimmed.to_string()
-        } else {
-            format!("{trimmed}/chat/completions")
+        match self.resolved_api_protocol() {
+            ApiProtocol::Responses => {
+                if trimmed.ends_with("/responses") {
+                    trimmed.to_string()
+                } else if let Some(base) = trimmed.strip_suffix("/chat/completions") {
+                    format!("{base}/responses")
+                } else if let Some(base) = trimmed.strip_suffix("/chats/completion") {
+                    format!("{base}/responses")
+                } else {
+                    format!("{trimmed}/responses")
+                }
+            }
+            ApiProtocol::ChatCompletions => {
+                if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion")
+                {
+                    trimmed.to_string()
+                } else if let Some(base) = trimmed.strip_suffix("/responses") {
+                    format!("{base}/chat/completions")
+                } else {
+                    format!("{trimmed}/chat/completions")
+                }
+            }
         }
     }
 
@@ -1018,6 +1076,18 @@ impl Default for AppConfig {
                     enable_thinking: None,
                     reasoning_effort: None,
                     max_tokens: None,
+                    supports_vision: Some(false),
+                    ..Default::default()
+                },
+                ModelProfile {
+                    name: "opencode-muse-spark-1.3".to_string(),
+                    url: "https://opencode.ai/zen/v1/responses".to_string(),
+                    model: "muse-spark-1.3".to_string(),
+                    context_window: Some(262_144),
+                    engine: Some("openai".to_string()),
+                    env_key: Some("OPENCODE_API_KEY".to_string()),
+                    api_protocol: Some(ApiProtocol::Responses),
+                    tool_protocol: Some(ToolProtocol::ApiNative),
                     supports_vision: Some(false),
                     ..Default::default()
                 },
