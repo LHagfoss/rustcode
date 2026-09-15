@@ -336,6 +336,23 @@ fn validate_tool_call(call: &ToolCall) -> Result<(), String> {
         ));
     };
 
+    // A complete textual call can otherwise carry an unbounded JSON string all
+    // the way to the filesystem handler. Keep the small-file convenience path,
+    // but force large writes through the resumable chunk protocol before any
+    // workspace mutation or confirmation is reached. This is deliberately a
+    // runtime guard as well as prompt/schema guidance because textual models do
+    // not enforce JSON Schema limits themselves.
+    if call.name == "write_to_file"
+        && let Some(content) = call.arguments.get("content").and_then(Value::as_str)
+        && content.len() > rustcode_tools::filesystem::MAX_FILE_CHUNK_BYTES
+    {
+        return Err(format!(
+            "write_to_file content is {} bytes, above the {}-byte single-call limit; no file was changed. Use write_file_chunk with contiguous offsets (start at offset 0 with truncate=true, then resume with each returned next_offset)",
+            content.len(),
+            rustcode_tools::filesystem::MAX_FILE_CHUNK_BYTES
+        ));
+    }
+
     // Only built-in handlers coerce string-encoded integers
     // (parse_json_number); MCP servers receive arguments verbatim.
     let string_integers = TOOLS.iter().any(|tool| tool.name == call.name);
