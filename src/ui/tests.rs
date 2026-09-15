@@ -178,6 +178,8 @@ fn render_snapshot_preserves_existing_ui_output() {
     selected_subagent.selected_subagent_id = Some(7);
     states.push(selected_subagent);
 
+    states[0].active_session_id = "session-test-123".to_owned();
+
     for state in &mut states {
         state.config = crate::config::AppConfig::default();
         state.model_name = "gemini-3.6-flash".to_owned();
@@ -531,6 +533,10 @@ fn welcome_banner_renders_without_a_conversation() {
     assert!(
         rendered.contains(">_ RustCode"),
         "the welcome banner header must include '>_ RustCode': {rendered:?}"
+    );
+    assert!(
+        rendered.contains("session:") && rendered.contains(&state.active_session_id),
+        "the welcome banner must include the active session ID: {rendered:?}"
     );
     assert!(
         rendered.contains("branch:") && rendered.contains("help:") && rendered.contains("/help"),
@@ -2715,7 +2721,7 @@ fn speculative_file_write_uses_ran_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "  └ src/main.js"]);
+    assert_eq!(rendered, ["• Ran", "  └ Writing src/main.js"]);
 }
 
 #[test]
@@ -2746,7 +2752,7 @@ fn native_speculative_exploration_without_target_uses_explored_heading() {
 }
 
 #[test]
-fn live_editing_tool_cell_shows_ran_heading_and_target_child() {
+fn live_editing_tool_cell_shows_action_and_target_child() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -2759,7 +2765,7 @@ fn live_editing_tool_cell_shows_ran_heading_and_target_child() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "  └ src/game/engine.ts"]);
+    assert_eq!(rendered, ["• Ran", "  └ Edit src/game/engine.ts"]);
 }
 
 #[test]
@@ -2779,7 +2785,13 @@ fn live_audio_generation_cell_shows_ran_heading_and_output_path() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "  └ assets/audio/balloon-pop.wav"]);
+    assert_eq!(
+        rendered,
+        [
+            "• Ran",
+            "  └ GenerateSoundEffect assets/audio/balloon-pop.wav"
+        ]
+    );
 }
 
 #[test]
@@ -2807,7 +2819,7 @@ fn live_video_render_cell_shows_progress() {
 }
 
 #[test]
-fn live_batched_edits_with_casing_aliases_group_under_ran_without_actions() {
+fn live_batched_edits_with_casing_aliases_include_actions() {
     let calls = vec![
         crate::app::LiveToolCall::new(
             "local:1",
@@ -2825,7 +2837,11 @@ fn live_batched_edits_with_casing_aliases_group_under_ran_without_actions() {
 
     assert_eq!(
         rendered,
-        ["• Ran", "  └ src/game/engine.ts", "    src/App.tsx"]
+        [
+            "• Ran",
+            "  └ Edit src/game/engine.ts",
+            "    Write src/App.tsx"
+        ]
     );
 }
 

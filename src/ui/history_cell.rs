@@ -516,15 +516,21 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         )];
         if all_editing {
+            spans.push(Span::styled(
+                call.action.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ));
             if !call.target.is_empty() && call.target != "?" {
                 spans.push(Span::styled(
-                    truncate_to_width(&call.target, child_width),
+                    " ",
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
-            } else {
                 spans.push(Span::styled(
-                    call.action.clone(),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                    truncate_to_width(
+                        &call.target,
+                        child_width.saturating_sub(call.action.chars().count() + 1),
+                    ),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
             }
         } else {
