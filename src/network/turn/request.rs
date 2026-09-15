@@ -93,9 +93,18 @@ fn bounded_stream_recovery_checkpoint(content: &str) -> String {
 }
 
 fn recoverable_textual_stream_failure(content: &str) -> bool {
-    !content.trim().is_empty()
-        && crate::network::text::has_intended_tool_call(content)
-        && crate::tools::has_incomplete_actionable_tool_call(content)
+    if content.trim().is_empty() || !crate::network::text::has_intended_tool_call(content) {
+        return false;
+    }
+
+    // A transport failure happens before the turn parser/dispatcher sees the
+    // response. Preserve both incomplete and apparently complete textual
+    // envelopes as unexecuted checkpoints: a stream can fail just after the
+    // closing brace, and replaying that text as a completed tool call would be
+    // indistinguishable from a mutation that actually ran.
+    crate::tools::has_incomplete_actionable_tool_call(content)
+        || !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty()
+        || !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty()
 }
 
 fn bounded_error_detail(error: &runner::ResponseError) -> String {
@@ -611,14 +620,17 @@ mod tests {
     };
 
     #[test]
-    fn only_an_incomplete_actionable_textual_call_is_auto_recoverable() {
+    fn textual_tool_call_stream_failures_are_checkpointed_before_dispatch() {
         assert!(recoverable_textual_stream_failure(
             "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial"
+        ));
+        assert!(recoverable_textual_stream_failure(
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}"
         ));
         assert!(!recoverable_textual_stream_failure(
             "ordinary partial prose"
         ));
-        assert!(!recoverable_textual_stream_failure(
+        assert!(recoverable_textual_stream_failure(
             "[TOOL_CALLS]get_time[ARGS]{}"
         ));
     }

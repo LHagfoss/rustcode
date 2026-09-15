@@ -372,7 +372,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
         let mut s = state.lock().await;
         let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
-            .with_tool_calls(call_refs.clone());
+            .with_tool_calls(call_refs.clone())
+            .as_unexecuted_tool_call_checkpoint();
         message.response_time_ms = Some(turn_response_time_ms);
         message.token_usage = turn_token_usage;
         message.thought_time_ms = thought_time_ms;
@@ -1646,7 +1647,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         let repeated_malformed = record_malformed_call(ctx, &raw_content, &[]);
         let mut s = state.lock().await;
         let bounded_history_content = bounded_malformed_tool_history(&ctx.response.final_content);
-        let mut msg = ChatMessage::new("assistant", bounded_history_content);
+        let mut msg = ChatMessage::new("assistant", bounded_history_content)
+            .as_unexecuted_tool_call_checkpoint();
         msg.response_time_ms = Some(turn_response_time_ms);
         msg.token_usage = turn_token_usage.clone();
         msg.thought_time_ms = thought_time_ms;
