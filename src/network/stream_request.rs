@@ -200,8 +200,18 @@ fn cache_usage_metrics(usage: &serde_json::Value) -> (Option<u32>, Option<u32>, 
         .and_then(|details| details.get("cached_tokens"))
         .and_then(serde_json::Value::as_u64)
         .or_else(|| {
+            input_details
+                .and_then(|details| details.get("cache_read_input_tokens"))
+                .and_then(serde_json::Value::as_u64)
+        })
+        .or_else(|| {
             usage
                 .get("cached_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .or_else(|| {
+            usage
+                .get("cache_read_input_tokens")
                 .and_then(serde_json::Value::as_u64)
         })
         .map(|value| value as u32);
@@ -209,8 +219,18 @@ fn cache_usage_metrics(usage: &serde_json::Value) -> (Option<u32>, Option<u32>, 
         .and_then(|details| details.get("cache_write_tokens"))
         .and_then(serde_json::Value::as_u64)
         .or_else(|| {
+            input_details
+                .and_then(|details| details.get("cache_creation_input_tokens"))
+                .and_then(serde_json::Value::as_u64)
+        })
+        .or_else(|| {
             usage
                 .get("cache_write_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .or_else(|| {
+            usage
+                .get("cache_creation_input_tokens")
                 .and_then(serde_json::Value::as_u64)
         })
         .map(|value| value as u32);
@@ -218,6 +238,26 @@ fn cache_usage_metrics(usage: &serde_json::Value) -> (Option<u32>, Option<u32>, 
         .get("cache_discount")
         .and_then(serde_json::Value::as_f64);
     (cached_tokens, cache_write_tokens, cache_discount)
+}
+
+fn provider_cache_observation(
+    affinity_requested: bool,
+    cached_tokens: Option<u32>,
+    cache_write_tokens: Option<u32>,
+) -> (&'static str, &'static str) {
+    if !affinity_requested {
+        return ("not_requested", "openrouter_session_affinity_unavailable");
+    }
+    if cached_tokens.is_some_and(|tokens| tokens > 0) {
+        return ("hit", "provider_reported_cached_tokens");
+    }
+    if cache_write_tokens.is_some_and(|tokens| tokens > 0) {
+        return ("write", "provider_reported_cache_write_without_read");
+    }
+    if cached_tokens == Some(0) || cache_write_tokens == Some(0) {
+        return ("miss", "provider_reported_zero_cache_tokens");
+    }
+    ("unknown", "provider_did_not_report_cache_tokens")
 }
 
 /// Convert the internal Chat Completions-shaped history into the stateless
@@ -1971,6 +2011,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_cache_observation_distinguishes_affinity_and_reported_state() {
+        assert_eq!(
+            provider_cache_observation(true, Some(80), Some(20)),
+            ("hit", "provider_reported_cached_tokens")
+        );
+        assert_eq!(
+            provider_cache_observation(true, Some(0), Some(0)),
+            ("miss", "provider_reported_zero_cache_tokens")
+        );
+        assert_eq!(
+            provider_cache_observation(true, None, None),
+            ("unknown", "provider_did_not_report_cache_tokens")
+        );
+        assert_eq!(
+            provider_cache_observation(false, None, None),
+            ("not_requested", "openrouter_session_affinity_unavailable")
+        );
+    }
+
+    #[test]
+    fn alternate_provider_cache_usage_names_are_normalized() {
+        let usage = serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+            "prompt_tokens_details": {
+                "cache_read_input_tokens": 75,
+                "cache_creation_input_tokens": 25
+            }
+        });
+        assert_eq!(cache_usage_metrics(&usage).0, Some(75));
+        assert_eq!(cache_usage_metrics(&usage).1, Some(25));
+    }
+
+    #[test]
     fn recovery_tool_requests_allow_a_final_answer() {
         let mut payload = serde_json::json!({});
         let schema = vec![serde_json::json!({
@@ -2707,6 +2782,9 @@ pub async fn stream_request(
                 "omitted": mcp_selection.omitted,
                 "selected_names": mcp_selection.selected_names,
                 "max": crate::tools::MAX_MCP_NATIVE_SCHEMAS,
+                "mcp_schema_bytes": mcp_selection.mcp_schema_bytes,
+                "mcp_schema_budget_bytes": mcp_selection.mcp_schema_budget_bytes,
+                "schema_budget_exhausted": mcp_selection.schema_budget_exhausted,
                 "allow_tools": allow_tools,
                 "phase": format!("{:?}", mcp_selection.phase),
                 "builtin_available": mcp_selection.builtin_available,
@@ -2805,6 +2883,10 @@ pub async fn stream_request(
             "available_builtin_tools": tool_surface.builtin,
             "available_mcp_tools": tool_surface.mcp,
             "available_agent_tools": tool_surface.agent,
+            "builtin_schema_bytes": mcp_selection.builtin_schema_bytes,
+            "mcp_schema_bytes": mcp_selection.mcp_schema_bytes,
+            "mcp_schema_budget_bytes": mcp_selection.mcp_schema_budget_bytes,
+            "schema_budget_exhausted": mcp_selection.schema_budget_exhausted,
             "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
             "textual_contract_tokens": textual_contract_tokens,
@@ -2876,6 +2958,10 @@ pub async fn stream_request(
             "available_builtin_tools": tool_surface.builtin,
             "available_mcp_tools": tool_surface.mcp,
             "available_agent_tools": tool_surface.agent,
+            "builtin_schema_bytes": mcp_selection.builtin_schema_bytes,
+            "mcp_schema_bytes": mcp_selection.mcp_schema_bytes,
+            "mcp_schema_budget_bytes": mcp_selection.mcp_schema_budget_bytes,
+            "schema_budget_exhausted": mcp_selection.schema_budget_exhausted,
             "openrouter_session_affinity": is_openrouter_endpoint(url)
                 && bounded_openrouter_session_id(expected_session_id).is_some(),
         }),
@@ -3386,6 +3472,16 @@ pub async fn stream_request(
                                     ) {
                                         let (cached, cache_write_tokens, cache_discount) =
                                             cache_usage_metrics(usage);
+                                        let (provider_cache_status, provider_cache_reason) =
+                                            provider_cache_observation(
+                                                is_openrouter_endpoint(url)
+                                                    && bounded_openrouter_session_id(
+                                                        expected_session_id,
+                                                    )
+                                                    .is_some(),
+                                                cached,
+                                                cache_write_tokens,
+                                            );
                                         let observed_reasoning_tokens = usage
                                             .get("completion_tokens_details")
                                             .and_then(|details| details.get("reasoning_tokens"))
@@ -3429,6 +3525,11 @@ pub async fn stream_request(
                                                 "cached_tokens": cached,
                                                 "cache_write_tokens": cache_write_tokens,
                                                 "cache_discount": cache_discount,
+                                                "provider_cache_status": provider_cache_status,
+                                                "provider_cache_reason": provider_cache_reason,
+                                                "openrouter_session_affinity": is_openrouter_endpoint(url)
+                                                    && bounded_openrouter_session_id(expected_session_id)
+                                                        .is_some(),
                                                 "requested_max_output_tokens": output_token_limit,
                                                 "requested_max_tokens": output_token_limit,
                                                 "requested_thinking_budget": thinking_budget,
