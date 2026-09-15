@@ -1,3 +1,9 @@
+## [v0.52.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.3) - 2026-09-15
+
+### Fixes
+- Gate automatic idle recaps on completed model turns and true idle entry.
+- Persist deterministic first-turn session titles with optional model refinement.
+- Make large textual file writes bounded, resumable, and safe across interrupted streams.
 ## [v0.52.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.2) - 2026-09-14
 
 ### Fixes
