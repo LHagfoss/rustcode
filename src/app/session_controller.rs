@@ -133,7 +133,7 @@ impl SessionController {
         state.clear_current_response();
         state.current_token_usage = None;
         state.response_time = None;
-        state.status = AppStatus::Idle;
+        state.enter_idle();
         state.request_clear_screen();
         Ok(SessionTransition::Cleared {
             session_id: state.active_session_id.clone(),
