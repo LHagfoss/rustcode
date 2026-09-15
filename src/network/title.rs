@@ -73,10 +73,11 @@ pub(crate) async fn record_prompt_to_history(
     if s.active_session_id != expected_session_id {
         return false;
     }
+    let active_id = s.active_session_id.clone();
     if let Some(message) = prompt_history_message(is_wakeup, next_prompt) {
         s.history.push(message);
+        crate::config::save_session_title_if_absent(&active_id, &s.history);
     }
-    let active_id = s.active_session_id.clone();
     crate::config::save_session_history(&active_id, &s.history);
     s.clear_current_response();
     s.current_token_usage = None;
