@@ -512,6 +512,20 @@ impl SessionStore {
         let _ = std::fs::write(session_dir.join("title.txt"), title);
     }
 
+    /// Persist the deterministic title derived from the first user prompt only
+    /// when no explicit title has already been saved.
+    pub fn save_session_title_if_absent(&self, session_id: &str, history: &[ChatMessage]) {
+        if self.load_session_title(session_id).is_some() {
+            return;
+        }
+
+        let title = Self::session_title(history);
+        if title.is_empty() || title == "(no prompt)" {
+            return;
+        }
+        self.save_session_title(session_id, &title);
+    }
+
     pub fn load_session_title(&self, session_id: &str) -> Option<String> {
         let path = self.session_dir(session_id).join("title.txt");
         path.exists()
@@ -1033,6 +1047,26 @@ mod tests {
         assert_eq!(
             store.load_session_meta(&path).unwrap().title,
             "Custom title"
+        );
+    }
+
+    #[test]
+    fn fallback_title_is_saved_once_and_explicit_titles_win() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let history = vec![message("user", "Implement reliable session titles")];
+
+        store.save_session_title_if_absent("fallback", &history);
+        assert_eq!(
+            store.load_session_title("fallback").as_deref(),
+            Some("Implement reliable session titles")
+        );
+
+        store.save_session_title("fallback", "Explicit title");
+        store.save_session_title_if_absent("fallback", &[message("user", "Different prompt")]);
+        assert_eq!(
+            store.load_session_title("fallback").as_deref(),
+            Some("Explicit title")
         );
     }
 
