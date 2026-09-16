@@ -308,6 +308,13 @@ fn provider_cache_observation(
 /// input-item form accepted by the OpenAI Responses API.
 fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut input = Vec::new();
+    // A function_call / function_call_output run is one transaction: DeepSeek
+    // rejects any other item type interleaved between them ("No tool output
+    // found") even when every call_id has a matching output. Runtime notices
+    // rendered as user/system text must not split the run, so buffer them
+    // while calls are still awaiting outputs and flush once answered.
+    let mut open_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut buffered: Vec<serde_json::Value> = Vec::new();
 
     for message in messages {
         let role = message
@@ -326,6 +333,10 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
                     "call_id": call_id,
                     "output": output,
                 }));
+                open_calls.remove(call_id);
+                if open_calls.is_empty() {
+                    input.append(&mut buffered);
+                }
             }
             continue;
         }
@@ -366,6 +377,7 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
                             .get("arguments")
                             .map_or_else(|| "{}".to_owned(), serde_json::Value::to_string)
                     });
+                open_calls.insert(call_id.to_owned());
                 input.push(serde_json::json!({
                     "type": "function_call",
                     "call_id": call_id,
@@ -384,12 +396,20 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
             } else {
                 "input_text"
             };
-            input.push(serde_json::json!({
+            let item = serde_json::json!({
                 "role": role,
                 "content": [{"type": content_type, "text": text}],
-            }));
+            });
+            if open_calls.is_empty() {
+                input.push(item);
+            } else {
+                // A runtime notice between calls and their outputs would
+                // split the transaction; hold it until the run is answered.
+                buffered.push(item);
+            }
         }
     }
+    input.append(&mut buffered);
 
     input
 }
@@ -1366,6 +1386,67 @@ mod tests {
         assert_eq!(input[3]["call_id"], "call-a");
         assert_eq!(input[4]["type"], "function_call_output");
         assert_eq!(input[4]["call_id"], "call-b");
+    }
+
+    #[test]
+    fn responses_input_holds_runtime_notices_outside_call_output_runs() {
+        let messages = vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": "reading",
+                "tool_calls": [
+                    {
+                        "id": "call-a",
+                        "type": "function",
+                        "function": {"name": "view_file", "arguments": "{}"}
+                    },
+                    {
+                        "id": "call-b",
+                        "type": "function",
+                        "function": {"name": "list_directory", "arguments": "{}"}
+                    }
+                ]
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": "<rustcode_runtime_notice>loop warning</rustcode_runtime_notice>",
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call-a",
+                "content": "file result"
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call-b",
+                "content": "directory result"
+            }),
+        ];
+
+        let input = responses_input_from_messages(&messages);
+
+        let first_call = input
+            .iter()
+            .position(|item| item["type"] == "function_call")
+            .expect("call run");
+        let last_output = input
+            .iter()
+            .rposition(|item| item["type"] == "function_call_output")
+            .expect("output run");
+        assert!(first_call < last_output);
+        for item in &input[first_call..=last_output] {
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            assert!(
+                item_type == "function_call" || item_type == "function_call_output",
+                "transaction split by {item:?}"
+            );
+        }
+        assert!(
+            input[last_output + 1..]
+                .iter()
+                .any(|item| item["content"].to_string().contains("loop warning")),
+            "buffered notice must survive after the run: {input:?}"
+        );
     }
 
     #[test]
