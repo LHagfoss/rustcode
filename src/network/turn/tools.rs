@@ -59,7 +59,7 @@ fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> Stri
         )
     } else {
         format!(
-            "Emit exactly one tool call per response and wait for its result before choosing the next action. The mutation budget remains {} for provider policy compatibility, but it is not a reason to batch calls. Read-only inspection never consumes it.",
+            "Batch independent read-only calls freely in one response and wait for their results before choosing the next action. Keep workspace-changing calls to one per response (limit {}) and keep control-plane calls alone. Read-only inspection never consumes the mutation budget. Never assume an unexecuted call ran.",
             policy.max_mutating_calls
         )
     }
@@ -114,14 +114,20 @@ fn selected_tool_call_indices(
             vec![0]
         };
     };
-    if !policy.allow_batching {
-        return vec![first_valid];
-    }
-
+    // Permissive scheduling: every valid read-only call runs — batching
+    // independent inspection is the fast path, not a policy violation.
+    // Workspace mutations stay ordered at one per round by default (more
+    // only for explicitly trusted batching profiles), and control-plane
+    // calls still execute alone above. Invalid or over-budget calls remain
+    // in the transcript as non-executed results.
     let mut selected = Vec::new();
-    let mut read_only = 0;
     let mut mutating = 0;
     let mut seen = std::collections::HashSet::new();
+    let mutation_cap = if policy.allow_batching {
+        policy.max_mutating_calls.max(1)
+    } else {
+        1
+    };
     for (index, call) in calls.iter().enumerate() {
         if validation_errors[index].is_some()
             || matches!(
@@ -134,18 +140,16 @@ fn selected_tool_call_indices(
         if !seen.insert(crate::tools::duplicate_tool_call_key(call)) {
             continue;
         }
-        if crate::tools::is_read_only_call(call) {
-            if read_only >= policy.max_read_only_calls {
-                continue;
-            }
-            read_only += 1;
-        } else {
-            if mutating >= policy.max_mutating_calls {
+        if !crate::tools::is_read_only_call(call) {
+            if mutating >= mutation_cap {
                 continue;
             }
             mutating += 1;
         }
         selected.push(index);
+    }
+    if selected.is_empty() {
+        return vec![first_valid];
     }
 
     selected
@@ -1863,15 +1867,14 @@ mod tests {
                 max_mutating_calls: limit,
                 ..Default::default()
             });
-            assert!(guidance.contains("exactly one tool call per response"));
-            assert!(guidance.contains(&format!("mutation budget remains {limit}")));
-            assert!(guidance.contains("Read-only inspection never consumes it"));
-            assert!(!guidance.contains("parallel"));
+            assert!(guidance.contains("Batch independent read-only calls freely"));
+            assert!(guidance.contains(&format!("one per response (limit {limit})")));
+            assert!(guidance.contains("Read-only inspection never consumes the mutation budget"));
         }
     }
 
     #[test]
-    fn default_scheduler_keeps_one_valid_call() {
+    fn default_scheduler_batches_all_valid_reads() {
         let calls = vec![read_call("git status"), read_call("git diff")];
         let errors = vec![None, None];
         let selected = selected_tool_call_indices(
@@ -1879,11 +1882,35 @@ mod tests {
             &errors,
             crate::config::ToolSchedulingPolicy::default(),
         );
-        assert_eq!(selected, vec![0]);
+        assert_eq!(selected, vec![0, 1]);
     }
 
     #[test]
-    fn trusted_scheduler_applies_separate_read_and_mutation_limits() {
+    fn default_scheduler_caps_mutations_at_one() {
+        let calls = vec![
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "a", "content": "a"}),
+                call_id: None,
+            },
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "b", "content": "b"}),
+                call_id: None,
+            },
+            read_call("git status"),
+        ];
+        let errors = vec![None, None, None];
+        let selected = selected_tool_call_indices(
+            &calls,
+            &errors,
+            crate::config::ToolSchedulingPolicy::default(),
+        );
+        assert_eq!(selected, vec![0, 2]);
+    }
+
+    #[test]
+    fn trusted_scheduler_applies_mutation_limit_while_reads_batch_freely() {
         let calls = vec![
             read_call("git status"),
             read_call("git diff"),
@@ -1909,7 +1936,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(selected, vec![0, 2]);
+        assert_eq!(selected, vec![0, 1, 2]);
     }
 
     #[test]

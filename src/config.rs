@@ -27,9 +27,9 @@ const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
 const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
 const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
 /// Safe mutation cap for explicitly enabled response batching. The scheduler
-/// remains strict one-call by default; read-only inspection (`grep`, `glob`,
-/// `view_file`, and read-only shell commands) is classified separately and
-/// never consumes this budget.
+/// batches every valid read-only call and runs one mutation per round by
+/// default; read-only inspection (`grep`, `glob`, `view_file`, and read-only
+/// shell commands) is classified separately and never consumes this budget.
 pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
 /// Keep profile overrides bounded even when a config typo requests an
 /// unreasonably large mutation batch.
@@ -199,8 +199,9 @@ pub struct ModelProfile {
     /// needed for self-hosted gateways whose URL and engine name look remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<bool>,
-    /// Explicitly allow this profile to batch multiple tool calls in one
-    /// response. Omitted profiles retain strict one-call scheduling.
+    /// Explicitly allow this profile to batch multiple workspace-changing
+    /// tool calls in one response. Omitted profiles run one mutation per
+    /// round; read-only calls always batch regardless of this flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_tool_batching: Option<bool>,
     /// Maximum read-only calls in one response when batching is enabled.
@@ -346,8 +347,9 @@ impl ModelProfile {
             .min(MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE)
     }
 
-    /// Whether this explicitly trusted profile may schedule a bounded batch
-    /// instead of the default one-call-per-response policy.
+    /// Whether this explicitly trusted profile may schedule a bounded
+    /// mutation batch instead of the default one-mutation-per-response policy.
+    /// Read-only calls always batch; this flag only raises the mutation cap.
     pub fn tool_batching_enabled(&self) -> bool {
         self.allow_tool_batching == Some(true)
     }
