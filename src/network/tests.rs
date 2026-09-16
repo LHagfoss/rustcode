@@ -2461,6 +2461,10 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
     assert_eq!(summary["last_stream_termination"], "client_budget");
     assert_eq!(summary["stop_reason"], "provider_error:429");
+    assert_eq!(summary["segment_count"], 1);
+    assert_eq!(summary["segment_rounds"], 7);
+    assert!(summary["effective_segment_limit"].is_null());
+    assert!(summary["effective_total_round_limit"].is_null());
 }
 
 #[test]
@@ -3328,6 +3332,95 @@ fn max_tool_rounds_triggers_the_budget() {
         Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.budget.max_tool_rounds),
         other => panic!("expected ToolRounds limit, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn productive_persisted_40_round_segments_continue_without_replaying_history() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut s = state.lock().await;
+        s.history
+            .push(ChatMessage::new("user", "complete the long task"));
+        s.history.push(
+            ChatMessage::new("tool", "completed call-1").with_tool_result(
+                crate::app::ToolResultRecord {
+                    tool_name: "write_file_chunk".to_string(),
+                    success: true,
+                    ..Default::default()
+                },
+            ),
+        );
+    }
+
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 40;
+    ctx.progress.meaningful_events = 1;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ProductiveSegment {
+            used: 40,
+            maximum: 40
+        })
+    ));
+
+    let limit = turn_budget_exceeded(&ctx).expect("productive segment should yield");
+    assert!(!stop_turn_for_budget(&state, &mut ctx, limit).await);
+    assert!(ctx.budget.continuation_pending);
+    assert!(ctx.budget.budget_stopped.is_none());
+    assert!(ctx.response.final_content.contains("without replaying"));
+
+    {
+        let mut s = state.lock().await;
+        save_turn_context_after_run(&mut s, ctx, true);
+    }
+    let history_len = state.lock().await.history.len();
+    let mut resumed = {
+        let mut s = state.lock().await;
+        take_turn_context_for_prompt(&mut s, true, 40)
+    };
+    assert_eq!(resumed.budget.tool_rounds, 40);
+    assert_eq!(resumed.budget.segment_count, 2);
+    assert_eq!(resumed.segment_rounds(), 0);
+    assert_eq!(state.lock().await.history.len(), history_len);
+
+    // A second productive segment takes the logical task beyond the legacy
+    // 40-round ceiling while retaining the same context and completed call.
+    resumed.budget.tool_rounds = 80;
+    resumed.progress.meaningful_events = 2;
+    assert!(matches!(
+        turn_budget_exceeded(&resumed),
+        Some(TurnBudgetLimit::ProductiveSegment {
+            used: 40,
+            maximum: 40
+        })
+    ));
+}
+
+#[test]
+fn productive_segment_requires_new_progress_after_each_boundary() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 40;
+    ctx.progress.meaningful_events = 1;
+    let first = turn_budget_exceeded(&ctx).expect("first segment should end");
+    assert!(matches!(first, TurnBudgetLimit::ProductiveSegment { .. }));
+    ctx.budget.continuation_pending = true;
+    ctx.begin_next_segment();
+    ctx.budget.tool_rounds = 80;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(40))
+    ));
+}
+
+#[test]
+fn explicit_total_round_limit_stops_productive_continuation() {
+    let mut ctx = TurnContext::with_budgets(40, 80);
+    ctx.budget.tool_rounds = 80;
+    ctx.progress.meaningful_events = 2;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::TotalToolRounds(80))
+    ));
 }
 
 #[test]

@@ -9,7 +9,8 @@ use super::super::policy;
 use super::super::stream::StreamBuffer;
 use super::super::title::record_prompt_to_history;
 use super::{
-    run_agent_turn_with_context, save_turn_context_after_run, take_turn_context_for_prompt,
+    run_agent_turn_with_context, save_turn_context_after_run,
+    take_turn_context_for_prompt_with_limits,
 };
 
 pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
@@ -61,7 +62,13 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);
             s.session_title_tool_available = is_first_prompt;
             let max_tool_rounds = s.config.max_tool_rounds;
-            let turn_context = take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
+            let max_total_tool_rounds = s.config.max_total_tool_rounds;
+            let turn_context = take_turn_context_for_prompt_with_limits(
+                &mut s,
+                is_wakeup,
+                max_tool_rounds,
+                max_total_tool_rounds,
+            );
             let turn_session_id = s.active_session_id.clone();
             dbg_log!("Popped prompt from queue: '{}'", prompt);
             (prompt, is_wakeup, turn_context, turn_session_id)
@@ -71,7 +78,18 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         if !record_prompt_to_history(&state, is_wakeup, &next_prompt, &turn_session_id).await {
             break;
         }
-        crate::logger::operational_event("turn.start", serde_json::json!({"wakeup": is_wakeup}));
+        crate::logger::operational_event(
+            "turn.start",
+            serde_json::json!({
+                "wakeup": is_wakeup,
+                "tool_rounds": turn_context.budget.tool_rounds,
+                "segment_rounds": turn_context.segment_rounds(),
+                "segment_limit": (turn_context.budget.max_tool_rounds != usize::MAX)
+                    .then_some(turn_context.budget.max_tool_rounds),
+                "total_round_limit": (turn_context.budget.max_total_tool_rounds != usize::MAX)
+                    .then_some(turn_context.budget.max_total_tool_rounds),
+            }),
+        );
 
         let completed_context = if let Some(sender) = ui_events.clone() {
             super::super::ui_adapter::run_agent_turn_with_events_and_context(
@@ -103,12 +121,19 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             // unwinding. Do not carry its turn context into the replacement.
             break;
         }
+        let schedule_continuation =
+            !cancel_token.is_cancelled() && completed_context.budget.continuation_pending;
         let preserve_for_wakeup = is_wakeup
+            || schedule_continuation
             || matches!(
                 completed_context.lifecycle.stop_reason,
                 Some(lifecycle::StopReason::BackgroundPending)
             );
         save_turn_context_after_run(&mut s, completed_context, preserve_for_wakeup);
+        if schedule_continuation && s.background_turn_context.is_some() {
+            s.pending_queue
+                .insert(0, "__task_wakeup__:productive_segment".to_string());
+        }
         drop(s);
 
         if cancel_token.is_cancelled() {

@@ -638,6 +638,25 @@ fn tool_round_limit_round_trips_through_runtime_config() {
 }
 
 #[test]
+fn long_turn_limits_round_trip_and_legacy_40_remains_valid() {
+    let dir = temp_dir("long_turn_limits");
+    let mut config = AppConfig::default();
+    config.max_tool_rounds = 40;
+    config.max_total_tool_rounds = 120;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.max_tool_rounds, 40);
+    assert_eq!(loaded.max_total_tool_rounds, 120);
+
+    let legacy_dir = temp_dir("legacy_40_round_limit");
+    std::fs::write(legacy_dir.join(CONFIG_FILE), r#"{"max_tool_rounds":40}"#).unwrap();
+    let (_, _, legacy) = load_config_from(&legacy_dir);
+    assert_eq!(legacy.max_tool_rounds, 40);
+    assert_eq!(legacy.max_total_tool_rounds, DEFAULT_MAX_TOTAL_TOOL_ROUNDS);
+}
+
+#[test]
 fn older_runtime_config_defaults_subagent_concurrency_limit() {
     let dir = temp_dir("legacy_subagent_concurrency_limit");
     std::fs::write(dir.join(CONFIG_FILE), "{}").unwrap();
