@@ -15,6 +15,10 @@ use std::time::Duration;
 pub const HISTORY_FILE: &str = "history.json";
 pub const SESSIONS_DIR: &str = "sessions";
 pub const IMAGE_CACHE_FILE: &str = "image_cache.json";
+/// Durable long-turn segment state for resuming productive continuations
+/// after a restart. Written when a turn ends with a pending continuation or
+/// background turn, cleared otherwise.
+pub const SEGMENT_CHECKPOINT_FILE: &str = "segment.json";
 pub const SESSION_METADATA_FILE: &str = "metadata.json";
 pub const SESSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -557,6 +561,27 @@ impl SessionStore {
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default()
+    }
+
+    pub fn save_segment_checkpoint<T: Serialize>(&self, session_id: &str, checkpoint: &T) {
+        let session_dir = self.ensure_session(session_id);
+        let _ = std::fs::create_dir_all(&session_dir);
+        if let Ok(json) = serde_json::to_string_pretty(checkpoint) {
+            let _ = std::fs::write(session_dir.join(SEGMENT_CHECKPOINT_FILE), json);
+        }
+    }
+
+    pub fn load_segment_checkpoint<T: for<'de> Deserialize<'de>>(
+        &self,
+        session_id: &str,
+    ) -> Option<T> {
+        std::fs::read_to_string(self.session_dir(session_id).join(SEGMENT_CHECKPOINT_FILE))
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+    }
+
+    pub fn clear_segment_checkpoint(&self, session_id: &str) {
+        let _ = std::fs::remove_file(self.session_dir(session_id).join(SEGMENT_CHECKPOINT_FILE));
     }
 
     pub fn get_active_session_dir(&self, session_id: &str) -> PathBuf {
@@ -1170,6 +1195,34 @@ mod tests {
         let cache = HashMap::from([(String::from("hash"), String::from("result"))]);
         store.save_session_image_cache("abc", &cache);
         assert_eq!(store.load_session_image_cache("abc"), cache);
+    }
+
+    #[test]
+    fn segment_checkpoint_round_trips_and_clears() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let checkpoint = serde_json::json!({
+            "schema_version": 1,
+            "session_id": "abc",
+            "continuation_pending": true,
+            "tool_rounds": 40,
+        });
+        assert!(
+            store
+                .load_segment_checkpoint::<serde_json::Value>("abc")
+                .is_none()
+        );
+        store.save_segment_checkpoint("abc", &checkpoint);
+        assert_eq!(
+            store.load_segment_checkpoint::<serde_json::Value>("abc"),
+            Some(checkpoint)
+        );
+        store.clear_segment_checkpoint("abc");
+        assert!(
+            store
+                .load_segment_checkpoint::<serde_json::Value>("abc")
+                .is_none()
+        );
     }
 
     fn saved_history() -> Vec<ChatMessage> {
