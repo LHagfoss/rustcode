@@ -333,6 +333,19 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
         if role == "assistant"
             && let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
         {
+            // Responses treats function calls and their outputs as one
+            // transaction. Keep assistant prose before the function calls so
+            // it cannot appear between a call and the outputs that answer it.
+            // DeepSeek rejects that interleaving with "No tool output found"
+            // even when every call_id has a matching function_call_output.
+            let text = response_message_text(message.get("content"));
+            if !text.is_empty() {
+                input.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                }));
+            }
+
             for tool_call in tool_calls {
                 let Some(function) = tool_call.get("function") else {
                     continue;
@@ -360,6 +373,8 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
                     "arguments": arguments,
                 }));
             }
+
+            continue;
         }
 
         let text = response_message_text(message.get("content"));
@@ -1307,6 +1322,50 @@ mod tests {
         assert_eq!(input[2]["arguments"], "{\"pattern\":\"src/**\"}");
         assert_eq!(input[3]["type"], "function_call_output");
         assert_eq!(input[3]["call_id"], "call-1");
+    }
+
+    #[test]
+    fn responses_input_keeps_assistant_prose_before_call_outputs() {
+        let messages = vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": "Continue from the real results.",
+                "tool_calls": [
+                    {
+                        "id": "call-a",
+                        "type": "function",
+                        "function": {"name": "view_file", "arguments": "{}"}
+                    },
+                    {
+                        "id": "call-b",
+                        "type": "function",
+                        "function": {"name": "list_directory", "arguments": "{}"}
+                    }
+                ]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call-a",
+                "content": "file result"
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call-b",
+                "content": "directory result"
+            }),
+        ];
+
+        let input = responses_input_from_messages(&messages);
+
+        assert_eq!(input[0]["role"], "assistant");
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["call_id"], "call-a");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call-b");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["call_id"], "call-a");
+        assert_eq!(input[4]["type"], "function_call_output");
+        assert_eq!(input[4]["call_id"], "call-b");
     }
 
     #[test]
