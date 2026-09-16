@@ -1371,7 +1371,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         let session_id = s.active_session_id.clone();
         native_tool_schemas = s
             .prompt_cache
-            .native_tool_schemas(policy, &msgs, &session_id, workspace_root.as_deref())
+            .native_tool_schemas(
+                policy,
+                &msgs,
+                &session_id,
+                task_working_directory.as_deref(),
+            )
             .0;
         let schema_preflight = compaction::calculate_preflight_budget_for_projection(
             &msgs,

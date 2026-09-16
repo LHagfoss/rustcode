@@ -375,7 +375,7 @@ pub(crate) async fn confirm_and_execute_for_call(
                 crate::tools::set_active_workspace_context(
                     workspace_root_for_task,
                     task_working_directory_for_task,
-                    true,
+                    false,
                 );
                 let result = if name_owned == "run_command" && live_key_owned.is_some() {
                     let callback: crate::tools::CommandProgressCallback =
@@ -554,7 +554,7 @@ pub(crate) async fn confirm_and_execute_for_call(
                     crate::tools::set_active_workspace_context(
                         workspace_root_for_task,
                         task_working_directory_for_task,
-                        true,
+                        false,
                     );
                     let result = if name_owned == "render_video" && live_key_for_task.is_some() {
                         let callback: crate::tools::CommandProgressCallback =
