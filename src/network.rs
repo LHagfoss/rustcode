@@ -1055,16 +1055,27 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // Everything the request needs from AppState is read in one guarded block so
     // the lock is taken a couple of times instead of once per field. The
     // environment snapshot is captured first because it touches the filesystem.
-    let workspace_root = {
+    let (workspace_root, task_working_directory) = {
         let s = state.lock().await;
-        s.workspace_root
+        let workspace_root = s
+            .workspace_root
             .clone()
-            .or_else(|| std::env::current_dir().ok())
+            .or_else(|| std::env::current_dir().ok());
+        let task_working_directory = s
+            .task_working_directory
+            .clone()
+            .or_else(|| workspace_root.clone());
+        (workspace_root, task_working_directory)
     };
-    let current_snapshot = workspace_root
-        .as_deref()
-        .map(crate::context::ContextSnapshot::capture_at)
-        .unwrap_or_else(crate::context::ContextSnapshot::capture);
+    let current_snapshot = match (workspace_root.as_deref(), task_working_directory.as_deref()) {
+        (Some(workspace_root), Some(task_working_directory)) => {
+            crate::context::ContextSnapshot::capture_at_scope(
+                workspace_root,
+                task_working_directory,
+            )
+        }
+        _ => crate::context::ContextSnapshot::capture(),
+    };
     let (
         mut history_snapshot,
         budget_token_limit,
@@ -1106,10 +1117,15 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             Some(prev) => prev
                 .diff(&current_snapshot)
                 .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
-            None => workspace_root
-                .as_deref()
-                .map(crate::context::environment_context_without_instructions_at)
-                .unwrap_or_else(crate::context::environment_context),
+            None => match (workspace_root.as_deref(), task_working_directory.as_deref()) {
+                (Some(workspace_root), Some(task_working_directory)) => {
+                    crate::context::environment_context_without_instructions_for_scope(
+                        workspace_root,
+                        task_working_directory,
+                    )
+                }
+                _ => crate::context::environment_context(),
+            },
         };
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
@@ -1261,10 +1277,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         .iter()
         .rev()
         .find(|message| message.role == "user")
-        .map(|message| message.content.clone())
+        .map(|message| crate::paste::compact_for_context(&message.content))
         .unwrap_or_default();
     let project_memory = crate::memory::render_relevant_async(
-        workspace_root.clone(),
+        task_working_directory.clone(),
         memory_query.clone(),
         (budget_token_limit / 16).min(192) as usize,
     )
@@ -1308,7 +1324,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // message, so the helpers deliberately target the last non-context entry.
     inject_system_reminder(&mut msgs);
     let bootstrap_phase = native_schema_policy.is_some_and(|_| {
-        crate::tools::tool_schema_phase(&msgs, workspace_root.as_deref())
+        crate::tools::tool_schema_phase(&msgs, task_working_directory.as_deref())
             == crate::tools::ToolSchemaPhase::Bootstrap
     });
     inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
@@ -1319,7 +1335,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .map(|policy| {
                 let session_id = s.active_session_id.clone();
                 s.prompt_cache
-                    .native_tool_schemas(policy, &msgs, &session_id, workspace_root.as_deref())
+                    .native_tool_schemas(
+                        policy,
+                        &msgs,
+                        &session_id,
+                        task_working_directory.as_deref(),
+                    )
                     .0
             })
             .unwrap_or_default();
@@ -1350,7 +1371,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         let session_id = s.active_session_id.clone();
         native_tool_schemas = s
             .prompt_cache
-            .native_tool_schemas(policy, &msgs, &session_id, workspace_root.as_deref())
+            .native_tool_schemas(
+                policy,
+                &msgs,
+                &session_id,
+                task_working_directory.as_deref(),
+            )
             .0;
         let schema_preflight = compaction::calculate_preflight_budget_for_projection(
             &msgs,

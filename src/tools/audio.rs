@@ -332,8 +332,7 @@ fn configured_backend_with_probe(
 }
 
 fn workspace_root() -> PathBuf {
-    super::ACTIVE_WORKSPACE_ROOT
-        .with(|root| root.borrow().clone())
+    super::active_task_working_directory()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }

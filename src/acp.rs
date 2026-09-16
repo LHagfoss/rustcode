@@ -275,7 +275,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let mut state = crate::app::AppState::new();
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
-                    state.workspace_root = Some(request.cwd.clone());
+                    state.task_working_directory = Some(request.cwd.clone());
+                    // ACP launches RustCode from the broader workspace in the
+                    // common editor/orchestrator setup. Keep that process root
+                    // as the containment boundary while treating request.cwd
+                    // as the task's project scope.
+                    state.workspace_root = std::env::current_dir().ok();
                     let config_options = build_session_config_options(&state);
                     let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
                     let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));

@@ -423,14 +423,18 @@ pub(crate) fn grep_output(args: &Value) -> Result<SearchOutput, String> {
         .get("pattern")
         .and_then(|p| p.as_str())
         .ok_or("missing 'pattern' argument")?;
-    let root = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+    let requested_root = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+    let context = super::current_tool_context();
+    let resolved_root =
+        rustcode_tools::validate_tool_path_with_context(requested_root, &context, false)?;
+    let root = resolved_root.to_string_lossy().to_string();
     let include = args.get("include").and_then(|p| p.as_str());
     let ignore_case = args
         .get("ignore_case")
         .and_then(parse_json_bool)
         .unwrap_or(false);
 
-    if let Some(res) = try_ripgrep(pattern, root, include, ignore_case) {
+    if let Some(res) = try_ripgrep(pattern, &root, include, ignore_case) {
         return res;
     }
 
@@ -442,9 +446,9 @@ pub(crate) fn grep_output(args: &Value) -> Result<SearchOutput, String> {
 
     let include_set = build_include_matcher(include)?;
 
-    let root_path = std::path::Path::new(root);
+    let root_path = resolved_root.as_path();
     if root_path.is_file() {
-        return grep_one_file_output(root, root_path, &re, MAX_GREP_LINES);
+        return grep_one_file_output(&root, root_path, &re, MAX_GREP_LINES);
     }
     if !root_path.is_dir() {
         return Err(format!("'{root}' is not a file or directory"));
@@ -540,7 +544,7 @@ pub(crate) fn grep_output(args: &Value) -> Result<SearchOutput, String> {
             });
         }
         Ok(SearchOutput {
-            content: no_matches_message(pattern, root, include),
+            content: no_matches_message(pattern, &root, include),
             completeness: ToolResultCompleteness::Complete,
         })
     } else {
@@ -639,10 +643,12 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
         .get("pattern")
         .and_then(|p| p.as_str())
         .ok_or("missing 'pattern' argument")?;
-    let root = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-    let root_path = std::path::Path::new(root);
+    let requested_root = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+    let context = super::current_tool_context();
+    let root_path =
+        rustcode_tools::validate_tool_path_with_context(requested_root, &context, false)?;
     if !root_path.is_dir() {
-        return Err(format!("'{root}' is not a directory"));
+        return Err(format!("'{}' is not a directory", root_path.display()));
     }
 
     let glob = Glob::new(pattern).map_err(|e| format!("invalid glob '{pattern}': {e}"))?;
@@ -652,7 +658,7 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
         .build()
         .map_err(|e| format!("globset build failed: {e}"))?;
 
-    let walker = WalkBuilder::new(root_path)
+    let walker = WalkBuilder::new(&root_path)
         .hidden(true)
         .ignore(true)
         .git_ignore(true)
@@ -668,7 +674,7 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
         }
         let path = entry.path();
         let rel = path
-            .strip_prefix(root_path)
+            .strip_prefix(&root_path)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
         if set.is_match(rel.as_str()) || set.is_match(path.to_string_lossy().as_ref()) {
@@ -681,7 +687,10 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
 
     if matched.is_empty() {
         Ok(SearchOutput {
-            content: format!("no files matched '{pattern}' under '{root}'"),
+            content: format!(
+                "no files matched '{pattern}' under '{}'",
+                root_path.display()
+            ),
             completeness: ToolResultCompleteness::Complete,
         })
     } else {
@@ -691,8 +700,9 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
         }
         matched.sort();
         let mut out = format!(
-            "{} file(s) matched '{pattern}' under '{root}':\n",
-            matched.len()
+            "{} file(s) matched '{pattern}' under '{}':\n",
+            matched.len(),
+            root_path.display()
         );
         out.push_str(&matched.join("\n"));
         if capped {
@@ -742,7 +752,8 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
         .ok_or("missing 'query' argument")?;
 
     let cwd = super::current_tool_context()
-        .workspace_root
+        .task_working_directory
+        .or_else(|| super::current_tool_context().workspace_root)
         .or_else(|| std::env::current_dir().ok())
         .ok_or("cannot determine current directory")?;
 
@@ -774,7 +785,8 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
 
 pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
     let cwd = super::current_tool_context()
-        .workspace_root
+        .task_working_directory
+        .or_else(|| super::current_tool_context().workspace_root)
         .or_else(|| std::env::current_dir().ok())
         .ok_or("cannot determine current directory")?;
 

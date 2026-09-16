@@ -65,6 +65,32 @@ pub(crate) fn compact(text: &str) -> String {
     output
 }
 
+/// Remove paste framing from short model-facing metadata such as objectives
+/// and runtime checkpoints. User messages still use [`expand`] at the
+/// provider boundary so the actual pasted content is preserved there; these
+/// metadata fields should never expose benchmark/provenance framing or invite
+/// the model to treat it as an instruction.
+pub(crate) fn compact_for_context(text: &str) -> String {
+    let compacted = compact(text);
+    let mut output = String::with_capacity(compacted.len());
+    let mut cursor = 0;
+    while let Some(relative) = compacted[cursor..].find(PASTE_PREFIX) {
+        let start = cursor + relative;
+        output.push_str(&compacted[cursor..start]);
+        let end = compacted[start..]
+            .find("-->")
+            .map(|offset| start + offset + 3)
+            .unwrap_or(compacted.len());
+        output.push_str("[pasted text omitted]");
+        cursor = end;
+        if cursor == compacted.len() {
+            break;
+        }
+    }
+    output.push_str(&compacted[cursor..]);
+    output
+}
+
 pub(crate) fn expand(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut cursor = 0;
@@ -79,7 +105,7 @@ pub(crate) fn expand(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact, expand, parse_at};
+    use super::{compact, compact_for_context, expand, parse_at};
 
     #[test]
     fn marker_parser_uses_declared_unicode_length() {
@@ -96,5 +122,20 @@ mod tests {
         let text = "<!--PASTE:8:short";
         assert_eq!(compact(text), text);
         assert_eq!(expand(text), text);
+    }
+
+    #[test]
+    fn context_compaction_neutralizes_paste_framing() {
+        let marker = "<!--PASTE:4:task-->";
+        let context = compact_for_context(marker);
+        assert_eq!(context, "[Pasted Text #1 (4 chars)]");
+        assert!(!context.contains("<!--PASTE:"));
+    }
+
+    #[test]
+    fn context_compaction_neutralizes_unclosed_paste_framing() {
+        let context = compact_for_context("objective <!--PASTE:1112:benchmark provenance");
+        assert_eq!(context, "objective [pasted text omitted]");
+        assert!(!context.contains("<!--PASTE:"));
     }
 }

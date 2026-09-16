@@ -30,7 +30,7 @@ pub fn list_directory_output_with_context(
     context: &super::ToolContext,
 ) -> Result<DirectoryListingOutput, String> {
     let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-    let resolved_path = super::resolve_tool_path_with_context(path, context);
+    let resolved_path = super::validate_tool_path_with_context(path, context, false)?;
 
     if resolved_path.is_file() {
         return Err(format!(
@@ -52,7 +52,10 @@ pub fn list_directory_output_with_context(
     names.sort();
     if names.is_empty() {
         return Ok(DirectoryListingOutput {
-            content: format!("'{path}' is empty"),
+            content: format!(
+                "[Directory: {}]\n'{path}' is empty",
+                resolved_path.display()
+            ),
             completeness: ToolResultCompleteness::Complete,
         });
     }
@@ -64,12 +67,16 @@ pub fn list_directory_output_with_context(
             total - MAX_LIST_ENTRIES
         ));
         Ok(DirectoryListingOutput {
-            content: out,
+            content: format!("[Directory: {}]\n{out}", resolved_path.display()),
             completeness: ToolResultCompleteness::ByteTruncated,
         })
     } else {
         Ok(DirectoryListingOutput {
-            content: names.join("\n"),
+            content: format!(
+                "[Directory: {}]\n{}",
+                resolved_path.display(),
+                names.join("\n")
+            ),
             completeness: ToolResultCompleteness::Complete,
         })
     }

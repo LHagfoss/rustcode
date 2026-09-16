@@ -2445,7 +2445,9 @@ fn list_directory_uses_active_workspace_root_instead_of_process_cwd() {
 
     let result = super::search::list_directory(&serde_json::json!({"path": "."}));
     set_active_workspace_root(None);
-    assert_eq!(result.expect("workspace listing"), "workspace-only.txt");
+    let result = result.expect("workspace listing");
+    assert!(result.starts_with("[Directory: "));
+    assert!(result.ends_with("workspace-only.txt"));
 }
 
 #[test]
