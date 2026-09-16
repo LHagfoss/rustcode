@@ -1,3 +1,7 @@
+## [v0.52.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.11) - 2026-09-16
+
+### Fixes
+- Fixed Responses API tool-call transaction ordering when assistant continuity text accompanies multiple tool calls, preventing deferred tool outputs from being rejected by the provider.
 ## [v0.52.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.10) - 2026-09-16
 
 ### Fixes
