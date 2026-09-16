@@ -1145,6 +1145,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }),
                 );
                 if assessment.meaningful {
+                    ctx.progress.meaningful_events =
+                        ctx.progress.meaningful_events.saturating_add(1);
                     ctx.progress.consecutive_no_progress = 0;
                 } else if !assessment.suppress_stagnation {
                     ctx.progress.consecutive_no_progress += 1;
