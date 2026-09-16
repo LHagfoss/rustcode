@@ -1506,6 +1506,9 @@ async fn multi_call_response_executes_all_valid_reads() {
 
 #[tokio::test]
 async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
+    // Search an empty directory so the outputs are hermetic: the pattern can
+    // never match the test source itself (which contains the pattern text).
+    let dir = tempfile::tempdir().expect("temp search root");
     let state = Arc::new(Mutex::new(AppState::new()));
     {
         let mut state = state.lock().await;
@@ -1517,6 +1520,7 @@ async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
     let cancel_token = tokio_util::sync::CancellationToken::new();
     let client = reqwest::Client::new();
     let mut ctx = TurnContext::new();
+    let root = dir.path().to_string_lossy().to_string();
 
     // Four no-match searches with the same pattern but alternating flags:
     // same call category (pre-execution repetition warning parks) and same
@@ -1539,6 +1543,7 @@ async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
                 tool_name: "grep".to_string(),
                 arguments: serde_json::json!({
                     "pattern": "zzz-no-match-xyz-123",
+                    "path": root,
                     "ignore_case": round % 2 == 0,
                 }),
             }],
