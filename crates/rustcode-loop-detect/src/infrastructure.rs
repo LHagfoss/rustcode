@@ -37,7 +37,7 @@ impl InfrastructureFailureTracker {
 
     pub fn observe(
         &mut self,
-        _tool_name: &str,
+        tool_name: &str,
         error_kind: Option<&str>,
         retryable: bool,
         success: bool,
@@ -48,7 +48,7 @@ impl InfrastructureFailureTracker {
             return InfrastructureFailureDecision::Cleared;
         }
 
-        let Some(failure) = classify(error_kind, retryable, content) else {
+        let Some(failure) = classify(tool_name, error_kind, retryable, content) else {
             self.reset();
             return InfrastructureFailureDecision::NotInfrastructure;
         };
@@ -77,6 +77,7 @@ impl InfrastructureFailureTracker {
 }
 
 fn classify(
+    tool_name: &str,
     error_kind: Option<&str>,
     retryable: bool,
     content: &str,
@@ -145,7 +146,16 @@ fn classify(
         return None;
     }
 
-    let fingerprint = format!("{dependency}:{class}");
+    // Named services share an outage across tools: an MCP call followed by
+    // a shell diagnostic for the same service is one streak. Anonymous
+    // transport failures carry no service name, so scope them per tool —
+    // otherwise two unrelated flapping MCP servers merge into one streak and
+    // stop the turn prematurely.
+    let fingerprint = if dependency == "mcp" && class == "transport" {
+        format!("mcp:transport:{}", tool_name.to_ascii_lowercase())
+    } else {
+        format!("{dependency}:{class}")
+    };
     Some(InfrastructureFailure {
         fingerprint,
         dependency: dependency.to_string(),
@@ -187,6 +197,35 @@ mod tests {
             "error: fetch failed for SocratiCode codebase graph",
         );
         assert_eq!(tracker.streak(), 2);
+    }
+
+    #[test]
+    fn anonymous_transport_failures_do_not_merge_across_tools() {
+        let mut tracker = InfrastructureFailureTracker::default();
+        tracker.observe(
+            "server_a_tool",
+            Some("McpFailed"),
+            true,
+            false,
+            "error: MCP channel closed",
+        );
+        tracker.observe(
+            "server_a_tool",
+            Some("McpFailed"),
+            true,
+            false,
+            "error: MCP channel closed",
+        );
+        // A different tool with an equally anonymous transport error is a
+        // different scope, not streak 3 of the same outage.
+        tracker.observe(
+            "server_b_tool",
+            Some("McpFailed"),
+            true,
+            false,
+            "error: MCP channel closed",
+        );
+        assert_eq!(tracker.streak(), 1);
     }
 
     #[test]
