@@ -1,3 +1,10 @@
+## [v0.52.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.10) - 2026-09-16
+
+### Fixes
+- Make productive tool turns resumable across bounded segments while retaining a hard total-round safety ceiling.
+- Detect repeated provider, MCP, and unavailable-dependency infrastructure failures across tool names and stop with an actionable recovery message.
+- Default provider requests to one tool call at a time, with explicit trusted-model batching opt-in and compatibility fallback for providers that reject the optional field.
+- Keep the welcome/status panel inside narrow terminal widths and preserve its existing layout output at normal widths.
 ## [v0.52.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.9) - 2026-09-16
 
 ### Fixes
