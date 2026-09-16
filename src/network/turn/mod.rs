@@ -5,7 +5,7 @@ mod recovery;
 mod request;
 pub(crate) mod tools;
 
-pub use context::{GroundedArtifactEvidence, TurnContext};
+pub use context::{GroundedArtifactEvidence, SegmentCheckpoint, TurnContext};
 pub use finish::run_agent_turn;
 pub(crate) use finish::run_agent_turn_with_context;
 pub use queue::process_queue_orchestrator;
@@ -60,6 +60,7 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // background result inherit the previous task's loop or verification
         // budgets.
         state.background_turn_context = None;
+        crate::config::clear_segment_checkpoint(&state.active_session_id);
         TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds)
     }
 }
@@ -77,8 +78,23 @@ pub(crate) fn save_turn_context_after_run(
             )
             || context.budget.continuation_pending)
     {
+        let background_pending = matches!(
+            context.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::BackgroundPending)
+        );
+        // Persist the segment sidecar so a restart can resume the pending
+        // continuation instead of losing the long task's budgets.
+        crate::config::save_segment_checkpoint(
+            &state.active_session_id,
+            &context.segment_checkpoint(
+                &state.active_session_id,
+                context.budget.continuation_pending,
+                background_pending,
+            ),
+        );
         state.background_turn_context = Some(Box::new(context));
     } else {
+        crate::config::clear_segment_checkpoint(&state.active_session_id);
         state.background_turn_context = None;
     }
 }

@@ -128,6 +128,33 @@ pub struct LifecycleState {
     pub stop_reason: Option<lifecycle::StopReason>,
 }
 
+/// Durable long-turn segment state. Only budget and progress counters cross
+/// a restart: detectors rebuild from new observations and the transcript
+/// keeps the completed-work evidence. Written when a turn ends with a pending
+/// continuation or background turn, cleared otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SegmentCheckpoint {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub continuation_pending: bool,
+    pub background_pending: bool,
+    pub tool_rounds: usize,
+    pub max_tool_rounds: usize,
+    pub max_total_tool_rounds: usize,
+    pub segment_start_round: usize,
+    pub segment_progress_checkpoint: usize,
+    pub segment_count: usize,
+    pub meaningful_events: usize,
+    pub made_edits: bool,
+    pub failed_mutations: usize,
+    pub changed_paths: Vec<String>,
+    pub phase_checkpoint: Option<String>,
+}
+
+impl SegmentCheckpoint {
+    pub const SCHEMA_VERSION: u32 = 1;
+}
+
 impl TurnContext {
     pub fn new() -> Self {
         Self::with_max_tool_rounds(crate::config::DEFAULT_MAX_TOOL_ROUNDS)
@@ -244,6 +271,63 @@ impl TurnContext {
         self.progress.meaningful_events > self.budget.segment_progress_checkpoint
     }
 
+    /// Snapshot the restart-durable segment state for the session sidecar.
+    pub(crate) fn segment_checkpoint(
+        &self,
+        session_id: &str,
+        continuation_pending: bool,
+        background_pending: bool,
+    ) -> SegmentCheckpoint {
+        SegmentCheckpoint {
+            schema_version: SegmentCheckpoint::SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            continuation_pending,
+            background_pending,
+            tool_rounds: self.budget.tool_rounds,
+            max_tool_rounds: self.budget.max_tool_rounds,
+            max_total_tool_rounds: self.budget.max_total_tool_rounds,
+            segment_start_round: self.budget.segment_start_round,
+            segment_progress_checkpoint: self.budget.segment_progress_checkpoint,
+            segment_count: self.budget.segment_count,
+            meaningful_events: self.progress.meaningful_events,
+            made_edits: self.progress.made_edits,
+            failed_mutations: self.progress.failed_mutations,
+            changed_paths: self.progress.changed_paths.iter().cloned().collect(),
+            phase_checkpoint: self.progress.phase_checkpoint.clone(),
+        }
+    }
+
+    /// Hydrate a fresh context from a checkpoint. Detectors restart empty and
+    /// rebuild from new observations; budgets and progress resume where the
+    /// previous process left off. Returns false when the checkpoint is for
+    /// another session or an unknown schema.
+    pub(crate) fn restore_segment(
+        &mut self,
+        checkpoint: &SegmentCheckpoint,
+        session_id: &str,
+    ) -> bool {
+        if checkpoint.schema_version != SegmentCheckpoint::SCHEMA_VERSION
+            || checkpoint.session_id != session_id
+        {
+            return false;
+        }
+        self.budget.tool_rounds = checkpoint.tool_rounds;
+        self.budget.max_tool_rounds = checkpoint.max_tool_rounds;
+        self.budget.max_total_tool_rounds = checkpoint.max_total_tool_rounds;
+        self.budget.segment_start_round = checkpoint.segment_start_round;
+        self.budget.segment_progress_checkpoint = checkpoint
+            .segment_progress_checkpoint
+            .min(checkpoint.meaningful_events);
+        self.budget.segment_count = checkpoint.segment_count.max(1);
+        self.budget.continuation_pending = checkpoint.continuation_pending;
+        self.progress.meaningful_events = checkpoint.meaningful_events;
+        self.progress.made_edits = checkpoint.made_edits;
+        self.progress.failed_mutations = checkpoint.failed_mutations;
+        self.progress.changed_paths = checkpoint.changed_paths.iter().cloned().collect();
+        self.progress.phase_checkpoint = checkpoint.phase_checkpoint.clone();
+        true
+    }
+
     pub(crate) fn begin_next_segment(&mut self) {
         self.budget.segment_start_round = self.budget.tool_rounds;
         self.budget.segment_progress_checkpoint = self.progress.meaningful_events;
@@ -319,5 +403,40 @@ impl TurnContext {
 impl Default for TurnContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_checkpoint_round_trips_budgets_and_rejects_foreign_sessions() {
+        let mut ctx = TurnContext::with_budgets(40, 200);
+        ctx.budget.tool_rounds = 40;
+        ctx.budget.segment_count = 2;
+        ctx.progress.meaningful_events = 7;
+        ctx.progress.made_edits = true;
+        ctx.progress.changed_paths.insert("src/a.rs".to_string());
+        ctx.progress.phase_checkpoint = Some("phase".to_string());
+
+        let checkpoint = ctx.segment_checkpoint("session-1", true, false);
+        // Sidecar must survive JSON serialization.
+        let reparsed: SegmentCheckpoint =
+            serde_json::from_str(&serde_json::to_string(&checkpoint).unwrap()).unwrap();
+        assert_eq!(reparsed, checkpoint);
+
+        let mut restored = TurnContext::with_budgets(40, 200);
+        assert!(restored.restore_segment(&reparsed, "session-1"));
+        assert_eq!(restored.budget.tool_rounds, 40);
+        assert_eq!(restored.budget.segment_count, 2);
+        assert!(restored.budget.continuation_pending);
+        assert!(restored.has_progress_in_current_segment());
+        assert!(restored.progress.made_edits);
+        assert!(restored.progress.changed_paths.contains("src/a.rs"));
+
+        let mut foreign = TurnContext::with_budgets(40, 200);
+        assert!(!foreign.restore_segment(&reparsed, "session-2"));
+        assert_eq!(foreign.budget.tool_rounds, 0);
     }
 }
