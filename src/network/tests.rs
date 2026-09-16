@@ -2538,6 +2538,10 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     assert_eq!(summary["segment_rounds"], 7);
     assert!(summary["effective_segment_limit"].is_null());
     assert!(summary["effective_total_round_limit"].is_null());
+    // Provider cache telemetry rides along so long-task prefix stability
+    // (cold vs reused) is visible per turn without extra logging.
+    assert_eq!(summary["prefix_cache"], "cold");
+    assert_eq!(summary["prefix_context_updates"], 0);
 }
 
 #[test]
