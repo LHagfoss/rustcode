@@ -283,9 +283,15 @@ pub(crate) async fn confirm_and_execute_for_call(
     Option<String>,
     std::time::Duration,
 ) {
-    let (agent_mode, auto_confirm) = {
+    let (agent_mode, auto_confirm, task_working_directory) = {
         let s = state.lock().await;
-        (s.agent_mode, s.auto_confirm)
+        (
+            s.agent_mode,
+            s.auto_confirm,
+            s.task_working_directory
+                .clone()
+                .or_else(|| s.workspace_root.clone()),
+        )
     };
     if let crate::tools::AuthorizationDecision::Deny(reason) =
         crate::tools::authorize_tool_with_args(name, args, agent_mode, auto_confirm, bypass_confirm)
@@ -349,6 +355,7 @@ pub(crate) async fn confirm_and_execute_for_call(
         let call_id_owned = call_id.map(str::to_owned);
         let session_id = { state.lock().await.active_session_id.clone() };
         let workspace_root_for_task = workspace_root.clone();
+        let task_working_directory_for_task = task_working_directory.clone();
         let live_key_owned = live_key.map(str::to_owned);
         let cancel_token_for_task = cancel_token.clone();
         let client_for_task = client.clone();
@@ -365,7 +372,11 @@ pub(crate) async fn confirm_and_execute_for_call(
 
             tokio::task::spawn_blocking(move || {
                 crate::tools::set_active_session_id(Some(session_id));
-                crate::tools::set_active_workspace_root(workspace_root_for_task);
+                crate::tools::set_active_workspace_context(
+                    workspace_root_for_task,
+                    task_working_directory_for_task,
+                    true,
+                );
                 let result = if name_owned == "run_command" && live_key_owned.is_some() {
                     let callback: crate::tools::CommandProgressCallback =
                         Arc::new(move |bytes, stderr| {
@@ -403,7 +414,7 @@ pub(crate) async fn confirm_and_execute_for_call(
                         call_id_owned.as_deref(),
                     )
                 };
-                crate::tools::set_active_workspace_root(None);
+                crate::tools::set_active_workspace_context(None, None, false);
                 crate::tools::set_active_session_id(None);
                 result
             })
@@ -534,12 +545,17 @@ pub(crate) async fn confirm_and_execute_for_call(
                 let call_id_owned = call_id.map(str::to_owned);
                 let session_id = { state.lock().await.active_session_id.clone() };
                 let workspace_root_for_task = workspace_root.clone();
+                let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
                 let live_key_for_task = live_key.map(str::to_owned);
                 let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::tools::set_active_session_id(Some(session_id));
-                    crate::tools::set_active_workspace_root(workspace_root_for_task);
+                    crate::tools::set_active_workspace_context(
+                        workspace_root_for_task,
+                        task_working_directory_for_task,
+                        true,
+                    );
                     let result = if name_owned == "render_video" && live_key_for_task.is_some() {
                         let callback: crate::tools::CommandProgressCallback =
                             Arc::new(move |bytes, stderr| {
@@ -559,7 +575,7 @@ pub(crate) async fn confirm_and_execute_for_call(
                             call_id_owned.as_deref(),
                         )
                     };
-                    crate::tools::set_active_workspace_root(None);
+                    crate::tools::set_active_workspace_context(None, None, false);
                     crate::tools::set_active_session_id(None);
                     result
                 });
