@@ -51,6 +51,23 @@ fn batch_invalidates_read_recovery(
             .is_some_and(|(reason, _, _)| *reason == loop_detect::ProgressReason::NoNewInformation)
 }
 
+/// Fold one model round's stagnation signals into the consecutive counter.
+/// A batched round contributes at most one step no matter how many of its
+/// calls stagnated, and any meaningful result clears the streak.
+fn apply_round_stagnation(
+    consecutive_no_progress: usize,
+    had_meaningful: bool,
+    hits: usize,
+) -> usize {
+    if had_meaningful {
+        0
+    } else if hits > 0 {
+        consecutive_no_progress.saturating_add(1)
+    } else {
+        consecutive_no_progress
+    }
+}
+
 fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> String {
     if policy.allow_batching {
         format!(
@@ -779,6 +796,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut grounded_recovery = None;
             let mut targeted_recovery = false;
             let mut targeted_recovery_exhausted = false;
+            // Batch-level stagnation: one model round contributes at most one
+            // no-progress step no matter how many calls it batched, and any
+            // meaningful result in the batch clears the streak.
+            let mut round_had_meaningful = false;
+            let mut round_no_progress_hits = 0usize;
             let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
@@ -1186,9 +1208,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 if assessment.meaningful {
                     ctx.progress.meaningful_events =
                         ctx.progress.meaningful_events.saturating_add(1);
-                    ctx.progress.consecutive_no_progress = 0;
+                    round_had_meaningful = true;
                 } else if !assessment.suppress_stagnation {
-                    ctx.progress.consecutive_no_progress += 1;
+                    round_no_progress_hits = round_no_progress_hits.saturating_add(1);
                     ctx.metrics.no_progress_results += 1;
                 }
                 if !assessment.suppress_stagnation
@@ -1241,6 +1263,15 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ),
                 ));
             }
+
+            // Stagnation is one signal per model round: a batched round of
+            // repeated reads is one stagnant step, not N budget-consuming
+            // failures, and any meaningful result clears the streak.
+            ctx.progress.consecutive_no_progress = apply_round_stagnation(
+                ctx.progress.consecutive_no_progress,
+                round_had_meaningful,
+                round_no_progress_hits,
+            );
 
             // Per-result no-information signals are provisional: a mixed
             // batch can repeat an old read and also discover new evidence.
@@ -1815,7 +1846,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 mod tests {
     use super::super::GroundedArtifactEvidence;
     use super::{
-        batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        apply_round_stagnation, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
         grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
         selected_tool_call_indices, should_apply_loop_recovery, targeted_no_progress_guidance,
@@ -1898,6 +1929,14 @@ mod tests {
             assert!(guidance.contains(&format!("one per response (limit {limit})")));
             assert!(guidance.contains("Read-only inspection never consumes the mutation budget"));
         }
+    }
+
+    #[test]
+    fn round_stagnation_counts_once_per_batch_and_clears_on_progress() {
+        assert_eq!(apply_round_stagnation(2, false, 6), 3);
+        assert_eq!(apply_round_stagnation(2, true, 5), 0);
+        assert_eq!(apply_round_stagnation(2, false, 0), 2);
+        assert_eq!(apply_round_stagnation(usize::MAX, false, 3), usize::MAX);
     }
 
     #[test]
