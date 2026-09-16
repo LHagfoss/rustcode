@@ -1,3 +1,13 @@
+## [v0.52.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.12) - 2026-09-16
+
+### Features
+- Batch every valid read-only tool call per model round while keeping one workspace mutation per round (more for explicitly trusted profiles); providers receive parallel-tool-call hints with the scheduler as the safety boundary.
+- Count stagnation once per model round so a bulk read round cannot trip the no-progress budget; any meaningful result clears the streak.
+- Emit at most one recovery guidance per round: parked call-repetition warnings yield to evidence recovery and failure replans.
+- Persist long-turn segment state across restarts and auto-continue pending productive segments on session resume.
+- Require ledger-confirmed stagnation before the same-files reasoning-loop flag so verifying long tasks are not misflagged.
+- Report provider prefix-cache decisions in turn summaries for long-task cache-stability visibility.
+- Pair reused native tool ids with their nearest announcement, keep native calls out of text normalization, scope anonymous transport-failure streaks per tool, hold runtime notices outside Responses call transactions, and enable the dead compaction-anchor test.
 ## [v0.52.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.11) - 2026-09-16
 
 ### Fixes
