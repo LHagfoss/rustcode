@@ -1204,5 +1204,10 @@ fn read_method(name: &str, exact: &str) -> String {
 mod reasoning;
 pub use reasoning::*;
 
+mod infrastructure;
+pub use infrastructure::{
+    InfrastructureFailure, InfrastructureFailureDecision, InfrastructureFailureTracker,
+};
+
 #[cfg(test)]
 mod tests;

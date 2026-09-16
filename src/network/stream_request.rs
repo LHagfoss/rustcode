@@ -158,6 +158,50 @@ fn apply_api_native_tools(
     }
 }
 
+/// Ask OpenAI-compatible providers to return one native tool call by default.
+/// RustCode's scheduler remains the authoritative safety boundary because some
+/// gateways ignore this hint. Explicitly trusted batching profiles opt in.
+fn apply_provider_parallel_tool_call_policy(
+    payload: &mut serde_json::Value,
+    api_protocol: crate::config::ApiProtocol,
+    allow_tools: bool,
+    allow_batching: bool,
+) {
+    if allow_tools
+        && matches!(
+            api_protocol,
+            crate::config::ApiProtocol::ChatCompletions | crate::config::ApiProtocol::Responses
+        )
+        && payload
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    {
+        payload["parallel_tool_calls"] = serde_json::json!(allow_batching);
+    }
+}
+
+fn is_parallel_tool_calls_rejection(status: u16, body: &str) -> bool {
+    if !matches!(status, 400 | 422) {
+        return false;
+    }
+    let body = body.to_ascii_lowercase();
+    let mentions_field =
+        body.contains("parallel_tool_calls") || body.contains("parallel tool calls");
+    mentions_field
+        && [
+            "invalid",
+            "unknown",
+            "unsupported",
+            "unrecognized",
+            "unexpected",
+            "not allowed",
+            "not support",
+        ]
+        .iter()
+        .any(|marker| body.contains(marker))
+}
+
 fn is_openrouter_endpoint(url: &str) -> bool {
     let authority = url
         .split_once("://")
@@ -1962,6 +2006,74 @@ mod tests {
     }
 
     #[test]
+    fn default_chat_completions_tools_disable_provider_parallel_calls() {
+        let mut payload = serde_json::json!({
+            "tools": [{"type": "function", "function": {"name": "view_file"}}]
+        });
+
+        apply_provider_parallel_tool_call_policy(
+            &mut payload,
+            crate::config::ApiProtocol::ChatCompletions,
+            true,
+            false,
+        );
+
+        assert_eq!(payload["parallel_tool_calls"], false);
+    }
+
+    #[test]
+    fn default_responses_tools_disable_provider_parallel_calls() {
+        let mut payload = serde_json::json!({
+            "tools": [{"type": "function", "name": "view_file"}]
+        });
+
+        apply_provider_parallel_tool_call_policy(
+            &mut payload,
+            crate::config::ApiProtocol::Responses,
+            true,
+            false,
+        );
+
+        assert_eq!(payload["parallel_tool_calls"], false);
+    }
+
+    #[test]
+    fn trusted_batching_profile_enables_provider_parallel_calls() {
+        let mut payload = serde_json::json!({
+            "tools": [{"type": "function", "function": {"name": "view_file"}}]
+        });
+
+        apply_provider_parallel_tool_call_policy(
+            &mut payload,
+            crate::config::ApiProtocol::ChatCompletions,
+            true,
+            true,
+        );
+
+        assert_eq!(payload["parallel_tool_calls"], true);
+    }
+
+    #[test]
+    fn parallel_call_hint_rejection_is_narrowly_classified() {
+        assert!(is_parallel_tool_calls_rejection(
+            400,
+            "Unknown parameter: parallel_tool_calls"
+        ));
+        assert!(is_parallel_tool_calls_rejection(
+            422,
+            "parallel tool calls are not supported"
+        ));
+        assert!(!is_parallel_tool_calls_rejection(
+            400,
+            "Invalid tool_choice"
+        ));
+        assert!(!is_parallel_tool_calls_rejection(
+            500,
+            "Unknown parameter: parallel_tool_calls"
+        ));
+    }
+
+    #[test]
     fn openrouter_requests_carry_a_bounded_session_id() {
         let mut payload = serde_json::json!({});
         apply_openrouter_session_affinity(
@@ -2798,6 +2910,15 @@ pub async fn stream_request(
         );
     }
 
+    let allow_provider_parallel_tool_calls = profile
+        .as_ref()
+        .is_some_and(crate::config::ModelProfile::tool_batching_enabled);
+    apply_provider_parallel_tool_call_policy(
+        &mut payload,
+        api_protocol,
+        allow_tools,
+        allow_provider_parallel_tool_calls,
+    );
     apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
 
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
@@ -2853,6 +2974,18 @@ pub async fn stream_request(
         )
     );
 
+    let parallel_tool_calls_fallback_payload_bytes = payload
+        .get("parallel_tool_calls")
+        .is_some()
+        .then(|| {
+            let mut fallback_payload = payload.clone();
+            fallback_payload
+                .as_object_mut()
+                .expect("request payload is an object")
+                .remove("parallel_tool_calls");
+            serde_json::to_vec(&fallback_payload).ok()
+        })
+        .flatten();
     let request_start_time = std::time::Instant::now();
     drop(payload);
     let tool_schema_tokens = tool_schema_tokens_for_protocol(
@@ -3034,6 +3167,8 @@ pub async fn stream_request(
         assistant_turn,
     );
 
+    let mut request_payload_bytes = payload_bytes;
+    let mut parallel_tool_calls_fallback_attempted = false;
     let mut attempt = 0usize;
     let response = loop {
         if cancel_token.is_cancelled() {
@@ -3042,7 +3177,7 @@ pub async fn stream_request(
         let mut req = client
             .post(&resolved_url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(payload_bytes.clone());
+            .body(request_payload_bytes.clone());
         if let Some(ref key) = api_key {
             req = req
                 .header("Authorization", format!("Bearer {key}"))
@@ -3102,6 +3237,26 @@ pub async fn stream_request(
                     None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
                     Some(body) => body.unwrap_or_default(),
                 };
+                if !parallel_tool_calls_fallback_attempted
+                    && let Some(fallback_payload_bytes) =
+                        parallel_tool_calls_fallback_payload_bytes.as_ref()
+                    && is_parallel_tool_calls_rejection(code, &err_body)
+                {
+                    dbg_log!(
+                        "stream_request: provider rejected parallel_tool_calls; retrying without optional field"
+                    );
+                    crate::logger::operational_event(
+                        "provider.parallel_tool_calls_fallback",
+                        serde_json::json!({
+                            "model": model,
+                            "status": code,
+                            "action": "retry_without_optional_field",
+                        }),
+                    );
+                    request_payload_bytes = fallback_payload_bytes.clone();
+                    parallel_tool_calls_fallback_attempted = true;
+                    continue;
+                }
                 if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, code);
                     dbg_log!(

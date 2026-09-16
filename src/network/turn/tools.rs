@@ -780,6 +780,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut cross_turn_authoritative_progress = false;
             let mut cross_turn_target_files = Vec::new();
             let mut cross_turn_tool_count = 0;
+            let mut infrastructure_stop: Option<(String, String, usize)> = None;
             let mut result_messages = Vec::with_capacity(results.len() + deferred_call_count);
             for (position, result) in results.into_iter().enumerate() {
                 let call_position = selected_call_indices
@@ -797,6 +798,39 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let content = result.content;
                 let diff_opt = result.diff;
                 let file_preview = result.file_preview;
+                let infrastructure_decision = ctx.recovery.infrastructure_failures.observe(
+                    &name,
+                    metadata.error_kind.map(|kind| kind.as_str()),
+                    metadata.retryable,
+                    metadata.success,
+                    &content,
+                );
+                let infrastructure_stop_reached = matches!(
+                    &infrastructure_decision,
+                    loop_detect::InfrastructureFailureDecision::Stop { .. }
+                );
+                match infrastructure_decision {
+                    loop_detect::InfrastructureFailureDecision::Allowed { failure, streak }
+                    | loop_detect::InfrastructureFailureDecision::Stop { failure, streak } => {
+                        crate::logger::operational_event(
+                            "turn.infrastructure_failure",
+                            serde_json::json!({
+                                "round": ctx.budget.tool_rounds,
+                                "tool": name,
+                                "fingerprint": &failure.fingerprint,
+                                "dependency": &failure.dependency,
+                                "class": &failure.class,
+                                "streak": streak,
+                            }),
+                        );
+                        if infrastructure_stop_reached {
+                            infrastructure_stop =
+                                Some((failure.fingerprint, failure.dependency, streak));
+                        }
+                    }
+                    loop_detect::InfrastructureFailureDecision::NotInfrastructure
+                    | loop_detect::InfrastructureFailureDecision::Cleared => {}
+                }
                 batch_incomplete |= incomplete_tool_result(&metadata);
                 if let Some(complete) = content_bearing_inspection_status(call, &metadata, &content)
                 {
@@ -1284,6 +1318,28 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         selected_call_indices.len()
                     ),
                 ));
+            }
+
+            if let Some((fingerprint, dependency, streak)) = infrastructure_stop {
+                let stop_reason = fingerprint;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "[Infrastructure failure guard: {dependency} has failed across multiple tool attempts ({streak} consecutive matching failures). Further retries are paused.]"
+                    ),
+                ));
+                crate::config::save_history(&s.history);
+                s.clear_current_response();
+                drop(s);
+                ctx.response.final_content = format!(
+                    "I could not complete the task because the {dependency} dependency remained unavailable across {streak} diagnostic attempts. The harness stopped further retries ({stop_reason}). Check that service or MCP connection, then resume the session."
+                );
+                ctx.response.final_content_persisted = false;
+                ctx.lifecycle.task_completed = false;
+                ctx.lifecycle.stop_reason =
+                    Some(lifecycle::StopReason::InfrastructureFailure(stop_reason));
+                ctx.lifecycle.turn_machine.finish_tools_if_executing();
+                return ToolHandlingOutcome::Stop;
             }
 
             if background_pending {

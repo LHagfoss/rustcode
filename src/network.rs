@@ -327,7 +327,7 @@ pub(crate) async fn stop_turn_for_budget(
             "[harness: completed a productive segment after {} tool round(s) — {limit}. \
              The task is NOT complete. Successful tool results are preserved and the next \
              segment will continue from this checkpoint without replaying completed calls. \
-             Total rounds so far: {}; token safety budget: 5,000,000.]",
+             Total rounds so far: {}; token safety budget: {MAX_TURN_TOKEN_BUDGET} tokens.]",
             ctx.segment_rounds(),
             ctx.budget.tool_rounds,
         )
