@@ -273,11 +273,15 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     total_width: usize,
     _max_height: usize,
 ) -> Vec<Line<'static>> {
+    if total_width < 8 {
+        return vec![Line::from("")];
+    }
+
     let mut banner = Vec::new();
     let version = env!("CARGO_PKG_VERSION");
     let model_name = model_label(state);
 
-    let box_w = total_width.saturating_sub(2).min(66).max(45);
+    let box_w = total_width.saturating_sub(2).min(66);
     let inner_w = box_w.saturating_sub(2);
 
     let border_c = COLOR_PRIMARY();
@@ -287,8 +291,13 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let reset_bg = COLOR_BG();
 
     // Top border
-    let title_str = format!(">_ RustCode v{version}");
-    let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
+    let title_str = fit_to_width(
+        &format!(">_ RustCode v{version}"),
+        inner_w.saturating_sub(3),
+    )
+    .trim_end()
+    .to_owned();
+    let top_pad = inner_w.saturating_sub(title_str.width() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
     banner.push(Line::from(vec![Span::styled(
         top_border,
@@ -339,20 +348,23 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     banner.push(make_row(vec![]));
 
     // Model and reasoning settings
+    let model_display = fit_to_width(&model_name, inner_w.saturating_sub(label_w))
+        .trim_end()
+        .to_owned();
+    let used_for_model = label_w + model_display.width();
     let mut model_spans = vec![
         Span::styled(
             fit_to_width("  model:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
-            model_name.clone(),
+            model_display,
             Style::default()
                 .fg(text_c)
                 .bg(reset_bg)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    let used_for_model = label_w + model_name.chars().count();
     if inner_w >= used_for_model + 22 {
         model_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
         model_spans.push(Span::styled(
@@ -370,22 +382,31 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         .active_model_profile()
         .and_then(|profile| profile.reasoning_effort.clone())
         .unwrap_or_else(|| "default".to_string());
-    banner.push(make_row(vec![
+    let effort_display = fit_to_width(&effort, inner_w.saturating_sub(label_w))
+        .trim_end()
+        .to_owned();
+    let used_for_effort = label_w + effort_display.width();
+    let mut effort_spans = vec![
         Span::styled(
             fit_to_width("  effort:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
-            effort,
+            effort_display,
             Style::default()
                 .fg(text_c)
                 .bg(reset_bg)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("    ", Style::default().bg(reset_bg)),
-        Span::styled("/effort", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
-    ]));
+    ];
+    if inner_w >= used_for_effort + 22 {
+        effort_spans.extend([
+            Span::styled("    ", Style::default().bg(reset_bg)),
+            Span::styled("/effort", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
+        ]);
+    }
+    banner.push(make_row(effort_spans));
 
     let context_window = format!(
         "{} tokens",
@@ -404,7 +425,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    let used_for_context = label_w + context_window.chars().count();
+    let used_for_context = label_w + context_window.width();
     if inner_w >= used_for_context + 22 {
         context_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
         context_spans.push(Span::styled(
@@ -481,14 +502,25 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     ]));
 
     // Help shortcut
-    banner.push(make_row(vec![
+    let mut help_spans = vec![
         Span::styled(
             fit_to_width("  help:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
-        Span::styled("/help", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(" for commands", Style::default().fg(muted_c).bg(reset_bg)),
-    ]));
+        Span::styled(
+            fit_to_width("/help", inner_w.saturating_sub(label_w))
+                .trim_end()
+                .to_owned(),
+            Style::default().fg(primary).bg(reset_bg),
+        ),
+    ];
+    if inner_w >= label_w + 18 {
+        help_spans.push(Span::styled(
+            " for commands",
+            Style::default().fg(muted_c).bg(reset_bg),
+        ));
+    }
+    banner.push(make_row(help_spans));
 
     // Blank line before the bottom border
     banner.push(make_row(vec![]));

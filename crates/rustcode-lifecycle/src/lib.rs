@@ -162,6 +162,7 @@ pub enum StopReason {
     LoopEscalation,
     ProviderError(Option<u16>),
     UnavailableTool,
+    InfrastructureFailure(String),
     BudgetExceeded(String),
 }
 
@@ -178,6 +179,9 @@ impl fmt::Display for StopReason {
             Self::ProviderError(Some(status)) => write!(f, "provider_error:{status}"),
             Self::ProviderError(None) => f.write_str("provider_error"),
             Self::UnavailableTool => f.write_str("unavailable_tool"),
+            Self::InfrastructureFailure(fingerprint) => {
+                write!(f, "infrastructure_failure:{fingerprint}")
+            }
             Self::BudgetExceeded(limit) => write!(f, "budget:{limit}"),
         }
     }
@@ -295,6 +299,10 @@ mod tests {
             "provider_error"
         );
         assert_eq!(StopReason::UnavailableTool.to_string(), "unavailable_tool");
+        assert_eq!(
+            StopReason::InfrastructureFailure("socraticode:transport".into()).to_string(),
+            "infrastructure_failure:socraticode:transport"
+        );
         assert_eq!(
             StopReason::BudgetExceeded("tool_rounds=4".into()).to_string(),
             "budget:tool_rounds=4"

@@ -20,6 +20,14 @@ pub struct TurnContext {
 pub struct BudgetState {
     pub tool_rounds: usize,
     pub max_tool_rounds: usize,
+    pub max_total_tool_rounds: usize,
+    /// Total rounds at which the current resumable segment began.
+    pub segment_start_round: usize,
+    pub segment_progress_checkpoint: usize,
+    /// Number of segment boundaries crossed for this logical task.
+    pub segment_count: usize,
+    /// A productive segment may be continued by the queue orchestrator.
+    pub continuation_pending: bool,
     pub tokens_used: u64,
     pub budget_stopped: Option<String>,
     pub round_budget_notice_sent: bool,
@@ -28,6 +36,7 @@ pub struct BudgetState {
 pub struct RecoveryState {
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
+    pub infrastructure_failures: loop_detect::InfrastructureFailureTracker,
     pub reasoning_loop_detector: loop_detect::ReasoningLoopDetector,
     pub loop_recovery_attempts: u8,
     pub reasoning_recovery_attempts: u8,
@@ -64,6 +73,10 @@ pub struct ProgressState {
     pub last_reason: Option<loop_detect::ProgressReason>,
     pub changed_paths: BTreeSet<String>,
     pub phase_checkpoint: Option<String>,
+    /// Monotonic count of meaningful tool results. Segment boundaries use a
+    /// checkpoint of this value so progress from an earlier segment cannot
+    /// authorize an endless sequence of empty continuations.
+    pub meaningful_events: usize,
 }
 
 pub struct GroundedArtifactEvidence {
@@ -121,6 +134,13 @@ impl TurnContext {
     }
 
     pub fn with_max_tool_rounds(max_tool_rounds: usize) -> Self {
+        Self::with_budgets(
+            max_tool_rounds,
+            crate::config::DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
+        )
+    }
+
+    pub fn with_budgets(max_tool_rounds: usize, max_total_tool_rounds: usize) -> Self {
         Self {
             budget: BudgetState {
                 tool_rounds: 0,
@@ -129,6 +149,15 @@ impl TurnContext {
                 } else {
                     max_tool_rounds
                 },
+                max_total_tool_rounds: if max_total_tool_rounds == 0 {
+                    usize::MAX
+                } else {
+                    max_total_tool_rounds
+                },
+                segment_start_round: 0,
+                segment_progress_checkpoint: 0,
+                segment_count: 1,
+                continuation_pending: false,
                 tokens_used: 0,
                 budget_stopped: None,
                 round_budget_notice_sent: false,
@@ -136,6 +165,7 @@ impl TurnContext {
             recovery: RecoveryState {
                 oversized_batch_rejections: 0,
                 loop_detector: loop_detect::LoopDetector::new(6),
+                infrastructure_failures: loop_detect::InfrastructureFailureTracker::default(),
                 reasoning_loop_detector: loop_detect::ReasoningLoopDetector::default(),
                 loop_recovery_attempts: 0,
                 reasoning_recovery_attempts: 0,
@@ -162,6 +192,7 @@ impl TurnContext {
                 last_reason: None,
                 changed_paths: BTreeSet::new(),
                 phase_checkpoint: None,
+                meaningful_events: 0,
             },
             verification: VerificationState {
                 blocks: 0,
@@ -203,6 +234,25 @@ impl TurnContext {
         }
     }
 
+    pub(crate) fn segment_rounds(&self) -> usize {
+        self.budget
+            .tool_rounds
+            .saturating_sub(self.budget.segment_start_round)
+    }
+
+    pub(crate) fn has_progress_in_current_segment(&self) -> bool {
+        self.progress.meaningful_events > self.budget.segment_progress_checkpoint
+    }
+
+    pub(crate) fn begin_next_segment(&mut self) {
+        self.budget.segment_start_round = self.budget.tool_rounds;
+        self.budget.segment_progress_checkpoint = self.progress.meaningful_events;
+        self.budget.segment_count = self.budget.segment_count.saturating_add(1);
+        self.budget.continuation_pending = false;
+        self.budget.round_budget_notice_sent = false;
+        self.lifecycle.stop_reason = None;
+    }
+
     /// Snapshot short-lived progress for the next request-local context tail.
     /// This is deliberately derived from turn state rather than persisted in
     /// history, so it cannot alter replay or compaction semantics.
@@ -234,12 +284,20 @@ impl TurnContext {
     pub fn benchmark_summary(&self) -> serde_json::Value {
         serde_json::json!({
             "tool_rounds": self.budget.tool_rounds, "tool_calls": self.metrics.tool_calls,
+            "segment_rounds": self.segment_rounds(),
+            "segment_count": self.budget.segment_count,
+            "effective_segment_limit": (self.budget.max_tool_rounds != usize::MAX)
+                .then_some(self.budget.max_tool_rounds),
+            "effective_total_round_limit": (self.budget.max_total_tool_rounds != usize::MAX)
+                .then_some(self.budget.max_total_tool_rounds),
+            "continuation_pending": self.budget.continuation_pending,
             "tokens_used": self.budget.tokens_used, "malformed_calls": self.metrics.malformed_calls,
             "no_progress_results": self.metrics.no_progress_results, "failure_replans": self.metrics.failure_replans,
             "evidence_recoveries": self.metrics.evidence_recoveries,
             "grounded_recoveries": self.metrics.grounded_recoveries,
             "progress_no_information_streak": self.progress.ledger.no_progress_streak(),
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
+            "infrastructure_failure_streak": self.recovery.infrastructure_failures.streak(),
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,
             "empty_response_recovery_attempts": self.recovery.empty_response_recovery_attempts,
             "last_stream_termination": self

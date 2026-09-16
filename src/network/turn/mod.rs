@@ -31,18 +31,36 @@ pub(crate) fn take_turn_context_for_prompt(
     is_wakeup: bool,
     max_tool_rounds: usize,
 ) -> TurnContext {
+    take_turn_context_for_prompt_with_limits(
+        state,
+        is_wakeup,
+        max_tool_rounds,
+        crate::config::DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
+    )
+}
+
+pub(crate) fn take_turn_context_for_prompt_with_limits(
+    state: &mut AppState,
+    is_wakeup: bool,
+    max_tool_rounds: usize,
+    max_total_tool_rounds: usize,
+) -> TurnContext {
     if is_wakeup {
-        state
+        let mut context = state
             .background_turn_context
             .take()
             .map(|context| *context)
-            .unwrap_or_else(|| TurnContext::with_max_tool_rounds(max_tool_rounds))
+            .unwrap_or_else(|| TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds));
+        if context.budget.continuation_pending {
+            context.begin_next_segment();
+        }
+        context
     } else {
         // A real user prompt starts a new logical task. Do not let a stale
         // background result inherit the previous task's loop or verification
         // budgets.
         state.background_turn_context = None;
-        TurnContext::with_max_tool_rounds(max_tool_rounds)
+        TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds)
     }
 }
 
@@ -56,7 +74,8 @@ pub(crate) fn save_turn_context_after_run(
             || matches!(
                 context.lifecycle.stop_reason,
                 Some(lifecycle::StopReason::BackgroundPending)
-            ))
+            )
+            || context.budget.continuation_pending)
     {
         state.background_turn_context = Some(Box::new(context));
     } else {
@@ -119,10 +138,8 @@ pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> 
     if ctx.budget.max_tool_rounds == usize::MAX {
         return None;
     }
-    let remaining = ctx
-        .budget
-        .max_tool_rounds
-        .saturating_sub(ctx.budget.tool_rounds);
+    let segment_rounds = ctx.segment_rounds();
+    let remaining = ctx.budget.max_tool_rounds.saturating_sub(segment_rounds);
     let warning_rounds = ctx.budget.max_tool_rounds.div_ceil(5).min(8);
     if ctx.budget.round_budget_notice_sent || remaining == 0 || remaining > warning_rounds {
         return None;
@@ -135,7 +152,7 @@ pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> 
          and required validation; avoid expanding scope. If the task cannot be completed \
          within the remaining budget, report the unfinished work and validation status \
          accurately. Do not claim success without evidence or bypass safety checks.]",
-        used = ctx.budget.tool_rounds,
+        used = segment_rounds,
         maximum = ctx.budget.max_tool_rounds,
     ))
 }

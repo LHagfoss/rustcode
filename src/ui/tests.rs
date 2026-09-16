@@ -627,6 +627,18 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
 }
 
 #[test]
+fn welcome_banner_stays_inside_narrow_terminal_width() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 32, 28);
+
+    assert!(!lines.is_empty());
+    assert!(
+        lines.iter().all(|line| line.width() <= 32),
+        "welcome banner must not overflow a narrow terminal: {lines:?}"
+    );
+}
+
+#[test]
 fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
     let mut state = AppState::new();
     state
