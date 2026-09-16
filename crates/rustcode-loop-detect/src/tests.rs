@@ -1409,6 +1409,36 @@ fn reasoning_loop_detector_catches_same_files_no_progress() {
 }
 
 #[test]
+fn fresh_inspection_of_same_files_is_not_a_loop() {
+    let mut detector = ReasoningLoopDetector::default();
+    let file = "src/app/state.rs";
+
+    // Same shape as the no-progress test, but the progress ledger keeps
+    // reporting fresh evidence (e.g. verification passing between reads).
+    for (index, reasoning) in [
+        "Turn 0: Inspecting the AppState struct definition in src/app/state.rs.",
+        "Turn 1: Checking TokenUsage calculations and prompt metrics in src/app/state.rs.",
+        "Turn 2: Viewing session history storage vector in src/app/state.rs.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            detector.record_turn_evidence(&TurnEvidence {
+                reasoning,
+                target_files: &[file],
+                made_progress: index == 0,
+                had_edits: false,
+                tool_count: 1,
+                no_progress_streak: 0,
+            }),
+            ReasoningLoopStatus::Ok,
+            "fresh evidence must not trip the same-files detector"
+        );
+    }
+}
+
+#[test]
 fn wide_repository_investigation_does_not_trigger_loop() {
     let mut detector = ReasoningLoopDetector::default();
     let files = [
