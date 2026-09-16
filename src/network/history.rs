@@ -353,7 +353,7 @@ fn to_messages_with_scope(
             Some((*index, calls))
         })
         .collect();
-    let answered: std::collections::HashSet<&str> = history
+    let answered: std::collections::HashSet<(usize, String)> = history
         .iter()
         .enumerate()
         .filter_map(|(index, message)| {
@@ -364,18 +364,17 @@ fn to_messages_with_scope(
                 && rendered_calls
                     .get(&announcement)
                     .is_some_and(|calls| calls.iter().any(|call| call.id == call_id)))
-            .then_some(call_id)
+            .then_some((announcement, call_id.to_owned()))
         })
         .collect();
     // Compaction can drop the assistant message that announced a call while
     // keeping its result. An answer to a call the request never mentions is just
     // as invalid as an unanswered call, so those fall back to the text form.
-    let announced: std::collections::HashSet<&str> = history
+    // Keyed by (announcement, id): ids can be reused by recovery, and a result
+    // for a dropped announcement must not satisfy a newer call with the same id.
+    let announced: std::collections::HashSet<(usize, String)> = rendered_calls
         .iter()
-        .enumerate()
-        .filter_map(|(index, _)| rendered_calls.get(&index))
-        .flat_map(|calls| calls.iter())
-        .map(|call| call.id.as_str())
+        .flat_map(|(index, calls)| calls.iter().map(|call| (*index, call.id.clone())))
         .collect();
 
     for (index, message) in history.iter().enumerate() {
@@ -385,10 +384,12 @@ fn to_messages_with_scope(
         if message.conversation_recap {
             continue;
         }
-        let orphan_result = message
-            .tool_call_id
-            .as_deref()
-            .is_some_and(|id| !announced.contains(id));
+        let orphan_result = message.tool_call_id.as_deref().is_some_and(|id| {
+            match announcing_call_index(history, index, id) {
+                Some(announcement) => !announced.contains(&(announcement, id.to_owned())),
+                None => true,
+            }
+        });
         let projected_message = rendered_calls.get(&index).map(|calls| {
             let mut projected = message.clone();
             projected.tool_calls = calls.clone();
@@ -406,7 +407,7 @@ fn to_messages_with_scope(
                 .get(&index)
                 .into_iter()
                 .flat_map(|calls| calls.iter())
-                .filter(|call| !answered.contains(call.id.as_str()))
+                .filter(|call| !answered.contains(&(index, call.id.clone())))
             {
                 messages.push(serde_json::json!({
                     "role": "tool",
@@ -1562,6 +1563,58 @@ mod tests {
                     .as_str()
                     .is_some_and(|content| content.contains("did not run"))
         }));
+    }
+
+    #[test]
+    fn reused_call_id_pairs_with_nearest_announcement() {
+        let old_call = ChatMessage::new("assistant", "first attempt").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-reused".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let new_call = ChatMessage::new("assistant", "retry attempt").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-reused".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let new_result = ChatMessage::new("tool", "view_file: fresh content")
+            .answering(Some("call-reused".into()));
+        let history = vec![
+            ChatMessage::new("user", "inspect"),
+            old_call,
+            ChatMessage::new("assistant", "interrupted"),
+            new_call,
+            new_result,
+            ChatMessage::new("user", "continue"),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        // Both announcements are retained; the stale one is closed
+        // synthetically while the newer one keeps its real result. A global
+        // id set would mark both answered and drop the synthetic close.
+        let tool_contents: Vec<&str> = messages
+            .iter()
+            .filter(|message| message["tool_call_id"] == "call-reused")
+            .filter_map(|message| message["content"].as_str())
+            .collect();
+        assert_eq!(tool_contents.len(), 2);
+        assert!(
+            tool_contents
+                .iter()
+                .any(|body| body.contains("did not run")),
+            "stale reused announcement must be closed: {tool_contents:?}"
+        );
+        assert!(
+            tool_contents
+                .iter()
+                .any(|body| body.contains("fresh content")),
+            "newest result must survive verbatim: {tool_contents:?}"
+        );
     }
 
     #[test]
