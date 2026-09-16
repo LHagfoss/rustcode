@@ -36,6 +36,7 @@ pub struct BudgetState {
 pub struct RecoveryState {
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
+    pub infrastructure_failures: loop_detect::InfrastructureFailureTracker,
     pub reasoning_loop_detector: loop_detect::ReasoningLoopDetector,
     pub loop_recovery_attempts: u8,
     pub reasoning_recovery_attempts: u8,
@@ -164,6 +165,7 @@ impl TurnContext {
             recovery: RecoveryState {
                 oversized_batch_rejections: 0,
                 loop_detector: loop_detect::LoopDetector::new(6),
+                infrastructure_failures: loop_detect::InfrastructureFailureTracker::default(),
                 reasoning_loop_detector: loop_detect::ReasoningLoopDetector::default(),
                 loop_recovery_attempts: 0,
                 reasoning_recovery_attempts: 0,
@@ -295,6 +297,7 @@ impl TurnContext {
             "grounded_recoveries": self.metrics.grounded_recoveries,
             "progress_no_information_streak": self.progress.ledger.no_progress_streak(),
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
+            "infrastructure_failure_streak": self.recovery.infrastructure_failures.streak(),
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,
             "empty_response_recovery_attempts": self.recovery.empty_response_recovery_attempts,
             "last_stream_termination": self
