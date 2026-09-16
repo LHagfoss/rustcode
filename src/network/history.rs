@@ -140,9 +140,10 @@ fn compact_tool_result_metadata(metadata: &ToolResultRecord) -> String {
 /// newer identical read is retained verbatim. Reads with different content
 /// remain intact, as do errors, truncated reads, and recent raw context.
 ///
-/// Excluded duplicate results still count as answers when their own announcing
-/// call remains in the request projection; an answer from another scope must
-/// not satisfy a reused id in the active request.
+/// A structured duplicate is removed as a complete call/result exchange from
+/// the provider projection. The persisted messages remain lossless, and an
+/// answer from another scope must not satisfy a reused id in the active
+/// request.
 pub(crate) fn redundant_tool_result_indices(
     history: &[ChatMessage],
     keep_recent_count: usize,
@@ -315,6 +316,35 @@ fn to_messages_with_scope(
         })
         .map(|(index, _)| index)
         .collect();
+    // Render-time deduplication must remove the announcing call together with
+    // its result. Otherwise the provider receives an assistant tool_calls
+    // announcement with no matching role=tool message. Keep this keyed by the
+    // announcement index as well as the id: an id can be reused by a broken or
+    // recovered transcript, and one old duplicate must not hide a newer call.
+    let redundant_calls: std::collections::HashSet<(usize, String)> = redundant
+        .iter()
+        .filter_map(|result_index| {
+            let call_id = history[*result_index].tool_call_id.as_ref()?;
+            let announcement = announcing_call_index(history, *result_index, call_id)?;
+            Some((announcement, call_id.clone()))
+        })
+        .collect();
+    let rendered_calls: std::collections::HashMap<usize, Vec<crate::app::ToolCallRef>> = included
+        .iter()
+        .filter_map(|index| {
+            let message = &history[*index];
+            if message.role != "assistant" || message.tool_calls.is_empty() {
+                return None;
+            }
+            let calls = message
+                .tool_calls
+                .iter()
+                .filter(|call| !redundant_calls.contains(&(*index, call.id.clone())))
+                .cloned()
+                .collect::<Vec<_>>();
+            Some((*index, calls))
+        })
+        .collect();
     let answered: std::collections::HashSet<&str> = history
         .iter()
         .enumerate()
@@ -322,7 +352,10 @@ fn to_messages_with_scope(
             let call_id = message.tool_call_id.as_deref()?;
             let announcement = announcing_call_index(history, index, call_id)?;
             (included.contains(&announcement)
-                && (included.contains(&index) || redundant.contains(&index)))
+                && included.contains(&index)
+                && rendered_calls
+                    .get(&announcement)
+                    .is_some_and(|calls| calls.iter().any(|call| call.id == call_id)))
             .then_some(call_id)
         })
         .collect();
@@ -332,8 +365,8 @@ fn to_messages_with_scope(
     let announced: std::collections::HashSet<&str> = history
         .iter()
         .enumerate()
-        .filter(|(index, _)| included.contains(index))
-        .flat_map(|(_, message)| message.tool_calls.iter())
+        .filter_map(|(index, _)| rendered_calls.get(&index))
+        .flat_map(|calls| calls.iter())
         .map(|call| call.id.as_str())
         .collect();
 
@@ -348,16 +381,23 @@ fn to_messages_with_scope(
             .tool_call_id
             .as_deref()
             .is_some_and(|id| !announced.contains(id));
+        let projected_message = rendered_calls.get(&index).map(|calls| {
+            let mut projected = message.clone();
+            projected.tool_calls = calls.clone();
+            projected
+        });
+        let message_for_render = projected_message.as_ref().unwrap_or(message);
         if let Some(structured) = (!orphan_result)
-            .then(|| structured_message(message))
+            .then(|| structured_message(message_for_render))
             .flatten()
         {
             messages.push(structured);
             // Speak for the calls nothing else answered, in the order they were
             // made, so the model sees which of them never ran.
-            for call in message
-                .tool_calls
-                .iter()
+            for call in rendered_calls
+                .get(&index)
+                .into_iter()
+                .flat_map(|calls| calls.iter())
                 .filter(|call| !answered.contains(call.id.as_str()))
             {
                 messages.push(serde_json::json!({
@@ -1296,6 +1336,29 @@ mod tests {
         (assistant, result)
     }
 
+    fn assert_native_tool_call_results(messages: &[serde_json::Value]) {
+        let mut calls = std::collections::BTreeMap::new();
+        let mut results = std::collections::BTreeMap::new();
+        for message in messages {
+            if message["role"] == "assistant" {
+                for call in message["tool_calls"].as_array().into_iter().flatten() {
+                    let id = call["id"].as_str().expect("native call id");
+                    *calls.entry(id.to_owned()).or_insert(0usize) += 1;
+                }
+            } else if message["role"] == "tool" {
+                let id = message["tool_call_id"]
+                    .as_str()
+                    .expect("provider result id");
+                *results.entry(id.to_owned()).or_insert(0usize) += 1;
+            }
+        }
+        assert_eq!(calls, results, "native tool calls and results diverged");
+        assert!(
+            calls.values().all(|count| *count == 1),
+            "duplicate call ids: {calls:?}"
+        );
+    }
+
     // #985: rendering the request must never mutate storage. Every retained
     // message stays byte-identical across prune passes and request builds.
     #[test]
@@ -1326,10 +1389,9 @@ mod tests {
         assert_eq!(first_render, second_render);
     }
 
-    // The older duplicate is excluded from the request, the newer identical
-    // read is retained verbatim, and both structured pairs keep their
-    // tool_call_id mapping: no result is re-attributed and no synthetic
-    // "did not run" error appears for a call that ran.
+    // The older duplicate exchange is excluded from the request, the newer
+    // identical read is retained verbatim, and the retained structured pair
+    // keeps its tool_call_id mapping.
     #[test]
     fn render_time_dedup_keeps_newest_and_preserves_call_mapping() {
         let (first_call, first_read) =
@@ -1370,8 +1432,8 @@ mod tests {
                     .and_then(|id| id.as_str())
             })
             .collect();
-        assert!(assistant_ids.contains(&"call_old"));
-        assert!(assistant_ids.contains(&"call_new"));
+        assert_eq!(assistant_ids, vec!["call_new"]);
+        assert_native_tool_call_results(&messages);
         let bodies: Vec<&str> = messages
             .iter()
             .filter_map(|message| message.get("content").and_then(|c| c.as_str()))
@@ -1384,6 +1446,107 @@ mod tests {
             bodies.iter().any(|body| body.contains("1: old")),
             "the retained read must survive verbatim: {bodies:?}"
         );
+    }
+
+    #[test]
+    fn compaction_projection_closes_only_the_retained_native_calls() {
+        let (old_call, old_result) =
+            structured_read("call_compacted", "view_file: [File: src/old.rs]\n1: old");
+        let current_call = ChatMessage::new("assistant", "inspect current").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call_current".into(),
+                name: "view_file".into(),
+                arguments: r#"{"path":"src/current.rs"}"#.into(),
+            },
+        ]);
+        let history = vec![
+            ChatMessage::new("user", "old task"),
+            old_call,
+            old_result,
+            ChatMessage::new("assistant", "old task finished"),
+            ChatMessage::new("user", "middle task"),
+            ChatMessage::new("assistant", "middle task finished"),
+            ChatMessage::new("user", "current task"),
+            current_call,
+        ];
+
+        let messages = to_messages_for_request(&history, RequestInstructions::new("system", None));
+
+        assert_native_tool_call_results(&messages);
+        assert!(!messages.iter().any(|message| {
+            message["tool_calls"]
+                .as_array()
+                .is_some_and(|calls| calls.iter().any(|call| call["id"] == "call_compacted"))
+        }));
+        assert!(messages.iter().any(|message| {
+            message["tool_call_id"] == "call_current"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("did not run"))
+        }));
+    }
+
+    #[test]
+    fn deferred_native_calls_get_one_provider_result_each() {
+        let calls = vec![
+            crate::app::ToolCallRef {
+                id: "call_executed".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+            crate::app::ToolCallRef {
+                id: "call_deferred".into(),
+                name: "edit_file".into(),
+                arguments: "{}".into(),
+            },
+        ];
+        let history = vec![
+            ChatMessage::new("user", "do the work"),
+            ChatMessage::new("assistant", "run the first call").with_tool_calls(calls),
+            ChatMessage::new("tool", "view_file: completed")
+                .answering(Some("call_executed".into())),
+            ChatMessage::new("user", "continue"),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        assert_native_tool_call_results(&messages);
+        assert!(messages.iter().any(|message| {
+            message["tool_call_id"] == "call_deferred"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("did not run"))
+        }));
+    }
+
+    #[test]
+    fn interrupted_native_calls_keep_their_recorded_results_paired() {
+        let calls = vec![
+            crate::app::ToolCallRef {
+                id: "call_finished_before_interrupt".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+            crate::app::ToolCallRef {
+                id: "call_interrupted".into(),
+                name: "run_command".into(),
+                arguments: "{}".into(),
+            },
+        ];
+        let history = vec![
+            ChatMessage::new("user", "inspect and run"),
+            ChatMessage::new("assistant", "the provider was interrupted")
+                .with_tool_calls(calls)
+                .as_unexecuted_tool_call_checkpoint(),
+            ChatMessage::new("tool", "view_file: completed")
+                .answering(Some("call_finished_before_interrupt".into())),
+            ChatMessage::new("tool", "run_command: error: interrupted")
+                .answering(Some("call_interrupted".into())),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        assert_native_tool_call_results(&messages);
     }
 
     // Reads with different content, errors, and truncated reads are never
