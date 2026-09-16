@@ -532,6 +532,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
         let mut loop_status = loop_detect::LoopStatus::Ok;
         let mut loop_offender: Option<String> = None;
+        // The pre-execution call-repetition warning is parked here and only
+        // pushed after the results are in, when no stronger recovery speaks.
+        // This keeps one model-visible guidance per round.
+        let mut pending_loop_warning: Option<String> = None;
         for index in &selected_call_indices {
             let call = &tool_calls[*index];
             let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
@@ -623,13 +627,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             }
             loop_detect::LoopStatus::Warning(n) => {
                 dbg_log!("Loop detector: warning at {} repeats", n);
-                let mut s = state.lock().await;
                 let action = loop_offender.as_deref().unwrap_or("the last tool action");
-                let warning_text = format!(
+                pending_loop_warning = Some(format!(
                     "[Loop warning: '{action}' has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
-                );
-                push_or_replace_loop_warning(s.history.as_mut_vec(), warning_text);
-                drop(s);
+                ));
             }
             loop_detect::LoopStatus::Ok => {}
         }
@@ -1450,6 +1451,32 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             }
 
             let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
+            // Single-guidance arbiter: at most one model-visible recovery
+            // notice per round. The evidence-recovery and failure-replan paths
+            // below return early with their own notice, so parked warnings are
+            // only pushed when neither of them will fire. The output-stagnation
+            // warning wins over the parked call-repetition one; they share one
+            // replaceable slot either way.
+            let recovery_will_fire =
+                should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some());
+            if !completed && !recovery_will_fire && failure_replan.is_none() {
+                match stagnation {
+                    loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) => {
+                        push_or_replace_loop_warning(
+                            s.history.as_mut_vec(),
+                            format!(
+                                "[Loop warning: the last {n} tool results were identical in kind (e.g. repeated \"no matches\"). Re-phrasing the same search is not progress — the answer is not where you are looking. View the relevant file directly or change approach.]"
+                            ),
+                        );
+                    }
+                    loop_detect::LoopStatus::Ok => {
+                        if let Some(warning) = pending_loop_warning {
+                            push_or_replace_loop_warning(s.history.as_mut_vec(), warning);
+                        }
+                    }
+                }
+            }
+
             if should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some()) {
                 let (reason, streak, action) = evidence_recovery.unwrap_or((
                     loop_detect::ProgressReason::NoNewInformation,
