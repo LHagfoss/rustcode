@@ -391,6 +391,8 @@ impl TurnContext {
             "last_progress_reason": self.progress.last_reason.map(|reason| reason.label()),
             "compiler_diagnostic_streak": self.compiler.consecutive_diagnostics,
             "provider_errors": self.metrics.provider_errors, "provider_429s": self.metrics.provider_429s,
+            "prefix_cache": self.request_prefix_cache.last_decision().label(),
+            "prefix_context_updates": self.request_prefix_cache.context_updates(),
             "changed_paths": self.progress.changed_paths.iter().collect::<Vec<_>>(),
             "phase_checkpoint": self.progress.phase_checkpoint,
             "stop_reason": self.lifecycle.stop_reason.as_ref().map(ToString::to_string),
