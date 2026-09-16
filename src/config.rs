@@ -882,8 +882,13 @@ pub struct AppConfig {
     pub vision_model: Option<String>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
+    /// Maximum tool/recovery rounds in one resumable segment. A finite legacy
+    /// value such as 40 remains valid and is continued automatically only
+    /// after meaningful progress; zero disables this segment backstop.
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: usize,
+    /// Optional hard ceiling across all segments, intended for unattended or
+    /// CI runs. Zero leaves total rounds bounded by the other safety guards.
     #[serde(default = "default_max_total_tool_rounds")]
     pub max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]

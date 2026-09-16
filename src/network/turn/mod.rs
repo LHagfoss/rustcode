@@ -138,10 +138,8 @@ pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> 
     if ctx.budget.max_tool_rounds == usize::MAX {
         return None;
     }
-    let remaining = ctx
-        .budget
-        .max_tool_rounds
-        .saturating_sub(ctx.budget.tool_rounds);
+    let segment_rounds = ctx.segment_rounds();
+    let remaining = ctx.budget.max_tool_rounds.saturating_sub(segment_rounds);
     let warning_rounds = ctx.budget.max_tool_rounds.div_ceil(5).min(8);
     if ctx.budget.round_budget_notice_sent || remaining == 0 || remaining > warning_rounds {
         return None;
@@ -154,7 +152,7 @@ pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> 
          and required validation; avoid expanding scope. If the task cannot be completed \
          within the remaining budget, report the unfinished work and validation status \
          accurately. Do not claim success without evidence or bypass safety checks.]",
-        used = ctx.budget.tool_rounds,
+        used = segment_rounds,
         maximum = ctx.budget.max_tool_rounds,
     ))
 }
