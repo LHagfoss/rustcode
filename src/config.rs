@@ -11,6 +11,9 @@ pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 /// Zero means no fixed round ceiling. Turns still terminate on context,
 /// token, cancellation, and progress/recovery safety budgets.
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 0;
+/// Zero means no additional total-round ceiling. Set this explicitly for an
+/// unattended/CI run that needs a hard cap across all continuation segments.
+pub const DEFAULT_MAX_TOTAL_TOOL_ROUNDS: usize = 0;
 pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 /// Tool rounds should be short and action-oriented. Reasoning models often
 /// spend their entire completion allowance thinking before emitting a tool
@@ -881,6 +884,8 @@ pub struct AppConfig {
     pub tool_protocol: ToolProtocol,
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: usize,
+    #[serde(default = "default_max_total_tool_rounds")]
+    pub max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]
     pub subagent_concurrency_limit: usize,
     #[serde(default)]
@@ -924,6 +929,8 @@ struct RuntimeConfig {
     tool_protocol: ToolProtocol,
     #[serde(default = "default_max_tool_rounds")]
     max_tool_rounds: usize,
+    #[serde(default = "default_max_total_tool_rounds")]
+    max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]
     subagent_concurrency_limit: usize,
     #[serde(default)]
@@ -965,6 +972,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_tool_rounds: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_total_tool_rounds: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_concurrency_limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_active_session_id: Option<String>,
@@ -994,6 +1003,10 @@ fn default_false() -> bool {
 
 fn default_max_tool_rounds() -> usize {
     DEFAULT_MAX_TOOL_ROUNDS
+}
+
+fn default_max_total_tool_rounds() -> usize {
+    DEFAULT_MAX_TOTAL_TOOL_ROUNDS
 }
 
 fn default_subagent_concurrency_limit() -> usize {
@@ -1094,6 +1107,7 @@ impl Default for AppConfig {
             ],
             tool_protocol: ToolProtocol::default(),
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_total_tool_rounds: DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
             subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
@@ -1303,6 +1317,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                 Some(runtime) => {
                     config.tool_protocol = runtime.tool_protocol;
                     config.max_tool_rounds = runtime.max_tool_rounds;
+                    config.max_total_tool_rounds = runtime.max_total_tool_rounds;
                     config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
                     config.last_active_session_id = runtime.last_active_session_id;
                     config.mcp_servers = runtime.mcp_servers;
@@ -1381,6 +1396,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         vision_model: config.vision_model.clone(),
         tool_protocol: Some(config.tool_protocol),
         max_tool_rounds: Some(config.max_tool_rounds),
+        max_total_tool_rounds: Some(config.max_total_tool_rounds),
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
@@ -1435,6 +1451,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(max_tool_rounds) = file.max_tool_rounds {
         config.max_tool_rounds = max_tool_rounds;
+    }
+    if let Some(max_total_tool_rounds) = file.max_total_tool_rounds {
+        config.max_total_tool_rounds = max_total_tool_rounds;
     }
     if let Some(limit) = file.subagent_concurrency_limit {
         config.subagent_concurrency_limit = limit;
@@ -1503,6 +1522,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.max_tool_rounds.is_some() {
         persisted.max_tool_rounds = global.max_tool_rounds;
     }
+    if file.max_total_tool_rounds.is_some() {
+        persisted.max_total_tool_rounds = global.max_total_tool_rounds;
+    }
     if file.subagent_concurrency_limit.is_some() {
         persisted.subagent_concurrency_limit = global.subagent_concurrency_limit;
     }
@@ -1550,6 +1572,8 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         vision_model: None,
         tool_protocol: None,
         max_tool_rounds: None,
+        max_tool_rounds_per_segment: None,
+        max_total_tool_rounds: None,
         subagent_concurrency_limit: None,
         last_active_session_id: None,
         mcp_servers: None,
