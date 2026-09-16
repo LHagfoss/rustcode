@@ -274,6 +274,9 @@ impl ReasoningLoopDetector {
         }
 
         // 3. Repeated reads over same small set of files without workspace edits
+        // Escalate only under ledger-confirmed stagnation: paging through the
+        // same one or two files while verification keeps producing fresh
+        // evidence is legitimate long-task inspection, not a loop.
         if !evidence.had_edits && evidence.tool_count > 0 && !target_files.is_empty() {
             let mut all_targets = target_files.clone();
             let mut total_tools = evidence.tool_count;
@@ -282,7 +285,11 @@ impl ReasoningLoopDetector {
                 total_tools += record.tool_count;
             }
 
-            if self.recent_turns.len() >= 2 && all_targets.len() <= 2 && total_tools >= 3 {
+            if self.recent_turns.len() >= 2
+                && all_targets.len() <= 2
+                && total_tools >= 3
+                && evidence.no_progress_streak >= 2
+            {
                 return ReasoningLoopStatus::LoopDetected(DIAG_SAME_FILES_NO_PROGRESS);
             }
         } else if evidence.had_edits {
