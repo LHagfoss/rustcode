@@ -46,11 +46,19 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
     match message.role.as_str() {
         "user" => HistoryEntry::User(&message.content),
         "assistant" => {
-            let calls = resolve_tool_calls(message, crate::config::ToolProtocol::Json);
-            if calls.len() == 1 {
-                HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
-            } else {
+            // Native tool calls are owned by the structured renderer, which
+            // supports batches. Never resurrect them as a single text fence
+            // here: a fully-deduped assistant message must fall back to plain
+            // prose, and multi-call messages must not be truncated to one.
+            if !message.tool_calls.is_empty() {
                 HistoryEntry::Assistant(&message.content)
+            } else {
+                let calls = resolve_tool_calls(message, crate::config::ToolProtocol::Json);
+                if calls.len() == 1 {
+                    HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
+                } else {
+                    HistoryEntry::Assistant(&message.content)
+                }
             }
         }
         "tool" => {
@@ -409,7 +417,10 @@ fn to_messages_with_scope(
             }
             continue;
         }
-        let entry = normalize_message(message);
+        // Normalize the projected message so render-time dedup applies:
+        // a fully-deduped assistant message falls back to prose instead of
+        // resurrecting its removed calls as text.
+        let entry = normalize_message(message_for_render);
         messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
@@ -1203,6 +1214,40 @@ mod tests {
         let messages = to_messages(&history, "system");
         assert_eq!(messages[3]["role"], "user");
         assert!(messages[3]["content"].as_str().unwrap().contains("grep:"));
+    }
+
+    #[test]
+    fn native_tool_calls_never_resurrect_as_text_fences() {
+        let batch = ChatMessage::new("assistant", "reading two files").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-a".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+            crate::app::ToolCallRef {
+                id: "call-b".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let entries: Vec<_> = normalize_history(std::slice::from_ref(&batch)).collect();
+        assert!(
+            matches!(entries[0], HistoryEntry::Assistant(_)),
+            "batched native calls must not truncate to one text fence"
+        );
+
+        let single = ChatMessage::new("assistant", "reading one file").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-a".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let entries: Vec<_> = normalize_history(std::slice::from_ref(&single)).collect();
+        assert!(
+            matches!(entries[0], HistoryEntry::Assistant(_)),
+            "structured calls are owned by the structured renderer"
+        );
     }
 
     #[test]
