@@ -1235,14 +1235,13 @@ mod tests {
             "batched native calls must not truncate to one text fence"
         );
 
-        let single =
-            ChatMessage::new("assistant", "reading one file").with_tool_calls(vec![
-                crate::app::ToolCallRef {
-                    id: "call-a".into(),
-                    name: "view_file".into(),
-                    arguments: "{}".into(),
-                },
-            ]);
+        let single = ChatMessage::new("assistant", "reading one file").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-a".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
         let entries: Vec<_> = normalize_history(std::slice::from_ref(&single)).collect();
         assert!(
             matches!(entries[0], HistoryEntry::Assistant(_)),
