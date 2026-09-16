@@ -311,7 +311,10 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
     prompt: String,
     sender: AgentUiEventSender,
 ) -> super::TurnContext {
-    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    let (max_tool_rounds, max_total_tool_rounds) = {
+        let s = state.lock().await;
+        (s.config.max_tool_rounds, s.config.max_total_tool_rounds)
+    };
     run_agent_turn_with_events_and_context(
         client,
         state,
@@ -320,7 +323,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
         stream_buffer,
         prompt,
         sender,
-        super::TurnContext::with_max_tool_rounds(max_tool_rounds),
+        super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
     )
     .await
 }
@@ -358,7 +361,10 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
     prompt: String,
     sender: AgentUiEventSender,
 ) -> super::TurnContext {
-    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    let (max_tool_rounds, max_total_tool_rounds) = {
+        let s = state.lock().await;
+        (s.config.max_tool_rounds, s.config.max_total_tool_rounds)
+    };
     run_agent_turn_with_events_and_context_mode(
         client,
         state,
@@ -367,7 +373,7 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
         stream_buffer,
         prompt,
         sender,
-        super::TurnContext::with_max_tool_rounds(max_tool_rounds),
+        super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
         true,
     )
     .await

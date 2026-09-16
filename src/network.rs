@@ -168,7 +168,14 @@ const MAX_CONSECUTIVE_MALFORMED_CALLS: usize = 4;
 /// summary to name the exact limit that was hit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TurnBudgetLimit {
+    /// A productive segment ended and can be resumed with the existing
+    /// transcript and progress ledger.
+    ProductiveSegment {
+        used: usize,
+        maximum: usize,
+    },
     ToolRounds(usize),
+    TotalToolRounds(usize),
     Tokens(u64),
     NoProgress(usize),
     FailedMutations(usize),
@@ -180,7 +187,14 @@ pub(crate) enum TurnBudgetLimit {
 impl std::fmt::Display for TurnBudgetLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            TurnBudgetLimit::ProductiveSegment { used, maximum } => write!(
+                f,
+                "productive segment limit reached ({used}/{maximum} rounds); continuation queued"
+            ),
             TurnBudgetLimit::ToolRounds(n) => write!(f, "maximum tool rounds reached ({n})"),
+            TurnBudgetLimit::TotalToolRounds(n) => {
+                write!(f, "maximum total tool rounds reached ({n})")
+            }
             TurnBudgetLimit::Tokens(n) => write!(f, "maximum token budget reached (~{n} tokens)"),
             TurnBudgetLimit::NoProgress(n) => write!(
                 f,
@@ -258,14 +272,26 @@ pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit>
             ctx.recovery.consecutive_malformed_calls,
         ));
     }
-    // The round count is intentionally last: evidence-aware recovery and
-    // focused failure guards get a chance to act first. This remains the hard
-    // final backstop for a model that keeps producing novel but unproductive
-    // actions which evade the more specific deterministic signals.
-    if ctx.budget.max_tool_rounds != usize::MAX
-        && ctx.budget.tool_rounds >= ctx.budget.max_tool_rounds
+    // The total-round count is intentionally after the specific guards. It is
+    // an explicit unattended/CI ceiling across all segments.
+    if ctx.budget.max_total_tool_rounds != usize::MAX
+        && ctx.budget.tool_rounds >= ctx.budget.max_total_tool_rounds
     {
-        return Some(TurnBudgetLimit::ToolRounds(ctx.budget.tool_rounds));
+        return Some(TurnBudgetLimit::TotalToolRounds(ctx.budget.tool_rounds));
+    }
+    // A configured round count is a segment backstop. Productive work gets a
+    // fresh segment with the same progress ledger; work with no progress
+    // stops here rather than opening an unattended continuation loop.
+    if ctx.budget.max_tool_rounds != usize::MAX
+        && ctx.segment_rounds() >= ctx.budget.max_tool_rounds
+    {
+        if ctx.has_progress_in_current_segment() {
+            return Some(TurnBudgetLimit::ProductiveSegment {
+                used: ctx.segment_rounds(),
+                maximum: ctx.budget.max_tool_rounds,
+            });
+        }
+        return Some(TurnBudgetLimit::ToolRounds(ctx.segment_rounds()));
     }
     None
 }
@@ -278,6 +304,7 @@ pub(crate) async fn stop_turn_for_budget(
     ctx: &mut TurnContext,
     limit: TurnBudgetLimit,
 ) -> bool {
+    let productive_segment = matches!(limit, TurnBudgetLimit::ProductiveSegment { .. });
     dbg_log!("Turn budget exceeded: {}", limit);
     crate::logger::operational_event(
         "turn.budget_exceeded",
@@ -287,19 +314,37 @@ pub(crate) async fn stop_turn_for_budget(
             "elapsed_secs": ctx.lifecycle.turn_started_at.elapsed().as_secs(),
             "tokens_used": ctx.budget.tokens_used,
             "failed_mutations": ctx.progress.failed_mutations,
+            "segment_rounds": ctx.segment_rounds(),
+            "segment_limit": (ctx.budget.max_tool_rounds != usize::MAX)
+                .then_some(ctx.budget.max_tool_rounds),
+            "total_round_limit": (ctx.budget.max_total_tool_rounds != usize::MAX)
+                .then_some(ctx.budget.max_total_tool_rounds),
+            "continuation": productive_segment,
         }),
     );
-    let summary = format!(
-        "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
-         Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
-        ctx.budget.tool_rounds
-    );
+    let summary = if productive_segment {
+        format!(
+            "[harness: completed a productive segment after {} tool round(s) — {limit}. \
+             The task is NOT complete. Successful tool results are preserved and the next \
+             segment will continue from this checkpoint without replaying completed calls. \
+             Total rounds so far: {}; token safety budget: 5,000,000.]",
+            ctx.segment_rounds(),
+            ctx.budget.tool_rounds,
+        )
+    } else {
+        format!(
+            "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
+             Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
+            ctx.budget.tool_rounds
+        )
+    };
     ctx.response.final_content = summary;
     // The preceding tool response may already be persisted, but this new
     // stop explanation still needs to reach the final transcript.
     ctx.response.final_content_persisted = false;
     ctx.lifecycle.task_completed = false;
-    ctx.budget.budget_stopped = Some(limit.to_string());
+    ctx.budget.continuation_pending = productive_segment;
+    ctx.budget.budget_stopped = (!productive_segment).then(|| limit.to_string());
     ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
     let mut s = _state.lock().await;
     s.continuous_mode = false;
