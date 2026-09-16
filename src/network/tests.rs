@@ -1504,6 +1504,75 @@ async fn multi_call_response_executes_all_valid_reads() {
     assert_eq!(rendered_ids, ["call_first", "call_second"]);
 }
 
+#[tokio::test]
+async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+
+    // Four no-match searches with the same pattern but alternating flags:
+    // same call category (pre-execution repetition warning parks) and same
+    // stagnant output, while the progress ledger hits its recovery streak.
+    // The evidence round must speak once, not stack both warnings with it.
+    for round in 0..4 {
+        super::turn_engine::tools::handle_tool_response(
+            &client,
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            vec![crate::tools::ToolCallEnvelope {
+                call_id: format!("call-nomatch-{round}"),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({
+                    "pattern": "zzz-no-match-xyz-123",
+                    "ignore_case": round % 2 == 0,
+                }),
+            }],
+        )
+        .await;
+        ctx.response.final_content = "Searching for references.".to_string();
+    }
+
+    let history = state.lock().await;
+    let bodies: Vec<&str> = history
+        .history
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("[Evidence-based recovery:")),
+        "expected evidence recovery after repeated no-progress searches: {bodies:?}"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("has repeated 4 times")),
+        "parked call-repetition warning must not stack with recovery: {bodies:?}"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("last 4 tool results")),
+        "output-stagnation warning must not stack with recovery: {bodies:?}"
+    );
+}
+
 #[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
