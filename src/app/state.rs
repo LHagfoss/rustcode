@@ -79,6 +79,9 @@ pub struct AppState {
     pub(crate) workspace_location: crate::app::workspace::WorkspaceLocationCache,
     /// Workspace root supplied by an external frontend such as ACP.
     pub workspace_root: Option<std::path::PathBuf>,
+    /// Task/project directory supplied by an external frontend. This is the
+    /// default navigation scope; `workspace_root` remains the hard boundary.
+    pub task_working_directory: Option<std::path::PathBuf>,
 
     pub update_check: crate::update::UpdateState,
     pub show_update_prompt: bool,
@@ -749,6 +752,7 @@ impl AppState {
             cwd_and_branch,
             workspace_location,
             workspace_root: None,
+            task_working_directory: None,
             update_check: crate::update::UpdateState::Unknown,
             show_update_prompt: false,
             update_prompt_index: 0,

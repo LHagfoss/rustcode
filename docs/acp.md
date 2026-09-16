@@ -13,7 +13,9 @@ initialize it, create a session, and submit prompts through the ACP v1 methods.
 ## Sessions and configuration
 
 `session/new` creates an isolated RustCode session. The request's working
-directory becomes the tool workspace root. Model and tool settings come from
+directory becomes the task working directory and default project scope. The
+launch workspace remains the security boundary; writes in sibling projects
+require explicit authorization. Model and tool settings come from
 the normal RustCode configuration stack:
 
 ```text

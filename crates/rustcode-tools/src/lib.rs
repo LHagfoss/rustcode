@@ -13,16 +13,24 @@ use std::path::{Path, PathBuf};
 /// Paths needed to resolve project-relative tool arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToolContext {
+    /// Hard security boundary. No resolved path may escape this directory.
     pub workspace_root: Option<PathBuf>,
+    /// Default navigation and project scope for the current task.
+    pub task_working_directory: Option<PathBuf>,
     pub sandbox_dir: Option<PathBuf>,
     pub artifacts_dir: Option<PathBuf>,
+    /// Set only after the caller has explicitly authorized a broader task
+    /// scope. The workspace boundary is still enforced when this is true.
+    pub allow_task_scope_escape: bool,
 }
 
 thread_local! {
     static ACTIVE_CONTEXT: RefCell<ToolContext> = const { RefCell::new(ToolContext {
         workspace_root: None,
+        task_working_directory: None,
         sandbox_dir: None,
         artifacts_dir: None,
+        allow_task_scope_escape: false,
     }) };
 }
 
@@ -50,16 +58,15 @@ pub(crate) fn active_context() -> ToolContext {
     ACTIVE_CONTEXT.with(|active| active.borrow().clone())
 }
 
-pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
-    resolve_tool_path_with_context(raw_path, &active_context())
-}
-
 /// Resolve a path using the same project, sandbox, artifact, and home rules as
 /// the original in-process handlers.
 pub fn resolve_tool_path_with_context(raw_path: &str, context: &ToolContext) -> PathBuf {
     let path = Path::new(raw_path);
     if !path.is_absolute()
-        && let Some(root) = context.workspace_root.as_ref()
+        && let Some(root) = context
+            .task_working_directory
+            .as_ref()
+            .or(context.workspace_root.as_ref())
     {
         return root.join(path);
     }
@@ -111,6 +118,78 @@ pub fn resolve_tool_path_with_context(raw_path: &str, context: &ToolContext) -> 
     PathBuf::from(raw_path)
 }
 
+/// Resolve a tool path and enforce the workspace boundary. Mutating paths are
+/// additionally kept below the task directory unless the caller has recorded
+/// an explicit scope escape authorization. Canonicalizing the existing
+/// portion catches both `..` traversal and symlink escapes, including paths
+/// whose final component has not been created yet.
+pub fn validate_tool_path_with_context(
+    raw_path: &str,
+    context: &ToolContext,
+    mutating: bool,
+) -> Result<PathBuf, String> {
+    let resolved = resolve_tool_path_with_context(raw_path, context);
+
+    let is_session_path = [context.sandbox_dir.as_ref(), context.artifacts_dir.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|root| path_is_within(&resolved, root));
+
+    if let Some(workspace_root) = context.workspace_root.as_deref()
+        && !is_session_path
+        && !path_is_within(&resolved, workspace_root)
+    {
+        return Err(format!(
+            "path '{}' escapes the workspace root '{}'",
+            raw_path,
+            workspace_root.display()
+        ));
+    }
+
+    if mutating
+        && !context.allow_task_scope_escape
+        && !is_session_path
+        && let Some(task_root) = context.task_working_directory.as_deref()
+        && !path_is_within(&resolved, task_root)
+    {
+        return Err(format!(
+            "refusing to modify '{}' because it is outside the task working directory '{}'; explicitly authorize a broader workspace scope to continue",
+            resolved.display(),
+            task_root.display()
+        ));
+    }
+
+    Ok(resolved)
+}
+
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    let Some(path) = canonicalize_for_containment(path) else {
+        return false;
+    };
+    let Some(root) = canonicalize_for_containment(root) else {
+        return false;
+    };
+    path.starts_with(root)
+}
+
+fn canonicalize_for_containment(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return std::fs::canonicalize(path).ok();
+    }
+
+    let mut suffix = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        suffix.push(current.file_name()?.to_os_string());
+        current = current.parent()?;
+    }
+    let mut canonical = std::fs::canonicalize(current).ok()?;
+    for component in suffix.into_iter().rev() {
+        canonical.push(component);
+    }
+    Some(canonical)
+}
+
 pub(crate) fn parse_json_number(value: &serde_json::Value) -> Option<u64> {
     value
         .as_u64()
@@ -140,13 +219,15 @@ mod tests {
     fn path_resolution_preserves_workspace_and_session_roots() {
         let context = ToolContext {
             workspace_root: Some(PathBuf::from("/workspace")),
+            task_working_directory: Some(PathBuf::from("/workspace/project")),
             sandbox_dir: Some(PathBuf::from("/session/sandbox")),
             artifacts_dir: Some(PathBuf::from("/session/artifacts")),
+            ..ToolContext::default()
         };
 
         assert_eq!(
             resolve_tool_path_with_context("src/main.rs", &context),
-            PathBuf::from("/workspace/src/main.rs")
+            PathBuf::from("/workspace/project/src/main.rs")
         );
         assert_eq!(
             resolve_tool_path_with_context("/tmp/sandbox/output.txt", &context),
@@ -165,18 +246,21 @@ mod tests {
         std::fs::write(root.path().join("file.txt"), "content").expect("file");
         let context = ToolContext {
             workspace_root: Some(root.path().to_path_buf()),
+            task_working_directory: Some(root.path().to_path_buf()),
             ..ToolContext::default()
         };
 
         let listing = with_context(&context, || search::list_directory(&json!({"path": "."})))
             .expect("list directory");
-        assert_eq!(listing, "file.txt\nnested/");
+        assert!(listing.starts_with("[Directory: "));
+        assert!(listing.ends_with("file.txt\nnested/"));
     }
 
     #[test]
     fn context_is_restored_when_handler_unwinds() {
         let context = ToolContext {
             workspace_root: Some(PathBuf::from("/temporary")),
+            task_working_directory: Some(PathBuf::from("/temporary")),
             ..ToolContext::default()
         };
 
@@ -185,5 +269,77 @@ mod tests {
         }));
         assert!(result.is_err());
         assert_eq!(super::active_context(), ToolContext::default());
+    }
+
+    #[test]
+    fn relative_paths_use_task_directory_but_sibling_mutations_are_blocked() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let task = workspace.path().join("task");
+        let sibling = workspace.path().join("sibling");
+        std::fs::create_dir_all(&task).expect("task");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        let context = ToolContext {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            task_working_directory: Some(task.clone()),
+            ..ToolContext::default()
+        };
+
+        assert_eq!(resolve_tool_path_with_context(".", &context), task);
+        let error = super::filesystem::write_to_file_with_context(
+            &json!({"path": sibling.join("README.md"), "content": "nope"}),
+            &context,
+        )
+        .expect_err("sibling mutation must require an explicit scope escape");
+        assert!(error.contains("outside the task working directory"));
+        assert!(!sibling.join("README.md").exists());
+    }
+
+    #[test]
+    fn authorized_scope_escape_stays_inside_workspace_boundary() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let task = workspace.path().join("task");
+        let sibling = workspace.path().join("sibling");
+        std::fs::create_dir_all(&task).expect("task");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        let context = ToolContext {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            task_working_directory: Some(task),
+            allow_task_scope_escape: true,
+            ..ToolContext::default()
+        };
+
+        super::filesystem::write_to_file_with_context(
+            &json!({"path": sibling.join("README.md"), "content": "authorized"}),
+            &context,
+        )
+        .expect("authorized sibling mutation");
+        assert_eq!(
+            std::fs::read_to_string(sibling.join("README.md")).unwrap(),
+            "authorized"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mutation_rejects_symlink_escape_from_task_directory() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let task = workspace.path().join("task");
+        let sibling = workspace.path().join("sibling");
+        std::fs::create_dir_all(&task).expect("task");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        std::os::unix::fs::symlink(&sibling, task.join("linked")).expect("symlink");
+        let context = ToolContext {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            task_working_directory: Some(task),
+            ..ToolContext::default()
+        };
+
+        let error = super::filesystem::write_to_file_with_context(
+            &json!({"path": "linked/README.md", "content": "nope"}),
+            &context,
+        )
+        .expect_err("symlink escape must be rejected");
+        assert!(error.contains("outside the task working directory"));
+        assert!(!sibling.join("README.md").exists());
     }
 }
