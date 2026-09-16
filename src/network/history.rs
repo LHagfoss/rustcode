@@ -1522,25 +1522,22 @@ mod tests {
 
     #[test]
     fn reused_call_id_pairs_with_nearest_announcement() {
-        let old_call =
-            ChatMessage::new("assistant", "first attempt").with_tool_calls(vec![
-                crate::app::ToolCallRef {
-                    id: "call-reused".into(),
-                    name: "view_file".into(),
-                    arguments: "{}".into(),
-                },
-            ]);
-        let new_call =
-            ChatMessage::new("assistant", "retry attempt").with_tool_calls(vec![
-                crate::app::ToolCallRef {
-                    id: "call-reused".into(),
-                    name: "view_file".into(),
-                    arguments: "{}".into(),
-                },
-            ]);
-        let new_result =
-            ChatMessage::new("tool", "view_file: fresh content")
-                .answering(Some("call-reused".into()));
+        let old_call = ChatMessage::new("assistant", "first attempt").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-reused".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let new_call = ChatMessage::new("assistant", "retry attempt").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "call-reused".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            },
+        ]);
+        let new_result = ChatMessage::new("tool", "view_file: fresh content")
+            .answering(Some("call-reused".into()));
         let history = vec![
             ChatMessage::new("user", "inspect"),
             old_call,
@@ -1562,11 +1559,15 @@ mod tests {
             .collect();
         assert_eq!(tool_contents.len(), 2);
         assert!(
-            tool_contents.iter().any(|body| body.contains("did not run")),
+            tool_contents
+                .iter()
+                .any(|body| body.contains("did not run")),
             "stale reused announcement must be closed: {tool_contents:?}"
         );
         assert!(
-            tool_contents.iter().any(|body| body.contains("fresh content")),
+            tool_contents
+                .iter()
+                .any(|body| body.contains("fresh content")),
             "newest result must survive verbatim: {tool_contents:?}"
         );
     }
