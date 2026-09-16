@@ -2645,8 +2645,9 @@ pub async fn stream_request(
         if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
             let session_id = s.active_session_id.clone();
             let workspace_root = s
-                .workspace_root
+                .task_working_directory
                 .clone()
+                .or_else(|| s.workspace_root.clone())
                 .or_else(|| std::env::current_dir().ok());
             let (schemas, selection) = s.prompt_cache.native_tool_schemas(
                 schema_policy,

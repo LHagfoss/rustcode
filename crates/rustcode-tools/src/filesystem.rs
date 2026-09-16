@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rustcode_core::ToolResultCompleteness;
 
-use crate::{coerce_array, parse_json_number, resolve_tool_path};
+use crate::{coerce_array, parse_json_number};
 
 pub fn delete_file_schema() -> Value {
     serde_json::json!({
@@ -124,8 +124,12 @@ pub struct ViewFileOutput {
     pub completeness: ToolResultCompleteness,
 }
 
-fn resolve(path: &str) -> PathBuf {
-    resolve_tool_path(path)
+fn resolve_read(path: &str) -> Result<PathBuf, String> {
+    crate::validate_tool_path_with_context(path, &crate::active_context(), false)
+}
+
+fn resolve_mutation(path: &str) -> Result<PathBuf, String> {
+    crate::validate_tool_path_with_context(path, &crate::active_context(), true)
 }
 
 const SECRET_DOTENV_READ_ERROR: &str = "native file reads of secret-bearing dotenv files are blocked; use configured environment or MCP tools instead";
@@ -146,11 +150,14 @@ pub fn delete_file(args: &Value) -> Result<String, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_mutation(path)?;
     if !resolved_path.exists() {
         // Idempotent: a missing file is already in the desired state. Returning an
         // error here used to derail the agent into confusion mid-task.
-        return Ok(format!("'{path}' does not exist (already gone)"));
+        return Ok(format!(
+            "'{path}' does not exist (already gone); resolved path: '{}'",
+            resolved_path.display()
+        ));
     }
     if resolved_path.is_dir() {
         return Err(format!(
@@ -158,7 +165,10 @@ pub fn delete_file(args: &Value) -> Result<String, String> {
         ));
     }
     std::fs::remove_file(&resolved_path).map_err(|e| format!("cannot delete '{path}': {e}"))?;
-    Ok(format!("deleted '{path}'"))
+    Ok(format!(
+        "deleted '{path}'; resolved path: '{}'",
+        resolved_path.display()
+    ))
 }
 
 pub fn delete_file_with_context(
@@ -177,8 +187,8 @@ pub fn move_file(args: &Value) -> Result<String, String> {
         .get("dest")
         .and_then(|d| d.as_str())
         .ok_or("missing 'dest' argument")?;
-    let resolved_src = resolve(src);
-    let resolved_dest = resolve(dest);
+    let resolved_src = resolve_mutation(src)?;
+    let resolved_dest = resolve_mutation(dest)?;
     if !resolved_src.exists() {
         return Err(format!("source '{src}' does not exist"));
     }
@@ -188,7 +198,11 @@ pub fn move_file(args: &Value) -> Result<String, String> {
     }
     std::fs::rename(&resolved_src, &resolved_dest)
         .map_err(|e| format!("cannot move '{src}' to '{dest}': {e}"))?;
-    Ok(format!("moved '{src}' to '{dest}'"))
+    Ok(format!(
+        "moved '{src}' to '{dest}'; resolved paths: '{}' -> '{}'",
+        resolved_src.display(),
+        resolved_dest.display()
+    ))
 }
 
 pub fn move_file_with_context(
@@ -207,8 +221,8 @@ pub fn copy_file(args: &Value) -> Result<String, String> {
         .get("dest")
         .and_then(|d| d.as_str())
         .ok_or("missing 'dest' argument")?;
-    let resolved_src = resolve(src);
-    let resolved_dest = resolve(dest);
+    let resolved_src = resolve_read(src)?;
+    let resolved_dest = resolve_mutation(dest)?;
     if !resolved_src.exists() {
         return Err(format!("source '{src}' does not exist"));
     }
@@ -223,7 +237,11 @@ pub fn copy_file(args: &Value) -> Result<String, String> {
     }
     std::fs::copy(&resolved_src, &resolved_dest)
         .map_err(|e| format!("cannot copy '{src}' to '{dest}': {e}"))?;
-    Ok(format!("copied '{src}' to '{dest}'"))
+    Ok(format!(
+        "copied '{src}' to '{dest}'; resolved paths: '{}' -> '{}'",
+        resolved_src.display(),
+        resolved_dest.display()
+    ))
 }
 
 pub fn copy_file_with_context(
@@ -249,7 +267,7 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_read(path)?;
     if is_secret_dotenv_path(&resolved_path) {
         return Err(format!("cannot read '{path}': {SECRET_DOTENV_READ_ERROR}"));
     }
@@ -327,7 +345,8 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         return Ok(ViewFileOutput {
             content: format!(
                 "[File: {}, Empty file, Bytes offset: {}]",
-                path, byte_offset
+                resolved_path.display(),
+                byte_offset
             ),
             truncated: false,
             completeness: ToolResultCompleteness::Complete,
@@ -360,7 +379,11 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
     let actual_end = end_line.min(total);
     let mut out = format!(
         "[File: {}, Lines {} to {} of {}, Bytes offset: {}]\n",
-        path, start_line, actual_end, total, byte_offset
+        resolved_path.display(),
+        start_line,
+        actual_end,
+        total,
+        byte_offset
     );
 
     // Put the completeness decision before the source body. The typed
@@ -948,7 +971,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
 
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_mutation(path)?;
     if resolved_path.is_dir() {
         return Err(format!("'{path}' is a directory"));
     }
@@ -989,11 +1012,13 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     if !any_changed {
         return Ok(if chunks.len() == 1 {
             format!(
-                "already applied; no changes made to '{path}' (target_content already reflects replacement_content)"
+                "already applied; no changes made to '{path}' (resolved path: '{}'; target_content already reflects replacement_content)",
+                resolved_path.display()
             )
         } else {
             format!(
-                "already applied; no changes made to '{path}' ({unchanged_count} of {} edits already reflected)",
+                "already applied; no changes made to '{path}' (resolved path: '{}'; {unchanged_count} of {} edits already reflected)",
+                resolved_path.display(),
                 chunks.len()
             )
         });
@@ -1008,7 +1033,8 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     let msg = if chunks.len() == 1 {
         format!(
-            "successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```"
+            "successfully replaced target_content in '{path}' (resolved path: '{}')\n\n```diff\n{combined_diffs}\n```",
+            resolved_path.display()
         )
     } else {
         let note = if unchanged_count > 0 {
@@ -1017,8 +1043,9 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
             String::new()
         };
         format!(
-            "successfully applied {} edits in '{path}'{note}\n\n```diff\n{combined_diffs}\n```",
-            chunks.len() - unchanged_count
+            "successfully applied {} edits in '{path}' (resolved path: '{}'){note}\n\n```diff\n{combined_diffs}\n```",
+            chunks.len() - unchanged_count,
+            resolved_path.display()
         )
     };
 
@@ -1217,7 +1244,7 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
         .and_then(coerce_array)
         .ok_or("missing 'replacements' array")?;
 
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_mutation(path)?;
     let content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
@@ -1319,7 +1346,8 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     if needs_apply.iter().all(|&needed| !needed) {
         return Ok(format!(
-            "already applied; no changes made to '{path}' (all {} replacements already reflected)",
+            "already applied; no changes made to '{path}' (resolved path: '{}'; all {} replacements already reflected)",
+            resolved_path.display(),
             chunks.len()
         ));
     }
@@ -1358,7 +1386,8 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     // fabricated from each replacement's target/replacement arguments.
     let diff = generate_unified_diff(&content, &new_content);
     Ok(format!(
-        "successfully applied {applied_count} replacements to '{path}'{note}\n\n```diff\n{diff}\n```"
+        "successfully applied {applied_count} replacements to '{path}' (resolved path: '{}'){note}\n\n```diff\n{diff}\n```",
+        resolved_path.display()
     ))
 }
 
@@ -1383,7 +1412,7 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
         .and_then(|o| o.as_bool())
         .unwrap_or(true);
 
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_mutation(path)?;
     if resolved_path.exists() && !overwrite {
         return Err(format!(
             "'{path}' already exists — set 'overwrite' to true to allow overwriting"
@@ -1399,7 +1428,8 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
 
     let lines = content.lines().count();
     Ok(format!(
-        "wrote '{path}' ({lines} lines, {} bytes)",
+        "wrote '{path}' (resolved path: '{}'; {lines} lines, {} bytes)",
+        resolved_path.display(),
         content.len()
     ))
 }
@@ -1474,7 +1504,7 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
         return Err("truncate is only valid with offset 0".to_string());
     }
 
-    let resolved_path = resolve(path);
+    let resolved_path = resolve_mutation(path)?;
     if resolved_path.is_dir() {
         return Err(format!("'{path}' is a directory"));
     }
@@ -1581,7 +1611,8 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
         .checked_add(bytes.len())
         .ok_or("next_offset exceeds the platform limit")?;
     Ok(format!(
-        "chunk complete path='{path}' offset={offset} next_offset={next_offset} bytes={} size={} sha256={}",
+        "chunk complete path='{path}' resolved_path='{}' offset={offset} next_offset={next_offset} bytes={} size={} sha256={}",
+        resolved_path.display(),
         bytes_to_write.len(),
         final_size,
         final_hash

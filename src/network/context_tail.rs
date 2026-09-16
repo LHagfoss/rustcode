@@ -151,7 +151,7 @@ fn build_dynamic_context_tail_internal(
         let objective = checkpoint
             .objective
             .as_deref()
-            .map(str::to_string)
+            .map(compact_objective)
             .or_else(|| objective_hint.map(compact_objective))
             .unwrap_or_else(|| "Continue the user's request".to_string());
         fragments.push(history::ContextFragment::new(
@@ -233,7 +233,10 @@ fn build_dynamic_context_tail_internal(
 
 fn compact_objective(text: &str) -> String {
     const MAX_OBJECTIVE_CHARS: usize = 180;
-    let compacted = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compacted = crate::paste::compact_for_context(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut chars = compacted.chars();
     let prefix = chars.by_ref().take(MAX_OBJECTIVE_CHARS).collect::<String>();
     if chars.next().is_some() {
@@ -268,12 +271,38 @@ mod tests {
         let volatile = build_volatile_context_block(Some(&usage(10, 3, 13)), Some(91.5), 32_000);
         let fresh = format!("{stable}\n{volatile}");
 
-        assert_eq!(fresh.matches("- Working directory:").count(), 1);
+        assert_eq!(
+            fresh
+                .matches("- Task working directory (default project scope):")
+                .count(),
+            1
+        );
         assert_eq!(fresh.matches("- Platform:").count(), 1);
         assert_eq!(fresh.matches("- Current date/time:").count(), 1);
         assert_eq!(fresh.matches("Today's date:").count(), 0);
         assert!(!volatile.contains("- Working directory:"));
         assert!(!volatile.contains("- Platform:"));
+    }
+
+    #[test]
+    fn objective_context_neutralizes_paste_provenance_markers() {
+        let checkpoint = ContextCheckpoint {
+            objective: Some("Review <!--PASTE:42:benchmark provenance-->".to_string()),
+            edit_status: "pending",
+            next_action: "continue",
+        };
+
+        let rendered = build_dynamic_context_tail_with_checkpoint(
+            String::new(),
+            &[],
+            &[],
+            None,
+            &checkpoint,
+            None,
+        );
+
+        assert!(!rendered.contains("<!--PASTE:"));
+        assert!(rendered.contains("[Pasted Text #1"));
     }
 
     #[test]

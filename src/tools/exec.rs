@@ -443,6 +443,7 @@ fn run_command_output_inner(
         .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
     let env = args.get("env").and_then(|e| e.as_object());
 
+    let context = super::current_tool_context();
     let resolved_cwd = match cwd {
         Some("sandbox") | Some("./sandbox") => {
             if let Some(session_id) = get_active_session_id() {
@@ -451,8 +452,14 @@ fn run_command_output_inner(
                 None
             }
         }
-        Some(other) => Some(crate::tools::resolve_tool_path(other)),
-        None => super::ACTIVE_WORKSPACE_ROOT.with(|root| root.borrow().clone()),
+        Some(other) => Some(
+            rustcode_tools::validate_tool_path_with_context(other, &context, false)
+                .map_err(|error| format!("invalid command cwd: {error}"))?,
+        ),
+        None => context
+            .task_working_directory
+            .clone()
+            .or(context.workspace_root.clone()),
     };
 
     if let Some(ref cwd_path) = resolved_cwd

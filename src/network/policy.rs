@@ -21,9 +21,15 @@ pub(crate) struct InteractivePolicy;
 impl TurnPolicy for InteractivePolicy {
     async fn should_approve(&self, state: &Arc<Mutex<AppState>>, tool_calls: &[ToolCall]) -> bool {
         let mut confirmations = Vec::new();
-        let (auto_confirm, workspace_root) = {
+        let (auto_confirm, task_working_directory) = {
             let state = state.lock().await;
-            (state.auto_confirm, state.workspace_root.clone())
+            (
+                state.auto_confirm,
+                state
+                    .task_working_directory
+                    .clone()
+                    .or_else(|| state.workspace_root.clone()),
+            )
         };
 
         if !auto_confirm {
@@ -59,7 +65,7 @@ impl TurnPolicy for InteractivePolicy {
                         .then(|| {
                             tools::render_confirmation_preview(
                                 &call.arguments,
-                                workspace_root.as_deref(),
+                                task_working_directory.as_deref(),
                             )
                         })
                         .flatten();

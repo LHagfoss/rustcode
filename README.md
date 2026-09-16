@@ -139,7 +139,10 @@ rustcode --acp
 The process speaks stable ACP v1 JSON-RPC on stdin/stdout. A runtime such as
 Multica can launch it as a subprocess, create a session with `session/new`, and
 send work with `session/prompt`. The working directory supplied to
-`session/new` becomes the workspace root for rustcode's tools. Rustcode stores
+`session/new` becomes RustCode's task working directory and default project
+scope. RustCode retains its launch workspace as the security boundary, so
+relative tool paths stay in the task project and sibling writes require
+explicit authorization. Rustcode stores
 its canonical configuration in `config.toml`. On macOS and Linux this is
 `${XDG_CONFIG_HOME:-~/.config}/rustcode/config.toml`; on Windows it is
 `%APPDATA%\rustcode\config.toml`. `RUSTCODE_CONFIG_DIR` overrides the

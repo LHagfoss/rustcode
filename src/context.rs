@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Default)]
 pub struct ContextSnapshot {
     cwd: String,
+    workspace_root: String,
     date: String,
     git_branch: Option<String>,
     git_status_summary: Option<String>,
@@ -24,7 +25,14 @@ impl ContextSnapshot {
     /// process cwd; using the process cwd here would load the wrong
     /// instructions and git delta after compaction.
     pub fn capture_at(root: &Path) -> Self {
-        let cwd = root.to_string_lossy().to_string();
+        Self::capture_at_scope(root, root)
+    }
+
+    /// Capture the task-facing project state while retaining the broader
+    /// workspace identity used as the security boundary.
+    pub fn capture_at_scope(workspace_root: &Path, task_working_directory: &Path) -> Self {
+        let cwd = task_working_directory.to_string_lossy().to_string();
+        let workspace_root = workspace_root.to_string_lossy().to_string();
         let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
 
         let git_branch = run_git(
@@ -69,6 +77,7 @@ impl ContextSnapshot {
 
         Self {
             cwd,
+            workspace_root,
             date,
             git_branch,
             git_status_summary,
@@ -86,6 +95,12 @@ impl ContextSnapshot {
             changes.push(format!(
                 "Working directory changed: {} -> {}",
                 self.cwd, current.cwd
+            ));
+        }
+        if self.workspace_root != current.workspace_root {
+            changes.push(format!(
+                "Workspace root changed: {} -> {}",
+                self.workspace_root, current.workspace_root
             ));
         }
         if self.date != current.date {
@@ -174,19 +189,43 @@ pub fn environment_context() -> String {
 /// date twice and later requests can see it advance without rebuilding this
 /// stable block.
 pub fn environment_context_at(root: &Path) -> String {
-    environment_context_at_with_instructions(root, true)
+    environment_context_for_scope(root, root)
 }
 
 pub(crate) fn environment_context_without_instructions_at(root: &Path) -> String {
-    environment_context_at_with_instructions(root, false)
+    environment_context_without_instructions_for_scope(root, root)
 }
 
-fn environment_context_at_with_instructions(root: &Path, include_instructions: bool) -> String {
+pub(crate) fn environment_context_without_instructions_for_scope(
+    workspace_root: &Path,
+    task_working_directory: &Path,
+) -> String {
+    environment_context_for_scope_with_instructions(workspace_root, task_working_directory, false)
+}
+
+pub fn environment_context_for_scope(
+    workspace_root: &Path,
+    task_working_directory: &Path,
+) -> String {
+    environment_context_for_scope_with_instructions(workspace_root, task_working_directory, true)
+}
+
+fn environment_context_for_scope_with_instructions(
+    workspace_root: &Path,
+    task_working_directory: &Path,
+    include_instructions: bool,
+) -> String {
     let mut out = String::new();
     out.push_str("# Environment\n\n");
 
-    let cwd = root.to_string_lossy().to_string();
-    out.push_str(&format!("- Working directory: {cwd}\n"));
+    let task = task_working_directory.to_string_lossy();
+    let workspace = workspace_root.to_string_lossy();
+    out.push_str(&format!(
+        "- Task working directory (default project scope): {task}\n"
+    ));
+    out.push_str(&format!(
+        "- Workspace root (security boundary): {workspace}\n"
+    ));
 
     out.push_str(&format!(
         "- Platform: {} {}\n",
@@ -194,21 +233,33 @@ fn environment_context_at_with_instructions(root: &Path, include_instructions: b
         std::env::consts::ARCH
     ));
 
-    if let Some(git) = git_context(&cwd) {
+    if let Some(git) = git_context(&task) {
         out.push_str(&git);
     }
 
-    if let Some(tree) = top_level_tree(&cwd) {
+    if let Some(tree) = top_level_tree(&task) {
         out.push_str(&tree);
     }
 
-    if include_instructions && let Some(agent_doc) = load_agent_doc(&cwd) {
+    if task_is_empty(task_working_directory) {
+        out.push_str(
+            "\n## Bootstrap guidance\n\nInitialize the project in the task working directory. Do not inspect sibling projects unless the user explicitly requests comparison or reuse.\n",
+        );
+    }
+
+    if include_instructions && let Some(agent_doc) = load_agent_doc(&task) {
         out.push_str("\n# Project instructions (AGENTS.md)\n\n");
         out.push_str(&agent_doc);
         out.push('\n');
     }
 
     out
+}
+
+fn task_is_empty(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
 }
 
 fn git_context(cwd: &str) -> Option<String> {
@@ -349,7 +400,7 @@ mod tests {
     fn environment_context_includes_cwd() {
         let ctx = environment_context();
         assert!(ctx.starts_with("# Environment"));
-        assert!(ctx.contains("Working directory:"));
+        assert!(ctx.contains("Task working directory (default project scope):"));
         assert!(ctx.contains("Platform:"));
         assert!(!ctx.contains("Today's date:"));
     }
@@ -393,6 +444,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_task_scope_context_names_boundary_and_bootstrap_action() {
+        let workspace = tempfile::tempdir().unwrap();
+        let task = workspace.path().join("empty-project");
+        std::fs::create_dir(&task).unwrap();
+
+        let context = environment_context_for_scope(workspace.path(), &task);
+        assert!(context.contains(&format!(
+            "Task working directory (default project scope): {}",
+            task.display()
+        )));
+        assert!(context.contains(&format!(
+            "Workspace root (security boundary): {}",
+            workspace.path().display()
+        )));
+        assert!(context.contains("Initialize the project in the task working directory."));
+        assert!(context.contains("Do not inspect sibling projects"));
+    }
+
+    #[test]
     fn agent_instructions_truncate_without_splitting_utf8() {
         let dir = tempfile::tempdir().unwrap();
         let content = format!("{}é", "a".repeat(MAX_AGENTS_BYTES - 1));
@@ -409,6 +479,7 @@ mod tests {
         let previous = ContextSnapshot {
             cwd: "/workspace/old".to_string(),
             date: "Wednesday 2026-08-19".to_string(),
+            workspace_root: "/workspace/old".to_string(),
             git_branch: Some("main".to_string()),
             git_status_summary: Some("clean".to_string()),
             tree_entries: vec!["src/".to_string()],
@@ -417,6 +488,7 @@ mod tests {
         let current = ContextSnapshot {
             cwd: "/workspace/new".to_string(),
             date: "Thursday 2026-08-20".to_string(),
+            workspace_root: "/workspace/old".to_string(),
             ..previous.clone()
         };
 

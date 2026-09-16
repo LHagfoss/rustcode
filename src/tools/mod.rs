@@ -710,6 +710,8 @@ pub(crate) fn spawn_background_task_for_test(
 thread_local! {
     static ACTIVE_SESSION_ID: RefCell<Option<String>> = const { RefCell::new(None) };
     static ACTIVE_WORKSPACE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static ACTIVE_TASK_WORKING_DIRECTORY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static ACTIVE_TASK_SCOPE_ESCAPE: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub fn set_active_session_id(id: Option<String>) {
@@ -724,12 +726,34 @@ pub fn get_active_session_id() -> Option<String> {
 
 pub fn set_active_workspace_root(root: Option<PathBuf>) {
     ACTIVE_WORKSPACE_ROOT.with(|current| {
-        *current.borrow_mut() = root;
+        *current.borrow_mut() = root.clone();
     });
+    // Compatibility for callers that only know the old single-root API:
+    // absent an explicit task directory, the boundary was also the project
+    // scope.
+    ACTIVE_TASK_WORKING_DIRECTORY.with(|current| *current.borrow_mut() = root);
+    if ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().is_none()) {
+        ACTIVE_TASK_SCOPE_ESCAPE.with(|current| *current.borrow_mut() = false);
+    }
+}
+
+pub fn set_active_workspace_context(
+    workspace_root: Option<PathBuf>,
+    task_working_directory: Option<PathBuf>,
+    allow_task_scope_escape: bool,
+) {
+    ACTIVE_WORKSPACE_ROOT.with(|current| *current.borrow_mut() = workspace_root);
+    ACTIVE_TASK_WORKING_DIRECTORY.with(|current| {
+        *current.borrow_mut() = task_working_directory;
+    });
+    ACTIVE_TASK_SCOPE_ESCAPE.with(|current| *current.borrow_mut() = allow_task_scope_escape);
 }
 
 pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
     let workspace_root = ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().clone());
+    let task_working_directory =
+        ACTIVE_TASK_WORKING_DIRECTORY.with(|current| current.borrow().clone());
+    let allow_task_scope_escape = ACTIVE_TASK_SCOPE_ESCAPE.with(|current| *current.borrow());
     let (sandbox_dir, artifacts_dir) = get_active_session_id()
         .map(|session_id| {
             (
@@ -740,9 +764,15 @@ pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
         .unwrap_or((None, None));
     rustcode_tools::ToolContext {
         workspace_root,
+        task_working_directory,
         sandbox_dir,
         artifacts_dir,
+        allow_task_scope_escape,
     }
+}
+
+pub(crate) fn active_task_working_directory() -> Option<PathBuf> {
+    ACTIVE_TASK_WORKING_DIRECTORY.with(|current| current.borrow().clone())
 }
 
 pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {

@@ -111,7 +111,13 @@ pub(crate) async fn run_prompt(
 ) -> Result<StopReason, agent_client_protocol::Error> {
     let turn = scheduled_turn.begin().await;
     crate::tools::set_active_session_id(Some(session_id.clone()));
-    crate::tools::set_active_workspace_root(Some(cwd.clone()));
+    let workspace_root = state
+        .lock()
+        .await
+        .workspace_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok());
+    crate::tools::set_active_workspace_context(workspace_root, Some(cwd.clone()), false);
     let stale_events = drain_task_events(&task_events, &terminal_backlog);
     for event in stale_events {
         if event.is_terminal() {
