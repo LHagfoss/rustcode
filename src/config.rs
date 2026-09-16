@@ -1572,7 +1572,6 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         vision_model: None,
         tool_protocol: None,
         max_tool_rounds: None,
-        max_tool_rounds_per_segment: None,
         max_total_tool_rounds: None,
         subagent_concurrency_limit: None,
         last_active_session_id: None,
