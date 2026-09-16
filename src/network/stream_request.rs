@@ -158,14 +158,15 @@ fn apply_api_native_tools(
     }
 }
 
-/// Ask OpenAI-compatible providers to return one native tool call by default.
-/// RustCode's scheduler remains the authoritative safety boundary because some
-/// gateways ignore this hint. Explicitly trusted batching profiles opt in.
+/// Allow providers to return parallel native tool calls. RustCode's
+/// scheduler remains the authoritative safety boundary: it executes every
+/// valid read-only call, runs at most one workspace mutation per round
+/// (more only for explicitly trusted batching profiles), and isolates
+/// control-plane calls. Some gateways ignore this hint.
 fn apply_provider_parallel_tool_call_policy(
     payload: &mut serde_json::Value,
     api_protocol: crate::config::ApiProtocol,
     allow_tools: bool,
-    allow_batching: bool,
 ) {
     if allow_tools
         && matches!(
@@ -177,7 +178,7 @@ fn apply_provider_parallel_tool_call_policy(
             .and_then(serde_json::Value::as_array)
             .is_some_and(|tools| !tools.is_empty())
     {
-        payload["parallel_tool_calls"] = serde_json::json!(allow_batching);
+        payload["parallel_tool_calls"] = serde_json::json!(true);
     }
 }
 
@@ -2065,7 +2066,7 @@ mod tests {
     }
 
     #[test]
-    fn default_chat_completions_tools_disable_provider_parallel_calls() {
+    fn default_chat_completions_tools_allow_provider_parallel_calls() {
         let mut payload = serde_json::json!({
             "tools": [{"type": "function", "function": {"name": "view_file"}}]
         });
@@ -2074,14 +2075,13 @@ mod tests {
             &mut payload,
             crate::config::ApiProtocol::ChatCompletions,
             true,
-            false,
         );
 
-        assert_eq!(payload["parallel_tool_calls"], false);
+        assert_eq!(payload["parallel_tool_calls"], true);
     }
 
     #[test]
-    fn default_responses_tools_disable_provider_parallel_calls() {
+    fn default_responses_tools_allow_provider_parallel_calls() {
         let mut payload = serde_json::json!({
             "tools": [{"type": "function", "name": "view_file"}]
         });
@@ -2090,10 +2090,9 @@ mod tests {
             &mut payload,
             crate::config::ApiProtocol::Responses,
             true,
-            false,
         );
 
-        assert_eq!(payload["parallel_tool_calls"], false);
+        assert_eq!(payload["parallel_tool_calls"], true);
     }
 
     #[test]
@@ -2105,7 +2104,6 @@ mod tests {
         apply_provider_parallel_tool_call_policy(
             &mut payload,
             crate::config::ApiProtocol::ChatCompletions,
-            true,
             true,
         );
 
@@ -2969,15 +2967,7 @@ pub async fn stream_request(
         );
     }
 
-    let allow_provider_parallel_tool_calls = profile
-        .as_ref()
-        .is_some_and(crate::config::ModelProfile::tool_batching_enabled);
-    apply_provider_parallel_tool_call_policy(
-        &mut payload,
-        api_protocol,
-        allow_tools,
-        allow_provider_parallel_tool_calls,
-    );
+    apply_provider_parallel_tool_call_policy(&mut payload, api_protocol, allow_tools);
     apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
 
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {

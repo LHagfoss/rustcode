@@ -30,8 +30,8 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "background",
         "run_command",
         "destructive operations",
-        "Issue exactly one tool call",
-        "wait for its result",
+        "Batch independent reads",
+        "Wait for results",
         "already applied",
         "advisory loop signals, not a hard stop",
         "native function-calling interface",
@@ -1520,8 +1520,8 @@ fn skills_are_control_plane_and_isolated() {
 // Every test session opened its edit with old_string: "" — the model's
 // instinct for "add a line at the top" — costing a turn before the error
 // taught it otherwise. The spec the model reads before calling now says it.
-// The orchestration boundary accepts a model batch for transcript safety but
-// executes only one call from it.
+// The orchestration boundary accepts a model batch for transcript safety,
+// executes every valid read and at most one mutation from it.
 #[test]
 fn the_prompt_matches_what_the_executor_actually_does() {
     let prompt = tool_system_prompt(
@@ -1530,12 +1530,12 @@ fn the_prompt_matches_what_the_executor_actually_does() {
         crate::config::AgentMode::Build,
     );
 
+    assert!(prompt.contains("Batch independent reads"), "got: {prompt}");
+    assert!(prompt.contains("wait for"), "got: {prompt}");
     assert!(
-        prompt.contains("Issue exactly one tool call"),
-        "got: {prompt}"
+        prompt.contains("one mutation per response"),
+        "mutations stay ordered: {prompt}"
     );
-    assert!(prompt.contains("wait for its result"), "got: {prompt}");
-    assert!(!prompt.contains("run in parallel"), "got: {prompt}");
     assert!(
         !prompt.contains("at most 1 or 2 tool calls"),
         "the old cap is gone"
@@ -1543,7 +1543,7 @@ fn the_prompt_matches_what_the_executor_actually_does() {
 
     // And the stated limit on changes must be the one the executor enforces.
     assert!(
-        prompt.contains("Issue exactly one tool call"),
+        prompt.contains("one mutation per response"),
         "got: {prompt}"
     );
     assert!(
@@ -1592,11 +1592,11 @@ fn manual_preview_port_guidance_honors_user_control() {
     }
 }
 
-// Regression: the JSON format must tell the model to make one call per
-// response, while the parser remains able to recover every call in a batch so
-// the orchestration layer can close the unexecuted calls safely.
+// Regression: the JSON format must tell the model to batch reads while
+// keeping mutations ordered, while the parser remains able to recover every
+// call in a batch so the orchestration layer can close unexecuted calls safely.
 #[test]
-fn json_protocol_tool_format_requires_one_call_per_response() {
+fn json_protocol_tool_format_batches_reads_per_response() {
     let prompt = tool_system_prompt(
         false,
         crate::config::ToolProtocol::Json,
@@ -1611,7 +1611,7 @@ fn json_protocol_tool_format_requires_one_call_per_response() {
         !prompt.contains("executes calls sequentially"),
         "got: {prompt}"
     );
-    assert!(prompt.contains("Emit exactly one fence"), "got: {prompt}");
+    assert!(prompt.contains("multiple fences"), "got: {prompt}");
     assert!(
         !prompt.contains("Several fences are allowed"),
         "got: {prompt}"
