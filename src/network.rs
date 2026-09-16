@@ -62,7 +62,7 @@ pub(crate) use tool_exec::{
 pub(crate) mod turn_engine;
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 pub(crate) use turn_engine::run_agent_turn_with_context;
-pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
+pub use turn_engine::{SegmentCheckpoint, TurnContext, process_queue_orchestrator, run_agent_turn};
 
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;

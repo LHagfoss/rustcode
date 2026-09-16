@@ -399,6 +399,35 @@ mod tests {
     }
 
     #[test]
+    fn resume_restores_pending_segment_and_queues_wakeup() {
+        let mut state = AppState::new();
+        let saved_id = state.active_session_id.clone();
+        state.history.push(ChatMessage::new("user", "long task"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "working on it"));
+        crate::config::save_session_history(&saved_id, &state.history);
+        let checkpoint = crate::network::TurnContext::with_budgets(40, 200)
+            .segment_checkpoint(&saved_id, true, false);
+        crate::config::save_segment_checkpoint(&saved_id, &checkpoint);
+
+        SessionController::default()
+            .start_fresh(&mut state)
+            .expect("new session should succeed");
+
+        SessionController::default()
+            .resume(&mut state, SessionAction::Id(saved_id.clone()))
+            .expect("saved session should resume");
+
+        assert!(state.background_turn_context.is_some());
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:productive_segment".to_string()]
+        );
+        crate::config::clear_segment_checkpoint(&saved_id);
+    }
+
+    #[test]
     fn switching_sessions_replaces_history_in_both_directions() {
         let mut state = AppState::new();
         let session_a = state.active_session_id.clone();

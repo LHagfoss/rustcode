@@ -311,6 +311,22 @@ pub fn load_session_image_cache(session_id: &str) -> HashMap<String, String> {
     })
 }
 
+pub fn save_segment_checkpoint(session_id: &str, checkpoint: &crate::network::SegmentCheckpoint) {
+    if let Some(session_store) = store() {
+        session_store.save_segment_checkpoint(session_id, checkpoint);
+    }
+}
+
+pub fn load_segment_checkpoint(session_id: &str) -> Option<crate::network::SegmentCheckpoint> {
+    store()?.load_segment_checkpoint(session_id)
+}
+
+pub fn clear_segment_checkpoint(session_id: &str) {
+    if let Some(session_store) = store() {
+        session_store.clear_segment_checkpoint(session_id);
+    }
+}
+
 pub fn get_active_session_dir(session_id: &str) -> Option<PathBuf> {
     store().map(|session_store| session_store.get_active_session_dir(session_id))
 }

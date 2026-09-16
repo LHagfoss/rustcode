@@ -365,6 +365,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
 
     s.history.replace(loaded);
     reset_active_session_state(s);
+    restore_segment_checkpoint(s);
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     s.history.push(ChatMessage::new(
@@ -373,6 +374,29 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     ));
     crate::config::save_session_history(&s.active_session_id, &s.history);
     true
+}
+
+/// Resume a persisted productive segment after a restart. Seeds the
+/// background turn context from the session sidecar and queues the internal
+/// wakeup so the idle orchestrator continues the long task automatically.
+/// Stale or foreign checkpoints are ignored.
+pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
+    let Some(checkpoint) = crate::config::load_segment_checkpoint(&s.active_session_id) else {
+        return;
+    };
+    if !checkpoint.continuation_pending && !checkpoint.background_pending {
+        return;
+    }
+    let mut context = crate::network::TurnContext::with_budgets(
+        s.config.max_tool_rounds,
+        s.config.max_total_tool_rounds,
+    );
+    if !context.restore_segment(&checkpoint, &s.active_session_id) {
+        return;
+    }
+    s.background_turn_context = Some(Box::new(context));
+    s.pending_queue
+        .insert(0, "__task_wakeup__:productive_segment".to_string());
 }
 
 pub fn extract_code_blocks_or_content(content: &str) -> String {
