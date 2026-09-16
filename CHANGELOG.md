@@ -1,3 +1,9 @@
+## [v0.52.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.9) - 2026-09-16
+
+### Fixes
+- Keep native tool-call history valid when duplicate tool results are compacted, preventing provider `TOOL_CALLS_MISSING_RESULTS` failures during long sessions.
+- Scope relative reads and writes to the ACP task directory, enforce workspace and symlink boundaries, and add explicit empty-project bootstrap guidance.
+- Remove pasted provenance markers from model-facing context and keep task/workspace context consistent during schema selection and tool execution.
 ## [v0.52.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.8) - 2026-09-15
 
 ### Fixes
