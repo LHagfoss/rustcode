@@ -1421,7 +1421,7 @@ async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
 }
 
 #[tokio::test]
-async fn multi_call_response_executes_one_and_closes_remaining_call_ids() {
+async fn multi_call_response_executes_all_valid_reads() {
     let state = Arc::new(Mutex::new(AppState::new()));
     {
         let mut state = state.lock().await;
@@ -1460,7 +1460,7 @@ async fn multi_call_response_executes_one_and_closes_remaining_call_ids() {
     .await;
 
     let state = state.lock().await;
-    assert_eq!(ctx.metrics.tool_calls, 1);
+    assert_eq!(ctx.metrics.tool_calls, 2);
     let assistant = state
         .history
         .iter()
@@ -1489,13 +1489,11 @@ async fn multi_call_response_executes_one_and_closes_remaining_call_ids() {
             .is_some_and(|result| result.success)
     );
     assert_eq!(results[1].tool_call_id.as_deref(), Some("call_second"));
-    let deferred = results[1].tool_result.as_ref().expect("deferred result");
-    assert!(!deferred.success);
-    assert_eq!(deferred.error_kind.as_deref(), Some("Internal"));
+    let second = results[1].tool_result.as_ref().expect("second result");
     assert!(
-        results[1]
-            .content
-            .contains("not executed in this model round")
+        second.success,
+        "both valid reads execute: {:?}",
+        results[1].content
     );
 
     let messages = history::to_messages(&state.history, "system");
