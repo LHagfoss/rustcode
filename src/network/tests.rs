@@ -274,6 +274,7 @@ fn equivalent_inspection_tools_share_a_fingerprint() {
     );
 }
 
+#[test]
 fn deterministic_compaction_persists_the_retained_suffix_anchor() {
     let mut history = vec![
         ChatMessage::new("user", "old task"),
