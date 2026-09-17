@@ -241,7 +241,8 @@ impl Composer {
                 crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
                 crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
             };
-            state.set_notice(notice);
+            // Collapse repeats instead of stacking history entries (#1223).
+            crate::app::actions::push_ephemeral_status(state, notice.to_string());
         }
     }
 }
