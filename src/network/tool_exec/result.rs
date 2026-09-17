@@ -335,6 +335,115 @@ pub(crate) fn replay_cached_view_file_subrange(
     Some(replay)
 }
 
+/// Best-effort shell redirection targets (`> file`, `>> file`, including
+/// heredoc writes like `cat > file <<'EOF'`). Quoted regions are ignored so
+/// `echo "a > b"` is not a file write; fd duplications (`>&2`, `2>&1`) and
+/// `/dev/*` sinks are skipped. Returns workspace-relative paths as written.
+pub(crate) fn shell_redirection_targets(command: &str) -> Vec<String> {
+    let bytes = command.as_bytes();
+    let mut targets = Vec::new();
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'\\' && !single_quote {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' && !double_quote {
+            single_quote = !single_quote;
+            index += 1;
+            continue;
+        }
+        if byte == b'"' && !single_quote {
+            double_quote = !double_quote;
+            index += 1;
+            continue;
+        }
+        if byte != b'>' || single_quote || double_quote {
+            index += 1;
+            continue;
+        }
+        // Skip `<<` heredoc delimiters and `<` + `>` combos; we only record
+        // `>` output targets (which cover `> file <<'EOF'` heredoc writes).
+        let previous = index.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+        if previous == Some(b'<') {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + 1;
+        // `>>` append.
+        if bytes.get(cursor) == Some(&b'>') {
+            cursor += 1;
+        }
+        // `>|` noclobber override.
+        if bytes.get(cursor) == Some(&b'|') {
+            cursor += 1;
+        }
+        // `>&2` / `>>>...` fd duplication, not a file.
+        if bytes.get(cursor) == Some(&b'&') {
+            index = cursor + 1;
+            continue;
+        }
+        while bytes.get(cursor).is_some_and(|b| b.is_ascii_whitespace()) {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            break;
+        }
+        let target = if bytes[cursor] == b'\'' || bytes[cursor] == b'"' {
+            let quote = bytes[cursor];
+            cursor += 1;
+            let start = cursor;
+            while cursor < bytes.len() && bytes[cursor] != quote {
+                if bytes[cursor] == b'\\' && quote == b'"' {
+                    cursor += 2;
+                } else {
+                    cursor += 1;
+                }
+            }
+            let end = cursor.min(bytes.len());
+            cursor = (end + 1).min(bytes.len().saturating_add(1));
+            command.get(start..end).unwrap_or("").to_string()
+        } else {
+            let start = cursor;
+            while cursor < bytes.len() {
+                let b = bytes[cursor];
+                if b.is_ascii_whitespace()
+                    || matches!(b, b';' | b'&' | b'|' | b'<' | b'>' | b'(' | b')')
+                {
+                    break;
+                }
+                cursor += 1;
+            }
+            command.get(start..cursor).unwrap_or("").to_string()
+        };
+        let target = target.trim();
+        if !target.is_empty()
+            && !target.starts_with('&')
+            && !target.starts_with("/dev/")
+            && target.chars().any(|c| c != '>' && !c.is_ascii_digit())
+        {
+            let cleaned = target
+                .trim_matches(|c| c == '\'' || c == '"')
+                .trim();
+            if !cleaned.is_empty() && !targets.contains(&cleaned.to_string()) {
+                targets.push(cleaned.to_string());
+            }
+        }
+        index = cursor.max(index + 1);
+    }
+    targets
+}
+
 pub(crate) fn tool_result_from_execution(
     tool_name: &str,
     args: &serde_json::Value,
@@ -344,7 +453,19 @@ pub(crate) fn tool_result_from_execution(
     // The execution layer owns source/read completeness. Request-level
     // bounding is recorded independently during finalization below.
     let completeness = execution.completeness;
-    let changed_paths = if is_mutating_tool(tool_name) && execution.success {
+    let changed_paths = if tool_name == "run_command" {
+        // Shell-created files (redirection, heredocs) bypass write tools but
+        // still change the workspace. Record `>`/`>>` targets so file evidence
+        // survives regardless of how the bytes got there.
+        if execution.success {
+            args.get("command")
+                .and_then(|value| value.as_str())
+                .map(shell_redirection_targets)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else if is_mutating_tool(tool_name) && execution.success {
         if !crate::network::mutation_made_progress(execution.success, &execution.content) {
             Vec::new()
         } else {
@@ -553,4 +674,40 @@ pub(crate) fn subagent_tool_history_message(
         &prefix,
         answered_call,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_redirection_targets_cover_heredoc_and_append() {
+        assert_eq!(
+            shell_redirection_targets("cat > package.json <<'EOF'\n{}\nEOF"),
+            vec!["package.json".to_string()]
+        );
+        assert_eq!(
+            shell_redirection_targets("echo hi >> src/GameScene.ts"),
+            vec!["src/GameScene.ts".to_string()]
+        );
+        assert_eq!(
+            shell_redirection_targets("cat <<'EOF' > src/app.ts\nx\nEOF"),
+            vec!["src/app.ts".to_string()]
+        );
+        assert!(shell_redirection_targets("sed -n '1,2p' src/lib.rs").is_empty());
+        assert!(shell_redirection_targets("echo \"a > b\"").is_empty());
+        assert!(shell_redirection_targets("cmd 2>&1").is_empty());
+        assert!(shell_redirection_targets("echo x > /dev/null").is_empty());
+    }
+
+    #[test]
+    fn run_command_redirection_populates_changed_paths() {
+        let result = tool_result_from_execution(
+            "run_command",
+            &serde_json::json!({"command": "cat > package.json <<'EOF'\n{}\nEOF"}),
+            crate::tools::ToolExecutionOutput::success("exit code: 0".into()),
+            None,
+        );
+        assert_eq!(result.metadata.changed_paths, vec!["package.json".to_string()]);
+    }
 }
