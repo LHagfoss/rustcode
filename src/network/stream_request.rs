@@ -2326,6 +2326,25 @@ mod tests {
         assert_eq!(chunk.text, "reasoning");
         assert!(!chunk.budget_exhausted);
     }
+
+    #[test]
+    fn thinking_estimate_accumulates_chars_not_per_chunk_ceils() {
+        // Token-piece streams deliver thousands of few-char deltas. Summing
+        // per-chunk ceils would charge 2000 * ceil(9 * 0.25) = 6000 tokens
+        // here; deriving once from kept chars charges ceil(18000 * 0.25).
+        let mut buffer = StreamBuffer::new();
+        let budget = Some(8192);
+        for _ in 0..2000 {
+            let used = buffer.thought_tokens_estimate();
+            let bounded = bound_reasoning_chunk("123456789", used, budget);
+            assert!(!bounded.budget_exhausted);
+            buffer.thought_chars += bounded.text.len();
+            buffer.thought_tokens = buffer.thought_tokens_estimate();
+        }
+        assert_eq!(buffer.thought_chars, 18_000);
+        assert_eq!(buffer.thought_tokens_estimate(), 4500);
+        assert_eq!(buffer.thought_tokens, 4500);
+    }
 }
 
 #[derive(Debug)]
@@ -3619,19 +3638,24 @@ pub async fn stream_request(
                                                 }
                                                 chunk.push_str("<think>\n");
                                             }
-                                            let used_tokens = buffer.lock().await.thought_tokens;
+                                            let used_tokens =
+                                                buffer.lock().await.thought_tokens_estimate();
                                             let bounded = bound_reasoning_chunk(
                                                 r_token,
                                                 used_tokens,
                                                 thinking_budget,
                                             );
-                                            let thought_tokens = bounded.estimated_tokens;
-                                            {
+                                            let thought_delta = {
                                                 let mut buffer = buffer.lock().await;
-                                                buffer.thought_tokens = buffer
-                                                    .thought_tokens
-                                                    .saturating_add(thought_tokens);
-                                            }
+                                                buffer.thought_chars = buffer
+                                                    .thought_chars
+                                                    .saturating_add(bounded.text.len());
+                                                let total = buffer.thought_tokens_estimate();
+                                                let delta = total
+                                                    .saturating_sub(buffer.thought_tokens);
+                                                buffer.thought_tokens = total;
+                                                delta
+                                            };
                                             if !quiet {
                                                 let mut s = state.lock().await;
                                                 if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
@@ -3639,7 +3663,7 @@ pub async fn stream_request(
                                                 }
                                                 s.current_thought_tokens = s
                                                     .current_thought_tokens
-                                                    .saturating_add(thought_tokens);
+                                                    .saturating_add(thought_delta);
                                             }
                                             chunk.push_str(&bounded.text);
                                             if let super::loop_detect::ReasoningLoopStatus::LoopDetected(reason) =
@@ -3664,7 +3688,7 @@ pub async fn stream_request(
                                                     "stream.reasoning_budget_cut",
                                                     serde_json::json!({
                                                         "budget": thinking_budget,
-                                                        "estimated_thought_tokens": used_tokens.saturating_add(thought_tokens),
+                                                        "estimated_thought_tokens": used_tokens.saturating_add(thought_delta),
                                                     }),
                                                 );
                                                 finish_reason = Some("reasoning_budget".to_string());
