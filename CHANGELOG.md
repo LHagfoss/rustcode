@@ -1,3 +1,9 @@
+## [v0.52.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.15) - 2026-09-17
+
+### Fixes
+- Fix pending background `run_command` receipts rendering as `failed`; they now show `running` until the real outcome arrives, and cancelled background tasks show `cancelled` (#1221).
+- Collapse repeated `/ps` polls and Tab mode-switch notices in durable history instead of appending near-duplicates (#1222, #1223).
+- Clarify the status hint to `esc interrupts stream only` while background terminals run.
 ## [v0.52.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.14) - 2026-09-17
 
 ### Fixes
