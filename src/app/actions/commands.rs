@@ -1,5 +1,40 @@
 use super::*;
 
+/// Ephemeral status classes that must collapse instead of accumulating in
+/// durable history (issues #1222, #1223): repeated `/ps` polls only differ
+/// by elapsed seconds, and accidental Tab mode-toggles only flip Plan/Build.
+fn ephemeral_status_class(content: &str) -> Option<&'static str> {
+    if content.starts_with("No background terminals are running.")
+        || (content.contains("background terminal") && content.contains("running:"))
+    {
+        return Some("background-listing");
+    }
+    if content.starts_with("Switched to Plan Mode") || content.starts_with("Switched to Build Mode")
+    {
+        return Some("mode-switch");
+    }
+    None
+}
+
+/// Push an ephemeral status notice, replacing a previous notice of the same
+/// class instead of appending a near-duplicate system message. Unlike
+/// `set_notice`, repeated polls/toggles leave exactly one history entry.
+pub(crate) fn push_ephemeral_status(state: &mut AppState, text: String) {
+    let class = ephemeral_status_class(&text);
+    if class.is_some()
+        && state.history.last().is_some_and(|last| {
+            last.role == "system" && ephemeral_status_class(&last.content) == class
+        })
+    {
+        if let Some(last) = state.history.last_mut() {
+            last.content = text;
+        }
+        state.request_redraw();
+        return;
+    }
+    state.set_notice(text);
+}
+
 pub(super) fn background_terminal_list(session_id: &str) -> String {
     let tasks = crate::tools::background_task_snapshots(session_id);
     if tasks.is_empty() {

@@ -435,8 +435,15 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
     ) {
+        // Esc only interrupts the model stream; background terminals survive
+        // it (issue #1223). Say so when a background job is actually running.
+        let hint = if state.background_tasks().is_empty() {
+            " · esc interrupt"
+        } else {
+            " · esc interrupts stream only"
+        };
         spans.push(Span::styled(
-            " · esc interrupt",
+            hint,
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }

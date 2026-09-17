@@ -244,7 +244,9 @@ pub async fn handle_enter(
             }
             "/ps" => {
                 let text = background_terminal_list(&s.active_session_id);
-                s.history.push(ChatMessage::new("system", text));
+                // Polling /ps while a job runs must not append one system
+                // message per poll (issue #1222): collapse repeats in place.
+                super::commands::push_ephemeral_status(&mut s, text);
             }
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);

@@ -206,6 +206,56 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
     crate::tools::stop_background_tasks(other_session_id);
 }
 
+#[test]
+fn ephemeral_status_collapses_repeated_background_and_mode_notices() {
+    let mut state = crate::app::AppState::new();
+    state
+        .history
+        .push(crate::app::ChatMessage::new("user", "merge it in"));
+
+    super::push_ephemeral_status(
+        &mut state,
+        "1 background terminal running:\n  • task_1 · 24s · PID 4600 · sleep 30".to_string(),
+    );
+    super::push_ephemeral_status(
+        &mut state,
+        "1 background terminal running:\n  • task_1 · 31s · PID 4600 · sleep 30".to_string(),
+    );
+    super::push_ephemeral_status(
+        &mut state,
+        "1 background terminal running:\n  • task_1 · 34s · PID 4600 · sleep 30".to_string(),
+    );
+    // Three /ps polls collapse into one entry showing the latest snapshot.
+    let listings: Vec<_> = state
+        .history
+        .iter()
+        .filter(|m| m.content.contains("background terminal running:"))
+        .collect();
+    assert_eq!(listings.len(), 1);
+    assert!(listings[0].content.contains("34s"));
+
+    super::push_ephemeral_status(
+        &mut state,
+        "Switched to Plan Mode (Read-only / Design only)".to_string(),
+    );
+    // A different ephemeral class appends rather than replacing the listing.
+    assert_eq!(state.history.len(), 3);
+
+    super::push_ephemeral_status(
+        &mut state,
+        "Switched to Build Mode (Full Code Editing)".to_string(),
+    );
+    // Accidental Tab toggles collapse into one mode notice.
+    let modes: Vec<_> = state
+        .history
+        .iter()
+        .filter(|m| m.content.starts_with("Switched to"))
+        .collect();
+    assert_eq!(modes.len(), 1);
+    assert!(modes[0].content.contains("Build Mode"));
+    assert_eq!(state.history.len(), 3);
+}
+
 #[tokio::test]
 async fn ctrl_c_requires_a_second_press_to_exit_without_cancelling() {
     use std::sync::Arc;

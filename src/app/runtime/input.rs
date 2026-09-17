@@ -1402,7 +1402,9 @@ pub(super) async fn handle_app_event(
                                     "Switched to Plan Mode (Read-only / Design only)"
                                 }
                             };
-                            s.set_notice(notice);
+                            // Accidental Tabs must not stack duplicate mode
+                            // notices in durable history (issue #1223).
+                            crate::app::actions::push_ephemeral_status(&mut s, notice.to_string());
                         }
                     }
                     KeyCode::Left => {
