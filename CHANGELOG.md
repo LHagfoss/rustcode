@@ -1,3 +1,8 @@
+## [v0.52.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.14) - 2026-09-17
+
+### Fixes
+- **Thinking estimate:** Derive the client reasoning estimate once from total kept reasoning chars instead of summing per-SSE-delta ceils, which overcounted token-piece streams ~20-30% and cut thinking early ([#1218](https://github.com/LHagfoss/rustcode/pull/1218); fixes [#1216](https://github.com/LHagfoss/rustcode/issues/1216))
+- **Search noise:** Prune vendored dirs (`node_modules`, `target`, `dist`, ...) from recursive glob/grep unless explicitly targeted, so broad queries in non-git workspaces no longer dump dependency trees into every round's prefix ([#1219](https://github.com/LHagfoss/rustcode/pull/1219); fixes [#1217](https://github.com/LHagfoss/rustcode/issues/1217))
 ## [v0.52.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.13) - 2026-09-17
 
 ### Fixes
