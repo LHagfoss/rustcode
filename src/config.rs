@@ -498,8 +498,14 @@ impl ModelProfile {
                 .map(|e| e != "off" && e != "none")
                 .unwrap_or(false);
         let requested_thinking = if thinking_enabled {
-            self.thinking_budget
-                .unwrap_or_else(|| (context_window / 8).clamp(1, 2048))
+            self.thinking_budget.unwrap_or_else(|| {
+                // Scale the derived default with the output cap so large-context
+                // profiles keep thinking room proportional to the answer budget.
+                // The client-side cut remains only as a high backstop against
+                // runaway thought eating the whole turn; provider-side controls
+                // (effort/thinking_budget) are the primary mechanism.
+                (context_window / 8).clamp(1, (requested_completion / 2).max(1))
+            })
         } else {
             0
         };
