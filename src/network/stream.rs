@@ -38,6 +38,11 @@ pub(crate) struct StreamBuffer {
     pub provider_final_answer_state: ProviderFinalAnswerState,
     pub thought_time_ms: u64,
     pub thought_tokens: u32,
+    /// Total kept reasoning chars this response. The integer estimate is
+    /// derived once from this total (see `thought_tokens_estimate`); summing
+    /// per-SSE-delta ceils instead overcounts token-piece streams by ~0.5
+    /// tokens per event and cuts thinking early.
+    pub thought_chars: usize,
     pub thought_started_at: Option<std::time::Instant>,
     /// Effective output ceiling used for this request, recorded so the turn
     /// runner can make an evidence-based continuation decision.
@@ -68,6 +73,7 @@ impl StreamBuffer {
             provider_final_answer_state: ProviderFinalAnswerState::None,
             thought_time_ms: 0,
             thought_tokens: 0,
+            thought_chars: 0,
             thought_started_at: None,
             output_token_limit: None,
             tool_call_ids: Vec::new(),
@@ -84,11 +90,18 @@ impl StreamBuffer {
         self.provider_final_answer_state = ProviderFinalAnswerState::None;
         self.thought_time_ms = 0;
         self.thought_tokens = 0;
+        self.thought_chars = 0;
         self.thought_started_at = None;
         self.output_token_limit = None;
         self.tool_call_ids.clear();
         self.native_tool_calls.clear();
         self.native_tool_call_checkpoint.clear();
+    }
+
+    /// Integer thinking estimate derived once from the total kept
+    /// reasoning chars, instead of summing per-SSE-delta ceils.
+    pub fn thought_tokens_estimate(&self) -> u32 {
+        (self.thought_chars as f64 * crate::app::TOKENS_PER_CHAR_APPROX).ceil() as u32
     }
 
     pub fn finish_thought(&mut self) {
@@ -109,6 +122,7 @@ mod tests {
         let mut buffer = StreamBuffer::new();
         buffer.thought_time_ms = 12;
         buffer.thought_tokens = 4;
+        buffer.thought_chars = 16;
         buffer.thought_started_at = Some(std::time::Instant::now());
         buffer.final_answer_boundary = FinalAnswerBoundary::ReasoningClosed;
         buffer.provider_final_answer_state = ProviderFinalAnswerState::Terminal;
@@ -129,6 +143,8 @@ mod tests {
         assert!(buffer.native_tool_call_checkpoint.is_empty());
         assert_eq!(buffer.thought_time_ms, 0);
         assert_eq!(buffer.thought_tokens, 0);
+        assert_eq!(buffer.thought_chars, 0);
+        assert_eq!(buffer.thought_tokens_estimate(), 0);
         assert!(buffer.thought_started_at.is_none());
         assert_eq!(buffer.final_answer_boundary, FinalAnswerBoundary::None);
         assert_eq!(
