@@ -432,9 +432,7 @@ pub(crate) fn shell_redirection_targets(command: &str) -> Vec<String> {
             && !target.starts_with("/dev/")
             && target.chars().any(|c| c != '>' && !c.is_ascii_digit())
         {
-            let cleaned = target
-                .trim_matches(|c| c == '\'' || c == '"')
-                .trim();
+            let cleaned = target.trim_matches(|c| c == '\'' || c == '"').trim();
             if !cleaned.is_empty() && !targets.contains(&cleaned.to_string()) {
                 targets.push(cleaned.to_string());
             }
@@ -708,6 +706,9 @@ mod tests {
             crate::tools::ToolExecutionOutput::success("exit code: 0".into()),
             None,
         );
-        assert_eq!(result.metadata.changed_paths, vec!["package.json".to_string()]);
+        assert_eq!(
+            result.metadata.changed_paths,
+            vec!["package.json".to_string()]
+        );
     }
 }
