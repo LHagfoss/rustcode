@@ -54,6 +54,66 @@ pub const GLOB: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+/// Dependency/build-output dirs pruned from recursive search. The `ignore`
+/// walker only honors gitignore inside git repos, so without this a broad
+/// query in a non-git workspace dumps all of `node_modules` (13k+ chars in
+/// one session) into every round's prefix.
+const VENDOR_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".tox",
+    ".gradle",
+    "Pods",
+    ".git",
+    ".hg",
+    ".svn",
+];
+
+/// True when the query itself names a vendored path (`node_modules/three/...`
+/// or a root inside one). Pruning must not apply then: explicit inspection of
+/// vendored code is legitimate and must keep working.
+fn query_targets_vendor_dir(pattern_or_include: Option<&str>, requested_path: &str) -> bool {
+    [pattern_or_include.unwrap_or(""), requested_path]
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .replace('\\', "/")
+                .split('/')
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .any(|segment| VENDOR_DIR_NAMES.contains(&segment.as_str()))
+}
+
+/// Prune vendored subtrees from a recursive walker unless the query
+/// explicitly targets inside them. `filter_entry(false)` skips descent, so
+/// this also keeps broad queries fast.
+fn apply_vendor_prune(
+    builder: &mut WalkBuilder,
+    pattern_or_include: Option<&str>,
+    requested_path: &str,
+) {
+    if query_targets_vendor_dir(pattern_or_include, requested_path) {
+        return;
+    }
+    builder.filter_entry(|entry| {
+        !(entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false)
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| VENDOR_DIR_NAMES.contains(&name)))
+    });
+}
+
 fn list_directory_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": { "path": { "type": "string" } }
@@ -289,6 +349,14 @@ fn try_ripgrep(
         cmd.arg("-g").arg(inc);
     }
 
+    // Mirror the walker prune below: `rg` also only honors gitignore inside
+    // git repos, so exclude vendored trees unless explicitly targeted.
+    if !query_targets_vendor_dir(include, root) {
+        for vendor in VENDOR_DIR_NAMES {
+            cmd.arg("-g").arg(format!("!{vendor}/**"));
+        }
+    }
+
     cmd.arg(pattern).arg(root);
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -454,13 +522,15 @@ pub(crate) fn grep_output(args: &Value) -> Result<SearchOutput, String> {
         return Err(format!("'{root}' is not a file or directory"));
     }
 
-    let walker = WalkBuilder::new(root_path)
+    let mut walker_builder = WalkBuilder::new(root_path);
+    walker_builder
         .hidden(true)
         .ignore(true)
         .git_ignore(true)
         .git_exclude(true)
-        .git_global(true)
-        .build();
+        .git_global(true);
+    apply_vendor_prune(&mut walker_builder, include, requested_root);
+    let walker = walker_builder.build();
 
     let mut out = String::new();
     let mut total_lines = 0usize;
@@ -658,13 +728,15 @@ pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
         .build()
         .map_err(|e| format!("globset build failed: {e}"))?;
 
-    let walker = WalkBuilder::new(&root_path)
+    let mut walker_builder = WalkBuilder::new(&root_path);
+    walker_builder
         .hidden(true)
         .ignore(true)
         .git_ignore(true)
         .git_exclude(true)
-        .git_global(true)
-        .build();
+        .git_global(true);
+    apply_vendor_prune(&mut walker_builder, Some(pattern), requested_root);
+    let walker = walker_builder.build();
 
     let mut matched: Vec<String> = Vec::new();
     for entry in walker {
@@ -935,5 +1007,50 @@ mod tests {
         .expect("glob should succeed");
         assert_eq!(exhaustive.completeness, ToolResultCompleteness::Complete);
         assert!(!exhaustive.content.contains("truncated"));
+    }
+
+    #[test]
+    fn glob_prunes_vendored_dirs_unless_explicitly_targeted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("app.js"), "content").expect("write");
+        let vendored = dir.path().join("node_modules").join("three");
+        std::fs::create_dir_all(&vendored).expect("mkdir");
+        std::fs::write(vendored.join("three.js"), "content").expect("write");
+        let root = dir.path().to_string_lossy().to_string();
+
+        let broad = glob_output(&serde_json::json!({
+            "path": root,
+            "pattern": "**/*.js",
+        }))
+        .expect("glob should succeed");
+        assert!(broad.content.contains("app.js"), "got: {}", broad.content);
+        assert!(
+            !broad.content.contains("node_modules"),
+            "got: {}",
+            broad.content
+        );
+
+        let explicit = glob_output(&serde_json::json!({
+            "path": root,
+            "pattern": "node_modules/three/*.js",
+        }))
+        .expect("glob should succeed");
+        assert!(
+            explicit.content.contains("three.js"),
+            "got: {}",
+            explicit.content
+        );
+    }
+
+    #[test]
+    fn vendor_target_detection_covers_patterns_and_paths() {
+        assert!(!query_targets_vendor_dir(Some("**/*.js"), "."));
+        assert!(!query_targets_vendor_dir(None, "src"));
+        assert!(query_targets_vendor_dir(
+            Some("node_modules/three/*.js"),
+            "."
+        ));
+        assert!(query_targets_vendor_dir(None, "node_modules/three"));
+        assert!(query_targets_vendor_dir(Some("target"), "."));
     }
 }
