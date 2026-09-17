@@ -425,6 +425,20 @@ pub(super) fn tool_result_status(
     result: &str,
 ) -> (bool, String) {
     if let Some(record) = &message.tool_result {
+        // A background launch receipt is pending, not failed: the real
+        // outcome arrives later as a `background_task` completion. Rendering
+        // it as failed (issue #1221) misleads the user into thinking the
+        // command itself failed.
+        if record.pending {
+            return (true, "running".to_owned());
+        }
+        if record
+            .error_kind
+            .as_deref()
+            .is_some_and(|kind| kind == "Cancelled")
+        {
+            return (false, "cancelled".to_owned());
+        }
         return match record.exit_code {
             Some(code) => (record.success, format!("exit {code}")),
             None if record.success => (true, "completed".to_owned()),
@@ -848,7 +862,7 @@ pub(super) fn command_child_lines(
         );
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
-    if !entry.success {
+    if !entry.success || entry.status == "running" {
         if let Some(line) = lines.last_mut() {
             line.spans.push(Span::styled(
                 format!(" · {}", entry.status),
@@ -1286,7 +1300,7 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_hidden_system_notice;
+    use super::{is_hidden_system_notice, tool_result_status};
 
     #[test]
     fn deferred_tool_batch_notice_is_hidden_from_transcript() {
@@ -1294,5 +1308,54 @@ mod tests {
             "[The model emitted 4 tool calls. Only one was executed this round; the remaining calls (grep, write_to_file) were not executed or scheduled.]"
         ));
         assert!(!is_hidden_system_notice("Notice: background task finished"));
+    }
+
+    fn tool_message_with_record(record: crate::app::ToolResultRecord) -> crate::app::ChatMessage {
+        let mut message =
+            crate::app::ChatMessage::new("tool", "run_command: Task started in background.");
+        message.tool_result = Some(record);
+        message
+    }
+
+    #[test]
+    fn pending_background_launch_renders_running_not_failed() {
+        let message = tool_message_with_record(crate::app::ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: false,
+            pending: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            tool_result_status(&message, "run_command", "Task started in background."),
+            (true, "running".to_owned())
+        );
+    }
+
+    #[test]
+    fn cancelled_background_task_renders_cancelled_not_failed() {
+        let message = tool_message_with_record(crate::app::ToolResultRecord {
+            tool_name: "background_task".to_owned(),
+            success: false,
+            error_kind: Some("Cancelled".to_owned()),
+            ..Default::default()
+        });
+        assert_eq!(
+            tool_result_status(&message, "background_task", "background task cancelled"),
+            (false, "cancelled".to_owned())
+        );
+    }
+
+    #[test]
+    fn completed_exit_zero_still_renders_exit_status() {
+        let message = tool_message_with_record(crate::app::ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(
+            tool_result_status(&message, "run_command", "exit code: 0"),
+            (true, "exit 0".to_owned())
+        );
     }
 }
