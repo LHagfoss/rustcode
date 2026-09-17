@@ -1,3 +1,8 @@
+## [v0.52.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.13) - 2026-09-17
+
+### Fixes
+- **Thinking budget:** Scale the derived default thinking budget with the output cap (`(context/8)` capped by `completion/2`) instead of the flat 2048 clamp, keeping the client-side cut as a high backstop; set `thinking_budget = 8192` on the `deepseek-v4.1-flash` default profile ([#1213](https://github.com/LHagfoss/rustcode/pull/1213); fixes [#1211](https://github.com/LHagfoss/rustcode/issues/1211))
+- **Shell file tracking:** Detect shell redirection targets (`>`, `>>`, heredocs) in `run_command` and record them into `metadata.changed_paths`, plus one workflow prompt line preferring write tools for file creation ([#1214](https://github.com/LHagfoss/rustcode/pull/1214); fixes [#1212](https://github.com/LHagfoss/rustcode/issues/1212))
 ## [v0.52.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.12) - 2026-09-16
 
 ### Features
