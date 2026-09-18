@@ -793,8 +793,7 @@ mod tests {
         // <think> dithering and no user-facing text.
         let mut ctx = TurnContext::new();
         ctx.response.final_content =
-            "<think>\nShould I paste the code? Yes. No. Let me reconsider...\n</think>"
-                .to_string();
+            "<think>\nShould I paste the code? Yes. No. Let me reconsider...\n</think>".to_string();
         ctx.progress.complete_inspection_results = 7;
         ctx.progress.changed_paths.insert("slime.html".to_string());
         let presented = presentable_final_content(&ctx);
@@ -808,10 +807,7 @@ mod tests {
         // Prose passes through untouched.
         let mut ctx = TurnContext::new();
         ctx.response.final_content = "Done, all tests pass.".to_string();
-        assert_eq!(
-            presentable_final_content(&ctx),
-            "Done, all tests pass."
-        );
+        assert_eq!(presentable_final_content(&ctx), "Done, all tests pass.");
 
         // No work, no prose: leave alone (existing recovery paths handle it).
         let ctx = TurnContext::new();
