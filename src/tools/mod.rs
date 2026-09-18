@@ -348,7 +348,6 @@ fn validate_tool_call(call: &ToolCall) -> Result<(), String> {
         ));
     }
 
-
     // A complete textual call can otherwise carry an unbounded JSON string all
     // the way to the filesystem handler. Keep the small-file convenience path,
     // but force large writes through the resumable chunk protocol before any
