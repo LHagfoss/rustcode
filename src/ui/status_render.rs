@@ -313,7 +313,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
         let mut used = 0;
         for s in &spans {
-            used += s.content.chars().count();
+            used += s.content.width();
         }
         line_spans.extend(spans);
 
@@ -334,7 +334,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     // Session identity is useful when copying a report or resuming a run, so
     // keep it visually separate from the mutable model/workspace settings.
-    let label_w = 15;
+    let label_w = 15.min(inner_w);
     let session_id = fit_to_width(state.active_session_id(), inner_w.saturating_sub(label_w));
     banner.push(make_row(vec![
         Span::styled(
@@ -350,13 +350,13 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         ),
     ]));
 
-    // Model and reasoning settings
+    // Model and reasoning settings. Keep each hint beside its value when it
+    // fits; dropping the hint is preferable to letting it touch the border.
     let model_display = fit_to_width(&model_name, inner_w.saturating_sub(label_w))
         .trim_end()
         .to_owned();
-    // Slash-command hints live on one dedicated row below (see commands_row):
-    // inline hints after each value never line up across rows.
-    let model_spans = vec![
+    let model_width = model_display.width();
+    let mut model_spans = vec![
         Span::styled(
             fit_to_width("  model:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
@@ -369,6 +369,20 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
+    let append_change_hint = |spans: &mut Vec<Span<'static>>, value_width: usize, command: &str| {
+        let hint_width = 4 + command.width() + " to change".width();
+        if value_width + hint_width <= inner_w.saturating_sub(label_w) {
+            spans.extend([
+                Span::styled("    ", Style::default().bg(reset_bg)),
+                Span::styled(
+                    command.to_owned(),
+                    Style::default().fg(primary).bg(reset_bg),
+                ),
+                Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
+            ]);
+        }
+    };
+    append_change_hint(&mut model_spans, model_width, "/model");
     banner.push(make_row(model_spans));
 
     let effort = state
@@ -378,7 +392,8 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let effort_display = fit_to_width(&effort, inner_w.saturating_sub(label_w))
         .trim_end()
         .to_owned();
-    let effort_spans = vec![
+    let effort_width = effort_display.width();
+    let mut effort_spans = vec![
         Span::styled(
             fit_to_width("  effort:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
@@ -391,25 +406,30 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
+    append_change_hint(&mut effort_spans, effort_width, "/effort");
     banner.push(make_row(effort_spans));
 
     let context_window = format!(
         "{} tokens",
         format_token_count(state.active_context_window())
     );
-    let context_spans = vec![
+    let context_display = fit_to_width(&context_window, inner_w.saturating_sub(label_w))
+        .trim_end()
+        .to_owned();
+    let mut context_spans = vec![
         Span::styled(
             fit_to_width("  context:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
-            context_window.clone(),
+            context_display.clone(),
             Style::default()
                 .fg(text_c)
                 .bg(reset_bg)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
+    append_change_hint(&mut context_spans, context_display.width(), "/context");
     banner.push(make_row(context_spans));
 
     // Workspace location
@@ -471,49 +491,35 @@ pub(crate) fn build_claude_startup_banner_snapshot(
             fit_to_width("  permissions:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
-        Span::styled(perm_text, perm_style),
+        Span::styled(
+            fit_to_width(perm_text, inner_w.saturating_sub(label_w))
+                .trim_end()
+                .to_owned(),
+            perm_style,
+        ),
     ]));
 
-    // All slash-command hints on one aligned row instead of scattered inline
-    // after each value (they never lined up across rows). Even gaps when the
-    // box fits them; two balanced rows when the viewport is too narrow.
-    const COMMANDS: &[&str] = &["/model", "/effort", "/context", "/help"];
-    let command_style = Style::default().fg(primary).bg(reset_bg);
-    let command_row = |gap: usize| -> Vec<Span<'static>> {
-        let mut spans = vec![Span::styled("  ", Style::default().bg(reset_bg))];
-        for (index, command) in COMMANDS.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::styled(" ".repeat(gap), Style::default().bg(reset_bg)));
-            }
-            spans.push(Span::styled((*command).to_owned(), command_style));
-        }
-        spans
-    };
-    let row_width = |gap: usize| -> usize {
-        2 + COMMANDS.iter().map(|c| c.len()).sum::<usize>() + gap * (COMMANDS.len() - 1)
-    };
-    if row_width(4) <= inner_w {
-        banner.push(make_row(command_row(4)));
-    } else if row_width(1) <= inner_w {
-        banner.push(make_row(command_row(1)));
-    } else {
-        let mut first = vec![Span::styled("  ", Style::default().bg(reset_bg))];
-        for (index, command) in COMMANDS.iter().take(2).enumerate() {
-            if index > 0 {
-                first.push(Span::styled("    ", Style::default().bg(reset_bg)));
-            }
-            first.push(Span::styled((*command).to_owned(), command_style));
-        }
-        banner.push(make_row(first));
-        let mut second = vec![Span::styled("  ", Style::default().bg(reset_bg))];
-        for (index, command) in COMMANDS.iter().skip(2).enumerate() {
-            if index > 0 {
-                second.push(Span::styled("    ", Style::default().bg(reset_bg)));
-            }
-            second.push(Span::styled((*command).to_owned(), command_style));
-        }
-        banner.push(make_row(second));
+    // Help gets its own row because it explains the command interface rather
+    // than changing one of the values above.
+    let mut help_spans = vec![
+        Span::styled(
+            fit_to_width("  help:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(
+            fit_to_width("/help", inner_w.saturating_sub(label_w))
+                .trim_end()
+                .to_owned(),
+            Style::default().fg(primary).bg(reset_bg),
+        ),
+    ];
+    if "/help".width() + " for commands".width() <= inner_w.saturating_sub(label_w) {
+        help_spans.push(Span::styled(
+            " for commands",
+            Style::default().fg(muted_c).bg(reset_bg),
+        ));
     }
+    banner.push(make_row(help_spans));
 
     // Blank line before the bottom border
     banner.push(make_row(vec![]));

@@ -543,8 +543,9 @@ fn welcome_banner_renders_without_a_conversation() {
             && rendered.contains("/model")
             && rendered.contains("/effort")
             && rendered.contains("/context")
+            && rendered.contains("help:")
             && rendered.contains("/help"),
-        "the welcome banner must include branch and the aligned slash-command row: {rendered:?}"
+        "the welcome banner must include branch and help rows: {rendered:?}"
     );
 }
 
@@ -577,11 +578,7 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         rendered.contains("context:     128.0K tokens"),
         "rendered: {rendered:?}"
     );
-    assert!(rendered.contains("/context"));
-    assert!(
-        !rendered.contains("to change"),
-        "slash hints must live on the shared commands row, not inline: {rendered:?}"
-    );
+    assert!(rendered.contains("/context to change"));
 }
 
 #[test]
@@ -611,19 +608,26 @@ fn welcome_banner_pads_above_session_and_groups_session_with_model() {
 }
 
 #[test]
-fn welcome_banner_commands_share_one_row() {
+fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
     let state = AppState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
     let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
-    let command_rows: Vec<&String> = rendered
-        .iter()
-        .filter(|line| line.contains("/model") || line.contains("/effort"))
-        .collect();
-    assert_eq!(command_rows.len(), 1, "one shared row: {rendered:?}");
-    let row = command_rows[0];
-    for command in ["/model", "/effort", "/context", "/help"] {
+    for (value, command) in [
+        ("model:", "/model to change"),
+        ("effort:", "/effort to change"),
+        ("context:", "/context to change"),
+    ] {
+        let row = rendered
+            .iter()
+            .find(|line| line.contains(value))
+            .expect("banner value row");
         assert!(row.contains(command), "{command} missing: {rendered:?}");
     }
+    let help_row = rendered
+        .iter()
+        .find(|line| line.contains("help:"))
+        .expect("banner help row");
+    assert!(help_row.contains("/help for commands"));
 }
 
 #[test]
@@ -679,13 +683,26 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
 #[test]
 fn welcome_banner_stays_inside_narrow_terminal_width() {
     let state = AppState::new();
-    let lines = super::build_claude_startup_banner(&state, 32, 28);
+    for width in [8, 16, 32] {
+        let lines = super::build_claude_startup_banner(&state, width, 28);
 
-    assert!(!lines.is_empty());
-    assert!(
-        lines.iter().all(|line| line.width() <= 32),
-        "welcome banner must not overflow a narrow terminal: {lines:?}"
-    );
+        assert!(!lines.is_empty());
+        assert!(
+            lines.iter().all(|line| line.width() <= width),
+            "welcome banner must not overflow a narrow terminal: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn welcome_banner_omits_hints_that_do_not_fit() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 32, 28);
+    let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+
+    assert!(lines.iter().all(|line| line.width() <= 32));
+    assert!(rendered.iter().all(|line| !line.contains("to change")));
+    assert!(rendered.iter().any(|line| line.contains("/help")));
 }
 
 #[test]
