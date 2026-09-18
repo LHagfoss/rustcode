@@ -2617,3 +2617,49 @@ fn read_only_shell_commands_bypass_the_mutation_budget() {
     assert!(validate_tool_calls(&over, 1).is_err());
     assert!(validate_tool_calls(&kept, 1).is_ok());
 }
+
+#[test]
+fn the_write_tool_spec_steers_large_files_to_chunks_first() {
+    let spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "write_to_file")
+        .expect("tool exists");
+
+    // Issue #1233: large single writes hit provider output cutoffs and lose
+    // the whole call, so the spec must steer chunked writes from the start.
+    assert!(
+        spec.description.contains("write_file_chunk past ~4 KiB"),
+        "got: {}",
+        spec.description
+    );
+    assert!(
+        spec.arguments
+            .contains("prefer write_file_chunk from the start"),
+        "got: {}",
+        spec.arguments
+    );
+}
+
+#[test]
+fn the_run_command_spec_forbids_moving_the_user_checkout() {
+    let spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "run_command")
+        .expect("tool exists");
+
+    // Issue #1229: a session yanked the user's checkout with checkout -B +
+    // rebase. Branch/merge work belongs in an isolated worktree.
+    for forbidden in [
+        "checkout -B",
+        "switch -C",
+        "git rebase",
+        "reset --hard",
+        "git worktree add",
+    ] {
+        assert!(
+            spec.description.contains(forbidden),
+            "run_command spec must mention {forbidden}: {}",
+            spec.description
+        );
+    }
+}

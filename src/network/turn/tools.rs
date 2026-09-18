@@ -71,12 +71,12 @@ fn apply_round_stagnation(
 fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> String {
     if policy.allow_batching {
         format!(
-            "This trusted profile permits a bounded batch of up to {} read-only and {} workspace-changing tool calls per response. Keep control-plane calls alone, keep mutations grounded and sequential, and never assume an unexecuted call ran.",
+            "This trusted profile permits a bounded batch of up to {} read-only and {} workspace-changing tool calls per response. Control-plane calls run first with read-only calls following in order; keep mutations grounded and sequential, and never assume an unexecuted call ran.",
             policy.max_read_only_calls, policy.max_mutating_calls
         )
     } else {
         format!(
-            "Batch independent read-only calls freely in one response and wait for their results before choosing the next action. Keep workspace-changing calls to one per response (limit {}) and keep control-plane calls alone. Read-only inspection never consumes the mutation budget. Never assume an unexecuted call ran.",
+            "Batch independent read-only calls freely in one response and wait for their results before choosing the next action. Keep workspace-changing calls to one per response (limit {}) and let control-plane calls run first with read-only calls following in order. Read-only inspection never consumes the mutation budget. Never assume an unexecuted call ran.",
             policy.max_mutating_calls
         )
     }
@@ -115,8 +115,31 @@ fn selected_tool_call_indices(
                 crate::tools::ToolSafety::ControlPlane
             )
     });
-    if let Some((index, _)) = first_control {
-        return vec![index];
+    if let Some((index, control)) = first_control {
+        // Control-plane calls run first for ordering, but valid read-only
+        // companions follow in the same batch (issue #1230) instead of
+        // costing a whole extra model round-trip for reissue. The executor
+        // runs the batch sequentially, so the control result still lands
+        // before any companion starts. Mutating companions, duplicates, and
+        // invalid calls never ride along.
+        let mut selected = vec![index];
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(crate::tools::duplicate_tool_call_key(control));
+        for (other, call) in calls.iter().enumerate() {
+            if other == index
+                || validation_errors[other].is_some()
+                || matches!(
+                    crate::tools::tool_safety(&call.name),
+                    crate::tools::ToolSafety::ControlPlane
+                )
+                || !seen.insert(crate::tools::duplicate_tool_call_key(call))
+                || !crate::tools::is_read_only_call(call)
+            {
+                continue;
+            }
+            selected.push(other);
+        }
+        return selected;
     }
 
     let first_valid = calls
@@ -2006,7 +2029,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_isolates_control_plane_calls() {
+    fn scheduler_runs_control_first_with_reads_following() {
         let calls = vec![
             read_call("git status"),
             ToolCall {
@@ -2015,8 +2038,13 @@ mod tests {
                 call_id: None,
             },
             read_call("git diff"),
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "a", "content": "a"}),
+                call_id: None,
+            },
         ];
-        let errors = vec![None, None, None];
+        let errors = vec![None, None, None, None];
         let selected = selected_tool_call_indices(
             &calls,
             &errors,
@@ -2025,7 +2053,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(selected, vec![1]);
+        // Control first for ordering; valid reads ride along in the same
+        // round (issue #1230). The mutating companion still waits.
+        assert_eq!(selected, vec![1, 0, 2]);
     }
 
     #[test]

@@ -238,6 +238,44 @@ fn has_substantive_final_prose(content: &str) -> bool {
     !prose.trim().is_empty()
 }
 
+/// Issue #1234: when the final response is thinking-only (no user-facing
+/// prose) but the turn did work, persisting the raw think-dump leaves the
+/// user with kilobytes of dithering and no answer. Substitute a deterministic
+/// work summary so the transcript always ends the turn with readable text.
+/// Turns with no work keep their content untouched.
+fn presentable_final_content(ctx: &TurnContext) -> String {
+    if has_substantive_final_prose(&ctx.response.final_content) {
+        return ctx.response.final_content.clone();
+    }
+    let inspections = ctx.progress.complete_inspection_results;
+    let edits = ctx.progress.made_edits;
+    if inspections == 0 && !edits && ctx.progress.changed_paths.is_empty() {
+        return ctx.response.final_content.clone();
+    }
+    let mut parts = Vec::new();
+    if inspections > 0 {
+        parts.push(format!("{inspections} inspection result(s)"));
+    }
+    if edits {
+        parts.push("file edit(s)".to_owned());
+    }
+    let mut summary = format!(
+        "Turn completed without a final summary. Work done: {}.",
+        parts.join(", ")
+    );
+    if !ctx.progress.changed_paths.is_empty() {
+        let paths: Vec<&str> = ctx
+            .progress
+            .changed_paths
+            .iter()
+            .take(8)
+            .map(String::as_str)
+            .collect();
+        summary.push_str(&format!(" Files touched: {}.", paths.join(", ")));
+    }
+    summary
+}
+
 fn can_complete_interactive_plain_response(
     ctx: &TurnContext,
     cancel_token: &tokio_util::sync::CancellationToken,
@@ -283,6 +321,10 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         let mut s = state.lock().await;
         s.continuous_mode = false;
     }
+
+    // Normalize thinking-only finales before the finish gate evaluates or
+    // persists them (see presentable_final_content).
+    ctx.response.final_content = presentable_final_content(ctx);
 
     let mut finish_gate_passed = !policy.should_verify_completion() || !ctx.progress.made_edits;
     if policy.should_verify_completion()
@@ -743,5 +785,32 @@ mod tests {
             &cancel_token,
             &normal,
         ));
+    }
+
+    #[test]
+    fn thinking_only_finale_with_work_synthesizes_a_summary() {
+        // Issue #1234: the slime-mold session ended its turn with 18KB of
+        // <think> dithering and no user-facing text.
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content =
+            "<think>\nShould I paste the code? Yes. No. Let me reconsider...\n</think>".to_string();
+        ctx.progress.complete_inspection_results = 7;
+        ctx.progress.changed_paths.insert("slime.html".to_string());
+        let presented = presentable_final_content(&ctx);
+        assert!(
+            !presented.contains("<think>"),
+            "think-dump must not reach the transcript: {presented:?}"
+        );
+        assert!(presented.contains('7'), "{presented:?}");
+        assert!(presented.contains("slime.html"), "{presented:?}");
+
+        // Prose passes through untouched.
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "Done, all tests pass.".to_string();
+        assert_eq!(presentable_final_content(&ctx), "Done, all tests pass.");
+
+        // No work, no prose: leave alone (existing recovery paths handle it).
+        let ctx = TurnContext::new();
+        assert_eq!(presentable_final_content(&ctx), "");
     }
 }
