@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-command"
-version = "0.52.16"
+version = "0.52.17"
 edition = "2024"
 
 [target.'cfg(unix)'.dependencies]
