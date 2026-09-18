@@ -55,7 +55,9 @@ fn stuck_orchestrator_flag_with_queued_prompts_resets() {
     healthy.pending_queue.push("user follow-up".to_string());
     healthy.orchestrator_running = false;
     healthy.generation_start_time = Some(Instant::now());
-    assert!(healthy
-        .check_stall_watchdog(false, Instant::now())
-        .is_none());
+    assert!(
+        healthy
+            .check_stall_watchdog(false, Instant::now())
+            .is_none()
+    );
 }

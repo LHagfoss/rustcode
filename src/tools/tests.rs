@@ -2633,7 +2633,8 @@ fn the_write_tool_spec_steers_large_files_to_chunks_first() {
         spec.description
     );
     assert!(
-        spec.arguments.contains("prefer write_file_chunk from the start"),
+        spec.arguments
+            .contains("prefer write_file_chunk from the start"),
         "got: {}",
         spec.arguments
     );

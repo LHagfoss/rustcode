@@ -163,10 +163,8 @@ impl AppRuntime {
                 let mut state = app_state.lock().await;
                 let background_tasks_active =
                     crate::tools::has_background_tasks(&state.active_session_id);
-                match state.check_stall_watchdog(
-                    background_tasks_active,
-                    std::time::Instant::now(),
-                ) {
+                match state.check_stall_watchdog(background_tasks_active, std::time::Instant::now())
+                {
                     None => false,
                     Some(recovery) => {
                         if recovery.reset_orchestrator {
@@ -187,10 +185,7 @@ impl AppRuntime {
                 }
             };
             if stall_recovered {
-                crate::logger::operational_event(
-                    "turn.stall_recovered",
-                    serde_json::json!({}),
-                );
+                crate::logger::operational_event("turn.stall_recovered", serde_json::json!({}));
                 needs_redraw = true;
             }
 
