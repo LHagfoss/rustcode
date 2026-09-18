@@ -1021,15 +1021,20 @@ pub fn supports_parallel_execution(name: &str) -> bool {
 /// under the existing command policy — e.g. `git status`, `ls`, `cat`, or a
 /// `rg … | head` pipeline. Anything unclassified stays mutating: a missing
 /// command, an unknown binary, or a write-like shell (`cargo test`, `rm`,
-/// redirections) still counts toward the limit. Evaluate this before the
-/// mutating cap in every batch path, including recovery, so inspection is
-/// never dropped or reprimanded for budget reasons.
+/// redirections) still counts toward the limit. MCP tools outside the builtin
+/// registry opt into inspection with the standard `readOnlyHint` annotation
+/// (same rule the replay policy uses for repeatable reads).
+/// Evaluate this before the mutating cap in every batch path, including
+/// recovery, so inspection is never dropped or reprimanded for budget reasons.
 pub fn is_read_only_call(call: &ToolCall) -> bool {
     if supports_parallel_execution(&call.name) {
         return true;
     }
     if call.name == "run_command" {
         return !command_requires_confirmation(&call.arguments);
+    }
+    if matches!(tool_safety(&call.name), ToolSafety::Unknown) {
+        return mcp_tool_read_only_hint(&call.name);
     }
     false
 }
