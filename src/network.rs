@@ -941,6 +941,19 @@ fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
         .min(budget.history_tokens.saturating_sub(1).max(1))
 }
 
+/// Actionable error when image input needs a vision profile that is not
+/// configured or no longer matches any model profile (e.g. a renamed model).
+/// Names the bad value and lists valid options so config is fixed in one edit.
+fn vision_profile_missing_error(configured: Option<&str>, available: &[String]) -> String {
+    match configured.filter(|name| !name.is_empty()) {
+        None => "image analysis failed: no vision_model is configured and the active model profile does not declare image input support. Set the vision model in config, or enable supports_vision on the active profile".to_string(),
+        Some(wanted) => format!(
+            "image analysis failed: vision_model '{wanted}' matches no configured model profile. Available profiles: {}. Update the vision model name in config.",
+            available.join(", ")
+        ),
+    }
+}
+
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
@@ -1243,9 +1256,22 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             "image analysis failed: active model profile is not configured".to_string()
         })?;
         if active_profile.image_input_supported() != Some(true) {
-            let vision_profile = vision_profile.ok_or_else(|| {
-                "image analysis failed: configure a dedicated vision_model profile".to_string()
-            })?;
+            let Some(vision_profile) = vision_profile else {
+                // Issue: a stale vision_model name (or none at all) used to
+                // fail with a generic "configure a dedicated vision_model
+                // profile" that named neither the bad value nor the valid
+                // options. Say both so the user can fix config in one edit.
+                let guard = state.lock().await;
+                let wanted = guard.config.vision_model.clone();
+                let available: Vec<String> = guard
+                    .config
+                    .models
+                    .iter()
+                    .map(|profile| profile.name.clone())
+                    .collect();
+                drop(guard);
+                return Err(vision_profile_missing_error(wanted.as_deref(), &available));
+            };
             let request_client = client.clone();
             let request_cancel = cancel_token.clone();
             let mut image_cache = {
