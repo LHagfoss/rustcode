@@ -328,6 +328,10 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Line::from(line_spans)
     };
 
+    // Blank padding above the session row (the legacy boxed panel had this;
+    // the compact rewrite dropped it).
+    banner.push(make_row(vec![]));
+
     // Session identity is useful when copying a report or resuming a run, so
     // keep it visually separate from the mutable model/workspace settings.
     let label_w = 15;
@@ -345,14 +349,14 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
-    banner.push(make_row(vec![]));
 
     // Model and reasoning settings
     let model_display = fit_to_width(&model_name, inner_w.saturating_sub(label_w))
         .trim_end()
         .to_owned();
-    let used_for_model = label_w + model_display.width();
-    let mut model_spans = vec![
+    // Slash-command hints live on one dedicated row below (see commands_row):
+    // inline hints after each value never line up across rows.
+    let model_spans = vec![
         Span::styled(
             fit_to_width("  model:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
@@ -365,17 +369,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    if inner_w >= used_for_model + 22 {
-        model_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
-        model_spans.push(Span::styled(
-            "/model",
-            Style::default().fg(primary).bg(reset_bg),
-        ));
-        model_spans.push(Span::styled(
-            " to change",
-            Style::default().fg(muted_c).bg(reset_bg),
-        ));
-    }
     banner.push(make_row(model_spans));
 
     let effort = state
@@ -385,8 +378,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let effort_display = fit_to_width(&effort, inner_w.saturating_sub(label_w))
         .trim_end()
         .to_owned();
-    let used_for_effort = label_w + effort_display.width();
-    let mut effort_spans = vec![
+    let effort_spans = vec![
         Span::styled(
             fit_to_width("  effort:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
@@ -399,20 +391,13 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    if inner_w >= used_for_effort + 22 {
-        effort_spans.extend([
-            Span::styled("    ", Style::default().bg(reset_bg)),
-            Span::styled("/effort", Style::default().fg(primary).bg(reset_bg)),
-            Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
-        ]);
-    }
     banner.push(make_row(effort_spans));
 
     let context_window = format!(
         "{} tokens",
         format_token_count(state.active_context_window())
     );
-    let mut context_spans = vec![
+    let context_spans = vec![
         Span::styled(
             fit_to_width("  context:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
@@ -425,18 +410,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    let used_for_context = label_w + context_window.width();
-    if inner_w >= used_for_context + 22 {
-        context_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
-        context_spans.push(Span::styled(
-            "/context",
-            Style::default().fg(primary).bg(reset_bg),
-        ));
-        context_spans.push(Span::styled(
-            " to change",
-            Style::default().fg(muted_c).bg(reset_bg),
-        ));
-    }
     banner.push(make_row(context_spans));
 
     // Workspace location
@@ -501,26 +474,46 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         Span::styled(perm_text, perm_style),
     ]));
 
-    // Help shortcut
-    let mut help_spans = vec![
-        Span::styled(
-            fit_to_width("  help:", label_w),
-            Style::default().fg(muted_c).bg(reset_bg),
-        ),
-        Span::styled(
-            fit_to_width("/help", inner_w.saturating_sub(label_w))
-                .trim_end()
-                .to_owned(),
-            Style::default().fg(primary).bg(reset_bg),
-        ),
-    ];
-    if inner_w >= label_w + 18 {
-        help_spans.push(Span::styled(
-            " for commands",
-            Style::default().fg(muted_c).bg(reset_bg),
-        ));
+    // All slash-command hints on one aligned row instead of scattered inline
+    // after each value (they never lined up across rows). Even gaps when the
+    // box fits them; two balanced rows when the viewport is too narrow.
+    const COMMANDS: &[&str] = &["/model", "/effort", "/context", "/help"];
+    let command_style = Style::default().fg(primary).bg(reset_bg);
+    let command_row = |gap: usize| -> Vec<Span<'static>> {
+        let mut spans = vec![Span::styled("  ", Style::default().bg(reset_bg))];
+        for (index, command) in COMMANDS.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(" ".repeat(gap), Style::default().bg(reset_bg)));
+            }
+            spans.push(Span::styled((*command).to_owned(), command_style));
+        }
+        spans
+    };
+    let row_width = |gap: usize| -> usize {
+        2 + COMMANDS.iter().map(|c| c.len()).sum::<usize>() + gap * (COMMANDS.len() - 1)
+    };
+    if row_width(4) <= inner_w {
+        banner.push(make_row(command_row(4)));
+    } else if row_width(1) <= inner_w {
+        banner.push(make_row(command_row(1)));
+    } else {
+        let mut first = vec![Span::styled("  ", Style::default().bg(reset_bg))];
+        for (index, command) in COMMANDS.iter().take(2).enumerate() {
+            if index > 0 {
+                first.push(Span::styled("    ", Style::default().bg(reset_bg)));
+            }
+            first.push(Span::styled((*command).to_owned(), command_style));
+        }
+        banner.push(make_row(first));
+        let mut second = vec![Span::styled("  ", Style::default().bg(reset_bg))];
+        for (index, command) in COMMANDS.iter().skip(2).enumerate() {
+            if index > 0 {
+                second.push(Span::styled("    ", Style::default().bg(reset_bg)));
+            }
+            second.push(Span::styled((*command).to_owned(), command_style));
+        }
+        banner.push(make_row(second));
     }
-    banner.push(make_row(help_spans));
 
     // Blank line before the bottom border
     banner.push(make_row(vec![]));
