@@ -1,3 +1,9 @@
+## [v0.52.18](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.18) - 2026-09-18
+
+### Fixes
+- Protocol-aware vision requests: Responses endpoints get input[] instead of a chat-completions body (#1236).
+- Welcome banner: restored top padding, grouped session/model, one aligned slash-command row (#1239).
+- Batch reliability: chunked-write steering past ~4 KiB (#1233), summaries for thinking-only finales (#1234), control-first scheduling with reads following (#1230), checkout worktree rule (#1229), stall watchdog recovering dead turns (#1226).
 ## [v0.52.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.17) - 2026-09-18
 
 ### Fixes
