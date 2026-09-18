@@ -548,7 +548,14 @@ impl TranscriptCursor {
     /// When the stream is finalized into a durable assistant history entry,
     /// return the part not already emitted above the live viewport.
     pub(crate) fn take_final_stream_remainder(&mut self, final_text: &str) -> Option<String> {
-        if self.committed_stream.is_empty() || !final_text.starts_with(&self.committed_stream) {
+        if self.committed_stream.is_empty() {
+            return None;
+        }
+        if !final_text.starts_with(&self.committed_stream) {
+            // A rewritten/recovered response may finalize with different text
+            // after the live prefix was committed. Do not let that prefix
+            // leak into the next turn's transcript projection.
+            self.committed_stream.clear();
             return None;
         }
         let remainder = final_text[self.committed_stream.len()..].to_owned();
