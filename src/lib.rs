@@ -115,10 +115,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // prior session let it grow past the size cap, instead of letting every
     // subsequent write add to an already-huge file.
     crate::logger::rotate_if_oversized();
-    // Issue #1226: silent mid-stream hangs left zero evidence. A panic hook
-    // preserves the message + location in debug.log even when the process
-    // dies without a crash report.
-    crate::logger::install_panic_hook();
 
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
