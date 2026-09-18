@@ -1,3 +1,7 @@
+## [v0.52.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.17) - 2026-09-18
+
+### Fixes
+- Actionable error when vision_model matches no configured profile: names the bad value and lists valid options (#1236).
 ## [v0.52.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.16) - 2026-09-18
 
 ### Fixes
