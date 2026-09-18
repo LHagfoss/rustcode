@@ -539,8 +539,12 @@ fn welcome_banner_renders_without_a_conversation() {
         "the welcome banner must include the active session ID: {rendered:?}"
     );
     assert!(
-        rendered.contains("branch:") && rendered.contains("help:") && rendered.contains("/help"),
-        "the welcome banner must include branch and help rows: {rendered:?}"
+        rendered.contains("branch:")
+            && rendered.contains("/model")
+            && rendered.contains("/effort")
+            && rendered.contains("/context")
+            && rendered.contains("/help"),
+        "the welcome banner must include branch and the aligned slash-command row: {rendered:?}"
     );
 }
 
@@ -573,7 +577,53 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         rendered.contains("context:     128.0K tokens"),
         "rendered: {rendered:?}"
     );
-    assert!(rendered.contains("/context to change"));
+    assert!(rendered.contains("/context"));
+    assert!(
+        !rendered.contains("to change"),
+        "slash hints must live on the shared commands row, not inline: {rendered:?}"
+    );
+}
+
+#[test]
+fn welcome_banner_pads_above_session_and_groups_session_with_model() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 100, 28);
+    let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let session = rendered
+        .iter()
+        .position(|line| line.contains("session:"))
+        .expect("banner has a session row");
+    let model = rendered
+        .iter()
+        .position(|line| line.contains("model:"))
+        .expect("banner has a model row");
+    // Blank padding between the top border and session.
+    assert!(
+        session >= 2 && rendered[session - 1].trim_matches(['│', ' ']).is_empty(),
+        "expected blank padding above session: {rendered:?}"
+    );
+    // No gap between session and model.
+    assert_eq!(
+        model,
+        session + 1,
+        "session and model must be adjacent: {rendered:?}"
+    );
+}
+
+#[test]
+fn welcome_banner_commands_share_one_row() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 100, 28);
+    let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let command_rows: Vec<&String> = rendered
+        .iter()
+        .filter(|line| line.contains("/model") || line.contains("/effort"))
+        .collect();
+    assert_eq!(command_rows.len(), 1, "one shared row: {rendered:?}");
+    let row = command_rows[0];
+    for command in ["/model", "/effort", "/context", "/help"] {
+        assert!(row.contains(command), "{command} missing: {rendered:?}");
+    }
 }
 
 #[test]
