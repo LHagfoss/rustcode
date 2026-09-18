@@ -86,6 +86,34 @@ fn append_line_to_path(path: &Path, line: &str) {
     }
 }
 
+/// Install a panic hook that preserves panic evidence in debug.log.
+/// Issue #1226: two sessions froze/died mid-stream with zero log evidence.
+/// Unwind panics leave no macOS crash report, and a panic in a spawned task
+/// is silently dropped unless its JoinHandle is observed — so without this
+/// hook the next occurrence would be just as undiagnosable.
+pub(crate) fn install_panic_hook() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info
+                .payload()
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("<non-string panic payload>");
+            let location = info
+                .location()
+                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+                .unwrap_or_else(|| "<unknown location>".to_owned());
+            // Best-effort synchronous write: async logging may be gone, and
+            // append_line is lock-poison-safe, so this cannot deadlock.
+            append_line(&format!("[PANIC] {payload} at {location}"));
+            previous(info);
+        }));
+    });
+}
+
 /// Write metadata-only lifecycle events to the existing debug log.
 pub(crate) fn operational_event(event: &str, fields: Value) {
     let payload = serde_json::json!({"event": event, "fields": fields});
