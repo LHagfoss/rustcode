@@ -154,6 +154,46 @@ impl AppRuntime {
                 });
             }
 
+            // Stall watchdog (issue #1226): the main loop stays alive on
+            // stdin even when the turn machinery died mid-stream, freezing
+            // the TUI forever with zero evidence. If status claims active
+            // work but nothing can progress, log it and reset to Idle so
+            // the user can reissue instead of force-quitting.
+            let stall_recovered = {
+                let mut state = app_state.lock().await;
+                let background_tasks_active =
+                    crate::tools::has_background_tasks(&state.active_session_id);
+                match state.check_stall_watchdog(
+                    background_tasks_active,
+                    std::time::Instant::now(),
+                ) {
+                    None => false,
+                    Some(recovery) => {
+                        if recovery.reset_orchestrator {
+                            state.orchestrator_running = false;
+                        }
+                        state.history.push(crate::app::ChatMessage::new(
+                            "system",
+                            "[Watchdog: turn showed no progress for 5 minutes with nothing running; state reset to Idle. Reissue the request if work is still needed.]",
+                        ));
+                        let session_id = state.active_session_id.clone();
+                        crate::config::save_session_history(&session_id, &state.history);
+                        state.clear_current_response();
+                        state.generation_start_time = None;
+                        state.enter_idle();
+                        state.request_redraw();
+                        true
+                    }
+                }
+            };
+            if stall_recovered {
+                crate::logger::operational_event(
+                    "turn.stall_recovered",
+                    serde_json::json!({}),
+                );
+                needs_redraw = true;
+            }
+
             task_subscriptions.retain(|session_id, _| {
                 session_id == &active_session_id || manager.has_running(session_id)
             });
