@@ -5,6 +5,15 @@ mod models;
 use models::MAX_LIVE_TOOL_OUTPUT_BYTES;
 pub use models::*;
 
+pub(crate) struct StallRecovery {
+    pub reset_orchestrator: bool,
+}
+
+/// Stall watchdog timeout (issue #1226). The provider stream idle timeout
+/// (120s) already bounds supplier silence, so a longer active-state silence
+/// means our own machinery died, not the provider.
+pub(crate) const STALL_WATCHDOG_TIMEOUT_SECS: u64 = 5 * 60;
+
 pub struct AppState {
     pub input_buffer: String,
     /// Deadline through which a second Ctrl+C confirms application exit.
@@ -320,6 +329,47 @@ impl AppState {
     pub(crate) fn enter_idle(&mut self) {
         self.status = AppStatus::Idle;
         self.idle_since = std::time::Instant::now();
+    }
+
+    /// Detect a dead turn: status says work is in flight but nothing can make
+    /// progress — no background tasks, no running tools, no queued prompts,
+    /// and the stream (if any) silent past the watchdog timeout. Also catches
+    /// a stuck orchestrator flag wedging a non-empty queue (the loop only
+    /// spawns while the flag is clear). Returns recovery instructions; the
+    /// caller logs the event and resets state.
+    pub(crate) fn check_stall_watchdog(
+        &self,
+        background_active: bool,
+        now: std::time::Instant,
+    ) -> Option<StallRecovery> {
+        if !matches!(self.status, AppStatus::Streaming | AppStatus::Queued) {
+            return None;
+        }
+        if background_active || !self.running_tools.is_empty() {
+            return None;
+        }
+        let timeout = std::time::Duration::from_secs(STALL_WATCHDOG_TIMEOUT_SECS);
+        let generation_stale = self
+            .generation_start_time
+            .is_some_and(|started| now.saturating_duration_since(started) >= timeout);
+        let stream_stale = match &self.stream_tracker {
+            None => true,
+            Some(tracker) => now.saturating_duration_since(tracker.last_update) >= timeout,
+        };
+        if !self.pending_queue.is_empty() {
+            if self.orchestrator_running && generation_stale {
+                return Some(StallRecovery {
+                    reset_orchestrator: true,
+                });
+            }
+            return None;
+        }
+        if generation_stale && stream_stale {
+            return Some(StallRecovery {
+                reset_orchestrator: self.orchestrator_running,
+            });
+        }
+        None
     }
 
     pub(crate) fn should_start_idle_summary(
@@ -1429,3 +1479,6 @@ mod protocol_tests;
 #[cfg(test)]
 #[path = "state/queue_pull_back_tests.rs"]
 mod queue_pull_back_tests;
+#[cfg(test)]
+#[path = "state/stall_watchdog_tests.rs"]
+mod stall_watchdog_tests;
