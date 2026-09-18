@@ -21,4 +21,7 @@ docs/superpowers/
 /benchmarks/
 /tests/
 /AGENT_HARNESS_CONTRACTS.md
+
+# Codex ignore file
+
 .codexignore
