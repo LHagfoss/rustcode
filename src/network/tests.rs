@@ -6362,3 +6362,24 @@ fn test_adversarial_8_readonly_analysis_task_does_not_false_positive() {
         assert_eq!(status, loop_detect::ReasoningLoopStatus::Ok);
     }
 }
+
+#[test]
+fn vision_profile_error_names_bad_value_and_options() {
+    let available = vec![
+        "deepseek-v4.1-flash".to_string(),
+        "gemini-3.6-flash".to_string(),
+    ];
+    let stale = super::vision_profile_missing_error(Some("qwen-3.8:27b-3bit"), &available);
+    assert!(stale.contains("qwen-3.8:27b-3bit"), "{stale}");
+    assert!(stale.contains("deepseek-v4.1-flash"), "{stale}");
+    assert!(stale.contains("gemini-3.6-flash"), "{stale}");
+
+    let missing = super::vision_profile_missing_error(None, &available);
+    assert!(
+        missing.contains("no vision_model is configured"),
+        "{missing}"
+    );
+
+    let empty = super::vision_profile_missing_error(Some(""), &available);
+    assert!(empty.contains("no vision_model is configured"), "{empty}");
+}
