@@ -162,18 +162,19 @@ pub(crate) async fn request_vision_analysis(
     } else {
         "application/octet-stream"
     };
-    let payload = serde_json::json!({
-        "model": profile.model,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": VISION_PROMPT},
-                {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{}", general_purpose::STANDARD.encode(bytes))}}
-            ]
-        }],
-        "stream": false,
-        "max_tokens": 2048
-    });
+    let data_url = format!(
+        "data:{mime};base64,{}",
+        general_purpose::STANDARD.encode(bytes)
+    );
+    // The vision endpoint speaks whatever protocol the profile declares:
+    // sending a chat-completions body to a Responses endpoint fails with
+    // 400 ("Either input or instructions must be provided"), and vice versa.
+    let payload = vision_request_payload(
+        &profile.model,
+        profile.resolved_api_protocol(),
+        profile.resolved_output_token_field().wire_name(),
+        data_url,
+    );
     let mut request = client.post(profile.endpoint_url()).json(&payload);
     if let Some(key) = profile.resolved_api_key() {
         request = request.header("Authorization", format!("Bearer {key}"));
@@ -191,6 +192,81 @@ pub(crate) async fn request_vision_analysis(
             .and_then(|m| m.as_str())
             .unwrap_or("provider rejected image analysis");
         return Err(format!("vision provider returned {status}: {detail}"));
+    }
+    vision_response_text(profile.resolved_api_protocol(), &body)
+}
+
+fn vision_request_payload(
+    model: &str,
+    protocol: crate::config::ApiProtocol,
+    token_field: &str,
+    data_url: String,
+) -> serde_json::Value {
+    match protocol {
+        crate::config::ApiProtocol::Responses => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "model".to_owned(),
+                serde_json::Value::String(model.to_owned()),
+            );
+            map.insert(
+                "input".to_owned(),
+                serde_json::json!([{
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": VISION_PROMPT},
+                        {"type": "input_image", "image_url": data_url},
+                    ]
+                }]),
+            );
+            map.insert("stream".to_owned(), serde_json::Value::Bool(false));
+            map.insert(
+                token_field.to_owned(),
+                serde_json::Value::Number(2048.into()),
+            );
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VISION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ]
+            }],
+            "stream": false,
+            "max_tokens": 2048
+        }),
+    }
+}
+
+fn vision_response_text(
+    protocol: crate::config::ApiProtocol,
+    body: &serde_json::Value,
+) -> Result<String, String> {
+    if matches!(protocol, crate::config::ApiProtocol::Responses) {
+        let mut texts = Vec::new();
+        if let Some(items) = body.get("output").and_then(|o| o.as_array()) {
+            for item in items {
+                if item.get("type").and_then(|t| t.as_str()) != Some("message") {
+                    continue;
+                }
+                if let Some(parts) = item.get("content").and_then(|c| c.as_array()) {
+                    for part in parts {
+                        if part.get("type").and_then(|t| t.as_str()) == Some("output_text")
+                            && let Some(text) = part.get("text").and_then(|t| t.as_str())
+                        {
+                            texts.push(text);
+                        }
+                    }
+                }
+            }
+        }
+        if texts.is_empty() {
+            return Err("vision provider returned no text content".to_string());
+        }
+        return Ok(texts.join("\n"));
     }
     body.get("choices")
         .and_then(|c| c.get(0))
@@ -232,6 +308,84 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         format!("![image](file://{})", path.display())
+    }
+
+    #[test]
+    fn vision_payload_matches_profile_protocol() {
+        use crate::config::ApiProtocol;
+
+        let responses = vision_request_payload(
+            "deepseek-flash",
+            ApiProtocol::Responses,
+            "max_output_tokens",
+            "data:image/png;base64,AAA".to_string(),
+        );
+        // Responses shape: input[], never messages[] — the mismatch caused
+        // 400 "Either input or instructions must be provided".
+        assert!(responses.get("messages").is_none(), "{responses}");
+        let input = responses
+            .get("input")
+            .and_then(|i| i.as_array())
+            .expect("input");
+        assert_eq!(input.len(), 1);
+        let content = input[0]
+            .get("content")
+            .and_then(|c| c.as_array())
+            .expect("content");
+        assert!(
+            content
+                .iter()
+                .any(|p| p.get("type").and_then(|t| t.as_str()) == Some("input_text"))
+        );
+        assert!(content.iter().any(|p| {
+            p.get("type").and_then(|t| t.as_str()) == Some("input_image")
+                && p.get("image_url").and_then(|u| u.as_str()) == Some("data:image/png;base64,AAA")
+        }));
+        assert_eq!(
+            responses.get("max_output_tokens").and_then(|v| v.as_u64()),
+            Some(2048)
+        );
+
+        let chat = vision_request_payload(
+            "m",
+            ApiProtocol::ChatCompletions,
+            "max_tokens",
+            "data:image/png;base64,AAA".to_string(),
+        );
+        assert!(chat.get("input").is_none(), "{chat}");
+        assert!(chat.get("messages").and_then(|m| m.as_array()).is_some());
+        assert_eq!(chat.get("max_tokens").and_then(|v| v.as_u64()), Some(2048));
+    }
+
+    #[test]
+    fn vision_response_text_parses_both_protocols() {
+        use crate::config::ApiProtocol;
+
+        let responses_body = serde_json::json!({
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "a rustcode panel"},
+                    {"type": "refusal", "refusal": "no"}
+                ]},
+            ]
+        });
+        assert_eq!(
+            vision_response_text(ApiProtocol::Responses, &responses_body).as_deref(),
+            Ok("a rustcode panel")
+        );
+        assert!(
+            vision_response_text(ApiProtocol::Responses, &serde_json::json!({"output": []}))
+                .is_err()
+        );
+
+        let chat_body = serde_json::json!({
+            "choices": [{"message": {"content": "hello"}}]
+        });
+        assert_eq!(
+            vision_response_text(ApiProtocol::ChatCompletions, &chat_body).as_deref(),
+            Ok("hello")
+        );
     }
 
     #[test]
