@@ -2638,3 +2638,27 @@ fn the_write_tool_spec_steers_large_files_to_chunks_first() {
         spec.arguments
     );
 }
+
+#[test]
+fn the_run_command_spec_forbids_moving_the_user_checkout() {
+    let spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "run_command")
+        .expect("tool exists");
+
+    // Issue #1229: a session yanked the user's checkout with checkout -B +
+    // rebase. Branch/merge work belongs in an isolated worktree.
+    for forbidden in [
+        "checkout -B",
+        "switch -C",
+        "git rebase",
+        "reset --hard",
+        "git worktree add",
+    ] {
+        assert!(
+            spec.description.contains(forbidden),
+            "run_command spec must mention {forbidden}: {}",
+            spec.description
+        );
+    }
+}
