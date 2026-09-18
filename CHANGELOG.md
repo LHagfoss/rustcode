@@ -1,3 +1,8 @@
+## [v0.52.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.16) - 2026-09-18
+
+### Fixes
+- Log panics and orchestrator task death to debug.log so silent mid-stream hangs leave evidence (#1226).
+- Batch MCP tools advertising the standard readOnlyHint as read-only instead of serializing them one per round (#1230).
 ## [v0.52.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.15) - 2026-09-17
 
 ### Fixes
