@@ -115,6 +115,10 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     if s.active_session_id != turn_session_id {
         return ctx;
     }
+    let usage = s
+        .current_token_usage
+        .clone()
+        .or_else(|| ctx.response.last_token_usage.clone());
     s.continuous_mode = false;
     s.response_time = Some(prompt_start_time.elapsed());
     if let Some(content) = final_transcript {
@@ -129,6 +133,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
             msg.thought_time_ms = Some(s.current_thought_time_ms);
             msg.thought_tokens = Some(s.current_thought_tokens);
         }
+        msg.token_usage = usage.clone();
         s.history.push(msg);
     }
     let latest_user_index = s
@@ -148,19 +153,6 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
                     && !message.content.trim().is_empty()
             })
         });
-    drop(s);
-
-    let usage = {
-        let s = state.lock().await;
-        if s.current_token_usage.is_some() {
-            s.current_token_usage.clone()
-        } else {
-            drop(s);
-            ctx.response.last_token_usage.clone()
-        }
-    };
-
-    let mut s = state.lock().await;
     if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant")
         && msg.token_usage.is_none()
     {

@@ -40,10 +40,9 @@ use transcript::render_finalized_assistant_scrollback;
 use updates::{apply_update_decision, run_update_command};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
-// Streaming text and spinner updates do not need terminal refreshes at the
-// input/event poll rate. Event-driven redraws still happen immediately; this
-// interval only bounds periodic redraws while a turn is active.
-const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+// Keep streaming frames at the same cadence as the event loop so a provider
+// chunk cannot sit in the live response buffer for a perceptible interval.
+const STREAM_FRAME_INTERVAL: Duration = EVENT_POLL_INTERVAL;
 
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
@@ -156,11 +155,19 @@ impl AppRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppRunControl, AppRuntime, apply_update_decision};
+    use super::{
+        AppRunControl, AppRuntime, EVENT_POLL_INTERVAL, STREAM_FRAME_INTERVAL,
+        apply_update_decision,
+    };
     use crate::app::{
         AppEvent, AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer,
         SessionAction, UpdateDecision,
     };
+
+    #[test]
+    fn streaming_frames_match_the_live_redraw_cadence() {
+        assert_eq!(STREAM_FRAME_INTERVAL, EVENT_POLL_INTERVAL);
+    }
 
     #[tokio::test]
     async fn request_draw_and_submit_are_handled_by_the_runtime() {
@@ -243,18 +250,25 @@ mod tests {
     }
 
     #[test]
-    fn non_streamed_assistant_scrollback_keeps_history_block() {
+    fn finalized_assistant_scrollback_survives_live_buffer_clear() {
         let mut state = AppState::new();
         state
             .history
+            .push(crate::app::ChatMessage::new("user", "hello"));
+        state.status = AppStatus::Streaming;
+        state.replace_current_response("final answer");
+        state
+            .history
             .push(crate::app::ChatMessage::new("assistant", "final answer"));
+        state.clear_current_response();
+        state.enter_idle();
         let snapshot = state.render_snapshot();
         let mut cursor = crate::ui::scrollback::TranscriptCursor::default();
 
         let lines = super::render_finalized_assistant_scrollback(
             &snapshot,
             &mut cursor,
-            0,
+            1,
             "final answer",
             80,
         );
@@ -268,7 +282,7 @@ mod tests {
         let separator = super::render_finalized_assistant_scrollback(
             &snapshot,
             &mut cursor,
-            0,
+            1,
             "final answer",
             80,
         );

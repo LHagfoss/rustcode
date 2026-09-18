@@ -3850,6 +3850,11 @@ fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
         Some("tail".to_owned())
     );
     assert_eq!(cursor.take_final_stream_remainder("stable\ntail"), None);
+    assert!(!cursor.has_committed_stream());
+
+    cursor.commit_stable_stream("stable\n\n");
+    assert_eq!(cursor.take_final_stream_remainder("rewritten final"), None);
+    assert!(!cursor.has_committed_stream());
 }
 
 #[test]
