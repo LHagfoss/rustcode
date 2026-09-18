@@ -273,7 +273,7 @@ impl AppRuntime {
                     let token_clone = current_cancel_token.clone();
                     let ui_event_sender = agent_ui_event_sender.clone();
                     drop(s);
-                    let handle = tokio::spawn(async move {
+                    tokio::spawn(async move {
                         crate::network::process_queue_orchestrator_with_ui_events(
                             client_clone,
                             state_clone,
@@ -282,25 +282,6 @@ impl AppRuntime {
                             ui_event_sender,
                         )
                         .await;
-                    });
-                    // Issue #1226: a panicking orchestrator was silently
-                    // dropped, freezing the TUI mid-stream with zero log
-                    // evidence. Observe the JoinHandle so task death is
-                    // always recorded in debug.log.
-                    tokio::spawn(async move {
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {
-                                crate::dbg_log!("Orchestrator task cancelled");
-                            }
-                            Err(error) => {
-                                crate::dbg_log!("Orchestrator task died: {error}");
-                                crate::logger::operational_event(
-                                    "orchestrator.task_died",
-                                    serde_json::json!({ "error": error.to_string() }),
-                                );
-                            }
-                        }
                     });
                     needs_redraw = true;
                 }
