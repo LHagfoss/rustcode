@@ -1429,7 +1429,7 @@ pub(crate) fn append_tool_response_policy(
             prompt,
             "\n\n# Tool response limit\n\
 This trusted profile permits a bounded batch of up to {} read-only calls and {} workspace-changing calls in one assistant response. \
-Keep control-plane calls alone, keep workspace changes grounded and sequential, and never assume an unexecuted call ran. \
+Control-plane calls first, reads follow; workspace changes grounded and sequential; never assume an unexecuted call ran. \
 Read-only calls do not consume the workspace-changing limit.\n",
             policy.max_read_only_calls, policy.max_mutating_calls
         )
@@ -1481,7 +1481,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- Batch independent reads in one response; one mutation per response, control-plane calls alone. Wait for results before the next calls.\n\
+- Batch independent reads in one response; one mutation per response, control-plane calls first. Wait for results before the next calls.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; complete results are authoritative, so do not reread them—edit or verify next. For manual previews, use the user's exact port, do not start/probe/fallback, and let them run it after verification; do not start a server merely to inspect a static app.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Prefer the smallest focused sequence.\n\
@@ -1516,12 +1516,12 @@ If the request context names a skill, load it first. For a likely specialized wo
             p.push_str(
                 "Active tool protocol: textual native tags. Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
-                Rules: batch independent reads as multiple [TOOL_CALLS] markers; one mutation per response, control-plane calls alone. Wait for results before the next calls. Arguments must be a valid JSON object matching the tool parameters.\n\n"
+                Rules: batch independent reads as multiple [TOOL_CALLS] markers; one mutation per response, control-plane calls first. Wait for results before the next calls. Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; one mutation per response, control-plane calls alone. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
+                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; one mutation per response, control-plane calls first. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
