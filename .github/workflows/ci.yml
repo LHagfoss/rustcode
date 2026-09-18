@@ -129,7 +129,7 @@ jobs:
               run: cargo fmt --all -- --check
 
             - name: Check shell installer syntax
-              run: bash -n install.sh
+              run: bash -n scripts/install.sh
 
             - name: Check CI change matcher
               run: bash scripts/test-ci-relevant-changes.sh
@@ -167,7 +167,7 @@ jobs:
               run: |
                   $tokens = $null
                   $errors = $null
-                  $path = Join-Path $PWD "install.ps1"
+                  $path = Join-Path $PWD "scripts/install.ps1"
                   $null = [System.Management.Automation.Language.Parser]::ParseFile(
                       $path,
                       [ref]$tokens,

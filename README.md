@@ -49,46 +49,6 @@ brew trust lhagfoss/tap
 brew install rustcode
 ```
 
-### Arch Linux via the AUR
-
-For Arch x86_64, the verified prebuilt installer is the fastest option:
-
-```bash
-curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
-```
-
-If another `rustcode` installation already appears earlier in `PATH`, refresh
-your shell with `hash -r` (Bash) or `rehash` (Zsh), and confirm with
-`which rustcode` and `rustcode --version`.
-
-Build and install the current tagged source release with an AUR helper:
-
-```bash
-paru -S rustcode
-```
-
-Keep the package updated with the rest of the system:
-
-```bash
-paru -Syu
-```
-
-The AUR package is source-built, so it also works on supported Arch
-architectures that do not have one of RustCode's prebuilt release archives.
-
-#### If AUR registration is temporarily closed
-
-You can build the same package locally while new AUR accounts are unavailable:
-
-```bash
-git clone https://github.com/LHagfoss/rustcode.git
-cd rustcode/packaging/aur/rustcode
-makepkg -si
-```
-
-This installs `rustcode` through the normal Arch package system. Once the AUR
-package is published, use `paru -Syu` for future upgrades.
-
 Official release binaries are published for Linux x86_64, macOS Apple Silicon
 (ARM64), and Windows x86_64. Intel macOS is not supported by the prebuilt
 installer or Homebrew formula. Building from source may support additional
