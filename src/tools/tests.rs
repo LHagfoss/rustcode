@@ -2617,3 +2617,24 @@ fn read_only_shell_commands_bypass_the_mutation_budget() {
     assert!(validate_tool_calls(&over, 1).is_err());
     assert!(validate_tool_calls(&kept, 1).is_ok());
 }
+
+#[test]
+fn the_write_tool_spec_steers_large_files_to_chunks_first() {
+    let spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "write_to_file")
+        .expect("tool exists");
+
+    // Issue #1233: large single writes hit provider output cutoffs and lose
+    // the whole call, so the spec must steer chunked writes from the start.
+    assert!(
+        spec.description.contains("write_file_chunk past ~4 KiB"),
+        "got: {}",
+        spec.description
+    );
+    assert!(
+        spec.arguments.contains("prefer write_file_chunk from the start"),
+        "got: {}",
+        spec.arguments
+    );
+}
