@@ -20,7 +20,7 @@ mod policy;
 
 pub(crate) use policy::{
     command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
-    reject_broad_git_stage,
+    pull_request_base, reject_broad_git_stage,
 };
 use policy::{has_interactive_sudo, is_short_discovery_command};
 
@@ -468,6 +468,12 @@ fn run_command_output_inner(
         return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
     }
 
+    if let Some(base) = pull_request_base(command_str)
+        && remote_base_missing(resolved_cwd.as_deref(), &base)
+    {
+        return Ok(pr_creation_guard_output(command_str, &base));
+    }
+
     // GUI/Dock launches don't inherit the shell PATH, so agent-run builds/tests
     // (cargo, npm, …) fail to find their toolchain. Seed a toolchain-aware PATH;
     // an explicit PATH in `env` below still overrides it.
@@ -649,6 +655,58 @@ fn run_command_output_inner(
     })
 }
 
+/// Check the remote used by the default `gh` repository resolution without
+/// running the requested PR mutation. A failed `ls-remote` caused by a
+/// transport/authentication problem is deliberately inconclusive and lets
+/// `gh` report that real problem; only an absent remote or absent ref blocks.
+fn remote_base_missing(cwd: Option<&std::path::Path>, base: &str) -> bool {
+    let mut remote = std::process::Command::new("git");
+    if let Some(cwd) = cwd {
+        remote.current_dir(cwd);
+    }
+    let Ok(remote) = remote.args(["remote", "get-url", "origin"]).output() else {
+        return false;
+    };
+    if !remote.status.success() {
+        return true;
+    }
+
+    let ref_name = format!("refs/heads/{base}");
+    let mut refs = std::process::Command::new("git");
+    if let Some(cwd) = cwd {
+        refs.current_dir(cwd);
+    }
+    let Ok(refs) = refs
+        .args(["ls-remote", "--exit-code", "--heads", "origin", &ref_name])
+        .output()
+    else {
+        return false;
+    };
+    refs.status.code() == Some(2)
+}
+
+fn pr_creation_guard_output(command: &str, base: &str) -> super::ToolExecutionOutput {
+    super::ToolExecutionOutput {
+        content: format!(
+            "[harness: PR creation blocked — remote base branch `{base}` does not exist on `origin`. Create or push that base branch, or choose an existing remote base, before retrying `gh pr create`. The PR command was not run.]"
+        ),
+        success: false,
+        pending: false,
+        command: Some(command.to_owned()),
+        exit_code: Some(2),
+        truncated: false,
+        completeness: rustcode_core::ToolResultCompleteness::Complete,
+        replayed: false,
+        error_kind: Some(super::ToolErrorKind::CommandFailed),
+        retryable: false,
+        command_status: Some(rustcode_core::CommandResultMetadata {
+            completed: true,
+            exit_code: Some(2),
+            ..Default::default()
+        }),
+    }
+}
+
 pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     let action = args
         .get("action")
@@ -781,8 +839,8 @@ mod tests {
     use super::{
         cancel_result_message, command_confirmation_preview, command_confirmation_scope,
         command_requires_confirmation, has_interactive_sudo, has_shell_background_operator,
-        manage_task_tool, reject_broad_git_stage, run_command, run_command_output,
-        run_command_output_cancellable, run_command_output_with_progress,
+        manage_task_tool, pull_request_base, reject_broad_git_stage, run_command,
+        run_command_output, run_command_output_cancellable, run_command_output_with_progress,
         task_event_to_tool_output,
     };
 
@@ -1063,6 +1121,36 @@ mod tests {
             );
         }
         assert!(reject_broad_git_stage("git add src/network.rs").is_none());
+    }
+
+    #[test]
+    fn pull_request_base_is_parsed_only_for_create_commands() {
+        assert_eq!(
+            pull_request_base("gh pr create --base main --title change"),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            pull_request_base("gh pr create --base=release"),
+            Some("release".to_string())
+        );
+        assert_eq!(pull_request_base("gh pr list --base main"), None);
+    }
+
+    #[test]
+    fn pr_creation_is_guarded_when_origin_has_no_base() {
+        let root = tempfile::tempdir().expect("temporary repository");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .expect("git init");
+        assert!(status.success());
+
+        assert!(super::remote_base_missing(Some(root.path()), "main"));
+        let output = super::pr_creation_guard_output("gh pr create --base main", "main");
+        assert!(!output.success);
+        assert!(!output.retryable);
+        assert!(output.content.contains("was not run"));
     }
 
     #[test]
