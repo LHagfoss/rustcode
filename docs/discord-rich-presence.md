@@ -9,6 +9,13 @@ unavailable, RustCode silently retries in the background and the TUI remains
 usable. It does not open a Discord login flow and never reads or stores Discord
 passwords, account tokens, cookies, or browser profiles.
 
+When a generated session title is unavailable, the activity uses only the
+basename of the workspace, repository, or current folder (for example,
+"rustcode"). It never publishes an absolute local path. During a request,
+provider usage may be shown as compact "out" and "total" token checkpoints.
+These values are rounded and deduplicated so streaming deltas do not create a
+Discord update for every token.
+
 ## Setup and control
 
 With the Discord desktop application installed and running:
