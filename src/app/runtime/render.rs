@@ -83,16 +83,14 @@ pub(super) async fn render_frame(
         // The cache still debounces Git discovery; this only makes the frame
         // boundary the final source of truth for the footer and welcome panel.
         guard.refresh_workspace_location(std::time::Instant::now());
-        let custom_title = (guard.active_session_id == title_session_id)
+        let generated_title = (guard.active_session_id == title_session_id)
             .then_some(loaded_title)
-            .flatten()
-            .or_else(|| {
-                guard
-                    .history
-                    .iter()
-                    .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                    .map(|_| crate::config::session_title(&guard.history))
-            });
+            .flatten();
+        let prompt_title = guard
+            .history
+            .iter()
+            .find(|m| m.role == "user" && !m.content.starts_with('/'))
+            .map(|_| crate::config::session_title(&guard.history));
         let snapshot = guard.render_snapshot();
         let activity =
             crate::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
@@ -101,12 +99,27 @@ pub(super) async fn render_frame(
             .unwrap_or_default()
             .as_millis() as u64
             / 100;
-        let session_name = custom_title
+        let terminal_title = generated_title.clone().or(prompt_title);
+        let session_name = terminal_title
+            .as_deref()
             .filter(|title| !title.is_empty() && !title.starts_with('/'))
-            .unwrap_or_else(|| "session".to_string());
+            .unwrap_or("session");
+        let presence_title = generated_title
+            .as_deref()
+            .filter(|title| !title.is_empty() && !title.starts_with('/'))
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                let workspace = guard
+                    .workspace_root
+                    .as_deref()
+                    .or(guard.task_working_directory.as_deref())
+                    .map(std::path::Path::to_path_buf)
+                    .or_else(|| std::env::current_dir().ok());
+                crate::discord_rpc::workspace_basename(workspace.as_deref())
+            });
         let title_display = crate::app::activity::format_terminal_title(
             activity.kind,
-            &session_name,
+            session_name,
             animation_frame,
         );
         let old_title = guard.current_terminal_title.clone();
@@ -115,10 +128,13 @@ pub(super) async fn render_frame(
         }
 
         let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
-        discord_rpc.update(crate::discord_rpc::DiscordPresence::from_activity(
-            &activity,
-            &session_name,
-        ));
+        discord_rpc.update(
+            crate::discord_rpc::DiscordPresence::from_activity_with_usage(
+                &activity,
+                &presence_title,
+                snapshot.current_token_usage(),
+            ),
+        );
         let should_send_progress = guard.current_terminal_progress != Some(progress)
             || (progress != crate::app::activity::TerminalProgress::Hidden
                 && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));
