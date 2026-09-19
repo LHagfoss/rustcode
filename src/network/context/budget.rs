@@ -153,3 +153,31 @@ pub fn calculate_preflight_budget_for_projection(
         context_window: budget.context_window as usize,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_projection_reports_an_actionable_over_budget_checkpoint() {
+        let profile = crate::config::ModelProfile {
+            name: "budget-test".to_owned(),
+            model: "budget-test".to_owned(),
+            context_window: Some(256),
+            max_tokens: Some(64),
+            ..Default::default()
+        };
+        let budget = profile.context_budget();
+        let projection = vec![serde_json::json!({
+            "role": "user",
+            "content": "oversized ".repeat(2_000),
+        })];
+        let preflight = calculate_preflight_budget_for_projection(&projection, &[], 0, &budget);
+
+        assert!(!preflight.fits_hard_limit());
+        let notice = crate::network::context_preflight_checkpoint_notice(&preflight);
+        assert!(notice.contains("Context checkpoint"));
+        assert!(notice.contains("/compact"));
+        assert!(notice.contains("was not sent"));
+    }
+}

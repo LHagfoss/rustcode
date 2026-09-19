@@ -103,6 +103,10 @@ pub struct CompilerState {
 
 pub struct ResponseState {
     pub last_token_usage: Option<TokenUsage>,
+    /// Sum of provider usage across every request in this logical turn,
+    /// including continuation requests.  The per-response value remains in
+    /// `last_token_usage` for the footer and transcript attribution.
+    pub turn_token_usage: Option<TokenUsage>,
     pub last_stream_termination: Option<lifecycle::StreamTermination>,
     pub final_content: String,
     pub final_content_persisted: bool,
@@ -235,6 +239,7 @@ impl TurnContext {
             },
             response: ResponseState {
                 last_token_usage: None,
+                turn_token_usage: None,
                 last_stream_termination: None,
                 final_content: String::new(),
                 final_content_persisted: false,
@@ -335,6 +340,37 @@ impl TurnContext {
         self.budget.continuation_pending = false;
         self.budget.round_budget_notice_sent = false;
         self.lifecycle.stop_reason = None;
+    }
+
+    /// Add one provider response to the logical turn total. Provider usage is
+    /// reported per request, so overwriting this value would undercount turns
+    /// that execute tools or use response continuations.
+    pub(crate) fn record_token_usage(&mut self, usage: Option<&TokenUsage>) {
+        let Some(usage) = usage else {
+            return;
+        };
+        let total = self
+            .response
+            .turn_token_usage
+            .get_or_insert_with(TokenUsage::default);
+        total.prompt_tokens = total.prompt_tokens.saturating_add(usage.prompt_tokens);
+        total.completion_tokens = total
+            .completion_tokens
+            .saturating_add(usage.completion_tokens);
+        total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
+        total.cached_tokens = Some(
+            total
+                .cached_tokens
+                .unwrap_or_default()
+                .saturating_add(usage.cached_tokens.unwrap_or_default()),
+        );
+        total.cache_write_tokens = Some(
+            total
+                .cache_write_tokens
+                .unwrap_or_default()
+                .saturating_add(usage.cache_write_tokens.unwrap_or_default()),
+        );
+        total.cache_discount = usage.cache_discount.or(total.cache_discount);
     }
 
     /// Snapshot short-lived progress for the next request-local context tail.
@@ -438,5 +474,84 @@ mod tests {
         let mut foreign = TurnContext::with_budgets(40, 200);
         assert!(!foreign.restore_segment(&reparsed, "session-2"));
         assert_eq!(foreign.budget.tool_rounds, 0);
+    }
+
+    #[test]
+    fn turn_usage_accumulates_requests_without_changing_last_response_usage() {
+        let mut context = TurnContext::new();
+        let first = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            cached_tokens: Some(80),
+            cache_write_tokens: Some(4),
+            cache_discount: Some(0.5),
+        };
+        let second = TokenUsage {
+            prompt_tokens: 60,
+            completion_tokens: 10,
+            total_tokens: 70,
+            cached_tokens: None,
+            cache_write_tokens: None,
+            cache_discount: None,
+        };
+
+        context.record_token_usage(Some(&first));
+        context.record_token_usage(Some(&second));
+
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .prompt_tokens,
+            160
+        );
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .completion_tokens,
+            30
+        );
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .total_tokens,
+            190
+        );
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .cached_tokens,
+            Some(80)
+        );
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .cache_write_tokens,
+            Some(4)
+        );
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .unwrap()
+                .cache_discount,
+            Some(0.5)
+        );
     }
 }

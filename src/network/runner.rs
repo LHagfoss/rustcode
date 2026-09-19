@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use crate::app::TokenUsage;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResponseError {
     pub(crate) message: String,
@@ -56,8 +58,14 @@ impl std::fmt::Display for ResponseError {
 pub(crate) struct TurnRunner {
     continuation_count: usize,
     adaptive_continuation_count: usize,
+    replay_tokens: u32,
     max_continuations: usize,
 }
+
+/// Every continuation resends the accumulated response prefix. Keep that
+/// replay work bounded independently of the number of continuations and the
+/// logical output ceiling.
+const MAX_CONTINUATION_REPLAY_TOKENS: u32 = 65_536;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ContinuationPolicy {
@@ -102,6 +110,7 @@ pub(crate) struct ResponseChunk {
     pub(crate) output_token_limit: Option<u32>,
     pub(crate) thought_time_ms: u64,
     pub(crate) thought_tokens: u32,
+    pub(crate) token_usage: Option<TokenUsage>,
 }
 
 #[derive(Debug)]
@@ -112,6 +121,32 @@ pub(crate) struct CollectedResponse {
     pub(crate) finish_reason: Option<String>,
     pub(crate) thought_time_ms: u64,
     pub(crate) thought_tokens: u32,
+    pub(crate) token_usage: Option<TokenUsage>,
+}
+
+fn add_usage(total: &mut Option<TokenUsage>, usage: Option<TokenUsage>) {
+    let Some(usage) = usage else {
+        return;
+    };
+    let target = total.get_or_insert_with(TokenUsage::default);
+    target.prompt_tokens = target.prompt_tokens.saturating_add(usage.prompt_tokens);
+    target.completion_tokens = target
+        .completion_tokens
+        .saturating_add(usage.completion_tokens);
+    target.total_tokens = target.total_tokens.saturating_add(usage.total_tokens);
+    target.cached_tokens = Some(
+        target
+            .cached_tokens
+            .unwrap_or_default()
+            .saturating_add(usage.cached_tokens.unwrap_or_default()),
+    );
+    target.cache_write_tokens = Some(
+        target
+            .cache_write_tokens
+            .unwrap_or_default()
+            .saturating_add(usage.cache_write_tokens.unwrap_or_default()),
+    );
+    target.cache_discount = usage.cache_discount.or(target.cache_discount);
 }
 
 impl TurnRunner {
@@ -123,6 +158,7 @@ impl TurnRunner {
         Self {
             continuation_count: 0,
             adaptive_continuation_count: 0,
+            replay_tokens: 0,
             // Replaying a provider prefix can amplify an incomplete
             // structured tool call. In particular, local models often
             // restart a large write from byte zero instead of resuming its
@@ -133,12 +169,26 @@ impl TurnRunner {
         }
     }
 
-    pub(crate) fn allow_continuation(&mut self, response_is_cut_off: bool) -> bool {
+    fn reserve_continuation(&mut self, accumulated: &str) -> bool {
+        let prefix_tokens = crate::network::count_tokens(accumulated);
+        let replay_tokens = self.replay_tokens.saturating_add(prefix_tokens);
+        if replay_tokens > MAX_CONTINUATION_REPLAY_TOKENS {
+            return false;
+        }
+        self.replay_tokens = replay_tokens;
+        self.continuation_count += 1;
+        true
+    }
+
+    pub(crate) fn allow_continuation(
+        &mut self,
+        response_is_cut_off: bool,
+        accumulated: &str,
+    ) -> bool {
         if !response_is_cut_off || self.continuation_count >= self.max_continuations {
             return false;
         }
-        self.continuation_count += 1;
-        true
+        self.reserve_continuation(accumulated)
     }
 
     fn adaptive_output_limit(
@@ -164,10 +214,9 @@ impl TurnRunner {
                 .max_total_output_tokens
                 .saturating_sub(current_tokens),
         );
-        if next_limit <= current_limit {
+        if next_limit <= current_limit || !self.reserve_continuation(accumulated) {
             return None;
         }
-        self.continuation_count += 1;
         self.adaptive_continuation_count += 1;
         Some(next_limit)
     }
@@ -189,6 +238,7 @@ where
     let mut has_native_tool_calls = false;
     let mut thought_time_ms: u64 = 0;
     let mut thought_tokens: u32 = 0;
+    let mut token_usage = None;
     let mut runner = TurnRunner::with_max_continuations(policy.max_continuations);
     let mut next_output_token_limit = None;
     loop {
@@ -220,6 +270,7 @@ where
         has_native_tool_calls |= chunk.has_native_tool_calls;
         thought_time_ms = thought_time_ms.saturating_add(chunk.thought_time_ms);
         thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
+        add_usage(&mut token_usage, chunk.token_usage);
         if !has_native_tool_calls {
             let cut_off = crate::network::is_cut_off(&accumulated, chunk.finish_reason.as_deref());
             let adaptive_candidate = crate::network::text::is_adaptive_tool_continuation_candidate(
@@ -248,9 +299,9 @@ where
             let should_continue = if adaptive_candidate {
                 adaptive_limit.is_some()
                     || (policy.adaptive_tool_output_limit.is_none()
-                        && runner.allow_continuation(cut_off))
+                        && runner.allow_continuation(cut_off, &accumulated))
             } else {
-                runner.allow_continuation(cut_off)
+                runner.allow_continuation(cut_off, &accumulated)
             };
             if should_continue {
                 next_output_token_limit = adaptive_limit;
@@ -275,6 +326,7 @@ where
             finish_reason,
             thought_time_ms,
             thought_tokens,
+            token_usage,
         });
     }
 }
@@ -287,11 +339,18 @@ mod tests {
     #[test]
     fn continuation_policy_is_bounded_and_reusable() {
         let mut runner = TurnRunner::new();
-        assert!(!runner.allow_continuation(false));
+        assert!(!runner.allow_continuation(false, ""));
         for _ in 0..2 {
-            assert!(runner.allow_continuation(true));
+            assert!(runner.allow_continuation(true, "small prefix"));
         }
-        assert!(!runner.allow_continuation(true));
+        assert!(!runner.allow_continuation(true, "small prefix"));
+    }
+
+    #[test]
+    fn continuation_replay_budget_blocks_large_prefix_growth() {
+        let mut runner = TurnRunner::with_max_continuations(4);
+        let prefix = "token ".repeat(MAX_CONTINUATION_REPLAY_TOKENS as usize * 2);
+        assert!(!runner.allow_continuation(true, &prefix));
     }
 
     #[tokio::test]
@@ -317,6 +376,7 @@ mod tests {
                     output_token_limit: None,
                     thought_time_ms: 0,
                     thought_tokens: 0,
+                    token_usage: None,
                 })
             }
         })
@@ -355,6 +415,7 @@ mod tests {
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
                         thought_tokens: 0,
+                        token_usage: None,
                     })
                 }
             },
@@ -389,6 +450,7 @@ mod tests {
                     output_token_limit: None,
                     thought_time_ms: 0,
                     thought_tokens: 0,
+                    token_usage: None,
                 })
             }
         })
@@ -426,6 +488,7 @@ mod tests {
                     output_token_limit: None,
                     thought_time_ms: 0,
                     thought_tokens: 0,
+                    token_usage: None,
                 })
             }
         })
@@ -477,6 +540,7 @@ mod tests {
                     output_token_limit: None,
                     thought_time_ms: 0,
                     thought_tokens: 0,
+                    token_usage: None,
                 })
             }
         })
@@ -515,6 +579,7 @@ mod tests {
                         400
                     },
                     thought_tokens: if request.previous.is_empty() { 12 } else { 8 },
+                    token_usage: None,
                 })
             }
         })
@@ -559,6 +624,7 @@ mod tests {
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
                         thought_tokens: 0,
+                        token_usage: None,
                     })
                 }
             },
@@ -607,6 +673,7 @@ mod tests {
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
                         thought_tokens: 0,
+                        token_usage: None,
                     })
                 }
             },
@@ -637,6 +704,7 @@ mod tests {
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
                         thought_tokens: 0,
+                        token_usage: None,
                     })
                 }
             },
@@ -670,7 +738,8 @@ mod tests {
                         has_native_tool_calls: false,
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
-                        thought_tokens: 0,
+                    thought_tokens: 0,
+                    token_usage: None,
                     })
                 }
             },
@@ -705,7 +774,8 @@ mod tests {
                         has_native_tool_calls: false,
                         output_token_limit: Some(8_192),
                         thought_time_ms: 0,
-                        thought_tokens: 0,
+                    thought_tokens: 0,
+                    token_usage: None,
                     })
                 }
             },
@@ -743,6 +813,7 @@ mod tests {
                         output_token_limit: None,
                         thought_time_ms: 0,
                         thought_tokens: 0,
+                        token_usage: None,
                     })
                 } else {
                     Err(ResponseError::with_partial(

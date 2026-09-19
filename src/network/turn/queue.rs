@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::app::{AppState, AppStatus, StreamTracker};
+use crate::app::{AppState, AppStatus, OrchestratorLease, StreamTracker};
 
 use super::super::lifecycle;
 use super::super::policy;
@@ -13,13 +13,14 @@ use super::{
     take_turn_context_for_prompt_with_limits,
 };
 
-pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
+pub(crate) async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
     policy: Arc<P>,
+    lease: OrchestratorLease,
 ) {
-    process_queue_orchestrator_inner(client, state, cancel_token, policy, None).await;
+    process_queue_orchestrator_inner(client, state, cancel_token, policy, None, lease).await;
 }
 
 pub(crate) async fn process_queue_orchestrator_with_ui_events<P: policy::TurnPolicy + 'static>(
@@ -28,8 +29,10 @@ pub(crate) async fn process_queue_orchestrator_with_ui_events<P: policy::TurnPol
     cancel_token: tokio_util::sync::CancellationToken,
     policy: Arc<P>,
     ui_events: super::super::ui_adapter::AgentUiEventSender,
+    lease: OrchestratorLease,
 ) {
-    process_queue_orchestrator_inner(client, state, cancel_token, policy, Some(ui_events)).await;
+    process_queue_orchestrator_inner(client, state, cancel_token, policy, Some(ui_events), lease)
+        .await;
 }
 
 async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
@@ -38,6 +41,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
     cancel_token: tokio_util::sync::CancellationToken,
     policy: Arc<P>,
     ui_events: Option<super::super::ui_adapter::AgentUiEventSender>,
+    lease: OrchestratorLease,
 ) {
     dbg_log!("Orchestrator started");
     loop {
@@ -47,7 +51,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Pending queue empty, setting status to Idle");
                 s.enter_idle();
                 s.delegation_active = false;
-                s.orchestrator_running = false;
+                s.release_orchestrator(&lease);
                 break;
             }
             s.status = AppStatus::Streaming;
@@ -81,6 +85,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         crate::logger::operational_event(
             "turn.start",
             serde_json::json!({
+                "session_id": turn_session_id,
                 "wakeup": is_wakeup,
                 "tool_rounds": turn_context.budget.tool_rounds,
                 "segment_rounds": turn_context.segment_rounds(),
@@ -141,6 +146,6 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             break;
         }
     }
-    state.lock().await.orchestrator_running = false;
+    state.lock().await.release_orchestrator(&lease);
     dbg_log!("Orchestrator finished");
 }

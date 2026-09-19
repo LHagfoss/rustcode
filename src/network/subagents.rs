@@ -341,6 +341,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         output_token_limit: buffer.output_token_limit,
                         thought_time_ms: buffer.thought_time_ms,
                         thought_tokens: buffer.thought_tokens,
+                        token_usage: None,
                     })
                 }
             })
