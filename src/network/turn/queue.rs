@@ -47,6 +47,14 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
     loop {
         let (next_prompt, is_wakeup, turn_context, turn_session_id) = {
             let mut s = state.lock().await;
+            // Cancellation owns the current turn until it reaches this
+            // boundary. Do not dequeue the next item while the token is
+            // cancelled: doing so loses queued user prompts when Esc races
+            // with the end of the active stream.
+            if cancel_token.is_cancelled() {
+                s.release_orchestrator(&lease);
+                break;
+            }
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
                 s.enter_idle();
@@ -126,14 +134,15 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             // unwinding. Do not carry its turn context into the replacement.
             break;
         }
-        let schedule_continuation =
-            !cancel_token.is_cancelled() && completed_context.budget.continuation_pending;
-        let preserve_for_wakeup = is_wakeup
-            || schedule_continuation
-            || matches!(
-                completed_context.lifecycle.stop_reason,
-                Some(lifecycle::StopReason::BackgroundPending)
-            );
+        let cancelled = cancel_token.is_cancelled();
+        let schedule_continuation = !cancelled && completed_context.budget.continuation_pending;
+        let preserve_for_wakeup = !cancelled
+            && (is_wakeup
+                || schedule_continuation
+                || matches!(
+                    completed_context.lifecycle.stop_reason,
+                    Some(lifecycle::StopReason::BackgroundPending)
+                ));
         save_turn_context_after_run(&mut s, completed_context, preserve_for_wakeup);
         if schedule_continuation && s.background_turn_context.is_some() {
             s.pending_queue
