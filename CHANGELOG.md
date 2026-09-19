@@ -1,3 +1,8 @@
+## [v0.52.19](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.19) - 2026-09-19
+
+### Fixes
+- Restore responsive live streaming and reliable final assistant transcript handoff, including token usage preservation.
+- Place welcome-banner slash-command hints beside their associated values and keep the layout safe on narrow terminals.
 ## [v0.52.18](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.18) - 2026-09-18
 
 ### Fixes
