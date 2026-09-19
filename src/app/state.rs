@@ -9,6 +9,15 @@ pub(crate) struct StallRecovery {
     pub reset_orchestrator: bool,
 }
 
+/// A single-flight claim for the queue orchestrator.  The session and
+/// generation are both part of the claim so a task that is unwinding after a
+/// cancellation or session switch cannot release a newer orchestrator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrchestratorLease {
+    pub(crate) session_id: String,
+    pub(crate) generation: u64,
+}
+
 /// Stall watchdog timeout (issue #1226). The provider stream idle timeout
 /// (120s) already bounds supplier silence, so a longer active-state silence
 /// means our own machinery died, not the provider.
@@ -48,6 +57,8 @@ pub struct AppState {
     /// concurrent orchestrator — two turns streaming the same history produced
     /// duplicate assistant messages. Spawns gate on this instead.
     pub orchestrator_running: bool,
+    pub(crate) orchestrator_generation: u64,
+    pub(crate) orchestrator_owner: Option<OrchestratorLease>,
     /// Time at which the app most recently entered an eligible idle state.
     /// Unlike user activity, this cannot be stale from before a turn ran.
     pub(crate) idle_since: std::time::Instant,
@@ -324,6 +335,45 @@ impl AppState {
         if self.status == AppStatus::Idle {
             self.idle_since = now;
         }
+    }
+
+    /// Claim the queue orchestrator for the current session.  The returned
+    /// lease must be supplied when the task finishes; this makes release
+    /// conditional on the task that originally claimed the slot.
+    pub(crate) fn claim_orchestrator(&mut self) -> Option<OrchestratorLease> {
+        if self.orchestrator_running {
+            return None;
+        }
+        self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
+        let lease = OrchestratorLease {
+            session_id: self.active_session_id.clone(),
+            generation: self.orchestrator_generation,
+        };
+        self.orchestrator_owner = Some(lease.clone());
+        self.orchestrator_running = true;
+        Some(lease)
+    }
+
+    /// Release only the exact ownership claim that was acquired by a task.
+    /// Returns false when a newer session or generation owns the slot.
+    pub(crate) fn release_orchestrator(&mut self, lease: &OrchestratorLease) -> bool {
+        if self.orchestrator_owner.as_ref() != Some(lease)
+            || self.active_session_id != lease.session_id
+        {
+            return false;
+        }
+        self.orchestrator_owner = None;
+        self.orchestrator_running = false;
+        true
+    }
+
+    /// Invalidate the current owner before cancelling or switching sessions.
+    /// A stale task may still unwind, but its release can no longer affect a
+    /// later claim.
+    pub(crate) fn invalidate_orchestrator(&mut self) {
+        self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
+        self.orchestrator_owner = None;
+        self.orchestrator_running = false;
     }
 
     pub(crate) fn enter_idle(&mut self) {
@@ -724,6 +774,7 @@ impl AppState {
         self.clear_current_response();
         self.clear_live_tool_calls();
         self.running_tools.clear();
+        self.current_token_usage = None;
         self.stream_tracker = None;
         self.generation_start_time = None;
         self.request_redraw();
@@ -784,6 +835,8 @@ impl AppState {
             background_turn_context: None,
             status: AppStatus::Idle,
             orchestrator_running: false,
+            orchestrator_generation: 0,
+            orchestrator_owner: None,
             idle_since: std::time::Instant::now(),
             last_turn_had_model_final_response: false,
             summary_in_flight: false,

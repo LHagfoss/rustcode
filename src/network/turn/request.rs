@@ -308,6 +308,19 @@ pub(super) async fn collect_round(
         Err(error) => {
             dbg_log!("Image fallback failed: {error}");
             let mut s = state.lock().await;
+            if error.starts_with(crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX) {
+                let notice = error
+                    .trim_start_matches(crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX)
+                    .trim()
+                    .to_owned();
+                ctx.response.final_content = notice;
+                ctx.response.final_content_persisted = true;
+                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(
+                    "context preflight exceeded".to_owned(),
+                ));
+                s.current_token_usage = None;
+                return Err(RoundCollectionError::Stop);
+            }
             ctx.lifecycle.stop_reason = Some(if error == "cancelled" {
                 lifecycle::StopReason::Cancelled
             } else {
@@ -327,6 +340,10 @@ pub(super) async fn collect_round(
     {
         let mut s = state.lock().await;
         s.clear_current_response();
+        // Usage belongs to one provider request. Clear the previous round's
+        // value before a new request so an omitted usage footer cannot be
+        // mistaken for a repeated report and counted twice.
+        s.current_token_usage = None;
         s.current_thought_time_ms = 0;
         s.current_thought_tokens = 0;
         s.current_thought_started_at = None;
@@ -443,7 +460,7 @@ pub(super) async fn collect_round(
                     messages_for_response_continuation(&request_msgs, &request.previous);
                 let stream_result = stream_request(
                     &request_client,
-                    request_state,
+                    Arc::clone(&request_state),
                     request_cancel,
                     &request_api_url,
                     &request_model,
@@ -484,6 +501,10 @@ pub(super) async fn collect_round(
                     output_token_limit: buffer.output_token_limit,
                     thought_time_ms: buffer.thought_time_ms,
                     thought_tokens: buffer.thought_tokens,
+                    token_usage: {
+                        let state = request_state.lock().await;
+                        state.current_token_usage.clone()
+                    },
                 })
             }
         })
@@ -497,6 +518,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.stream_retry",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "attempt": transport_retry_attempts,
                         "output_phase": stream_output_phase(&error).label(),
                         "reason": lifecycle::stream_failure_kind_from_message(&error.to_string())
@@ -524,6 +546,20 @@ pub(super) async fn collect_round(
             }
             dbg_log!("Stream request failed: {error}");
             let error_message = error.to_string();
+            if error_message.contains(crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX) {
+                let notice = "[Context checkpoint: the continuation request was not sent because replayed response output exhausted the effective context budget. The completed transcript is preserved. Run /compact or continue with a narrower request.]";
+                let mut s = state.lock().await;
+                if s.active_session_id == request_session_id {
+                    s.history.push(ChatMessage::new("system", notice));
+                    crate::config::save_session_history(&request_session_id, &s.history);
+                }
+                ctx.response.final_content_persisted = true;
+                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(
+                    "context continuation preflight exceeded".to_owned(),
+                ));
+                s.current_token_usage = None;
+                return Err(RoundCollectionError::Stop);
+            }
             let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error_message);
             ctx.response.last_stream_termination =
                 stream_failure_kind.map(lifecycle::StreamTermination::from_failure);
@@ -539,6 +575,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.completed_transport_warning",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "kind": kind.to_string(),
                         "error": error_message,
                     }),
@@ -556,6 +593,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.stream_failure",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "kind": kind.to_string(),
                         "error": error_message,
                     }),
@@ -568,6 +606,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.native_stream_checkpoint",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "call_count": error.partial_native_tool_calls.len(),
                         "outcome": "saved_unexecuted_checkpoint",
                     }),
@@ -588,6 +627,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.stream_recovery",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "attempt": ctx.recovery.stream_recovery_attempts,
                         "kind": stream_failure_kind.map(|kind| kind.to_string()),
                         "partial_content_bytes": error.partial_content.len(),
@@ -602,6 +642,7 @@ pub(super) async fn collect_round(
                 crate::logger::operational_event(
                     "turn.stream_checkpoint",
                     serde_json::json!({
+                        "session_id": request_session_id,
                         "kind": stream_failure_kind.map(|kind| kind.to_string()),
                         "output_phase": stream_output_phase(&error).label(),
                         "partial_content_bytes": error.partial_content.len(),
@@ -641,6 +682,7 @@ pub(super) async fn collect_round(
     crate::logger::operational_event(
         "model.response",
         serde_json::json!({
+            "session_id": request_session_id,
             "round": ctx.budget.tool_rounds,
             "finish_reason": collected.finish_reason,
             "stream_termination":
@@ -648,7 +690,7 @@ pub(super) async fn collect_round(
             "content_bytes": content.len(),
         }),
     );
-    let token_usage = {
+    let latest_token_usage = {
         let s = state.lock().await;
         if s.current_token_usage.is_some() {
             s.current_token_usage.clone()
@@ -659,7 +701,9 @@ pub(super) async fn collect_round(
             estimate
         }
     };
-    ctx.response.last_token_usage = token_usage.clone();
+    let token_usage = collected.token_usage.or_else(|| latest_token_usage.clone());
+    ctx.response.last_token_usage = latest_token_usage;
+    ctx.record_token_usage(token_usage.as_ref());
     {
         let mut s = state.lock().await;
         s.replace_current_response(content.clone());
