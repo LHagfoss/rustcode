@@ -536,6 +536,18 @@ pub fn semantic_failure_class(output: &str) -> Option<&'static str> {
         Some("invalid_command_usage")
     } else if lower.contains("not a git repository") {
         Some("wrong_working_directory")
+    } else if lower.contains("does not have any commits yet")
+        || lower.contains("ambiguous argument 'head'")
+        || lower.contains("ambiguous argument \"head\"")
+        || lower.contains("bad revision 'head'")
+        || lower.contains("bad revision \"head\"")
+    {
+        Some("unborn_repository")
+    } else if lower.contains("remote base branch") && lower.contains("does not exist")
+        || lower.contains("could not find remote ref")
+        || lower.contains("remote ref does not exist")
+    {
+        Some("missing_remote_base")
     } else if lower.contains("api resource not found") {
         Some("resource_not_found")
     } else {
