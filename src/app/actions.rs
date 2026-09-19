@@ -47,12 +47,16 @@ pub async fn handle_escape(
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
-    s.invalidate_orchestrator();
     s.clear_active_turn_projection();
 
     if s.status == AppStatus::Streaming {
         s.enter_idle();
-        s.pending_queue.clear();
+        // Let the current orchestrator unwind and release its lease at the
+        // cancellation boundary. User prompts already accepted while the
+        // stream was active must survive and will be submitted in FIFO order
+        // once that lease is released. Background wakeups are internal
+        // continuations, not user input, and must not restart after Esc.
+        s.consume_observed_background_wakeups();
     } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
         if s.pending_queue.is_empty() {
