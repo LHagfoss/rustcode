@@ -103,6 +103,7 @@ pub(super) async fn handle_app_event(
             current_cancel_token.cancel();
             *current_cancel_token = CancellationToken::new();
             let mut state = app_state.lock().await;
+            state.invalidate_orchestrator();
             state.pending_queue.clear();
             state.background_turn_context = None;
             state.clear_active_turn_projection();

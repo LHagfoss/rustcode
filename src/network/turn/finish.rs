@@ -91,6 +91,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     crate::logger::operational_event(
         "turn.summary",
         serde_json::json!({
+            "session_id": turn_session_id,
             "completed_task": ctx.lifecycle.task_completed,
             "metrics": ctx.benchmark_summary(),
         }),
@@ -100,6 +101,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     crate::logger::operational_event(
         "turn.finish",
         serde_json::json!({
+            "session_id": turn_session_id,
             "completed_task": ctx.lifecycle.task_completed,
             "tool_rounds": ctx.budget.tool_rounds,
             "content_bytes": ctx.response.final_content.len(),
@@ -119,6 +121,11 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
         .current_token_usage
         .clone()
         .or_else(|| ctx.response.last_token_usage.clone());
+    let turn_usage = ctx
+        .response
+        .turn_token_usage
+        .clone()
+        .or_else(|| usage.clone());
     s.continuous_mode = false;
     s.response_time = Some(prompt_start_time.elapsed());
     if let Some(content) = final_transcript {
@@ -165,7 +172,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     s.clear_live_tool_calls();
     s.enter_idle();
     s.request_redraw();
-    if let Some(u) = &usage {
+    if let Some(u) = &turn_usage {
         crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
     }
     s.current_token_usage = usage;

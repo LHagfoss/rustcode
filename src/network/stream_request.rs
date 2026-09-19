@@ -10,6 +10,7 @@ use super::lifecycle::{StreamFailure, StreamFailureKind, StreamTermination};
 use super::retry;
 use super::stream::{NativeToolCallCheckpoint, StreamBuffer};
 use super::{align_alternating_messages, count_tokens, parse_sse_line};
+use crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX;
 
 const RESPONSE_BODY_DECODE_ERROR: &str = "error decoding response body";
 
@@ -1237,6 +1238,219 @@ mod tests {
 
         assert_eq!(bytes, "data: final".len());
         assert_eq!(line, "data: final");
+    }
+
+    async fn stream_test_state(
+        endpoint: &str,
+    ) -> (
+        std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+        String,
+    ) {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(crate::app::AppState::new()));
+        let session_id = {
+            let mut state = state.lock().await;
+            state.api_base_url = endpoint.to_owned();
+            state.model_name = "stream-test".to_owned();
+            state.config.models = vec![crate::config::ModelProfile {
+                name: "stream-test".to_owned(),
+                url: endpoint.to_owned(),
+                model: "stream-test".to_owned(),
+                context_window: Some(8_192),
+                max_tokens: Some(1_024),
+                ..Default::default()
+            }];
+            state.active_session_id.clone()
+        };
+        (state, session_id)
+    }
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) {
+        use tokio::io::AsyncReadExt;
+
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let bytes = socket.read(&mut chunk).await.expect("read request");
+            if bytes == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..bytes]);
+        }
+    }
+
+    async fn write_sse_response(socket: &mut tokio::net::TcpStream, status: &str, body: &[u8]) {
+        use tokio::io::AsyncWriteExt;
+
+        let header = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        socket
+            .write_all(header.as_bytes())
+            .await
+            .expect("write response headers");
+        socket.write_all(body).await.expect("write response body");
+    }
+
+    #[tokio::test]
+    async fn stream_request_flushes_final_sse_content_and_records_usage() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"final answer\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "200 OK", &body).await;
+            socket.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let finish = stream_request(
+            &reqwest::Client::new(),
+            state.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("SSE response should complete");
+
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(buffer.lock().await.content, "final answer");
+        assert_eq!(
+            state.lock().await.current_token_usage,
+            Some(crate::app::TokenUsage {
+                prompt_tokens: 12,
+                completion_tokens: 3,
+                total_tokens: 15,
+                ..Default::default()
+            })
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stream_request_cancellation_interrupts_a_pending_response() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            accepted_tx.send(()).unwrap();
+            let _ = release_rx.await;
+            let _ = socket.shutdown().await;
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            stream_request(
+                &client,
+                state,
+                task_cancel,
+                &endpoint,
+                "stream-test",
+                vec![serde_json::json!({"role": "user", "content": "hello"})],
+                std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new())),
+                false,
+                false,
+                ThinkingMode::Normal,
+                crate::tools::ToolSchemaPolicy::read_only_inspection(),
+                Some(&session_id),
+                None,
+            )
+            .await
+        });
+        accepted_rx.await.unwrap();
+        cancel.cancel();
+        let error = task.await.unwrap().expect_err("request should cancel");
+        assert_eq!(error.kind, StreamFailureKind::Cancelled);
+        release_tx.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stream_request_retries_a_retryable_http_response_before_streaming() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"retried\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            read_http_request(&mut first).await;
+            write_sse_response(&mut first, "503 Service Unavailable", b"busy").await;
+            first.shutdown().await.unwrap();
+
+            let (mut second, _) = listener.accept().await.unwrap();
+            read_http_request(&mut second).await;
+            write_sse_response(&mut second, "200 OK", &body).await;
+            second.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let finish = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("retry should reach the successful stream");
+
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(buffer.lock().await.content, "retried");
+        server.await.unwrap();
     }
 
     #[test]
@@ -2962,6 +3176,33 @@ pub async fn stream_request(
         .map(|p| p.context_budget().provider_overhead_margin)
         .unwrap_or_default();
     let accounted_prompt_tokens = estimated_prompt_tokens.saturating_add(provider_overhead_margin);
+    if let Some(profile) = profile.as_ref() {
+        let budget = profile.context_budget();
+        if estimated_prompt_tokens.saturating_add(budget.completion_reserve)
+            > budget.hard_effective_limit
+        {
+            crate::logger::operational_event(
+                "context.preflight_rejected",
+                serde_json::json!({
+                    "model": model,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                    "completion_reserve": budget.completion_reserve,
+                    "hard_effective_limit": budget.hard_effective_limit,
+                    "reason": "final_projection_over_budget",
+                }),
+            );
+            return Err(StreamFailure {
+                kind: StreamFailureKind::ProviderError,
+                status: None,
+                detail: Some(format!(
+                    "{CONTEXT_PREFLIGHT_STOP_PREFIX}final provider projection exceeds the configured context budget"
+                )),
+                bytes_received: 0,
+                events_received: 0,
+                partial_event_bytes: 0,
+            });
+        }
+    }
     if let Some(capacity) = context_output_capacity {
         output_token_limit = output_token_limit.map(|limit| limit.min(capacity.max(1)));
     }

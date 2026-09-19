@@ -8,7 +8,7 @@ pub(crate) mod tools;
 pub use context::{GroundedArtifactEvidence, SegmentCheckpoint, TurnContext};
 pub use finish::run_agent_turn;
 pub(crate) use finish::run_agent_turn_with_context;
-pub use queue::process_queue_orchestrator;
+pub(crate) use queue::process_queue_orchestrator;
 pub(crate) use queue::process_queue_orchestrator_with_ui_events;
 use recovery::reasoning_loop_final_response;
 pub(crate) use recovery::record_malformed_call;
