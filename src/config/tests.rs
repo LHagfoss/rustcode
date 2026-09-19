@@ -52,6 +52,19 @@ fn test_config_save_load() {
 }
 
 #[test]
+fn discord_rich_presence_defaults_enabled_and_round_trips() {
+    assert!(AppConfig::default().discord_rpc_enabled);
+
+    let dir = temp_dir("discord-rpc");
+    let mut config = AppConfig::default();
+    config.discord_rpc_enabled = false;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert!(!loaded.discord_rpc_enabled);
+}
+
+#[test]
 fn test_default_profile_is_source_of_truth() {
     let dir = temp_dir("latest");
     let config = AppConfig {

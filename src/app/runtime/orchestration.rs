@@ -43,6 +43,7 @@ impl AppRuntime {
         let AppRuntime {
             terminal_runtime,
             app_state,
+            discord_rpc,
             client,
             current_cancel_token,
             needs_redraw,
@@ -358,6 +359,7 @@ impl AppRuntime {
                 render_frame(RenderFrameContext {
                     terminal_runtime: &mut terminal_runtime,
                     app_state: &app_state,
+                    discord_rpc: &discord_rpc,
                     transcript_cursor: &mut transcript_cursor,
                     transcript_state: &mut transcript_state,
                     stream_commits: &mut stream_commits,
@@ -417,6 +419,7 @@ impl AppRuntime {
         }
         crate::config::flush_history();
         restore_terminal(&mut terminal_runtime, exit_summary.composer_y)?;
+        discord_rpc.shutdown();
         Ok(exit_summary)
     }
 }

@@ -907,6 +907,10 @@ pub struct AppConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub audio: AudioConfig,
+    /// Publish the active RustCode session to the local Discord desktop IPC
+    /// client when available. This never contains Discord credentials.
+    #[serde(default = "default_true")]
+    pub discord_rpc_enabled: bool,
 
     #[serde(default)]
     pub agent_mode: AgentMode,
@@ -952,6 +956,8 @@ struct RuntimeConfig {
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     audio: AudioConfig,
+    #[serde(default = "default_true")]
+    discord_rpc_enabled: bool,
     #[serde(default)]
     agent_mode: AgentMode,
     #[serde(default)]
@@ -994,6 +1000,8 @@ struct TomlConfig {
     mcp_servers: Option<Vec<McpServerConfig>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audio: Option<AudioConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discord_rpc_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1132,6 +1140,7 @@ impl Default for AppConfig {
                 enabled: true,
             }],
             audio: AudioConfig::default(),
+            discord_rpc_enabled: true,
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1340,6 +1349,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.theme = runtime.theme;
                     config.start_time = runtime.start_time;
                     config.audio = runtime.audio;
+                    config.discord_rpc_enabled = runtime.discord_rpc_enabled;
                 }
                 None => {
                     eprintln!(
@@ -1414,6 +1424,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
         audio: Some(config.audio.clone()),
+        discord_rpc_enabled: Some(config.discord_rpc_enabled),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
@@ -1479,6 +1490,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(audio) = file.audio {
         config.audio = audio;
+    }
+    if let Some(enabled) = file.discord_rpc_enabled {
+        config.discord_rpc_enabled = enabled;
     }
     if let Some(agent_mode) = file.agent_mode {
         config.agent_mode = agent_mode;
@@ -1547,6 +1561,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.audio.is_some() {
         persisted.audio = global.audio.clone();
     }
+    if file.discord_rpc_enabled.is_some() {
+        persisted.discord_rpc_enabled = global.discord_rpc_enabled;
+    }
     if file.agent_mode.is_some() {
         persisted.agent_mode = global.agent_mode;
     }
@@ -1590,6 +1607,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         last_active_session_id: None,
         mcp_servers: None,
         audio: None,
+        discord_rpc_enabled: None,
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,
