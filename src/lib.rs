@@ -7,6 +7,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod context;
+mod discord_rpc;
 mod inline_terminal;
 mod mcp;
 mod memory;
@@ -162,6 +163,59 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             if !report.errors.is_empty() {
                 std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(cli::Commands::Discord {
+        setup,
+        status: _status,
+        enable,
+        disable,
+    }) = cli_args.command.as_ref()
+    {
+        let workspace = std::env::current_dir()?;
+        let (_, _, mut config) = crate::config::load_config_for_workspace(&workspace);
+        if *setup || *enable || *disable {
+            config.discord_rpc_enabled = !*disable;
+            crate::config::save_entire_config(&config);
+            println!(
+                "Discord Rich Presence {}.",
+                if config.discord_rpc_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            if *setup {
+                println!(
+                    "Keep the Discord desktop app running and ensure the RustCode application has a `rustcode_logo` large asset."
+                );
+                println!(
+                    "Rich Presence uses Discord's local desktop IPC; RustCode has no Discord login flow and never uses passwords, tokens, or browser profiles."
+                );
+            }
+        } else {
+            let socket = crate::discord_rpc::ipc_socket_detected();
+            println!(
+                "Discord Rich Presence: {}",
+                if config.discord_rpc_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            println!(
+                "Discord desktop IPC: {}",
+                if socket {
+                    "socket detected"
+                } else {
+                    "not detected (Discord may be closed)"
+                }
+            );
+            if let Some(path) = crate::config::get_config_dir() {
+                println!("Config directory: {}", path.display());
             }
         }
         return Ok(());

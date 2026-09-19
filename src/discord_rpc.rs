@@ -1,152 +1,185 @@
+//! Best-effort Discord Rich Presence through the local desktop IPC socket.
+//!
+//! The IPC client is deliberately isolated on a standard-library worker
+//! thread. Discord may be stopped, starting, or disconnected at any time, and
+//! none of those cases should stall the TUI or require a Discord login flow.
+
+use crate::app::activity::{ActivityKind, ActivitySnapshot};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DISCORD_CLIENT_ID: &str = "1533154312622964970";
+pub(crate) const DISCORD_CLIENT_ID: &str = "1533154312622964970";
 const DISCORD_LARGE_IMAGE: &str = "rustcode_logo";
+const MAX_ACTIVITY_CHARS: usize = 128;
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
-pub struct DiscordRpcHandler {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiscordPresence {
+    pub(crate) state: String,
+    pub(crate) details: String,
+}
+
+impl DiscordPresence {
+    pub(crate) fn from_activity(activity: &ActivitySnapshot, session_title: &str) -> Self {
+        let state = match activity.kind {
+            ActivityKind::Ready => "Idle",
+            ActivityKind::Queued => "Queued",
+            ActivityKind::Working => "Thinking",
+            ActivityKind::RunningTool => "Running tools",
+            ActivityKind::ActionRequired => "Action required",
+        };
+        let detail = activity
+            .detail
+            .as_deref()
+            .filter(|detail| !detail.trim().is_empty())
+            .map(|detail| format!("{session_title} · {detail}"))
+            .unwrap_or_else(|| session_title.to_owned());
+
+        Self {
+            state: sanitize(state),
+            details: sanitize(if detail.trim().is_empty() {
+                "RustCode session"
+            } else {
+                &detail
+            }),
+        }
+    }
+}
+
+fn sanitize(value: &str) -> String {
+    let compact = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut value = compact.chars().take(MAX_ACTIVITY_CHARS).collect::<String>();
+    if compact.chars().count() > MAX_ACTIVITY_CHARS {
+        value.push('…');
+    }
+    value
+}
+
+/// Candidate Unix IPC sockets used by Discord's desktop client. This is only
+/// a read-only status probe; actual connection remains delegated to the RPC
+/// crate. Windows uses named pipes, so there is no filesystem probe there.
+pub(crate) fn ipc_socket_candidates() -> Vec<PathBuf> {
+    #[cfg(unix)]
+    {
+        let mut roots = Vec::new();
+        for key in ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                let root = PathBuf::from(value);
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+        }
+        if !roots.iter().any(|root| root == "/tmp") {
+            roots.push(PathBuf::from("/tmp"));
+        }
+        roots
+            .into_iter()
+            .flat_map(|root| (0..10).map(move |index| root.join(format!("discord-ipc-{index}"))))
+            .collect()
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+}
+
+pub(crate) fn ipc_socket_detected() -> bool {
+    ipc_socket_detected_in(&ipc_socket_candidates())
+}
+
+fn ipc_socket_detected_in(candidates: &[PathBuf]) -> bool {
+    candidates.iter().any(|path| path.exists())
+}
+
+/// The synchronous IPC implementation, kept private to the worker thread.
+struct DiscordRpcHandler {
     client: Option<DiscordIpcClient>,
     start_time: u64,
     enabled: bool,
 }
 
 impl DiscordRpcHandler {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             client: None,
             start_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
+                .map(|duration| duration.as_secs())
                 .unwrap_or(0),
             enabled: false,
         }
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
-        if self.enabled == enabled {
-            return;
+    fn connect(&mut self) -> bool {
+        if !self.enabled || self.client.is_some() {
+            return self.client.is_some();
         }
-        if enabled {
-            self.enabled = true;
-            self.connect();
+        let Ok(mut client) = DiscordIpcClient::new(DISCORD_CLIENT_ID) else {
+            return false;
+        };
+        if client.connect().is_ok() {
+            self.client = Some(client);
+            true
         } else {
-            self.clear_activity_internal();
-            self.enabled = false;
+            false
+        }
+    }
+
+    fn set_activity(&mut self, presence: &DiscordPresence) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if !self.connect() {
+            return false;
+        }
+        let Some(client) = &mut self.client else {
+            return false;
+        };
+        let payload = activity::Activity::new()
+            .state(&presence.state)
+            .details(&presence.details)
+            .assets(activity::Assets::new().large_image(DISCORD_LARGE_IMAGE))
+            .timestamps(activity::Timestamps::new().start(self.start_time as i64));
+        if client.set_activity(payload).is_ok() {
+            true
+        } else {
             self.disconnect();
+            false
+        }
+    }
+
+    fn clear_activity(&mut self) {
+        if let Some(client) = &mut self.client {
+            let _ = client.clear_activity();
         }
     }
 
     fn disconnect(&mut self) {
-        if let Some(mut client) = self.client.take()
-            && let Err(e) = client.close()
-        {
-            eprintln!("Failed to close Discord RPC client: {}", e);
+        if let Some(mut client) = self.client.take() {
+            let _ = client.close();
         }
     }
 
-    fn connect(&mut self) {
-        if !self.enabled || self.client.is_some() {
-            return;
-        }
-
-        let mut client_instance = match DiscordIpcClient::new(DISCORD_CLIENT_ID) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to create Discord RPC client: {}", e);
-                return;
-            }
-        };
-
-        match client_instance.connect() {
-            Ok(_) => {
-                self.client = Some(client_instance);
-                self.set_activity_once("Idle", "");
-            }
-            Err(e) => {
-                eprintln!("Failed to connect to Discord RPC: {}", e);
-                self.client = None;
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn set_idle(&mut self, model_name: Option<&str>) {
-        let details = model_name.map_or("", |m| m);
-        self.set_activity("Idle", details);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_queued(&mut self, model_name: Option<&str>) {
-        let details = model_name.map_or("", |m| m);
-        self.set_activity("Queued", details);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_thinking(&mut self, model_name: Option<&str>) {
-        let details = model_name.map_or("", |m| m);
-        self.set_activity("Thinking", details);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_streaming(&mut self, model_name: Option<&str>) {
-        let details = model_name.map_or("", |m| m);
-        self.set_activity("Streaming", details);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_running_tools(&mut self, model_name: Option<&str>) {
-        let details = model_name.map_or("", |m| m);
-        self.set_activity("Running Tools", details);
-    }
-
-    pub fn set_activity(&mut self, state: &str, details: &str) {
-        if !self.enabled {
-            return;
-        }
-        // Attempt to connect if not already connected.
-        // This also sets the initial "Idle" activity.
-        self.connect();
-
-        // Try to set the activity once.
-        if self.set_activity_once(state, details) {
-            return;
-        }
-
-        // If setting activity failed, it might be due to a disconnected client.
-        // Disconnect the old client (if any), reconnect, and try setting activity once more.
-        self.disconnect();
-        self.connect();
-        self.set_activity_once(state, details);
-    }
-
-    fn set_activity_once(&mut self, state: &str, details: &str) -> bool {
-        let Some(client) = &mut self.client else {
-            return false;
-        };
-
-        let activity = activity::Activity::new()
-            .state(state)
-            .details(details)
-            .assets(activity::Assets::new().large_image(DISCORD_LARGE_IMAGE))
-            .timestamps(activity::Timestamps::new().start(self.start_time as i64));
-        if let Err(e) = client.set_activity(activity) {
-            eprintln!("Failed to set Discord RPC activity: {}", e);
-            return false;
-        }
-
-        true
-    }
-
-    fn clear_activity_internal(&mut self) {
-        if let Some(client) = &mut self.client
-            && let Err(e) = client.clear_activity()
-        {
-            eprintln!("Failed to clear Discord RPC activity: {}", e);
-        }
-    }
-
-    pub fn shutdown(&mut self) {
-        self.clear_activity_internal();
+    fn shutdown(&mut self) {
+        self.clear_activity();
         self.enabled = false;
         self.disconnect();
     }
@@ -154,16 +187,95 @@ impl DiscordRpcHandler {
 
 impl Drop for DiscordRpcHandler {
     fn drop(&mut self) {
-        self.clear_activity_internal();
-        self.disconnect();
+        self.shutdown();
     }
 }
 
-pub(crate) fn activity_for_tools(running_tools: usize) -> &'static str {
-    if running_tools == 0 {
-        "Thinking"
-    } else {
-        "Running tools"
+enum Command {
+    Update(DiscordPresence),
+    Shutdown,
+}
+
+/// Non-blocking handle used by the TUI. Presence updates are deduplicated
+/// before they reach the worker, so streaming frames do not spam Discord IPC.
+pub(crate) struct DiscordRpcWorker {
+    sender: Sender<Command>,
+    last_presence: Arc<Mutex<Option<DiscordPresence>>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl DiscordRpcWorker {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("rustcode-discord-rpc".to_owned())
+            .spawn(move || run_worker(receiver, enabled))
+            .expect("Discord RPC worker thread should start");
+        Self {
+            sender,
+            last_presence: Arc::new(Mutex::new(None)),
+            thread: Some(thread),
+        }
+    }
+
+    pub(crate) fn update(&self, presence: DiscordPresence) {
+        let Ok(mut last_presence) = self.last_presence.lock() else {
+            return;
+        };
+        if last_presence.as_ref() == Some(&presence) {
+            return;
+        }
+        *last_presence = Some(presence.clone());
+        let _ = self.sender.send(Command::Update(presence));
+    }
+
+    pub(crate) fn shutdown(mut self) {
+        let _ = self.sender.send(Command::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for DiscordRpcWorker {
+    fn drop(&mut self) {
+        let _ = self.sender.send(Command::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
+    let mut handler = DiscordRpcHandler::new();
+    let enabled = initially_enabled;
+    handler.enabled = initially_enabled;
+    let mut desired = None;
+    let mut retry_at = Instant::now();
+    let mut retry_delay = INITIAL_RETRY_DELAY;
+
+    loop {
+        match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(Command::Update(presence)) => desired = Some(presence),
+            Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+
+        if !enabled {
+            continue;
+        }
+        let Some(presence) = desired.as_ref() else {
+            continue;
+        };
+        if Instant::now() < retry_at {
+            continue;
+        }
+        if handler.set_activity(presence) {
+            retry_delay = INITIAL_RETRY_DELAY;
+        } else {
+            retry_at = Instant::now() + retry_delay;
+            retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+        }
     }
 }
 
@@ -171,76 +283,56 @@ pub(crate) fn activity_for_tools(running_tools: usize) -> &'static str {
 mod tests {
     use super::*;
 
-    #[test]
-    fn tool_activity_distinguishes_idle_tool_execution() {
-        assert_eq!(activity_for_tools(0), "Thinking");
-        assert_eq!(activity_for_tools(1), "Running tools");
-        assert_eq!(activity_for_tools(3), "Running tools");
+    fn snapshot(kind: ActivityKind, detail: Option<&str>) -> ActivitySnapshot {
+        ActivitySnapshot {
+            kind,
+            label: "test".to_owned(),
+            detail: detail.map(str::to_owned),
+            animated: false,
+        }
     }
 
     #[test]
-    fn shutdown_is_safe_when_no_client_connected() {
-        let mut handler = DiscordRpcHandler::new();
-        // No client connected
-        handler.shutdown();
-        // Should not panic or error
-        assert!(handler.client.is_none());
+    fn activity_mapping_includes_session_title_and_state() {
+        let presence = DiscordPresence::from_activity(
+            &snapshot(ActivityKind::RunningTool, Some("run_command")),
+            "Fix parser",
+        );
+        assert_eq!(presence.state, "Running tools");
+        assert_eq!(presence.details, "Fix parser · run_command");
     }
 
     #[test]
-    fn set_activity_reconnects_on_failure() {
-        let mut handler = DiscordRpcHandler::new();
-        handler.enabled = true; // Manually enable for testing reconnect logic without full connect
-        // Simulate a client that fails to set activity
-        // This is tricky to test directly without mocking the DiscordIpcClient trait.
-        // For now, we'll rely on the existing logic that if set_activity_once returns false,
-        // it triggers a reconnect.
-        // A more robust test would involve a mock DiscordIpcClient.
-        handler.set_activity("Thinking", "model_name");
-        // We can't assert much here without mocking, but we can ensure it doesn't panic.
+    fn activity_mapping_sanitizes_and_bounds_titles() {
+        let presence = DiscordPresence::from_activity(
+            &snapshot(ActivityKind::Ready, None),
+            &format!("bad\n{}", "x".repeat(200)),
+        );
+        assert!(!presence.details.contains('\n'));
+        assert!(presence.details.chars().count() <= MAX_ACTIVITY_CHARS + 1);
     }
 
     #[test]
-    fn set_enabled_connects_and_sets_idle() {
-        let mut handler = DiscordRpcHandler::new();
-        handler.set_enabled(true);
-        // We can't directly check if it connected and set idle without mocking,
-        // but we can check if client is Some after enabling.
-        assert!(handler.client.is_some());
+    fn disabled_worker_accepts_updates_without_connecting() {
+        let worker = DiscordRpcWorker::new(false);
+        worker.update(DiscordPresence {
+            state: "Idle".to_owned(),
+            details: "session".to_owned(),
+        });
+        worker.shutdown();
     }
 
     #[test]
-    fn set_enabled_disconnects_and_clears_activity() {
-        let mut handler = DiscordRpcHandler::new();
-        handler.set_enabled(true); // Connect first
-        assert!(handler.client.is_some());
-        handler.set_enabled(false);
-        assert!(handler.client.is_none());
+    fn no_discord_socket_is_a_normal_unavailable_state() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let candidates = (0..10)
+            .map(|index| temporary.path().join(format!("discord-ipc-{index}")))
+            .collect::<Vec<_>>();
+        assert!(!ipc_socket_detected_in(&candidates));
     }
 
     #[test]
-    fn shutdown_clears_activity_and_disconnects() {
-        let mut handler = DiscordRpcHandler::new();
-        handler.set_enabled(true); // Connect first
-        assert!(handler.client.is_some());
-        handler.shutdown();
-        assert!(handler.client.is_none());
-    }
-
-    #[test]
-    fn activity_includes_rustcode_logo() {
-        let mut handler = DiscordRpcHandler::new();
-        handler.set_enabled(true);
-        // This test is more conceptual as we can't inspect the activity sent to Discord directly.
-        // We rely on the `set_activity_once` function constructing the activity correctly.
-        // The `DISCORD_LARGE_IMAGE` constant is used in `set_activity_once`.
-        // If `set_activity_once` succeeds, it implies the activity was constructed with the logo.
-        assert!(handler.set_activity_once("Idle", ""));
-    }
-
-    #[test]
-    fn set_activity_once_returns_false_when_client_not_connected() {
-        let mut handler = DiscordRpcHandler::new();
-        assert!(!handler.set_activity_once("Idle", ""));
+    fn handler_shutdown_without_connection_is_safe() {
+        DiscordRpcHandler::new().shutdown();
     }
 }
