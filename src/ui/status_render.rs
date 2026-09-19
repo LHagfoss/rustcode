@@ -356,6 +356,46 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         .trim_end()
         .to_owned();
     let model_width = model_display.width();
+
+    let effort = state
+        .active_model_profile()
+        .and_then(|profile| profile.reasoning_effort.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let effort_display = fit_to_width(&effort, inner_w.saturating_sub(label_w))
+        .trim_end()
+        .to_owned();
+    let effort_width = effort_display.width();
+
+    let context_window = format!(
+        "{} tokens",
+        format_token_count(state.active_context_window())
+    );
+    let context_display = fit_to_width(&context_window, inner_w.saturating_sub(label_w))
+        .trim_end()
+        .to_owned();
+    let context_width = context_display.width();
+
+    // Keep the command hints in a stable second column. The values are all
+    // rendered after the fixed label column, so the longest displayed value
+    // determines where every hint starts.
+    let hint_column = label_w + model_width.max(effort_width).max(context_width) + 4;
+    let append_change_hint = |spans: &mut Vec<Span<'static>>, left_width: usize, command: &str| {
+        let hint_width = command.width() + " to change".width();
+        if hint_column <= inner_w && hint_column + hint_width <= inner_w {
+            spans.push(Span::styled(
+                " ".repeat(hint_column.saturating_sub(left_width)),
+                Style::default().bg(reset_bg),
+            ));
+            spans.extend([
+                Span::styled(
+                    command.to_owned(),
+                    Style::default().fg(primary).bg(reset_bg),
+                ),
+                Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
+            ]);
+        }
+    };
+
     let mut model_spans = vec![
         Span::styled(
             fit_to_width("  model:", label_w),
@@ -369,30 +409,9 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    let append_change_hint = |spans: &mut Vec<Span<'static>>, value_width: usize, command: &str| {
-        let hint_width = 4 + command.width() + " to change".width();
-        if value_width + hint_width <= inner_w.saturating_sub(label_w) {
-            spans.extend([
-                Span::styled("    ", Style::default().bg(reset_bg)),
-                Span::styled(
-                    command.to_owned(),
-                    Style::default().fg(primary).bg(reset_bg),
-                ),
-                Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
-            ]);
-        }
-    };
-    append_change_hint(&mut model_spans, model_width, "/model");
+    append_change_hint(&mut model_spans, label_w + model_width, "/model");
     banner.push(make_row(model_spans));
 
-    let effort = state
-        .active_model_profile()
-        .and_then(|profile| profile.reasoning_effort.clone())
-        .unwrap_or_else(|| "default".to_string());
-    let effort_display = fit_to_width(&effort, inner_w.saturating_sub(label_w))
-        .trim_end()
-        .to_owned();
-    let effort_width = effort_display.width();
     let mut effort_spans = vec![
         Span::styled(
             fit_to_width("  effort:", label_w),
@@ -406,16 +425,9 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    append_change_hint(&mut effort_spans, effort_width, "/effort");
+    append_change_hint(&mut effort_spans, label_w + effort_width, "/effort");
     banner.push(make_row(effort_spans));
 
-    let context_window = format!(
-        "{} tokens",
-        format_token_count(state.active_context_window())
-    );
-    let context_display = fit_to_width(&context_window, inner_w.saturating_sub(label_w))
-        .trim_end()
-        .to_owned();
     let mut context_spans = vec![
         Span::styled(
             fit_to_width("  context:", label_w),
@@ -429,7 +441,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    append_change_hint(&mut context_spans, context_display.width(), "/context");
+    append_change_hint(&mut context_spans, label_w + context_width, "/context");
     banner.push(make_row(context_spans));
 
     // Workspace location
@@ -501,19 +513,29 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     // Help gets its own row because it explains the command interface rather
     // than changing one of the values above.
+    // At very narrow widths the shared column may be outside the box. Keep
+    // the existing compact help fallback so /help remains discoverable.
+    let help_column = if hint_column + "/help".width() <= inner_w {
+        hint_column
+    } else {
+        label_w
+    };
+    let help_available = inner_w.saturating_sub(help_column);
     let mut help_spans = vec![
         Span::styled(
             fit_to_width("  help:", label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
-            fit_to_width("/help", inner_w.saturating_sub(label_w))
-                .trim_end()
-                .to_owned(),
+            " ".repeat(help_column.saturating_sub(label_w)),
+            Style::default().bg(reset_bg),
+        ),
+        Span::styled(
+            fit_to_width("/help", help_available).trim_end().to_owned(),
             Style::default().fg(primary).bg(reset_bg),
         ),
     ];
-    if "/help".width() + " for commands".width() <= inner_w.saturating_sub(label_w) {
+    if "/help".width() + " for commands".width() <= help_available {
         help_spans.push(Span::styled(
             " for commands",
             Style::default().fg(muted_c).bg(reset_bg),
