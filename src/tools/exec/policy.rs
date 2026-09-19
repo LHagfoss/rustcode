@@ -268,6 +268,40 @@ pub(crate) fn command_confirmation_preview(command: &str) -> String {
     format!("resolved command: {command}\nscope: {scope}")
 }
 
+/// Return the explicitly requested base branch from a `gh pr create` command.
+///
+/// The command is still executed by the normal shell path; this narrow parser
+/// only gives the harness enough information to avoid asking GitHub to create
+/// a PR when the local repository has no corresponding remote base.
+pub(crate) fn pull_request_base(command: &str) -> Option<String> {
+    split_command_segments(command)
+        .into_iter()
+        .find_map(|segment| {
+            let tokens = segment.split_whitespace().collect::<Vec<_>>();
+            let binary = tokens.first()?.rsplit(['/', '\\']).next()?;
+            if binary != "gh"
+                || tokens.get(1).copied() != Some("pr")
+                || tokens.get(2).copied() != Some("create")
+            {
+                return None;
+            }
+
+            tokens[3..]
+                .windows(2)
+                .find_map(|pair| {
+                    (pair[0] == "--base").then(|| pair[1].trim_matches(['\'', '"']).to_string())
+                })
+                .or_else(|| {
+                    tokens[3..].iter().find_map(|token| {
+                        token
+                            .strip_prefix("--base=")
+                            .map(|base| base.trim_matches(['\'', '"']).to_string())
+                    })
+                })
+                .filter(|base| !base.is_empty())
+        })
+}
+
 fn segment_is_interactive_sudo(segment: &str) -> bool {
     let mut tokens = segment.split_whitespace();
     let Some(first) = tokens.next() else {

@@ -873,6 +873,20 @@ fn semantic_failure_classes_collapse_equivalent_command_failures() {
         Some("wrong_working_directory")
     );
     assert_eq!(
+        semantic_failure_class("fatal: your current branch 'main' does not have any commits yet"),
+        Some("unborn_repository")
+    );
+    assert_eq!(
+        semantic_failure_class("fatal: ambiguous argument 'HEAD': unknown revision"),
+        Some("unborn_repository")
+    );
+    assert_eq!(
+        semantic_failure_class(
+            "[harness: PR creation blocked — remote base branch `main` does not exist on `origin`.]"
+        ),
+        Some("missing_remote_base")
+    );
+    assert_eq!(
         semantic_failure_class(r#"{"message":"API resource not found"}"#),
         Some("resource_not_found")
     );
