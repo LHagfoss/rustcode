@@ -1,5 +1,51 @@
 use super::{build_idle_recap, compact_idle_summary, handle_ctrl_c, parse_token_count};
 
+#[tokio::test]
+async fn escape_preserves_fifo_prompts_until_the_orchestrator_releases() {
+    use crate::app::{AppState, AppStatus};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.pending_queue = vec![
+        "__task_wakeup__:finished".to_owned(),
+        "first follow-up".to_owned(),
+        "__task_wakeup__:later".to_owned(),
+        "second follow-up".to_owned(),
+    ];
+    let lease = app
+        .claim_orchestrator()
+        .expect("the active turn owns the orchestrator");
+    let state = Arc::new(Mutex::new(app));
+    let mut cancel_token = CancellationToken::new();
+    let cancelled_token = cancel_token.clone();
+
+    super::handle_escape(&state, &mut cancel_token).await;
+
+    let mut state_after_escape = state.lock().await;
+    assert!(cancelled_token.is_cancelled());
+    assert!(!cancel_token.is_cancelled());
+    assert_eq!(state_after_escape.status, AppStatus::Idle);
+    assert_eq!(
+        state_after_escape.pending_queue,
+        ["first follow-up", "second follow-up"]
+    );
+    assert!(state_after_escape.orchestrator_running);
+    assert!(state_after_escape.claim_orchestrator().is_none());
+    drop(state_after_escape);
+
+    // The cancelled task, not Esc, releases the lease at the turn boundary.
+    let mut state_after_boundary = state.lock().await;
+    assert!(state_after_boundary.release_orchestrator(&lease));
+    assert!(!state_after_boundary.orchestrator_running);
+    assert_eq!(
+        state_after_boundary.pending_queue,
+        ["first follow-up", "second follow-up"]
+    );
+}
+
 #[test]
 fn idle_summary_removes_headings_and_bullets() {
     assert_eq!(
