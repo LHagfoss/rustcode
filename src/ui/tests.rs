@@ -628,6 +628,22 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
         .find(|line| line.contains("help:"))
         .expect("banner help row");
     assert!(help_row.contains("/help for commands"));
+
+    let hint_positions = ["/model", "/effort", "/context", "/help"]
+        .into_iter()
+        .map(|command| {
+            rendered
+                .iter()
+                .find_map(|line| line.find(command))
+                .unwrap_or_else(|| panic!("{command} missing: {rendered:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        hint_positions
+            .iter()
+            .all(|position| *position == hint_positions[0]),
+        "slash-command hints must share a second column: {rendered:?}"
+    );
 }
 
 #[test]
@@ -702,7 +718,11 @@ fn welcome_banner_omits_hints_that_do_not_fit() {
 
     assert!(lines.iter().all(|line| line.width() <= 32));
     assert!(rendered.iter().all(|line| !line.contains("to change")));
-    assert!(rendered.iter().any(|line| line.contains("/help")));
+    let help_row = rendered
+        .iter()
+        .find(|line| line.contains("help:"))
+        .expect("narrow banner keeps a help row");
+    assert!(help_row.contains("/help"));
 }
 
 #[test]
