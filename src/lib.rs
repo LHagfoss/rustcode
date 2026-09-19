@@ -167,9 +167,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if let Some(cli::Commands::Sync { command }) = cli_args.command {
-        match command {
-            Some(cli::SyncCommands::Pull) => {
+    if let Some(cli::Commands::Sync {
+        command,
+        pull,
+        push,
+    }) = cli_args.command
+    {
+        let action = match cli::resolve_sync_action(command, pull, push) {
+            Ok(action) => action,
+            Err(error) => {
+                eprintln!("Sync argument error: {error}");
+                std::process::exit(2);
+            }
+        };
+
+        match action {
+            cli::SyncAction::Pull => {
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );
@@ -179,7 +192,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 println!("✅ [sync] Config sync complete!");
             }
-            Some(cli::SyncCommands::Push) => {
+            cli::SyncAction::Push => {
                 println!("💾 [sync] Staging and pushing config, skills, and themes...");
                 if let Err(e) = config::sync_config_push() {
                     eprintln!("Sync push failed: {e}");
@@ -187,7 +200,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 println!("✅ [sync] Config sync complete!");
             }
-            Some(cli::SyncCommands::Init { remote_url }) => {
+            cli::SyncAction::Init(remote_url) => {
                 if let Err(e) = config::init_sync_repo(&remote_url) {
                     eprintln!("Error initializing sync repo: {e}");
                     std::process::exit(1);
@@ -196,7 +209,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "Sync repository setup complete! You can now run `rustcode sync` anytime."
                 );
             }
-            None => {
+            cli::SyncAction::PullThenPush => {
                 // Default behavior for `rustcode sync` (pull then push)
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
