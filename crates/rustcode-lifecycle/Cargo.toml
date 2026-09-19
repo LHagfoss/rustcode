@@ -1,4 +1,4 @@
 [package]
 name = "rustcode-lifecycle"
-version = "0.52.18"
+version = "0.52.19"
 edition = "2024"
