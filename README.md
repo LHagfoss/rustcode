@@ -216,6 +216,20 @@ CLI overrides > nearest project config > global config > built-in defaults
 Project files are partial overrides; omitted fields continue to come from the
 lower-precedence layer.
 
+### Syncing config, skills, and themes
+
+Initialize a config sync repository with a remote Git URL, then choose a
+direction explicitly or run the default pull-then-push sync:
+
+```bash
+rustcode sync init <remote-git-url>
+rustcode sync --pull       # or: rustcode sync pull
+rustcode sync --push       # or: rustcode sync push
+rustcode sync              # pull, then push
+```
+
+`--pull` and `--push` cannot be used together.
+
 ### Optional local audio generation (Apple Silicon)
 
 RustCode can generate project-local WAV effects and instrumental music through
