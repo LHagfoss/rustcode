@@ -34,6 +34,7 @@ pub(super) async fn session_title_for_render(
 pub(super) struct RenderFrameContext<'a> {
     pub terminal_runtime: &'a mut TerminalRuntime,
     pub app_state: &'a Arc<Mutex<AppState>>,
+    pub discord_rpc: &'a crate::discord_rpc::DiscordRpcWorker,
     pub transcript_cursor: &'a mut crate::ui::scrollback::TranscriptCursor,
     pub transcript_state: &'a mut TranscriptState,
     pub stream_commits: &'a mut crate::ui::scrollback::StreamCommitQueue,
@@ -49,6 +50,7 @@ pub(super) async fn render_frame(
     let RenderFrameContext {
         terminal_runtime,
         app_state,
+        discord_rpc,
         transcript_cursor,
         transcript_state,
         stream_commits,
@@ -113,6 +115,10 @@ pub(super) async fn render_frame(
         }
 
         let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
+        discord_rpc.update(crate::discord_rpc::DiscordPresence::from_activity(
+            &activity,
+            &session_name,
+        ));
         let should_send_progress = guard.current_terminal_progress != Some(progress)
             || (progress != crate::app::activity::TerminalProgress::Hidden
                 && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));

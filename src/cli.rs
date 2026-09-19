@@ -68,6 +68,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<SessionCommands>,
     },
+
+    /// Configure RustCode's optional local Discord Rich Presence publisher
+    Discord {
+        /// Enable Rich Presence and print desktop Discord setup guidance
+        #[arg(long, conflicts_with_all = ["status", "enable", "disable"])]
+        setup: bool,
+        /// Show configuration and whether a local Discord IPC socket is visible
+        #[arg(long, conflicts_with_all = ["setup", "enable", "disable"])]
+        status: bool,
+        /// Enable Rich Presence in the RustCode config
+        #[arg(long, conflicts_with_all = ["setup", "status", "disable"])]
+        enable: bool,
+        /// Disable Rich Presence in the RustCode config
+        #[arg(long, conflicts_with_all = ["setup", "status", "enable"])]
+        disable: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -182,6 +198,29 @@ mod tests {
                 command: Some(SessionCommands::Migrate { dry_run: true })
             })
         ));
+    }
+
+    #[test]
+    fn parses_discord_configuration_flags() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "discord", "--setup"])
+                .unwrap()
+                .command,
+            Some(Commands::Discord { setup: true, .. })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "discord", "--status"])
+                .unwrap()
+                .command,
+            Some(Commands::Discord { status: true, .. })
+        ));
+        assert!(Cli::try_parse_from(["rustcode", "discord", "--enable"]).is_ok());
+        assert!(Cli::try_parse_from(["rustcode", "discord", "--disable"]).is_ok());
+    }
+
+    #[test]
+    fn discord_configuration_flags_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from(["rustcode", "discord", "--enable", "--disable"]).is_err());
     }
 
     #[test]

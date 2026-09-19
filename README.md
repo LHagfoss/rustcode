@@ -16,6 +16,7 @@ Now supports ollama or openai compatible APIs.
 - [ACP server integration](docs/acp.md)
 - [Provider stream traces](docs/provider-stream-traces.md)
 - [Runtime and workspace architecture](docs/architecture.md)
+- [Discord Rich Presence](docs/discord-rich-presence.md)
 - [Build-boundary benchmark](scripts/bench-build-boundaries.md)
 
 ## Installation
