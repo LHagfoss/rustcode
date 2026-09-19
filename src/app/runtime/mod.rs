@@ -47,6 +47,7 @@ const STREAM_FRAME_INTERVAL: Duration = EVENT_POLL_INTERVAL;
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
+    discord_rpc: crate::discord_rpc::DiscordRpcWorker,
     client: reqwest::Client,
     current_cancel_token: CancellationToken,
     needs_redraw: bool,
@@ -94,10 +95,15 @@ impl AppRuntime {
         let (app_event_sender, app_event_receiver) = AppEventSender::channel();
         let (agent_ui_event_sender, agent_ui_event_receiver) = AgentUiEventSender::channel();
         let (frame_requester, frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
+        let discord_rpc_enabled = app_state
+            .try_lock()
+            .map(|state| state.config.discord_rpc_enabled)
+            .unwrap_or(true);
 
         Ok(Self {
             terminal_runtime: Some(terminal_runtime),
             app_state,
+            discord_rpc: crate::discord_rpc::DiscordRpcWorker::new(discord_rpc_enabled),
             client,
             current_cancel_token: CancellationToken::new(),
             needs_redraw: true,
@@ -127,6 +133,7 @@ impl AppRuntime {
         Self {
             terminal_runtime: None,
             app_state: Arc::new(Mutex::new(app_state)),
+            discord_rpc: crate::discord_rpc::DiscordRpcWorker::new(false),
             client: reqwest::Client::new(),
             current_cancel_token: CancellationToken::new(),
             needs_redraw: false,
