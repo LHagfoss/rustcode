@@ -1,3 +1,9 @@
+## [v0.52.20](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.20) - 2026-09-19
+
+### Features
+- Add `rustcode sync --pull` and `rustcode sync --push` while preserving the existing sync subcommands and default pull-then-push behavior.
+- Add macOS-first Discord Rich Presence through local desktop IPC, with session-aware activity, background retries, and `rustcode discord --setup|--status|--enable|--disable` controls.
+- Harden agent-loop ownership and watchdog recovery, bound continuation replay, stop over-budget requests with actionable checkpoints, and improve stream finalization plus usage/session attribution.
 ## [v0.52.19](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.19) - 2026-09-19
 
 ### Fixes
