@@ -169,7 +169,7 @@ impl AppRuntime {
                     None => false,
                     Some(recovery) => {
                         if recovery.reset_orchestrator {
-                            state.orchestrator_running = false;
+                            state.invalidate_orchestrator();
                         }
                         state.history.push(crate::app::ChatMessage::new(
                             "system",
@@ -177,8 +177,7 @@ impl AppRuntime {
                         ));
                         let session_id = state.active_session_id.clone();
                         crate::config::save_session_history(&session_id, &state.history);
-                        state.clear_current_response();
-                        state.generation_start_time = None;
+                        state.clear_active_turn_projection();
                         state.enter_idle();
                         state.request_redraw();
                         true
@@ -301,8 +300,11 @@ impl AppRuntime {
 
             {
                 let mut s = app_state.lock().await;
-                if !s.summary_in_flight && !s.orchestrator_running && !s.pending_queue.is_empty() {
-                    s.orchestrator_running = true;
+                if !s.summary_in_flight
+                    && !s.orchestrator_running
+                    && !s.pending_queue.is_empty()
+                    && let Some(orchestrator_lease) = s.claim_orchestrator()
+                {
                     s.status = AppStatus::Queued;
                     let client_clone = client.clone();
                     let state_clone = Arc::clone(&app_state);
@@ -316,6 +318,7 @@ impl AppRuntime {
                             token_clone,
                             std::sync::Arc::new(crate::network::policy::InteractivePolicy),
                             ui_event_sender,
+                            orchestrator_lease,
                         )
                         .await;
                     });

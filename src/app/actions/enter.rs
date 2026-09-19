@@ -1039,8 +1039,7 @@ pub async fn handle_enter(
     s.input_buffer.clear();
     s.cursor_position = 0;
 
-    if !s.orchestrator_running {
-        s.orchestrator_running = true;
+    if let Some(orchestrator_lease) = s.claim_orchestrator() {
         s.status = AppStatus::Queued;
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
@@ -1053,6 +1052,7 @@ pub async fn handle_enter(
                 state_clone,
                 token_clone,
                 Arc::new(crate::network::policy::InteractivePolicy),
+                orchestrator_lease,
             )
             .await;
         });

@@ -61,3 +61,58 @@ fn stuck_orchestrator_flag_with_queued_prompts_resets() {
             .is_none()
     );
 }
+
+#[test]
+fn stale_orchestrator_release_cannot_clear_a_new_session_claim() {
+    let mut state = AppState::new();
+    let old = state.claim_orchestrator().expect("first claim");
+
+    state.active_session_id = "replacement-session".to_owned();
+    state.invalidate_orchestrator();
+    let current = state.claim_orchestrator().expect("replacement claim");
+
+    assert_ne!(old, current);
+    assert!(!state.release_orchestrator(&old));
+    assert!(state.orchestrator_running);
+    assert_eq!(state.orchestrator_owner.as_ref(), Some(&current));
+    assert!(state.release_orchestrator(&current));
+    assert!(!state.orchestrator_running);
+}
+
+#[test]
+fn watchdog_recovery_clears_the_complete_active_projection() {
+    let mut state = stale_active_state();
+    state.current_token_usage = Some(crate::app::TokenUsage {
+        prompt_tokens: 10,
+        completion_tokens: 2,
+        total_tokens: 12,
+        ..Default::default()
+    });
+    state.replace_current_response("partial response");
+    state.begin_live_tool_call(None, "run_command", &serde_json::json!({}));
+    // Keep the projection populated without marking a tool as actively
+    // running; an actively running tool intentionally suppresses watchdog
+    // recovery while it may still be making progress.
+    state.running_tools.clear();
+    let mut tracker = super::super::StreamTracker::new();
+    tracker.last_update =
+        Instant::now() - Duration::from_secs(super::STALL_WATCHDOG_TIMEOUT_SECS + 60);
+    state.stream_tracker = Some(tracker);
+    state.orchestrator_running = true;
+
+    let recovery = state
+        .check_stall_watchdog(false, Instant::now())
+        .expect("stale active projection must trip");
+    if recovery.reset_orchestrator {
+        state.invalidate_orchestrator();
+    }
+    state.clear_active_turn_projection();
+
+    assert!(state.current_response.is_empty());
+    assert!(state.live_tool_calls.is_empty());
+    assert!(state.running_tools.is_empty());
+    assert!(state.stream_tracker.is_none());
+    assert!(state.generation_start_time.is_none());
+    assert!(state.current_token_usage.is_none());
+    assert!(!state.orchestrator_running);
+}

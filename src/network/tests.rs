@@ -891,7 +891,10 @@ async fn automatic_compaction_discards_cross_session_result_with_shared_history(
     app.api_base_url = url;
     app.active_session_id = "old-session".to_string();
     for profile in &mut app.config.models {
-        profile.context_window = Some(400);
+        // Leave enough room for the compacted summary and final request so
+        // this test continues to exercise session isolation rather than the
+        // intentional over-budget preflight checkpoint.
+        profile.context_window = Some(2_000);
     }
     app.history = (0..(crate::network::compaction::KEEP_RECENT_TURNS + 4))
         .map(|index| {

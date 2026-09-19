@@ -2,6 +2,28 @@ use crate::app::{AppState, AppStatus, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Stable marker used internally when the final request projection cannot
+/// retain the configured completion reserve.  The turn layer turns this into
+/// an actionable persisted checkpoint instead of sending a provider request
+/// that is known to exceed the context budget.
+pub(crate) const CONTEXT_PREFLIGHT_STOP_PREFIX: &str = "context_budget_exceeded:";
+
+pub(crate) fn context_preflight_checkpoint_notice(
+    preflight: &compaction::PreflightBudget,
+) -> String {
+    format!(
+        concat!(
+            "[Context checkpoint: the final request was not sent because its estimated prompt ",
+            "({prompt} tokens) plus the completion reserve ({completion}) exceeds the ",
+            "effective context limit ({limit}). The current turn checkpoint is preserved. ",
+            "Run /compact, start /new, or continue with a narrower request before retrying.]"
+        ),
+        prompt = preflight.total_estimated_prompt,
+        completion = preflight.completion_reserve,
+        limit = preflight.hard_effective_limit,
+    )
+}
+
 #[path = "network/context/mod.rs"]
 pub(crate) mod compaction;
 
@@ -60,9 +82,10 @@ pub(crate) use tool_exec::{
 
 #[path = "network/turn/mod.rs"]
 pub(crate) mod turn_engine;
+pub(crate) use turn_engine::process_queue_orchestrator;
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 pub(crate) use turn_engine::run_agent_turn_with_context;
-pub use turn_engine::{SegmentCheckpoint, TurnContext, process_queue_orchestrator, run_agent_turn};
+pub use turn_engine::{SegmentCheckpoint, TurnContext, run_agent_turn};
 
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;
@@ -1005,6 +1028,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     checkpoint: ContextCheckpoint,
     mut prefix_cache: Option<&mut RequestPrefixCache>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    let request_session_id = state.lock().await.active_session_id.clone();
     // Try AI-driven compaction if history is long enough.
     //
     // The summarizer is a network round-trip, so the AppState mutex must NOT be
@@ -1583,6 +1607,16 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             "hard_trimmed": dropped > 0,
         }),
     );
+
+    if !preflight.fits_hard_limit() {
+        let notice = context_preflight_checkpoint_notice(&preflight);
+        let mut s = state.lock().await;
+        if s.active_session_id == request_session_id {
+            s.history.push(ChatMessage::new("system", notice.clone()));
+            crate::config::save_session_history(&request_session_id, &s.history);
+        }
+        return Err(format!("{CONTEXT_PREFLIGHT_STOP_PREFIX}{notice}"));
+    }
 
     Ok(msgs)
 }

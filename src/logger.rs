@@ -56,12 +56,16 @@ fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
 }
 
 pub(crate) fn append_line(line: &str) {
+    append_line_with_session(line, None);
+}
+
+fn append_line_with_session(line: &str, session_id: Option<&str>) {
     if let Some(log_dir) = crate::config::get_config_dir() {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{now}] {line}");
         append_line_to_path(&log_dir.join("debug.log"), &formatted);
 
-        if let Some(session_id) = active_session_id() {
+        if let Some(session_id) = session_id.map(str::to_owned).or_else(active_session_id) {
             let session_dir =
                 rustcode_session::SessionStore::new(&log_dir).session_dir(&session_id);
             let logs_dir = session_dir.join("logs");
@@ -70,6 +74,22 @@ pub(crate) fn append_line(line: &str) {
             append_line_to_path(&logs_dir.join("debug.log"), &formatted);
         }
     }
+}
+
+fn attributed_fields(mut fields: Value) -> (Value, Option<String>) {
+    let session_id = fields
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .or_else(active_session_id);
+    if let Some(object) = fields.as_object_mut()
+        && !object.contains_key("session_id")
+        && let Some(session_id) = session_id.as_ref()
+    {
+        object.insert("session_id".to_owned(), Value::String(session_id.clone()));
+    }
+    (fields, session_id)
 }
 
 fn append_line_to_path(path: &Path, line: &str) {
@@ -116,8 +136,13 @@ pub(crate) fn install_panic_hook() {
 
 /// Write metadata-only lifecycle events to the existing debug log.
 pub(crate) fn operational_event(event: &str, fields: Value) {
+    // Keep every operational event attributable even when a call site is in a
+    // low-level stream/parser helper that does not otherwise carry session
+    // state. Explicit ownership wins so a stale task cannot be attributed to
+    // whichever session happens to be active when it unwinds.
+    let (fields, session_id) = attributed_fields(fields);
     let payload = serde_json::json!({"event": event, "fields": fields});
-    append_line(&format!("[op] {payload}"));
+    append_line_with_session(&format!("[op] {payload}"), session_id.as_deref());
 }
 
 #[macro_export]
@@ -183,5 +208,15 @@ mod tests {
         append_line_to_path(&path, "[time] [op] {\"event\":\"turn.start\"}");
         let contents = std::fs::read_to_string(path).expect("session log");
         assert!(contents.contains("turn.start"));
+    }
+
+    #[test]
+    fn operational_fields_keep_explicit_session_ownership() {
+        let (fields, session_id) = attributed_fields(serde_json::json!({
+            "session_id": "older-session",
+            "round": 2,
+        }));
+        assert_eq!(session_id.as_deref(), Some("older-session"));
+        assert_eq!(fields["session_id"], "older-session");
     }
 }
