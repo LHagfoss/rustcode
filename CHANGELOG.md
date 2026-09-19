@@ -1,3 +1,9 @@
+## [v0.53.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.53.0) - 2026-09-19
+
+### Features
+- Discord Rich Presence now falls back to a privacy-safe workspace name and shows compact output/total token usage checkpoints.
+- Pressing Escape during a streaming turn preserves queued prompts and automatically continues them in FIFO order after cancellation.
+- Welcome-panel slash-command hints now align in a stable table-like column, including `/help`, with narrow-terminal-safe fallbacks.
 ## [v0.52.20](https://github.com/LHagfoss/rustcode/releases/tag/v0.52.20) - 2026-09-19
 
 ### Features
