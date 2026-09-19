@@ -4,8 +4,10 @@
 //! thread. Discord may be stopped, starting, or disconnected at any time, and
 //! none of those cases should stall the TUI or require a Discord login flow.
 
+use crate::app::TokenUsage;
 use crate::app::activity::{ActivityKind, ActivitySnapshot};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -25,7 +27,11 @@ pub(crate) struct DiscordPresence {
 }
 
 impl DiscordPresence {
-    pub(crate) fn from_activity(activity: &ActivitySnapshot, session_title: &str) -> Self {
+    pub(crate) fn from_activity_with_usage(
+        activity: &ActivitySnapshot,
+        session_title: &str,
+        usage: Option<&TokenUsage>,
+    ) -> Self {
         let state = match activity.kind {
             ActivityKind::Ready => "Idle",
             ActivityKind::Queued => "Queued",
@@ -39,6 +45,10 @@ impl DiscordPresence {
             .filter(|detail| !detail.trim().is_empty())
             .map(|detail| format!("{session_title} · {detail}"))
             .unwrap_or_else(|| session_title.to_owned());
+        let detail = match format_token_usage(usage) {
+            Some(usage) => format!("{detail} · {usage}"),
+            None => detail,
+        };
 
         Self {
             state: sanitize(state),
@@ -48,6 +58,83 @@ impl DiscordPresence {
                 &detail
             }),
         }
+    }
+}
+
+/// Return a display-safe workspace identity without ever exposing parent
+/// directories. This is intentionally based on the final path component, not
+/// on a path with the user's home directory replaced or abbreviated.
+pub(crate) fn workspace_basename(path: Option<&Path>) -> String {
+    let Some(path) = path else {
+        return "workspace".to_owned();
+    };
+
+    let raw = path.to_string_lossy();
+    let basename = raw
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let basename = sanitize(basename);
+    if basename.is_empty() || basename == "." || basename == ".." {
+        "workspace".to_owned()
+    } else {
+        basename
+    }
+}
+
+fn format_token_usage(usage: Option<&TokenUsage>) -> Option<String> {
+    let usage = usage?;
+    let mut parts = Vec::with_capacity(2);
+    if usage.completion_tokens > 0 {
+        parts.push(format!(
+            "out {}",
+            compact_token_count(usage.completion_tokens)
+        ));
+    }
+    if usage.total_tokens > 0 {
+        parts.push(format!("total {}", compact_token_count(usage.total_tokens)));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Round usage to checkpoints that are useful in a compact presence. Provider
+/// usage can arrive while a response is being rendered; the buckets prevent a
+/// Discord update for every small counter change or streaming delta.
+fn compact_token_count(tokens: u32) -> String {
+    let checkpoint = if tokens < 100 {
+        10
+    } else if tokens < 1_000 {
+        50
+    } else if tokens < 10_000 {
+        100
+    } else if tokens < 1_000_000 {
+        1_000
+    } else {
+        100_000
+    };
+    let rounded = tokens
+        .saturating_add(checkpoint / 2)
+        .checked_div(checkpoint)
+        .unwrap_or_default()
+        .saturating_mul(checkpoint);
+
+    if rounded < 1_000 {
+        rounded.to_string()
+    } else if rounded < 1_000_000 {
+        format_one_decimal(rounded, 1_000, 'k')
+    } else {
+        format_one_decimal(rounded, 1_000_000, 'm')
+    }
+}
+
+fn format_one_decimal(value: u32, unit: u32, suffix: char) -> String {
+    let whole = value / unit;
+    let tenth = value % unit / (unit / 10);
+    if tenth == 0 {
+        format!("{whole}{suffix}")
+    } else {
+        format!("{whole}.{tenth}{suffix}")
     }
 }
 
@@ -294,9 +381,10 @@ mod tests {
 
     #[test]
     fn activity_mapping_includes_session_title_and_state() {
-        let presence = DiscordPresence::from_activity(
+        let presence = DiscordPresence::from_activity_with_usage(
             &snapshot(ActivityKind::RunningTool, Some("run_command")),
             "Fix parser",
+            None,
         );
         assert_eq!(presence.state, "Running tools");
         assert_eq!(presence.details, "Fix parser · run_command");
@@ -304,12 +392,63 @@ mod tests {
 
     #[test]
     fn activity_mapping_sanitizes_and_bounds_titles() {
-        let presence = DiscordPresence::from_activity(
+        let presence = DiscordPresence::from_activity_with_usage(
             &snapshot(ActivityKind::Ready, None),
             &format!("bad\n{}", "x".repeat(200)),
+            None,
         );
         assert!(!presence.details.contains('\n'));
         assert!(presence.details.chars().count() <= MAX_ACTIVITY_CHARS + 1);
+    }
+
+    #[test]
+    fn workspace_fallback_uses_only_a_sanitized_basename() {
+        assert_eq!(
+            workspace_basename(Some(Path::new("/Users/alice/private/rustcode"))),
+            "rustcode"
+        );
+        assert_eq!(
+            workspace_basename(Some(Path::new(r"C:\Users\alice\private\rustcode"))),
+            "rustcode"
+        );
+        assert_eq!(
+            workspace_basename(Some(Path::new("/tmp/repo\nwith-control"))),
+            "repo with-control"
+        );
+        assert!(
+            !workspace_basename(Some(Path::new("/Users/alice/private/rustcode")))
+                .contains("/Users/alice")
+        );
+    }
+
+    #[test]
+    fn token_usage_is_compact_and_checkpointed() {
+        let usage = TokenUsage {
+            completion_tokens: 1_234,
+            total_tokens: 12_345,
+            ..Default::default()
+        };
+        assert_eq!(
+            format_token_usage(Some(&usage)).as_deref(),
+            Some("out 1.2k · total 12k")
+        );
+
+        let nearby = TokenUsage {
+            completion_tokens: 1_249,
+            total_tokens: 12_399,
+            ..usage
+        };
+        assert_eq!(
+            format_token_usage(Some(&nearby)),
+            format_token_usage(Some(&usage))
+        );
+
+        let presence = DiscordPresence::from_activity_with_usage(
+            &snapshot(ActivityKind::Working, None),
+            "rustcode",
+            Some(&usage),
+        );
+        assert_eq!(presence.details, "rustcode · out 1.2k · total 12k");
     }
 
     #[test]
