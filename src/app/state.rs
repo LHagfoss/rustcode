@@ -7,6 +7,9 @@ pub use models::*;
 
 pub(crate) struct StallRecovery {
     pub reset_orchestrator: bool,
+    /// The queue still holds prompts: recovery must preserve them (the spawn
+    /// loop restarts them) instead of telling the user to reissue.
+    pub queue_preserved: bool,
 }
 
 /// A single-flight claim for the queue orchestrator.  The session and
@@ -502,11 +505,13 @@ impl AppState {
     }
 
     /// Detect a dead turn: status says work is in flight but nothing can make
-    /// progress — no background tasks, no running tools, no queued prompts,
-    /// and the stream (if any) silent past the watchdog timeout. Also catches
-    /// a stuck orchestrator flag wedging a non-empty queue (the loop only
-    /// spawns while the flag is clear). Returns recovery instructions; the
-    /// caller logs the event and resets state.
+    /// progress — no background tasks, no running tools, and the stream (if
+    /// any) silent past the watchdog timeout. Also catches a stuck
+    /// orchestrator flag wedging a non-empty queue (the loop only spawns
+    /// while the flag is clear), and a queue orphaned with no owner at all
+    /// (invalidated while prompts remained, or a spawn that never happened):
+    /// the prompts are preserved and the spawn loop restarts them. Returns
+    /// recovery instructions; the caller logs the event and resets state.
     pub(crate) fn check_stall_watchdog(
         &self,
         background_active: bool,
@@ -530,6 +535,18 @@ impl AppState {
             if self.orchestrator_running && generation_stale {
                 return Some(StallRecovery {
                     reset_orchestrator: true,
+                    queue_preserved: true,
+                });
+            }
+            if !self.orchestrator_running && generation_stale {
+                // Orphaned queue: no loop owns the spawn slot, so nothing will
+                // ever drain these prompts. Reset the (already clear) flag and
+                // let the spawn loop restart them; never silently drop them.
+                // generation_stale (not merely stream silence) gates this so a
+                // freshly submitted prompt can never trip it.
+                return Some(StallRecovery {
+                    reset_orchestrator: false,
+                    queue_preserved: true,
                 });
             }
             return None;
@@ -537,6 +554,7 @@ impl AppState {
         if generation_stale && stream_stale {
             return Some(StallRecovery {
                 reset_orchestrator: self.orchestrator_running,
+                queue_preserved: false,
             });
         }
         None
