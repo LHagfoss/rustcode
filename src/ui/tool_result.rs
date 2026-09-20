@@ -177,21 +177,21 @@ fn render_generic_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
             }
             lines.push(Line::from(Span::styled(
                 "  │".to_string(),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
             )));
             continue;
         }
         blank_run = 0;
         let is_error = raw.trim_start().to_ascii_lowercase().starts_with("error")
             || raw.trim_start().starts_with('✗');
-        let color = if is_error {
-            Color::Rgb(229, 123, 123)
+        let (color, modifier) = if is_error {
+            (Color::Rgb(229, 123, 123), Modifier::empty())
         } else {
-            COLOR_MUTED()
+            (COLOR_MUTED(), Modifier::DIM)
         };
         lines.push(Line::from(Span::styled(
             format!("  │ {raw}"),
-            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), modifier, show_picker),
         )));
     }
     lines
@@ -230,14 +230,14 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
     }
 
     for (kind, raw) in output {
-        let (prefix, color) = if kind == "stderr" {
-            ("  ! ", Color::Rgb(229, 192, 123))
+        let (prefix, color, modifier) = if kind == "stderr" {
+            ("  ! ", Color::Rgb(229, 192, 123), Modifier::empty())
         } else {
-            ("  │ ", COLOR_MUTED())
+            ("  │ ", COLOR_MUTED(), Modifier::DIM)
         };
         lines.push(Line::from(Span::styled(
             format!("{prefix}{raw}"),
-            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), modifier, show_picker),
         )));
     }
 

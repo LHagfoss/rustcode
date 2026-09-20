@@ -1,4 +1,9 @@
 use super::*;
+use unicode_width::UnicodeWidthStr;
+
+/// Maximum wrapped visual lines for a committed shell command preview,
+/// mirroring Codex `command_continuation_max_lines = 2`. Longer commands
+/// collapse with an ellipsis instead of flooding the transcript.
 
 /// snake_case / kebab-case → PascalCase, e.g. `use_skill` → `UseSkill`. Used so
 /// custom and MCP tools render like the built-ins (no underscores, capitalized)
@@ -616,7 +621,12 @@ pub(super) fn indent_tool_result_body(
             head_count,
             Line::from(Span::styled(
                 format!("    … +{omitted} lines"),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, false),
+                get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::ITALIC | Modifier::DIM,
+                    false,
+                ),
             )),
         );
     }
@@ -910,13 +920,68 @@ pub(super) fn tool_child_line(
     lines
 }
 
+/// Maximum wrapped visual lines for a committed shell command preview,
+/// mirroring Codex `command_continuation_max_lines = 2`.
+pub(super) const COMMAND_DISPLAY_MAX_LINES: usize = 2;
+
+/// Collapse a shell command to a single-line preview: newlines become spaces
+/// and the result is width-truncated with an ellipsis. Width is display
+/// columns, not bytes, so CJK/wide glyphs don't overflow the transcript.
+pub(super) fn collapse_command_preview(target: &str, max_width: usize) -> String {
+    let single = target.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single.width() <= max_width {
+        return single;
+    }
+    let suffix = '…';
+    let budget = max_width.saturating_sub(1).max(1);
+    let mut output = String::new();
+    let mut used = 0;
+    for grapheme in single.split("").filter(|s| !s.is_empty()) {
+        let w = grapheme.width();
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        output.push_str(grapheme);
+    }
+    output.push(suffix);
+    output
+}
+
+/// Cap already-wrapped visual lines, appending an ellipsis to the last kept
+/// line when content was dropped. Keeps long `echo ...; pacman ...` chains to
+/// `COMMAND_DISPLAY_MAX_LINES` rows instead of flooding scrollback.
+fn truncate_wrapped_lines(mut lines: Vec<Line<'static>>, max_lines: usize) -> Vec<Line<'static>> {
+    if lines.len() <= max_lines || max_lines == 0 {
+        return lines;
+    }
+    lines.truncate(max_lines);
+    if let Some(last) = lines.last_mut() {
+        last.spans.push(Span::styled(
+            " …",
+            get_themed_style(
+                COLOR_MUTED(),
+                COLOR_BG(),
+                Modifier::DIM | Modifier::ITALIC,
+                false,
+            ),
+        ));
+    }
+    lines
+}
+
 pub(super) fn command_child_lines(
     entry: &ToolTranscriptEntry,
     first: bool,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let mut commands = highlight_shell_command(&entry.target, COLOR_BG(), show_picker);
+    // Collapse multi-line / chained commands to a single-line preview before
+    // highlighting, so `echo a; echo b; ...` renders as one dimmable row
+    // instead of N source lines each wrapping again.
+    let preview =
+        collapse_command_preview(&entry.target, (width as usize).saturating_sub(12).max(20));
+    let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
     if commands.is_empty() {
         commands.push(Line::default());
     }
@@ -952,6 +1017,7 @@ pub(super) fn command_child_lines(
         );
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
+    let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
     if !entry.success || entry.status == "running" {
         if let Some(line) = lines.last_mut() {
             line.spans.push(Span::styled(
@@ -974,7 +1040,9 @@ pub(super) fn command_summary_lines(
         Color::Rgb(229, 123, 123)
     };
     let has_command = !entry.target.is_empty() && entry.target != "?";
-    let mut commands = highlight_shell_command(&entry.target, COLOR_BG(), show_picker);
+    let preview =
+        collapse_command_preview(&entry.target, (width as usize).saturating_sub(14).max(20));
+    let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
     if commands.is_empty() {
         commands.push(Line::default());
     }
@@ -1014,7 +1082,7 @@ pub(super) fn command_summary_lines(
         );
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
-    lines
+    truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES)
 }
 
 pub(super) fn indent_generic_tool_body(
@@ -1064,7 +1132,12 @@ pub(super) fn indent_generic_tool_body(
             head_count,
             Line::from(Span::styled(
                 format!("    … +{omitted} lines"),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+                get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::ITALIC | Modifier::DIM,
+                    show_picker,
+                ),
             )),
         );
     }
@@ -1414,7 +1487,10 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_hidden_system_notice, tool_result_status};
+    use super::{
+        COMMAND_DISPLAY_MAX_LINES, collapse_command_preview, is_hidden_system_notice,
+        tool_result_status, truncate_wrapped_lines,
+    };
 
     #[test]
     fn deferred_tool_batch_notice_is_hidden_from_transcript() {
@@ -1481,5 +1557,27 @@ mod tests {
             tool_result_status(&message, "run_command", "exit code: 0"),
             (true, "exit 0".to_owned())
         );
+    }
+
+    #[test]
+    fn command_preview_collapses_whitespace_and_truncates() {
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(collapse_command_preview("ls -la", 20), "ls -la");
+        let collapsed = collapse_command_preview("echo a;\n  echo b", 20);
+        assert!(!collapsed.contains('\n'), "{collapsed:?}");
+        let long = collapse_command_preview("curl -sS https://example.com/very/long/path", 20);
+        assert!(long.ends_with('…'), "{long:?}");
+        assert!(long.width() <= 20, "{long:?}");
+    }
+
+    #[test]
+    fn wrapped_command_lines_cap_at_preview_limit() {
+        use ratatui::text::Line;
+        let lines = (0..10)
+            .map(|i| Line::from(format!("line {i}")))
+            .collect::<Vec<_>>();
+        let capped = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
+        assert_eq!(capped.len(), COMMAND_DISPLAY_MAX_LINES);
+        assert!(capped.last().unwrap().to_string().contains('…'));
     }
 }
