@@ -1,12 +1,111 @@
 use super::*;
 
+const STATUS_PANEL_MIN_WIDTH: usize = 40;
+
+fn status_panel_title(content: &str) -> Option<&'static str> {
+    let first_line = content.lines().find(|line| !line.trim().is_empty())?;
+    let first_line = first_line.trim().trim_end_matches(':');
+    let lower = first_line.to_ascii_lowercase();
+
+    if lower.starts_with("session usage") {
+        Some("Usage")
+    } else if lower.starts_with("session status") {
+        Some("Status")
+    } else if lower == "rustcode info" || lower.starts_with("about rustcode") {
+        Some("Info")
+    } else if lower.starts_with("available commands")
+        || lower.starts_with("core & session")
+        || lower.starts_with("help & commands")
+    {
+        Some("Help")
+    } else if lower.starts_with("discovered skills") {
+        Some("Skills")
+    } else if lower.starts_with("available themes") {
+        Some("Themes")
+    } else if lower.contains("model quota status") || lower.starts_with("quota") {
+        Some("Quota")
+    } else {
+        None
+    }
+}
+
+fn is_status_panel_heading(line: &str, title: Option<&str>) -> bool {
+    let normalized = line.trim().trim_end_matches(':').to_ascii_lowercase();
+    match title {
+        Some("Usage") => normalized == "session usage",
+        Some("Info") => normalized == "rustcode info" || normalized == "about rustcode",
+        Some("Help") => {
+            normalized == "available commands"
+                || normalized == "core & session"
+                || normalized == "help & commands"
+        }
+        Some("Skills") => normalized == "discovered skills",
+        Some("Themes") => normalized == "available themes",
+        _ => false,
+    }
+}
+
+fn status_panel_line_width(line: &str) -> usize {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+
+    if trimmed.starts_with('/') {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let command = parts.first().copied().unwrap_or_default();
+        let description = parts.get(1..).unwrap_or_default().join(" ");
+        return format!("  {:<18}{}", command, description).width();
+    }
+
+    if trimmed.starts_with("Enter")
+        || trimmed.starts_with("Shift+")
+        || trimmed.starts_with("Esc")
+        || trimmed.starts_with("Up/Down")
+        || trimmed.starts_with("Ctrl+")
+        || trimmed.starts_with("Alt+")
+        || trimmed.starts_with('?')
+    {
+        let parts: Vec<&str> = trimmed.splitn(2, "  ").collect();
+        let key = parts.first().copied().unwrap_or_default().trim();
+        let description = parts.get(1).map(|part| part.trim()).unwrap_or_default();
+        return format!("  {:<18}{}", key, description).width();
+    }
+
+    if trimmed.starts_with('•') || trimmed.starts_with('-') {
+        let bullet_text = trimmed
+            .trim_start_matches('•')
+            .trim_start_matches('-')
+            .trim();
+        return format!("  • {bullet_text}").width();
+    }
+
+    format!("  {trimmed}").width()
+}
+
+fn status_panel_content_width(content: &str, title: Option<&str>, available_width: usize) -> usize {
+    let body_width = content
+        .lines()
+        .filter(|line| !is_status_panel_heading(line, title))
+        .map(status_panel_line_width)
+        .max()
+        .unwrap_or_default();
+    let title_width = title
+        .map(|title| format!(">_ RustCode · {title}").width() + 1)
+        .unwrap_or_default();
+    let desired = STATUS_PANEL_MIN_WIDTH
+        .saturating_sub(4)
+        .max(body_width)
+        .max(title_width);
+    available_width.saturating_sub(6).max(1).min(desired)
+}
+
 pub(super) fn render_status_panel<'a>(
     content: &str,
     width: u16,
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
-    let version = env!("CARGO_PKG_VERSION");
     let lower = content.to_ascii_lowercase();
 
     if lower.starts_with("resumed session") {
@@ -119,13 +218,18 @@ pub(super) fn render_status_panel<'a>(
     let border_c = COLOR_PRIMARY();
     let reset_bg = COLOR_BG();
 
-    let box_w = (width as usize).saturating_sub(2).max(40);
+    let panel_title = status_panel_title(content);
+    let content_w = status_panel_content_width(content, panel_title, width as usize);
+    let box_w = content_w.saturating_add(4);
     let inner_w = box_w.saturating_sub(2);
-    let content_w = inner_w.saturating_sub(2);
 
-    // Top border: ╭─ >_ RustCode v0.17.0 ──────────────────────────────────────────╮
-    let title_str = format!(">_ RustCode v{version}");
-    let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
+    let title_str = panel_title
+        .map(|title| format!(">_ RustCode · {title}"))
+        .unwrap_or_else(|| format!(">_ RustCode v{}", env!("CARGO_PKG_VERSION")));
+    let title_str = fit_to_width(&title_str, inner_w.saturating_sub(3))
+        .trim_end()
+        .to_owned();
+    let top_pad = inner_w.saturating_sub(title_str.width() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
     lines.push(Line::from(vec![Span::styled(
         top_border,
@@ -141,7 +245,16 @@ pub(super) fn render_status_panel<'a>(
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("rustcode info") {
+        if is_status_panel_heading(trimmed, panel_title) {
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
+                Span::styled(" ".repeat(content_w), Style::default().bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
+            ]));
             continue;
         }
 
@@ -334,11 +447,15 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     // Session identity is useful when copying a report or resuming a run, so
     // keep it visually separate from the mutable model/workspace settings.
-    let label_w = 15.min(inner_w);
+    // Keep the welcome card's content comfortably away from the border on
+    // roomy terminals, while retaining a compact layout on narrow ones.
+    let label_indent = if total_width >= 80 { "    " } else { "  " };
+    let label_w = if total_width >= 80 { 17 } else { 15 }.min(inner_w);
+    let label = |name: &str| format!("{label_indent}{name}:");
     let session_id = fit_to_width(state.active_session_id(), inner_w.saturating_sub(label_w));
     banner.push(make_row(vec![
         Span::styled(
-            fit_to_width("  session:", label_w),
+            fit_to_width(&label("session"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -398,7 +515,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     let mut model_spans = vec![
         Span::styled(
-            fit_to_width("  model:", label_w),
+            fit_to_width(&label("model"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -414,7 +531,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     let mut effort_spans = vec![
         Span::styled(
-            fit_to_width("  effort:", label_w),
+            fit_to_width(&label("effort"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -430,7 +547,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     let mut context_spans = vec![
         Span::styled(
-            fit_to_width("  context:", label_w),
+            fit_to_width(&label("context"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -459,7 +576,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let dir_fitted = fit_to_width(&dir_display, max_dir_len);
     banner.push(make_row(vec![
         Span::styled(
-            fit_to_width("  directory:", label_w),
+            fit_to_width(&label("directory"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(dir_fitted, Style::default().fg(text_c).bg(reset_bg)),
@@ -474,7 +591,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let branch_fitted = fit_to_width(branch_name, inner_w.saturating_sub(label_w));
     banner.push(make_row(vec![
         Span::styled(
-            fit_to_width("  branch:", label_w),
+            fit_to_width(&label("branch"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(branch_fitted, Style::default().fg(text_c).bg(reset_bg)),
@@ -500,7 +617,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     };
     banner.push(make_row(vec![
         Span::styled(
-            fit_to_width("  permissions:", label_w),
+            fit_to_width(&label("permissions"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -523,7 +640,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let help_available = inner_w.saturating_sub(help_column);
     let mut help_spans = vec![
         Span::styled(
-            fit_to_width("  help:", label_w),
+            fit_to_width(&label("help"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(
@@ -535,9 +652,14 @@ pub(crate) fn build_claude_startup_banner_snapshot(
             Style::default().fg(primary).bg(reset_bg),
         ),
     ];
-    if "/help".width() + " for commands".width() <= help_available {
+    let help_suffix = if total_width >= 80 {
+        " — use it for commands"
+    } else {
+        " for commands"
+    };
+    if "/help".width() + help_suffix.width() <= help_available {
         help_spans.push(Span::styled(
-            " for commands",
+            help_suffix,
             Style::default().fg(muted_c).bg(reset_bg),
         ));
     }
