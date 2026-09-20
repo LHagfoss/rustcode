@@ -57,6 +57,7 @@ pub(super) fn format_pi_tool_action(
         "get_project_map" | "getprojectmap" => "ProjectMap".to_string(),
         "manage_task" | "managetask" => "ManageTask".to_string(),
         "background_task" | "backgroundtask" => "TaskDone".to_string(),
+        "ask_question" | "askquestion" => "Asked".to_string(),
         "remember" => "Remember".to_string(),
         "recall_memory" | "recallmemory" => "Recall".to_string(),
         "forget_memory" | "forgetmemory" => "Forget".to_string(),
@@ -173,7 +174,7 @@ pub(super) fn format_pi_tool_action(
             })
             .unwrap_or_default(),
         "set_goal" => "goal".to_owned(),
-        "ask_question" => "question".to_owned(),
+        "ask_question" | "askquestion" => ask_question_text(args),
         "manage_task" => {
             let action = args
                 .get("Action")
@@ -401,10 +402,62 @@ pub(super) fn cached_tool_result(
 }
 
 pub(super) fn tool_result_is_hidden(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "set_goal" | "todo_write" | "complete_task" | "ask_question"
-    )
+    // `ask_question` used to be hidden here, but its tool result carries the
+    // user's answer ("User selected: …"). Hiding it left no trace of the
+    // question or the choice in the transcript, so it stays visible.
+    matches!(tool_name, "set_goal" | "todo_write" | "complete_task")
+}
+
+/// Extract the human question from an `ask_question` call's arguments, across
+/// both the flat (`question`) and nested (`questions[0].question`) shapes the
+/// harness accepts.
+pub(super) fn ask_question_text(args: &serde_json::Value) -> String {
+    let nested = args
+        .get("questions")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first());
+    let text = nested
+        .and_then(|item| {
+            item.get("question")
+                .or_else(|| item.get("prompt"))
+                .or_else(|| item.get("message"))
+        })
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            args.get("question")
+                .or_else(|| args.get("prompt"))
+                .or_else(|| args.get("message"))
+                .and_then(|value| value.as_str())
+        })
+        .unwrap_or("");
+    let clean = crate::app::activity::sanitize_tool_parameter(text, 110);
+    if clean.is_empty() {
+        "a question".to_owned()
+    } else {
+        clean
+    }
+}
+
+/// Extract the user's answer from a committed `ask_question` tool message.
+/// The executor records success as `User selected: <answer>` and cancellation
+/// as a plain notice; surface just the answer so the transcript child line
+/// reads as a prompt/response pair.
+pub(super) fn ask_question_answer(history: &[ChatMessage], message_index: usize) -> String {
+    let raw = history
+        .get(message_index)
+        .map(|message| message.content.as_str())
+        .unwrap_or("");
+    let result = raw
+        .split_once(": ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(raw);
+    let answer = result.strip_prefix("User selected: ").unwrap_or(result);
+    let clean = crate::app::activity::sanitize_tool_parameter(answer, 90);
+    if clean.is_empty() {
+        "no answer".to_owned()
+    } else {
+        clean
+    }
 }
 
 pub(super) fn tool_result_action(
@@ -412,6 +465,14 @@ pub(super) fn tool_result_action(
     message_index: usize,
     tool_name: &str,
 ) -> (String, String) {
+    // Render the Q&A pair on one child line ("Asked <question> → <answer>")
+    // so the user's choice is visible without expanding the entry.
+    if tool_name == "ask_question" {
+        let args = tool_call_arguments(state, message_index, tool_name);
+        let question = ask_question_text(&args);
+        let answer = ask_question_answer(state.active_history(), message_index);
+        return ("Asked".to_owned(), format!("{question} → {answer}"));
+    }
     format_pi_tool_action(
         tool_name,
         &tool_call_arguments(state, message_index, tool_name),
@@ -626,14 +687,14 @@ pub(super) fn format_exploration_action(
 }
 
 pub(super) struct ToolTranscriptEntry {
-    message_index: usize,
-    tool_name: String,
-    action: String,
-    target: String,
-    success: bool,
-    status: String,
-    body: Vec<Line<'static>>,
-    kind: ToolTranscriptKind,
+    pub(super) message_index: usize,
+    pub(super) tool_name: String,
+    pub(super) action: String,
+    pub(super) target: String,
+    pub(super) success: bool,
+    pub(super) status: String,
+    pub(super) body: Vec<Line<'static>>,
+    pub(super) kind: ToolTranscriptKind,
 }
 
 pub(super) fn tool_call_arguments(
