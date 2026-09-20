@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 mod audio;
+mod delegate;
 mod dispatch;
 mod envelope;
 pub(crate) mod exec;
 mod filesystem;
 mod git;
 mod misc;
+mod openapi;
 mod parser;
 mod schema;
 mod search;
@@ -1065,6 +1067,8 @@ pub const TOOLS: &[Tool] = &[
     git::GIT_DIFF,
     git::GIT_ADD,
     git::GIT_COMMIT,
+    openapi::OPENAPI_CALL,
+    delegate::DELEGATE_TASK,
     filesystem::DELETE_FILE,
     filesystem::MOVE_FILE,
     filesystem::COPY_FILE,

@@ -3,6 +3,7 @@ mod logger;
 mod acp;
 mod app;
 mod atomic_file;
+mod benchmark;
 mod cli;
 mod clipboard;
 mod config;
@@ -174,6 +175,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if code != 0 {
             std::process::exit(code);
         }
+        return Ok(());
+    }
+
+    if let Some(cli::Commands::Bench {
+        rounds,
+        calls,
+        recoveries,
+        completed,
+    }) = cli_args.command.as_ref()
+    {
+        let stats = crate::benchmark::TurnStats {
+            rounds: *rounds,
+            tool_calls: *calls,
+            recoveries: *recoveries,
+            completed: *completed,
+        };
+        println!("{}", crate::benchmark::format_report(stats));
         return Ok(());
     }
 
