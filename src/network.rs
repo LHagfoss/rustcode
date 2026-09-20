@@ -1345,11 +1345,20 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         .find(|message| message.role == "user")
         .map(|message| message.content.as_str())
     {
-        crate::skills::skill_routing_hint(
+        let explicit = crate::skills::skill_routing_hint(
             latest_user_prompt,
             skill_metadata.as_slice(),
             &loaded_skills,
-        )
+        );
+        // Explicit name mentions win; otherwise fall back to trigger/keyword
+        // relevance so `triggers:`/`keywords:` frontmatter still routes.
+        explicit.or_else(|| {
+            crate::skills::relevant_skills_hint(
+                latest_user_prompt,
+                skill_metadata.as_slice(),
+                &loaded_skills,
+            )
+        })
     } else {
         None
     };
