@@ -1091,7 +1091,10 @@ impl LoopDetector {
     /// frequency signals.
     pub fn check(&mut self, exact: &str, category: &str) -> LoopStatus {
         let exact_count = self.exact.record(exact);
-        if exact_count >= 3 {
+        // Exact repeats abort one step past the category warn band: three in a
+        // row is often a verification retry or a paged read, not a hang.
+        // Category/frequency signals still escalate through classify().
+        if exact_count >= 4 {
             return LoopStatus::Abort(exact_count);
         }
         let n = exact_count
@@ -1111,7 +1114,7 @@ impl LoopDetector {
             .flatten();
         let status = if let Some(target) = read_target.as_ref() {
             let exact_count = self.exact.record(exact);
-            if exact_count >= 3 {
+            if exact_count >= 4 {
                 LoopStatus::Abort(exact_count)
             } else {
                 let range_category = range_category(target);

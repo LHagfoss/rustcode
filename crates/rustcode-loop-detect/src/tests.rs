@@ -155,7 +155,9 @@ fn exact_repeat_warns_then_aborts() {
     let mut d = LoopDetector::new(6);
     assert_eq!(d.check("x", "x"), LoopStatus::Ok);
     assert_eq!(d.check("x", "x"), LoopStatus::Ok);
-    assert_eq!(d.check("x", "x"), LoopStatus::Abort(3));
+    // Three in a row warns (verification retry, not a hang); the fourth aborts.
+    assert_eq!(d.check("x", "x"), LoopStatus::Warning(3));
+    assert_eq!(d.check("x", "x"), LoopStatus::Abort(4));
 }
 
 #[test]
