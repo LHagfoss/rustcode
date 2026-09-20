@@ -236,7 +236,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never move the user's checkout (no `git checkout -B`, `git switch -C`, `git rebase`, or `git reset --hard` in the active working tree): branch and merge work belongs in an isolated worktree under /tmp, created with `git worktree add`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never move the user's checkout (no `git checkout -B`, `git switch -C`, `git rebase`, or `git reset --hard` in the active working tree): branch and merge work belongs in an isolated worktree under /tmp, created with `git worktree add`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -248,16 +248,17 @@ pub const RUN_COMMAND: Tool = Tool {
 fn manage_task_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
-            "action": { "type": "string", "enum": ["list", "status", "kill"] },
-            "task_id": { "type": "string" }
+            "action": { "type": "string", "enum": ["list", "status", "kill", "wait"] },
+            "task_id": { "type": "string" },
+            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 }
         }, "required": ["action"]
     })
 }
 
 pub const MANAGE_TASK: Tool = Tool {
     name: "manage_task",
-    description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll 'status' or 'list' in a loop — completion notifications arrive automatically. Stop calling tools to wait for completion.",
-    arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
+    description: "Manage background tasks spawned with run_command (action: 'list', 'status', 'kill', or 'wait'). Use action 'wait' to block until a task finishes instead of polling in a shell loop. Otherwise stop calling tools to wait for completion; completion notifications also arrive automatically.",
+    arguments: r#"{"action": "list, status, kill, or wait", "task_id": "required for status/kill/wait", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
     handler: manage_task_tool,
     requires_confirmation: false,
     schema: manage_task_schema,
@@ -645,7 +646,7 @@ fn run_command_output_inner(
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion."
+                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop. You may continue other work meanwhile; use manage_task action 'wait' to block until it finishes."
             ),
             success: false,
             pending: true,
@@ -770,11 +771,89 @@ fn pr_creation_guard_output(command: &str, base: &str) -> super::ToolExecutionOu
     }
 }
 
+const DEFAULT_WAIT_TIMEOUT_MS: u64 = 600_000;
+const MAX_WAIT_TIMEOUT_MS: u64 = 1_800_000;
+
+fn wait_timeout(args: &Value) -> std::time::Duration {
+    let ms = args
+        .get("timeout_ms")
+        .and_then(|timeout| timeout.as_u64())
+        .unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+    std::time::Duration::from_millis(ms.clamp(1_000, MAX_WAIT_TIMEOUT_MS))
+}
+
+/// Block until one background task reaches a terminal state, so agents wait
+/// with a single tool call instead of hand-rolled sleep/poll shell loops.
+/// Runs on a blocking worker thread; Esc still interrupts the wait through
+/// the normal tool-cancellation path.
+fn wait_for_background_task(
+    manager: &TaskManager,
+    session_id: &str,
+    task_id: &str,
+    timeout: std::time::Duration,
+) -> String {
+    // Subscribe before checking the roster: a task that finishes after this
+    // point still delivers its terminal event to us, while one that finished
+    // before is simply absent from the roster below.
+    let subscription = manager.subscribe_session(session_id.to_owned());
+    if !manager
+        .list(session_id)
+        .iter()
+        .any(|info| info.id.as_str() == task_id)
+    {
+        return format!("TaskId '{task_id}' is not running (finished or cancelled).");
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            break;
+        };
+        match subscription.recv_timeout(remaining) {
+            Ok(event) if event.task_id().as_str() == task_id && event.is_terminal() => {
+                return format_wait_result(task_id, event);
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    // The wait expired. A task that finished in a way this fresh
+    // subscription could not observe is already gone from the roster; its
+    // result still arrives via the automatic completion notice.
+    if !manager
+        .list(session_id)
+        .iter()
+        .any(|info| info.id.as_str() == task_id)
+    {
+        format!(
+            "TaskId '{task_id}' finished while waiting; its result arrives via the automatic completion notice."
+        )
+    } else {
+        format!(
+            "TaskId '{task_id}' is still running after {}s. Call 'wait' again to keep waiting, or continue other work meanwhile.",
+            timeout.as_secs()
+        )
+    }
+}
+
+fn format_wait_result(task_id: &str, event: TaskEvent) -> String {
+    match task_event_to_tool_output(event) {
+        Some((_, _, output)) => {
+            let status = if output.success {
+                "finished successfully"
+            } else {
+                "finished"
+            };
+            format!("Task '{task_id}' {status}. Output:\n{}", output.content)
+        }
+        None => format!("Task '{task_id}' finished."),
+    }
+}
+
 pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     let action = args
         .get("action")
         .and_then(|a| a.as_str())
-        .ok_or("missing 'action' argument (must be 'list', 'status', or 'kill')")?;
+        .ok_or("missing 'action' argument (must be 'list', 'status', 'kill', or 'wait')")?;
 
     let session_id = get_active_session_id().unwrap_or_default();
     let manager = background_task_manager();
@@ -828,8 +907,20 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
 
             cancel_result_message(task_id, manager.cancel_in_session(&session_id, task_id))
         }
+        "wait" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(|t| t.as_str())
+                .ok_or("missing 'task_id' argument for wait action")?;
+            Ok(wait_for_background_task(
+                manager,
+                &session_id,
+                task_id,
+                wait_timeout(args),
+            ))
+        }
         _ => Err(format!(
-            "Unknown action '{action}'. Supported actions: list, status, kill."
+            "Unknown action '{action}'. Supported actions: list, status, kill, wait."
         )),
     }
 }
@@ -1102,6 +1193,80 @@ mod tests {
 
         crate::tools::set_active_session_id(Some(owner.to_owned()));
         crate::tools::stop_background_tasks(owner);
+        crate::tools::set_active_session_id(None);
+    }
+
+    #[test]
+    fn manage_task_wait_unknown_task_reports_not_running() {
+        let session = "manage-wait-unknown-session";
+        crate::tools::set_active_session_id(Some(session.to_owned()));
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "wait",
+            "task_id": "no-such-task",
+            "timeout_ms": 1000,
+        }));
+        assert_eq!(
+            result,
+            Ok("TaskId 'no-such-task' is not running (finished or cancelled).".to_string())
+        );
+        crate::tools::set_active_session_id(None);
+    }
+
+    #[test]
+    fn manage_task_wait_returns_finished_output() {
+        let session = "manage-wait-done-session";
+        let task_id = "manage-wait-done-task";
+        crate::tools::set_active_session_id(Some(session.to_owned()));
+        crate::tools::spawn_background_task_for_test(
+            task_id,
+            session,
+            if cfg!(target_os = "windows") {
+                "ping -n 3 127.0.0.1 > NUL"
+            } else {
+                "sleep 2"
+            },
+        )
+        .unwrap();
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "wait",
+            "task_id": task_id,
+            "timeout_ms": 30000,
+        }));
+        let output = result.expect("wait should return the finished result");
+        assert!(
+            output.contains("finished successfully"),
+            "unexpected wait output: {output}"
+        );
+        crate::tools::stop_background_tasks(session);
+        crate::tools::set_active_session_id(None);
+    }
+
+    #[test]
+    fn manage_task_wait_timeout_reports_still_running() {
+        let session = "manage-wait-timeout-session";
+        let task_id = "manage-wait-timeout-task";
+        crate::tools::set_active_session_id(Some(session.to_owned()));
+        crate::tools::spawn_background_task_for_test(
+            task_id,
+            session,
+            if cfg!(target_os = "windows") {
+                "ping -n 30 127.0.0.1 > NUL"
+            } else {
+                "sleep 30"
+            },
+        )
+        .unwrap();
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "wait",
+            "task_id": task_id,
+            "timeout_ms": 1000,
+        }));
+        let output = result.expect("wait should report still running");
+        assert!(
+            output.contains("still running"),
+            "unexpected wait output: {output}"
+        );
+        crate::tools::stop_background_tasks(session);
         crate::tools::set_active_session_id(None);
     }
 

@@ -1909,6 +1909,68 @@ fn expanded_generic_tool_preserves_its_result_body() {
 }
 
 #[test]
+fn mixed_batch_command_entry_shows_expand_hint_and_body() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"git status --short"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "get_time".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+        ]));
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0\nstdout:\nM src/main.rs")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "get_time: Thursday, 08:30")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "get_time".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+        "command child should carry the expand hint: {rendered:?}"
+    );
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        expanded.iter().any(|line| line.contains("M src/main.rs")),
+        "expanded command should reveal its body: {expanded:?}"
+    );
+}
+
+#[test]
 fn collapses_image_markers_to_chips() {
     // Plain text is untouched.
     assert_eq!(collapse_image_markers("hello world"), "hello world");
@@ -4588,12 +4650,18 @@ fn command_child_lines_wrap_with_indentation() {
     );
 
     let rendered = super::render_committed_tool_result_group(&state, &[1], 40, false);
+    // Long chained commands collapse to a bounded preview (Codex-style,
+    // max 2 visual lines) instead of flooding scrollback.
     assert!(
-        rendered.len() > 2,
-        "long command should wrap across multiple lines: {rendered:?}"
+        rendered.len() <= 3,
+        "long command should collapse to a bounded preview: {rendered:?}"
     );
     assert!(rendered[0].to_string().starts_with("• Ran"));
     assert!(rendered[1].to_string().starts_with("  └ Bash"));
+    assert!(
+        rendered.iter().any(|line| line.to_string().contains('…')),
+        "collapsed preview should carry an ellipsis: {rendered:?}"
+    );
     // Continuation lines must have indentation ("    ")
     for line in &rendered[2..] {
         let text = line.to_string();

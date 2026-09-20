@@ -446,7 +446,7 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
             .recovery
             .loop_detector
             .check("inspect:README.md", "inspect:README.md"),
-        loop_detect::LoopStatus::Abort(3),
+        loop_detect::LoopStatus::Warning(3),
         "ordinary loop history must continue across a background wakeup"
     );
     assert_eq!(

@@ -12,6 +12,19 @@ fn record_active_background_task(
     if state.background_wakeup_ids.contains(task_id) {
         return false;
     }
+    if state.orchestrator_running {
+        // A turn is in flight: withhold the output so it joins history at
+        // the next turn boundary instead of derailing the current turn's
+        // context mid-stream. The wakeup is still queued now.
+        state
+            .pending_background_outputs
+            .push(crate::PendingBackgroundOutput {
+                task_id: task_id.to_owned(),
+                output,
+            });
+        crate::queue_background_wakeup(state, task_id);
+        return true;
+    }
     state
         .history
         .push(crate::background_task_history_message(task_id, output));
@@ -459,6 +472,32 @@ mod tests {
             vec!["__task_wakeup__:task-completed-once".to_owned()]
         );
         assert!(state.background_wakeup_ids.contains("task-completed-once"));
+    }
+
+    #[test]
+    fn completion_during_active_turn_is_withheld_until_boundary() {
+        let mut state = AppState::new();
+        state.active_session_id = "withheld-session".to_owned();
+        state.orchestrator_running = true;
+        let output = ToolExecutionOutput::success("done".to_owned());
+
+        assert!(record_active_background_task(
+            &mut state,
+            "task-withheld",
+            output
+        ));
+        assert_eq!(state.history.len(), 0);
+        assert_eq!(state.pending_background_outputs.len(), 1);
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:task-withheld".to_owned()]
+        );
+
+        state.orchestrator_running = false;
+        assert_eq!(crate::flush_pending_background_outputs(&mut state), 1);
+        assert_eq!(state.history.len(), 1);
+        assert!(state.pending_background_outputs.is_empty());
+        assert_eq!(crate::flush_pending_background_outputs(&mut state), 0);
     }
 
     #[test]

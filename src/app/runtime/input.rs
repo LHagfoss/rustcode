@@ -1277,12 +1277,6 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
                 drop(s);
-                dbg_log!(
-                    "[KEY_EVENT] code={:?} modifiers={:?}",
-                    key.code,
-                    key.modifiers
-                );
-
                 match {
                     let mut state = app_state.lock().await;
                     composer.handle_key(&mut state, key)

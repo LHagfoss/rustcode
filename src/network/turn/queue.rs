@@ -101,6 +101,9 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
+            // Background completions withheld during the previous turn join
+            // history here, at a turn boundary, never mid-turn.
+            crate::flush_pending_background_outputs(&mut s);
             s.last_turn_had_model_final_response = false;
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
             let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);

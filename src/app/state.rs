@@ -48,6 +48,10 @@ pub struct AppState {
     /// Background task IDs whose terminal completion has already been queued.
     /// This makes completion notifications idempotent across callback races.
     pub background_wakeup_ids: std::collections::BTreeSet<String>,
+    /// Completed background outputs withheld while a turn is in flight. They
+    /// join history at the next turn boundary instead of derailing the
+    /// current turn's context mid-stream.
+    pub pending_background_outputs: Vec<crate::PendingBackgroundOutput>,
     /// The logical turn state waiting for a background task completion. This
     /// is intentionally kept outside serialized history so an orchestrator
     /// restart can resume the same in-memory task without creating a second
@@ -970,6 +974,7 @@ impl AppState {
             model_quota_remaining: None,
             pending_queue: Vec::new(),
             background_wakeup_ids: std::collections::BTreeSet::new(),
+            pending_background_outputs: Vec::new(),
             background_turn_context: None,
             status: AppStatus::Idle,
             orchestrator_running: false,

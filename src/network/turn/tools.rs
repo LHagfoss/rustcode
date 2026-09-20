@@ -793,6 +793,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // to the batch that requested completion.
             let mut batch_incomplete = unexecuted_call_count > 0;
             let mut background_pending = false;
+            let mut batch_has_completed = false;
             let explicit_verification_user_index = s
                 .history
                 .iter()
@@ -909,6 +910,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ));
                     continue;
                 }
+                // A completed result in the same batch gives the model
+                // something to act on: keep the turn alive instead of
+                // parking it on the background task.
+                batch_has_completed = true;
                 let mut verification_command = false;
                 let mut repeated_successful_verification = false;
                 if (name == "run_command" || metadata.command.is_some())
@@ -1400,7 +1405,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 return ToolHandlingOutcome::Stop;
             }
 
-            if background_pending {
+            // Park the turn on the background task only when the batch left
+            // the model nothing else to act on. Mixed batches keep going so
+            // background work does not block foreground progress.
+            if background_pending && !batch_has_completed {
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 drop(s);

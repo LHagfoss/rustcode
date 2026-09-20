@@ -18,6 +18,7 @@ mod notifications;
 mod paste;
 mod platform;
 mod raw_cli;
+mod shell_env;
 mod skills;
 mod symbols;
 mod tools;
@@ -104,6 +105,14 @@ pub(crate) fn background_task_history_message_with_call_id(
     )
 }
 
+/// A background task completion withheld while a turn is in flight, so it
+/// joins history at the next turn boundary instead of derailing the
+/// current turn's context mid-stream.
+pub(crate) struct PendingBackgroundOutput {
+    pub task_id: String,
+    pub output: crate::tools::ToolExecutionOutput,
+}
+
 pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
     if state.background_wakeup_ids.insert(task_id.to_string()) {
         state
@@ -111,6 +120,49 @@ pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
             .push(format!("__task_wakeup__:{task_id}"));
     }
     state.request_redraw();
+}
+
+/// Move withheld background completions into history at a turn boundary.
+/// Returns how many were flushed.
+pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
+    if state.pending_background_outputs.is_empty() {
+        return 0;
+    }
+    let stashed: Vec<PendingBackgroundOutput> =
+        std::mem::take(&mut state.pending_background_outputs);
+    let count = stashed.len();
+    for pending in stashed {
+        state.history.push(background_task_history_message(
+            &pending.task_id,
+            pending.output,
+        ));
+    }
+    let session_id = state.active_session_id.clone();
+    crate::config::save_session_history(&session_id, &state.history);
+    state.request_redraw();
+    count
+}
+
+/// Import provider API keys from the user's login/interactive shell into this
+/// process when they are missing here. Keys exported in `~/.zshrc` are the
+/// classic miss: visible in every terminal, invisible to desktop/systemd/IDE
+/// launches. Runs once at startup; the 3s probe timeout bounds the cost.
+fn hydrate_shell_provider_keys() {
+    // Cheap path first: read the workspace config to learn which env names
+    // the user's profiles actually reference.
+    let configured: Vec<String> = std::env::current_dir()
+        .ok()
+        .map(|workspace| crate::config::load_config_for_workspace(&workspace).2)
+        .map(|config| {
+            config
+                .models
+                .iter()
+                .filter_map(|profile| profile.api_key_env_name())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::shell_env::hydrate_provider_keys(&configured);
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -122,6 +174,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // preserves the message + location in debug.log even when the process
     // dies without a crash report.
     crate::logger::install_panic_hook();
+    // Provider keys are often exported in `~/.zshrc` (interactive-only) and
+    // invisible to GUI/systemd/IDE launches. Hydrate missing keys from the
+    // login shell once at startup so profiles, MCP servers, and tool shells
+    // all see the same values the user's terminal sees.
+    hydrate_shell_provider_keys();
 
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
