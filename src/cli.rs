@@ -178,12 +178,12 @@ mod tests {
     #[test]
     fn parses_doctor_with_fix_flag() {
         let cli = Cli::try_parse_from(["rustcode", "doctor"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Doctor { fix: false })
-        ));
+        assert!(matches!(cli.command, Some(Commands::Doctor { fix: false })));
         let cli_fix = Cli::try_parse_from(["rustcode", "doctor", "--fix"]).unwrap();
-        assert!(matches!(cli_fix.command, Some(Commands::Doctor { fix: true })));
+        assert!(matches!(
+            cli_fix.command,
+            Some(Commands::Doctor { fix: true })
+        ));
     }
 
     #[test]

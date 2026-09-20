@@ -25,11 +25,7 @@ impl DoctorCheck {
         }
     }
 
-    fn fail(
-        name: &'static str,
-        detail: impl Into<String>,
-        fix_hint: Option<String>,
-    ) -> Self {
+    fn fail(name: &'static str, detail: impl Into<String>, fix_hint: Option<String>) -> Self {
         Self {
             name,
             ok: false,
@@ -110,7 +106,10 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
                 checks.push(DoctorCheck::fail(
                     "config-dir",
                     format!("missing: {}", dir.display()),
-                    Some(format!("run `rustcode doctor --fix` or `mkdir -p {}`", dir.display())),
+                    Some(format!(
+                        "run `rustcode doctor --fix` or `mkdir -p {}`",
+                        dir.display()
+                    )),
                 ));
             }
         }
@@ -130,7 +129,11 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     ));
 
     // Binaries.
-    checks.push(check_binary("git", &["--version"], "install git: https://git-scm.com/downloads"));
+    checks.push(check_binary(
+        "git",
+        &["--version"],
+        "install git: https://git-scm.com/downloads",
+    ));
     checks.push(check_binary(
         "rg",
         &["--version"],
@@ -147,7 +150,10 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     if let Some(home) = home {
         let global = home.join(".config/rustcode/skills");
         if global.is_dir() {
-            checks.push(DoctorCheck::pass("skills-dir", global.display().to_string()));
+            checks.push(DoctorCheck::pass(
+                "skills-dir",
+                global.display().to_string(),
+            ));
         } else if fix && ensure_dir(&global) {
             checks.push(DoctorCheck::pass(
                 "skills-dir",
@@ -162,7 +168,10 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
         }
         let local = workspace.join(".rustcode/skills");
         if local.is_dir() {
-            checks.push(DoctorCheck::pass("project-skills", local.display().to_string()));
+            checks.push(DoctorCheck::pass(
+                "project-skills",
+                local.display().to_string(),
+            ));
         } else {
             // Missing project skills is fine — most repos don't have one.
             checks.push(DoctorCheck::pass(

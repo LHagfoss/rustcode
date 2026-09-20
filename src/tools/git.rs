@@ -257,10 +257,7 @@ mod tests {
         assert_eq!(GIT_DIFF.safety, super::super::ToolSafety::ReadOnly);
         assert!(!GIT_STATUS.requires_confirmation);
         assert!(!GIT_DIFF.requires_confirmation);
-        assert_eq!(
-            GIT_ADD.safety,
-            super::super::ToolSafety::WorkspaceMutation
-        );
+        assert_eq!(GIT_ADD.safety, super::super::ToolSafety::WorkspaceMutation);
         assert_eq!(
             GIT_COMMIT.safety,
             super::super::ToolSafety::WorkspaceMutation
