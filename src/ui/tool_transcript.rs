@@ -1260,13 +1260,37 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
     content.contains("Loop warning:")
         || content.contains("tool calls in that response were dropped")
         || content.contains("Oversized response:")
-        || (content.starts_with("[The model emitted ")
-            && content.contains("Only one was executed this round;"))
+        || is_deferred_tool_batch_notice(content)
         || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
         || content.starts_with("[harness: stopped after ")
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")
+}
+
+const COMPACT_DEFERRED_TOOL_WARNING: &str = "[Warning, check debug for more info]";
+
+fn is_deferred_tool_batch_notice(content: &str) -> bool {
+    let content = content.trim();
+    content.starts_with("[The model emitted ")
+        && content.contains(" tool calls.")
+        && content.contains("remaining calls (")
+        && content.contains("were not executed or scheduled.")
+}
+
+/// Return the presentation-safe form of a system notice.
+///
+/// Detailed harness diagnostics stay in canonical history and debug logs, but
+/// implementation details such as deferred tool names and call ids should not
+/// expand into a wide, noisy transcript row.
+pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
+    if is_deferred_tool_batch_notice(content) {
+        Some(COMPACT_DEFERRED_TOOL_WARNING)
+    } else if is_hidden_system_notice(content) {
+        None
+    } else {
+        Some(content)
+    }
 }
 
 pub(super) fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool {
@@ -1308,6 +1332,16 @@ mod tests {
             "[The model emitted 4 tool calls. Only one was executed this round; the remaining calls (grep, write_to_file) were not executed or scheduled.]"
         ));
         assert!(!is_hidden_system_notice("Notice: background task finished"));
+    }
+
+    #[test]
+    fn deferred_tool_batch_notice_has_a_compact_ui_projection() {
+        assert_eq!(
+            super::system_notice_for_display(
+                "[The model emitted 5 tool calls. 4 were executed this round; the remaining calls (get_status (call_123)) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]"
+            ),
+            Some("[Warning, check debug for more info]")
+        );
     }
 
     fn tool_message_with_record(record: crate::app::ToolResultRecord) -> crate::app::ChatMessage {
