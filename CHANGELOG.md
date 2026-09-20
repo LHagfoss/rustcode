@@ -1,3 +1,9 @@
+## [v0.55.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.2) - 2026-09-20
+
+### Features
+- Add `manage_task wait` for bounded, cancellable background-task waits.
+- Keep productive turns running while background tasks complete and flush completions at turn boundaries.
+- Add a live background-task progress chip with running count, elapsed time, command labels, and management hints.
 ## [v0.55.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.1) - 2026-09-20
 
 ### Features
