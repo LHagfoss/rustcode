@@ -2680,6 +2680,24 @@ fn fuzzy_match_resolves_case_typos_and_aliases() {
 }
 
 #[test]
+fn shared_truncate_bytes_bounds_output_at_utf8_boundary() {
+    assert_eq!(super::truncate_bytes("abc", 10), "abc");
+    let text = format!("{}é{}", "a".repeat(19), "z");
+    let truncated = super::truncate_bytes(&text, 20);
+    assert!(truncated.len() <= 20 + 40);
+    assert!(truncated.contains("truncated to 20 bytes"));
+}
+
+#[test]
+fn unknown_tool_error_suggests_close_match() {
+    let output = super::dispatch::execute("gti_status", &serde_json::json!({}));
+    assert!(
+        output.contains("Did you mean 'git_status'"),
+        "got: {output}"
+    );
+}
+
+#[test]
 fn filter_tools_ranks_exact_before_fuzzy_and_respects_limit() {
     let ranked = super::filter_tools_by_query("git_status", 10);
     assert_eq!(ranked.first(), Some(&"git_status"));

@@ -17,14 +17,7 @@ fn working_directory() -> PathBuf {
 }
 
 fn truncate_output(text: &str) -> String {
-    if text.len() <= MAX_GIT_OUTPUT_BYTES {
-        return text.to_string();
-    }
-    let mut end = MAX_GIT_OUTPUT_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…\n[output truncated to 20k bytes]", &text[..end])
+    super::truncate_bytes(text, MAX_GIT_OUTPUT_BYTES)
 }
 
 fn run_git(args: &[&str]) -> Result<String, String> {
@@ -114,7 +107,7 @@ pub const GIT_DIFF: Tool = Tool {
 pub fn git_diff(args: &Value) -> Result<String, String> {
     let staged = args
         .get("staged")
-        .and_then(|v| super::parse_json_bool(v))
+        .and_then(super::parse_json_bool)
         .unwrap_or(false);
     let path = args.get("path").and_then(Value::as_str).map(str::trim);
     if let Some(path) = path
