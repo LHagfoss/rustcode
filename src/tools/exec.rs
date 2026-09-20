@@ -236,7 +236,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. Do not add '&' when using detached=true. Never move the user's checkout (no `git checkout -B`, `git switch -C`, `git rebase`, or `git reset --hard` in the active working tree): branch and merge work belongs in an isolated worktree under /tmp, created with `git worktree add`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never move the user's checkout (no `git checkout -B`, `git switch -C`, `git rebase`, or `git reset --hard` in the active working tree): branch and merge work belongs in an isolated worktree under /tmp, created with `git worktree add`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -315,6 +315,65 @@ fn has_shell_background_operator(_command: &str) -> bool {
     // `cmd.exe` uses `&` as a command separator rather than as a portable
     // background operator. Detached callers should use detached=true without
     // adding shell syntax.
+    false
+}
+
+/// Return whether a command already synchronizes its own background jobs via
+/// `wait` or via `$!` paired with `kill`/`pkill`.
+///
+/// Such scripts (e.g. `server > log 2>&1 & pid=$!; …; curl …; kill $pid`)
+/// start a helper, verify it, then tear it down in one compound command. The
+/// verification output is the point of the call, so auto-detaching on the
+/// embedded `&` would discard exactly what the author meant to read. These
+/// run in the foreground under the normal timeout instead; a bare trailing
+/// `&` with no synchronization still auto-detaches.
+#[cfg(not(target_os = "windows"))]
+fn command_manages_own_background_jobs(command: &str) -> bool {
+    // Strip quoted spans (and blank escaped chars) so prose like
+    // `echo "wait $!"` cannot opt out of the background safety net.
+    let mut code = String::with_capacity(command.len());
+    let bytes = command.as_bytes();
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escaped = false;
+    for &byte in bytes {
+        if escaped {
+            escaped = false;
+            code.push(' ');
+            continue;
+        }
+        if byte == b'\\' && !single_quote {
+            escaped = true;
+            code.push(' ');
+            continue;
+        }
+        if byte == b'\'' && !double_quote {
+            single_quote = !single_quote;
+            continue;
+        }
+        if byte == b'"' && !single_quote {
+            double_quote = !double_quote;
+            continue;
+        }
+        if single_quote || double_quote {
+            continue;
+        }
+        code.push(byte as char);
+    }
+    let words: Vec<&str> = code
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|token| !token.is_empty())
+        .collect();
+    let has_wait = words.iter().any(|token| *token == "wait");
+    let has_pid_ref = code.contains("$!");
+    let has_kill = words
+        .iter()
+        .any(|token| *token == "kill" || *token == "pkill" || *token == "killall");
+    has_wait || (has_pid_ref && has_kill)
+}
+
+#[cfg(target_os = "windows")]
+fn command_manages_own_background_jobs(_command: &str) -> bool {
     false
 }
 
@@ -500,8 +559,12 @@ fn run_command_output_inner(
     let has_background_operator = has_shell_background_operator(command_str);
     // A shell-level `&` can outlive the shell. Treat it as detached even when
     // the model omitted the JSON background flag, so the child cannot inherit
-    // RustCode's pipes and keep a foreground turn stuck indefinitely.
-    let detached = detached_requested || has_background_operator;
+    // RustCode's pipes and keep a foreground turn stuck indefinitely. Scripts
+    // that synchronize their own background jobs (`wait`, or `$!` with
+    // `kill`) are exempt: they reap what they spawn, so the verification
+    // output they print must be preserved, not discarded.
+    let detached = detached_requested
+        || (has_background_operator && !command_manages_own_background_jobs(command_str));
     let run_in_bg = (background_requested || detached)
         && (detached || !is_short_discovery_command(command_str));
     let command_request = rustcode_command::CommandRequest {
@@ -838,10 +901,10 @@ mod tests {
     use super::terminate_background_pid;
     use super::{
         cancel_result_message, command_confirmation_preview, command_confirmation_scope,
-        command_requires_confirmation, has_interactive_sudo, has_shell_background_operator,
-        manage_task_tool, pull_request_base, reject_broad_git_stage, run_command,
-        run_command_output, run_command_output_cancellable, run_command_output_with_progress,
-        task_event_to_tool_output,
+        command_manages_own_background_jobs, command_requires_confirmation, has_interactive_sudo,
+        has_shell_background_operator, manage_task_tool, pull_request_base, reject_broad_git_stage,
+        run_command, run_command_output, run_command_output_cancellable,
+        run_command_output_with_progress, task_event_to_tool_output,
     };
 
     #[cfg(unix)]
@@ -1312,6 +1375,70 @@ mod tests {
             "detached task never started"
         );
         assert_eq!(stop.stopped, 1, "detached task was not terminated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_managed_background_scripts_are_exempt_from_auto_detach() {
+        // Shape of the frozen session's lost verification: start a server,
+        // probe it, then tear it down in one compound command. The embedded
+        // `&` is real, but the script reaps its own job, so its output must
+        // be preserved instead of detached into the void.
+        let verify = "bun run dev > /tmp/rc-dev.log 2>&1 &\nDEV_PID=$!\nfor i in $(seq 1 30); do\n  if grep -q \"Ready\" /tmp/rc-dev.log 2>/dev/null; then break; fi\n  sleep 1\ndone\ncurl -s \"http://localhost:3000/api/releases\" | head -c 100\necho \"\"\nkill $DEV_PID 2>/dev/null\npkill -f \"next dev\" 2>/dev/null\necho \"done\"";
+        assert!(has_shell_background_operator(verify));
+        assert!(command_manages_own_background_jobs(verify));
+        for command in [
+            "sleep 0.1 & pid=$!; kill $pid; echo reaped",
+            "sleep 0.1 & wait $!; echo done",
+            "server & client; wait; echo done",
+        ] {
+            assert!(
+                command_manages_own_background_jobs(command),
+                "self-managed: {command}"
+            );
+        }
+        for command in [
+            "sleep 30 &",
+            "server & echo ready",
+            "printf 'wait $!' &",
+            "echo \"wait\"",
+            "printf out 2>&1",
+        ] {
+            assert!(
+                !command_manages_own_background_jobs(command),
+                "not self-managed: {command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_managed_background_script_runs_in_foreground_with_output() {
+        let session_id = format!(
+            "self-managed-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let output = run_command_output(&serde_json::json!({
+            "command": "sleep 0.2 & pid=$!; wait $pid; echo verified-$pid",
+        }))
+        .expect("self-managed script should run in the foreground");
+        super::super::set_active_session_id(None);
+
+        assert!(
+            !output.content.contains("Detached task started"),
+            "self-managed script must not detach: {}",
+            output.content
+        );
+        assert_eq!(output.exit_code, Some(0));
+        assert!(
+            output.content.contains("verified-"),
+            "verification output must be preserved: {}",
+            output.content
+        );
     }
 
     #[cfg(unix)]
