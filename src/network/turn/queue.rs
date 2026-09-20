@@ -13,6 +13,31 @@ use super::{
     take_turn_context_for_prompt_with_limits,
 };
 
+/// Releases an orchestrator lease when its task dies without reaching the
+/// normal loop exit (panic, abort). The explicit release at the end of the
+/// loop disarms the guard; a stale guard release is a no-op because the
+/// lease generations no longer match.
+struct OrchestratorLeaseGuard {
+    state: Arc<Mutex<AppState>>,
+    lease: Option<OrchestratorLease>,
+}
+
+impl OrchestratorLeaseGuard {
+    fn disarm(&mut self) {
+        self.lease = None;
+    }
+}
+
+impl Drop for OrchestratorLeaseGuard {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take()
+            && let Ok(mut state) = self.state.try_lock()
+        {
+            state.release_orchestrator(&lease);
+        }
+    }
+}
+
 pub(crate) async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -44,6 +69,13 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
     lease: OrchestratorLease,
 ) {
     dbg_log!("Orchestrator started");
+    // Guard the spawn slot against task death (panic/abort) that skips the
+    // release at the end of the loop. Without this, one dead task wedges
+    // every future spawn until the watchdog invalidates the generation.
+    let mut lease_guard = OrchestratorLeaseGuard {
+        state: state.clone(),
+        lease: Some(lease.clone()),
+    };
     loop {
         let (next_prompt, is_wakeup, turn_context, turn_session_id) = {
             let mut s = state.lock().await;
@@ -155,6 +187,49 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             break;
         }
     }
+    {
+        let s = state.lock().await;
+        // Forensic context for the next stall investigation: a frozen turn
+        // leaves status/queue evidence instead of a bare "finished" line.
+        dbg_log!(
+            "Orchestrator finished (queue={}, status={:?})",
+            s.pending_queue.len(),
+            s.status
+        );
+    }
     state.lock().await.release_orchestrator(&lease);
-    dbg_log!("Orchestrator finished");
+    lease_guard.disarm();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lease_guard_releases_abandoned_claim_on_drop() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let lease = state.blocking_lock().claim_orchestrator().expect("claim");
+        assert!(state.blocking_lock().orchestrator_running);
+        {
+            let _guard = OrchestratorLeaseGuard {
+                state: state.clone(),
+                lease: Some(lease.clone()),
+            };
+            // Dropped without disarm: simulates panic/abort mid-loop.
+        }
+        assert!(!state.blocking_lock().orchestrator_running);
+
+        // A disarmed guard after the explicit end-of-loop release changes
+        // nothing.
+        let lease = state.blocking_lock().claim_orchestrator().expect("reclaim");
+        {
+            let mut guard = OrchestratorLeaseGuard {
+                state: state.clone(),
+                lease: Some(lease.clone()),
+            };
+            assert!(state.blocking_lock().release_orchestrator(&lease));
+            guard.disarm();
+        }
+        assert!(!state.blocking_lock().orchestrator_running);
+    }
 }
