@@ -1090,7 +1090,9 @@ fn ask_question_renders_prompt_and_answer_in_committed_history() {
         .expect("ask_question must not be hidden from the transcript");
     assert_eq!(entry.action, "Asked");
     assert!(
-        entry.target.contains("Where should the version data come from?"),
+        entry
+            .target
+            .contains("Where should the version data come from?"),
         "question missing from headline: {}",
         entry.target
     );
@@ -1129,18 +1131,21 @@ fn ask_question_cancellation_renders_visibly() {
         }]),
     );
     state.history.push(
-        ChatMessage::new("tool", "ask_question: User cancelled or provided no selection.")
-            .answering(Some("call-1".to_owned()))
-            .with_tool_result(ToolResultRecord {
-                tool_name: "ask_question".to_owned(),
-                arguments_hash: String::new(),
-                success: false,
-                exit_code: None,
-                changed_paths: Vec::new(),
-                truncated: false,
-                full_output_artifact: None,
-                ..Default::default()
-            }),
+        ChatMessage::new(
+            "tool",
+            "ask_question: User cancelled or provided no selection.",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "ask_question".to_owned(),
+            arguments_hash: String::new(),
+            success: false,
+            exit_code: None,
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+            ..Default::default()
+        }),
     );
 
     let entry = super::tool_transcript_entry(&state.render_snapshot(), 1, 80, false)

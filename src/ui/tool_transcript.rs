@@ -447,10 +447,7 @@ pub(super) fn ask_question_answer(history: &[ChatMessage], message_index: usize)
         .get(message_index)
         .map(|message| message.content.as_str())
         .unwrap_or("");
-    let result = raw
-        .split_once(": ")
-        .map(|(_, rest)| rest)
-        .unwrap_or(raw);
+    let result = raw.split_once(": ").map(|(_, rest)| rest).unwrap_or(raw);
     let answer = result.strip_prefix("User selected: ").unwrap_or(result);
     let clean = crate::app::activity::sanitize_tool_parameter(answer, 90);
     if clean.is_empty() {
