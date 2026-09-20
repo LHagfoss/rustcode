@@ -2886,13 +2886,15 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     crate::tools::stop_background_tasks(&session_id);
 
     let status = super::activity_status_line(&snapshot, false).to_string();
-    assert!(status.contains("Waiting for background terminal"));
+    assert!(status.contains("Idle"), "{status}");
+    assert!(!status.contains("Waiting for background terminal"));
     assert!(!status.contains("esc to interrupt"));
-    assert!(status.contains("1 background terminal running"));
-    assert!(status.contains("/ps to view · /stop to close"));
+    assert!(status.contains("⠋ 1 running ("), "{status}");
+    assert!(status.contains(long_command), "{status}");
+    assert!(status.contains("/ps · /stop"), "{status}");
     let neutral_status = super::activity_status_line(&neutral_snapshot, false).to_string();
     assert!(neutral_status.contains("Idle"));
-    assert!(neutral_status.contains("1 background terminal running"));
+    assert!(neutral_status.contains("1 running ("));
     assert!(!neutral_status.contains("Waiting for background terminal"));
     assert!(!neutral_status.contains("esc to interrupt"));
 
@@ -2904,16 +2906,40 @@ fn background_terminal_activity_shows_management_hints_and_command() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(live_tail.contains("Waiting for background terminal"));
+    assert!(live_tail.contains("Idle"));
+    assert!(live_tail.contains("⠋ 1 running ("));
     assert!(live_tail.contains(&format!("  └ {long_command}")));
-    assert_eq!(
-        super::background_terminal_summary(2),
-        "2 background terminals running · /ps to view · /stop to close"
-    );
     assert_eq!(
         crate::tools::background_command_label("cargo\n test\t--locked", 80),
         "cargo test --locked"
     );
+}
+
+#[test]
+fn background_terminal_chip_compacts_more_than_three_tasks() {
+    let state = AppState::new();
+    let session_id = state.active_session_id.clone();
+    let command = if cfg!(target_os = "windows") {
+        "ping -n 30 127.0.0.1 > NUL"
+    } else {
+        "sleep 30"
+    };
+    for index in 0..4 {
+        crate::tools::spawn_background_task_for_test(
+            &format!("ui-background-chip-{index}"),
+            &session_id,
+            command,
+        )
+        .unwrap();
+    }
+
+    let snapshot = state.render_snapshot();
+    let summary = super::background_terminal_summary(&snapshot);
+    crate::tools::stop_background_tasks(&session_id);
+
+    assert!(summary.contains("⠋ 4 running ("), "{summary}");
+    assert!(summary.contains("1 more"), "{summary}");
+    assert!(summary.contains("/ps · /stop"), "{summary}");
 }
 
 #[test]
