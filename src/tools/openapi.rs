@@ -69,14 +69,7 @@ fn spec_base_url(spec: &Value, spec_url: &str) -> String {
 }
 
 fn truncate_output(text: &str) -> String {
-    if text.len() <= MAX_API_OUTPUT_BYTES {
-        return text.to_string();
-    }
-    let mut end = MAX_API_OUTPUT_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…\n[output truncated to 20k bytes]", &text[..end])
+    super::truncate_bytes(text, MAX_API_OUTPUT_BYTES)
 }
 
 async fn fetch_spec(client: &reqwest::Client, spec_url: &str) -> Result<Value, String> {
@@ -212,7 +205,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_methods_and_paths() {
-        assert!(validate_request("https://example.com/s.json", "BREW", "/v1/x").is_ok() == false);
+        assert!(validate_request("https://example.com/s.json", "BREW", "/v1/x").is_err());
         assert!(validate_request("https://example.com/s.json", "GET", "v1/x").is_err());
     }
 

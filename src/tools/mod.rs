@@ -134,7 +134,15 @@ pub(crate) fn resolve_builtin_tool_alias(name: &str) -> Option<&'static str> {
 }
 
 fn normalize_tool_query(name: &str) -> String {
-    name.to_ascii_lowercase()
+    normalize_alphanumeric_lower(name)
+}
+
+/// Shared case-folded alphanumeric normalization for fuzzy matching.
+/// Used by tool-name and symbol ranking so every matcher folds queries
+/// the same way.
+pub(crate) fn normalize_alphanumeric_lower(value: &str) -> String {
+    value
+        .to_ascii_lowercase()
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect()
@@ -792,6 +800,20 @@ pub(crate) fn background_command_label(command: &str, max_chars: usize) -> Strin
         .collect::<String>();
     label.push('…');
     label
+}
+
+/// Shared byte-bounded truncation for tool outputs. Keeps a UTF-8 boundary
+/// and appends a `truncated to <max> bytes` marker instead of each tool
+/// hand-rolling its own copy.
+pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…\n[output truncated to {max_bytes} bytes]", &text[..end])
 }
 
 pub(crate) fn has_background_tasks(session_id: &str) -> bool {
