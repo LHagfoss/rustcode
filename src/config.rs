@@ -695,25 +695,56 @@ impl ModelProfile {
     }
 
     pub fn resolved_api_key(&self) -> Option<String> {
+        // `shell_env` falls back to the login/interactive shell (`$SHELL -l
+        // -i -c printenv) and static dotfile parsing, so keys exported in
+        // `~/.zshrc` resolve even when RustCode was launched outside the
+        // user's interactive shell (desktop entry, systemd, IDE, tmux
+        // server). Process env always wins. See `shell_env.rs`.
         if let Some(ref env_name) = self.env_key
-            && let Ok(val) = std::env::var(env_name)
+            && let Some(val) = crate::shell_env::env_var(env_name)
             && !val.trim().is_empty()
         {
             return Some(val);
         }
         if let Some(ref k) = self.api_key {
             if let Some(var_name) = k.strip_prefix("env:") {
-                if let Ok(val) = std::env::var(var_name)
+                if let Some(val) = crate::shell_env::env_var(var_name)
                     && !val.trim().is_empty()
                 {
                     return Some(val);
                 }
-            } else if let Ok(val) = std::env::var(k) {
+            } else if let Some(val) = crate::shell_env::env_var(k) {
                 if !val.trim().is_empty() {
                     return Some(val);
                 }
             } else if !k.trim().is_empty() {
                 return Some(k.clone());
+            }
+        }
+        None
+    }
+
+    /// Name of the environment variable holding this profile's key, for
+    /// startup hydration and `doctor` diagnostics.
+    pub fn api_key_env_name(&self) -> Option<&str> {
+        if let Some(ref env_name) = self.env_key {
+            return Some(env_name);
+        }
+        if let Some(ref k) = self.api_key {
+            if let Some(var_name) = k.strip_prefix("env:") {
+                return Some(var_name);
+            }
+            // A bare `api_key = "SOME_VAR"` doubles as an env reference when
+            // it looks like a variable name; surface it so hydration and
+            // diagnostics can pick it up. Literal secrets (spaces, dashes,
+            // `sk-...`) are not env names.
+            let looks_like_env = !k.trim().is_empty()
+                && k.len() <= 128
+                && k.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && !k.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if looks_like_env {
+                return Some(k);
             }
         }
         None
