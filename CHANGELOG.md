@@ -1,3 +1,29 @@
+## [v0.54.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.54.0) - 2026-09-20
+
+### Features
+# v0.54.0 — Features
+
+Agent-harness upgrades inspired by fortunto2/rust-code, shipped as a 4-PR stack
+(#1270 → #1271 → #1272 → #1273) plus a refactor pass.
+
+- Doctor & onboarding: new `rustcode doctor [--fix]` checks config, git/rg/tmux
+  binaries with install hints, and skill directories.
+- Git tools: `git_status` / `git_diff` (read-only, plan-mode safe) and
+  `git_add` / `git_commit` (confirmation-gated, broad staging refused).
+- Skills: `triggers` / `keywords` / `priority` frontmatter with relevance
+  routing; `list_skills` is priority-sorted.
+- Tool registry: fuzzy name resolution with "did you mean" suggestions and
+  progressive `filter_tools_by_query` discovery.
+- Memory: 7-day tentative GC plus confidence-first budgeted rendering.
+- Provider resilience: ordered `fallback_chain` (primary → small → rest).
+- Headless autonomy: `rustcode -p ... --loop N` with `<loop:done/>` and a
+  10-iteration circuit breaker.
+- OpenAPI: `openapi_call` turns any OpenAPI 3.x spec into a validated call.
+- Delegation: `delegate_task` hands `.tasks/*.md` to external CLIs
+  (claude/gemini/codex/opencode/rustcode).
+- Benchmarking: `rustcode bench` scores turns (0–100, A–D grades).
+- Symbols: fuzzy-ranked `find_symbol` results (top 20).
+- Refactor: shared truncate/normalize helpers, lint fixes, no behavior change.
 ## [v0.53.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.53.1) - 2026-09-20
 
 ### Fixes
