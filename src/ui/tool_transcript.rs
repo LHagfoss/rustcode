@@ -1169,12 +1169,33 @@ fn render_tool_result_group_snapshot(
                 let identity = format!("{}\0{}", entry.action, entry.target);
                 if entry.kind != ToolTranscriptKind::Explored || seen.insert(identity) {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                    let show_hint = entry.kind == ToolTranscriptKind::Tool
+                    // Command and generic Tool entries both collapse their
+                    // bodies with the same expand affordance; Explored/Edit
+                    // rows keep their kind-specific formatting.
+                    let expandable = matches!(
+                        entry.kind,
+                        ToolTranscriptKind::Tool | ToolTranscriptKind::Command
+                    );
+                    let show_hint = expandable
                         && !entry.body.is_empty()
                         && !is_expanded
                         && matches!(state.verbosity(), crate::app::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Command {
-                        lines.extend(command_child_lines(entry, first_child, width, show_picker));
+                        let mut child = command_child_lines(entry, first_child, width, show_picker);
+                        if show_hint {
+                            if let Some(last) = child.last_mut() {
+                                last.spans.push(Span::styled(
+                                    " (ctrl+o to expand)",
+                                    get_themed_style(
+                                        COLOR_MUTED(),
+                                        COLOR_BG(),
+                                        Modifier::ITALIC,
+                                        show_picker,
+                                    ),
+                                ));
+                            }
+                        }
+                        lines.extend(child);
                     } else {
                         lines.extend(tool_child_line(
                             entry,
@@ -1185,16 +1206,25 @@ fn render_tool_result_group_snapshot(
                         ));
                     }
                     first_child = false;
-                    if entry.kind == ToolTranscriptKind::Tool
+                    if expandable
                         && is_expanded
                         && matches!(state.verbosity(), crate::app::Verbosity::Low)
                     {
-                        lines.extend(indent_generic_tool_body(
-                            entry.body.clone(),
-                            &state.verbosity(),
-                            width,
-                            show_picker,
-                        ));
+                        if entry.kind == ToolTranscriptKind::Command {
+                            lines.extend(indent_tool_result_body(
+                                entry.body.clone(),
+                                &entry.tool_name,
+                                &state.verbosity(),
+                                width,
+                            ));
+                        } else {
+                            lines.extend(indent_generic_tool_body(
+                                entry.body.clone(),
+                                &state.verbosity(),
+                                width,
+                                show_picker,
+                            ));
+                        }
                     }
                 }
             }

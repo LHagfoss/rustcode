@@ -172,9 +172,102 @@ fn is_read_only_segment(segment: &str) -> bool {
             )
         }),
         Some(
-            "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more" | "printf"
-            | "pwd" | "rg" | "stat" | "tail" | "test" | "true" | "type" | "uname" | "which",
+            "arch" | "basename" | "blkid" | "cat" | "column" | "cut" | "date" | "df" | "dirname"
+            | "du" | "echo" | "false" | "file" | "free" | "getent" | "grep" | "groups" | "head"
+            | "hexdump" | "id" | "jq" | "less" | "logname" | "ls" | "lsblk" | "lscpu" | "lsmod"
+            | "lspci" | "lsusb" | "modinfo" | "more" | "netstat" | "nl" | "nproc" | "od" | "printf"
+            | "ps" | "pwd" | "readlink" | "realpath" | "rg" | "sort" | "ss" | "stat" | "strings"
+            | "tac" | "tail" | "test" | "tr" | "true" | "type" | "uname" | "uniq" | "uptime" | "w"
+            | "wc" | "which" | "who" | "whoami" | "xxd",
         ) => true,
+        Some("dmesg") => {
+            // Reads the kernel ring buffer; `-C`/`--clear`/`--read-clear`
+            // discard it.
+            !tokens[1..].iter().any(|argument| {
+                matches!(
+                    *argument,
+                    "-C" | "--clear" | "--read-clear" | "-c" | "--console-off"
+                )
+            })
+        }
+        Some("hostname") => {
+            // Bare `hostname` prints the name; `hostname <name>` sets it.
+            let rest = tokens.get(1..).unwrap_or_default();
+            rest.is_empty() || rest.iter().all(|argument| argument.starts_with('-'))
+        }
+        Some("flatpak") => {
+            matches!(
+                tokens.get(1..).unwrap_or_default(),
+                ["list", ..] | ["info", ..] | ["--version", ..] | ["--help", ..] | ["-h", ..]
+            )
+        }
+        Some("hostnamectl") => {
+            // `hostnamectl` with no subcommand prints status; `set-hostname`
+            // and friends mutate. Only the status form is inspection.
+            let rest = tokens.get(1..).unwrap_or_default();
+            rest.is_empty()
+                || rest.iter().all(|argument| argument.starts_with('-'))
+                || matches!(rest.first(), Some(first) if *first == "status")
+        }
+        Some("pacman") | Some("paru") => {
+            // Package queries (`-Q*`, optionally with package names) are
+            // local inspection; `-S`/`-R`/`-U` sync, install, or remove.
+            // Help/version flags are also safe.
+            let rest = tokens.get(1..).unwrap_or_default();
+            rest.iter().any(|argument| argument.starts_with("-Q"))
+                && rest.iter().all(|argument| {
+                    argument.starts_with("-Q")
+                        || !argument.starts_with('-')
+                        || matches!(
+                            *argument,
+                            "-h" | "--help" | "-V" | "--version" | "-v" | "--verbose"
+                        )
+                })
+        }
+        Some("sysctl") => {
+            // Reads kernel state; `-w`/`--write` and `key=value` assignments
+            // change it.
+            !tokens[1..].iter().any(|argument| {
+                *argument == "-w"
+                    || *argument == "--write"
+                    || (argument.contains('=') && !argument.starts_with('-'))
+            })
+        }
+        Some("systemctl") => {
+            matches!(
+                tokens.get(1..).unwrap_or_default(),
+                ["status", ..]
+                    | ["show", ..]
+                    | ["cat", ..]
+                    | ["is-active", ..]
+                    | ["is-enabled", ..]
+                    | ["is-failed", ..]
+                    | ["list-units", ..]
+                    | ["list-unit-files", ..]
+                    | ["list-sockets", ..]
+                    | ["list-timers", ..]
+                    | ["help", ..]
+                    | ["--version", ..]
+                    | ["--help", ..]
+            )
+        }
+        Some("timedatectl") => {
+            // Bare `timedatectl` prints status; `set-time`/`set-timezone`
+            // mutate. Only the status form is inspection.
+            let rest = tokens.get(1..).unwrap_or_default();
+            rest.is_empty()
+                || rest.iter().all(|argument| argument.starts_with('-'))
+                || matches!(
+                    rest.first(),
+                    Some(first) if *first == "status" || *first == "show" || *first == "show-timesync"
+                )
+        }
+        Some("yq") => {
+            // Like sed: reads unless editing in place.
+            !tokens[1..]
+                .iter()
+                .any(|argument| *argument == "-i" || *argument == "--in-place")
+        }
         Some("sed") => is_read_only_sed(segment),
         Some("npm") => {
             matches!(tokens.get(1..).unwrap_or_default(), ["config", "get", key] if !key.starts_with('-'))
@@ -234,8 +327,87 @@ pub(super) fn is_short_discovery_command(command: &str) -> bool {
     }
 }
 
+/// Match a redirection that cannot clobber files at the start of `segment`,
+/// returning its byte length: sinks into `/dev/null` (`>/dev/null`,
+/// `2>>/dev/null`, `&>/dev/null`, `< /dev/null`) and fd duplications
+/// (`2>&1`, `>&2`, `2>&-`). Anything else — including `> file`, `>> log`,
+/// and heredocs (`<<EOF`) — returns `None` so the caller stays conservative.
+fn match_null_redirect(segment: &str) -> Option<usize> {
+    let bytes = segment.as_bytes();
+    let mut index = 0;
+    let amp_prefix = bytes.first() == Some(&b'&');
+    if amp_prefix {
+        index += 1;
+    } else {
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+    }
+    if segment[index..].starts_with(">>") {
+        index += 2;
+    } else if segment[index..].starts_with('>') || segment[index..].starts_with('<') {
+        index += 1;
+    } else {
+        return None;
+    }
+    while segment[index..].starts_with(' ') || segment[index..].starts_with('\t') {
+        index += 1;
+    }
+    let target = &segment[index..];
+    if target.starts_with("/dev/null")
+        && target["/dev/null".len()..]
+            .chars()
+            .next()
+            .map_or(true, |c| {
+                !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/')
+            })
+    {
+        return Some(index + "/dev/null".len());
+    }
+    // `2>&1` / `>&2` duplicate one fd onto another; `2>&-` closes one.
+    // No path is involved, so no file can be clobbered.
+    if target.starts_with('&') {
+        let after_amp = &target[1..];
+        if after_amp.starts_with('-') {
+            return Some(index + 2);
+        }
+        if let Some(digit) = after_amp.chars().next()
+            && digit.is_ascii_digit()
+        {
+            return Some(index + 1 + digit.len_utf8());
+        }
+    }
+    if amp_prefix && target.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        let digit_len = target.chars().next().unwrap().len_utf8();
+        return Some(index + digit_len);
+    }
+    None
+}
+
+/// Strip redirections that cannot clobber files (see [`match_null_redirect`])
+/// so `lscpu 2>/dev/null | head` classifies by its commands, not its sink.
+/// Real redirections (`> file`, `<<EOF`) survive, keeping the policy fail-closed.
+fn without_null_redirects(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut index = 0;
+    while index < command.len() {
+        if let Some(len) = match_null_redirect(&command[index..]) {
+            out.push_str("  ");
+            index += len;
+        } else {
+            let next_len = command[index..].chars().next().unwrap().len_utf8();
+            out.push_str(&command[index..index + next_len]);
+            index += next_len;
+        }
+    }
+    out
+}
+
 pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
-    let segments = split_command_segments(command);
+    // Strip `/dev/null` sinks and fd duplications first so `|`/`&` inside
+    // them (`2>&1`) don't split phantom segments below.
+    let scannable = without_null_redirects(command);
+    let segments = split_command_segments(&scannable);
     let git_scopes = segments
         .iter()
         .filter_map(|segment| destructive_git_scope(segment))
@@ -243,7 +415,9 @@ pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
     if !git_scopes.is_empty() {
         return Some(git_scopes.join("; "));
     }
-    if command
+    // Redirections into `/dev/null` and fd duplications (`2>&1`) cannot
+    // clobber files, so they don't force confirmation on their own.
+    if scannable
         .chars()
         .any(|character| matches!(character, '<' | '>'))
     {
