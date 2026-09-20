@@ -646,7 +646,7 @@ fn run_command_output_inner(
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion."
+                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop. You may continue other work meanwhile; use manage_task action 'wait' to block until it finishes."
             ),
             success: false,
             pending: true,
