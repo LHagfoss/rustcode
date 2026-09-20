@@ -1370,13 +1370,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "[The model emitted {requested_calls} tool calls. {} were executed this round; the remaining calls ({deferred}) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
-                        selected_call_indices.len()
-                    ),
-                ));
+                let notice = format!(
+                    "[The model emitted {requested_calls} tool calls. {} were executed this round; the remaining calls ({deferred}) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
+                    selected_call_indices.len()
+                );
+                dbg_log!("Deferred tool-call diagnostic: {notice}");
+                s.history.push(ChatMessage::new("system", notice));
             }
 
             if let Some((fingerprint, dependency, streak)) = infrastructure_stop {
