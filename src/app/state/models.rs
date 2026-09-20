@@ -30,10 +30,17 @@ pub struct ToolConfirmation {
 
 /// An interactive `ask_question` prompt awaiting the user's choice. Rendered as
 /// a modal; the selected option(s) are sent back to the agent as the tool result.
+/// A single tool call may carry several questions (a chain); each one keeps its
+/// own highlight/ticks/answer while the user moves between them.
 #[derive(Debug, Clone)]
 pub struct PendingQuestion {
+    /// Short label shown in the modal header (opencode-style `header`).
+    pub header: String,
     pub question: String,
     pub options: Vec<String>,
+    /// Per-option explainers shown muted after the label (parallel to
+    /// `options`; may be shorter — missing entries render as no description).
+    pub descriptions: Vec<String>,
     pub is_multi_select: bool,
     /// Currently highlighted index. Valid range is `0..=options.len()`, where the
     /// final index (`options.len()`) is the always-present "write your own answer" slot.
@@ -44,22 +51,80 @@ pub struct PendingQuestion {
     /// slot is active); the string is the in-progress text.
     pub custom_input: Option<String>,
     pub custom_cursor: usize,
+    /// The submitted answer for this question once the user moves on or the
+    /// chain is submitted. `None` while unanswered (a skipped question).
+    pub answer: Option<String>,
 }
 
 impl PendingQuestion {
     pub fn new(question: String, options: Vec<String>, is_multi_select: bool) -> Self {
         let chosen = vec![false; options.len()];
         Self {
+            header: "Question".to_owned(),
             question,
             options,
+            descriptions: Vec::new(),
             is_multi_select,
             selected: 0,
             chosen,
             custom_input: None,
             custom_cursor: 0,
+            answer: None,
         }
     }
 
+    pub fn with_header(mut self, header: String) -> Self {
+        if !header.trim().is_empty() {
+            self.header = header;
+        }
+        self
+    }
+
+    pub fn with_descriptions(mut self, descriptions: Vec<String>) -> Self {
+        self.descriptions = descriptions;
+        self
+    }
+
+    /// Description for option `index`, or `None` when the tool call did not
+    /// provide one.
+    pub fn description(&self, index: usize) -> Option<&str> {
+        self.descriptions.get(index).and_then(|text| {
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text.as_str())
+            }
+        })
+    }
+
+    /// Human answer for the transcript: the recorded submission, falling back
+    /// to the current highlight/ticks so a mid-chain preview still reads.
+    pub fn display_answer(&self) -> String {
+        if let Some(answer) = self.answer.as_deref()
+            && !answer.trim().is_empty()
+        {
+            return answer.to_owned();
+        }
+        if self.is_multi_select {
+            let picked = self
+                .options
+                .iter()
+                .zip(self.chosen.iter())
+                .filter(|(_, chosen)| **chosen)
+                .map(|(option, _)| option.clone())
+                .collect::<Vec<_>>();
+            if !picked.is_empty() {
+                return picked.join(", ");
+            }
+        }
+        self.options.get(self.selected).cloned().unwrap_or_default()
+    }
+
+    pub fn is_answered(&self) -> bool {
+        self.answer
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
+    }
     pub fn activate_custom_input(&mut self) {
         if self.custom_input.is_none() {
             self.custom_input = Some(String::new());
@@ -226,6 +291,25 @@ impl PendingQuestion {
             self.custom_cursor = 0;
         }
     }
+}
+
+/// Format submitted chain answers for the tool result. A single question
+/// keeps the legacy `User selected: …` shape; a chain lists every
+/// header/question/answer triple so nothing is lost.
+pub fn format_question_chain_answers(answers: &[(String, String, String)]) -> String {
+    if answers.len() == 1 {
+        return format!("User selected: {}", answers[0].2);
+    }
+    let mut out = String::from("User answers:");
+    for (header, question, answer) in answers {
+        let shown = if answer.trim().is_empty() {
+            "(skipped)"
+        } else {
+            answer
+        };
+        out.push_str(&format!("\n[{header}] {question} → {shown}"));
+    }
+    out
 }
 
 /// Approximate token count accumulated during the current streaming reply.

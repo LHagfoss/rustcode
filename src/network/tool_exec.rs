@@ -104,75 +104,136 @@ fn replay_inspection_for_request(
     Some(inspection)
 }
 
+/// A parsed `ask_question` entry: header, question, `(label, description)`
+/// options, and whether several options may be ticked.
+type ParsedQuestion = (String, String, Vec<(String, String)>, bool);
+
+fn parse_question_option(raw: &serde_json::Value) -> Option<(String, String)> {
+    if let Some(label) = raw.as_str() {
+        return Some((label.to_owned(), String::new()));
+    }
+    let object = raw.as_object()?;
+    let label = object
+        .get("label")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let description = object
+        .get("description")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
+    if label.trim().is_empty() && description.trim().is_empty() {
+        return None;
+    }
+    Some((label, description))
+}
+
+fn parse_question_object(raw: &serde_json::Value) -> Option<ParsedQuestion> {
+    let object = raw.as_object()?;
+    let header = object
+        .get("header")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let question = object
+        .get("question")
+        .or_else(|| object.get("prompt"))
+        .or_else(|| object.get("message"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let options = object
+        .get("options")
+        .and_then(|value| value.as_array())
+        .map(|items| items.iter().filter_map(parse_question_option).collect())
+        .unwrap_or_default();
+    let multi = object
+        .get("multiple")
+        .or_else(|| object.get("is_multi_select"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    Some((header, question, options, multi))
+}
+
+/// Parse an `ask_question` call into a question chain. Accepts the chained
+/// opencode-style `questions: [{header, question, options: [{label,
+/// description}], multiple}]` shape first, then the legacy flat
+/// `question`/`options`/`is_multi_select` shape (a one-question chain).
+fn parse_question_chain(args: &serde_json::Value) -> Vec<ParsedQuestion> {
+    if let Some(items) = args.get("questions").and_then(|value| value.as_array()) {
+        let chained = items
+            .iter()
+            .filter_map(parse_question_object)
+            .collect::<Vec<_>>();
+        if !chained.is_empty() {
+            return chained;
+        }
+    }
+    let single =
+        parse_question_object(args).unwrap_or((String::new(), String::new(), Vec::new(), false));
+    // The legacy shape nests nothing: a failed object parse still yields one
+    // question slot so the defaults below apply.
+    let multi = args
+        .get("is_multi_select")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(single.3);
+    vec![(single.0, single.1, single.2, multi)]
+}
+
+/// Map the answered-question channel payload to a tool result. The channel
+/// already carries the fully formatted submission (`User selected: …` /
+/// `User answers: …`); the legacy cancel text maps back to a typed
+/// cancellation instead of a bogus successful selection.
+pub(crate) fn map_question_channel_result(
+    answer: Option<String>,
+) -> crate::tools::ToolExecutionOutput {
+    match answer {
+        Some(text) if text.trim() == "User cancelled prompt." => {
+            crate::tools::ToolExecutionOutput::failure_with_kind(
+                "User cancelled or provided no selection.".to_string(),
+                crate::tools::ToolErrorKind::Cancelled,
+                true,
+            )
+        }
+        Some(text) if !text.is_empty() => crate::tools::ToolExecutionOutput::success(text),
+        _ => crate::tools::ToolExecutionOutput::failure_with_kind(
+            "User cancelled or provided no selection.".to_string(),
+            crate::tools::ToolErrorKind::Cancelled,
+            true,
+        ),
+    }
+}
+
 pub(crate) async fn ask_user_question(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     args: &serde_json::Value,
 ) -> (crate::tools::ToolExecutionOutput, std::time::Duration) {
-    let (mut question, mut options, is_multi_select) =
-        if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
-            if let Some(first_q) = q_arr.first().and_then(|v| v.as_object()) {
-                let q_str = first_q
-                    .get("question")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let opts: Vec<String> = first_q
-                    .get("options")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|o| o.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let multi = first_q
-                    .get("is_multi_select")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                (q_str, opts, multi)
+    let questions = parse_question_chain(args)
+        .into_iter()
+        .map(|(header, question, options, multi)| {
+            let question = if question.trim().is_empty() {
+                "Please confirm how to proceed:".to_owned()
             } else {
-                (String::new(), Vec::new(), false)
-            }
-        } else {
-            let q_str = args
-                .get("question")
-                .or_else(|| args.get("prompt"))
-                .or_else(|| args.get("message"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let opts: Vec<String> = args
-                .get("options")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|o| o.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let multi = args
-                .get("is_multi_select")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            (q_str, opts, multi)
-        };
-
-    if question.trim().is_empty() {
-        question = "Please confirm how to proceed:".to_string();
-    }
-    if options.is_empty() {
-        options = vec!["Proceed".to_string(), "Cancel".to_string()];
-    }
+                question
+            };
+            let (labels, descriptions): (Vec<String>, Vec<String>) = options.into_iter().unzip();
+            let (labels, descriptions) = if labels.is_empty() {
+                (vec!["Proceed".to_owned(), "Cancel".to_owned()], Vec::new())
+            } else {
+                (labels, descriptions)
+            };
+            crate::app::PendingQuestion::new(question, labels, multi)
+                .with_header(header)
+                .with_descriptions(descriptions)
+        })
+        .collect::<Vec<_>>();
 
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     {
         let mut s = state.lock().await;
-        s.pending_question = Some(crate::app::PendingQuestion::new(
-            question,
-            options,
-            is_multi_select,
-        ));
+        s.begin_question_chain(questions);
         s.question_response = Some(tx);
         s.status = AppStatus::AwaitingQuestion;
         s.request_redraw();
@@ -190,6 +251,8 @@ pub(crate) async fn ask_user_question(
         let mut s = state.lock().await;
         let pending_changed = s.pending_question.take().is_some();
         s.question_response = None;
+        s.pending_question_queue.clear();
+        s.pending_question_done.clear();
         let status_changed = if s.status == AppStatus::AwaitingQuestion {
             s.status = AppStatus::Streaming;
             true
@@ -201,16 +264,10 @@ pub(crate) async fn ask_user_question(
         }
     }
 
-    let out = match answer {
-        Some(a) if !a.is_empty() => {
-            crate::tools::ToolExecutionOutput::success(format!("User selected: {a}"))
-        }
-        _ => crate::tools::ToolExecutionOutput::failure_with_kind(
-            "User cancelled or provided no selection.".to_string(),
-            crate::tools::ToolErrorKind::Cancelled,
-            true,
-        ),
-    };
+    // The channel already carries the fully formatted submission
+    // (`User selected: …` / `User answers: …`); the legacy cancel text maps
+    // back to a typed cancellation instead of a bogus successful selection.
+    let out = map_question_channel_result(answer);
     (out, user_wait)
 }
 
@@ -1123,4 +1180,82 @@ pub(crate) async fn execute_tool_batch(
         }
     }
     results
+}
+
+#[cfg(test)]
+mod question_tests {
+    use super::{map_question_channel_result, parse_question_chain};
+
+    #[test]
+    fn chained_shape_parses_headers_labels_descriptions_and_multi() {
+        let args = serde_json::json!({
+            "questions": [
+                {
+                    "header": "Source",
+                    "question": "Where from?",
+                    "options": [
+                        {"label": "CHANGELOG", "description": "curated"},
+                        "Releases API"
+                    ],
+                    "multiple": true
+                },
+                {"question": "How many?", "options": ["3", "5"]}
+            ]
+        });
+        let chain = parse_question_chain(&args);
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].0, "Source");
+        assert_eq!(chain[0].1, "Where from?");
+        assert_eq!(
+            chain[0].2,
+            vec![
+                ("CHANGELOG".to_owned(), "curated".to_owned()),
+                ("Releases API".to_owned(), String::new()),
+            ]
+        );
+        assert!(chain[0].3);
+        assert_eq!(chain[1].0, "");
+        assert!(!chain[1].3);
+    }
+
+    #[test]
+    fn legacy_flat_shape_parses_as_single_question() {
+        let args = serde_json::json!({
+            "question": "Proceed?",
+            "options": ["Yes", "No"],
+            "is_multi_select": true
+        });
+        let chain = parse_question_chain(&args);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].1, "Proceed?");
+        assert_eq!(chain[0].2.len(), 2);
+        assert!(chain[0].3);
+    }
+
+    #[test]
+    fn empty_args_yield_one_default_slot() {
+        let chain = parse_question_chain(&serde_json::json!({}));
+        assert_eq!(chain.len(), 1);
+    }
+
+    #[test]
+    fn channel_results_map_answers_and_legacy_cancel_text() {
+        let ok = map_question_channel_result(Some("User selected: X".to_owned()));
+        assert!(ok.success);
+        assert_eq!(ok.content, "User selected: X");
+
+        let chained = map_question_channel_result(Some("User answers:\n[H] Q? → A".to_owned()));
+        assert!(chained.success);
+        assert!(chained.content.contains("User answers:"));
+
+        for cancelled in [
+            Some("User cancelled prompt.".to_owned()),
+            Some(String::new()),
+            None,
+        ] {
+            let out = map_question_channel_result(cancelled);
+            assert!(!out.success, "cancel must fail: {}", out.content);
+            assert!(out.content.contains("cancelled"));
+        }
+    }
 }

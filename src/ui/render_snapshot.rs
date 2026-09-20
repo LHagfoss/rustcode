@@ -33,6 +33,11 @@ pub(crate) struct RenderSnapshot {
     generation_start_time: Option<std::time::Instant>,
     pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pending_question: Option<PendingQuestion>,
+    /// Chain position mirrors for the question modal header (`i/N`,
+    /// unanswered count) without cloning the whole queue per frame.
+    pending_question_chain_len: usize,
+    pending_question_chain_position: usize,
+    pending_question_chain_answered: usize,
     running_tools: Vec<String>,
     background_tasks: Vec<crate::tools::BackgroundTaskSnapshot>,
     waiting_for_background_terminal: bool,
@@ -185,6 +190,9 @@ impl RenderSnapshot {
             generation_start_time: state.generation_start_time,
             pending_tool_confirmation: state.pending_tool_confirmation.clone(),
             pending_question: state.pending_question.clone(),
+            pending_question_chain_len: state.question_chain_len(),
+            pending_question_chain_position: state.question_chain_position(),
+            pending_question_chain_answered: state.question_chain_answered(),
             running_tools: state.running_tools.clone(),
             background_tasks: crate::tools::background_task_snapshots(&state.active_session_id),
             waiting_for_background_terminal: state.background_turn_context.is_some(),
@@ -303,6 +311,15 @@ impl RenderSnapshot {
     }
     pub(crate) fn pending_question(&self) -> Option<&PendingQuestion> {
         self.pending_question.as_ref()
+    }
+    pub(crate) fn pending_question_chain_len(&self) -> usize {
+        self.pending_question_chain_len
+    }
+    pub(crate) fn pending_question_chain_position(&self) -> usize {
+        self.pending_question_chain_position
+    }
+    pub(crate) fn pending_question_chain_answered(&self) -> usize {
+        self.pending_question_chain_answered
     }
     pub(crate) fn show_model_picker(&self) -> bool {
         self.overlay.show_model_picker
