@@ -484,6 +484,11 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-withheld",
+            output.clone()
+        ));
+        assert!(!record_active_background_task(
+            &mut state,
+            "task-withheld",
             output
         ));
         assert_eq!(state.history.len(), 0);
@@ -496,6 +501,7 @@ mod tests {
         state.orchestrator_running = false;
         assert_eq!(crate::flush_pending_background_outputs(&mut state), 1);
         assert_eq!(state.history.len(), 1);
+        assert!(state.history[0].content.contains("done"));
         assert!(state.pending_background_outputs.is_empty());
         assert_eq!(crate::flush_pending_background_outputs(&mut state), 0);
     }
