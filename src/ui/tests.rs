@@ -2446,6 +2446,28 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
 }
 
 #[test]
+fn deferred_tool_batch_notice_renders_as_a_compact_warning() {
+    let mut state = crate::app::AppState::new();
+    state.history.push(crate::app::ChatMessage::new(
+        "system",
+        "[The model emitted 5 tool calls. 4 were executed this round; the remaining calls (get_status (call_123)) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
+    ));
+
+    let rendered = super::render_committed_history_block(&state, 0, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("[Warning, check debug for more info]")),
+        "rendered: {rendered:?}"
+    );
+    assert!(rendered.iter().all(|line| !line.contains("call_123")));
+}
+
+#[test]
 fn cancelled_turn_renders_as_a_human_status_separator() {
     let mut state = crate::app::AppState::new();
     state.history.push(crate::app::ChatMessage::new(

@@ -317,9 +317,11 @@ pub(crate) fn render_committed_history_block_snapshot(
                 }
             }
         }
-        "system" if !is_hidden_system_notice(&message.content) => {
-            render_status_panel(&message.content, width, show_picker, &mut lines);
-            lines.push(Line::from(""));
+        "system" => {
+            if let Some(content) = system_notice_for_display(&message.content) {
+                render_status_panel(content, width, show_picker, &mut lines);
+                lines.push(Line::from(""));
+            }
         }
         _ => {}
     }
