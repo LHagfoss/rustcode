@@ -1272,6 +1272,32 @@ pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String
         .unwrap_or_else(|| default_endpoint(&AppConfig::default()))
 }
 
+/// Ordered provider fallback chain for a primary profile name: the primary
+/// first, then the configured `default.small` profile, then remaining
+/// profiles in config order. Capped at 3 so retries stay bounded.
+pub fn fallback_chain<'a>(config: &'a AppConfig, primary: &str) -> Vec<&'a ModelProfile> {
+    let mut chain: Vec<&ModelProfile> = Vec::new();
+    if let Some(profile) = config.models.iter().find(|m| m.name == primary) {
+        chain.push(profile);
+    }
+    let small = config.default.small();
+    if small != primary
+        && let Some(profile) = config.models.iter().find(|m| m.name == small)
+        && !chain.iter().any(|p| p.name == profile.name)
+    {
+        chain.push(profile);
+    }
+    for profile in &config.models {
+        if chain.len() >= 3 {
+            break;
+        }
+        if !chain.iter().any(|p| p.name == profile.name) {
+            chain.push(profile);
+        }
+    }
+    chain
+}
+
 pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
     let defaults = AppConfig::default();
     let mut config = defaults.clone();
