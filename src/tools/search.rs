@@ -832,6 +832,12 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
     let _ = crate::symbols::update_index(&cwd);
 
     let symbols = crate::symbols::find_symbol(&cwd, query)?;
+    let ranked = crate::symbols::fuzzy_filter_symbols(&symbols, query, 20);
+    let symbols = if ranked.is_empty() {
+        symbols.into_iter().take(20).collect::<Vec<_>>()
+    } else {
+        ranked
+    };
     if symbols.is_empty() {
         return Ok(format!("No symbols found matching query '{}'.", query));
     }
