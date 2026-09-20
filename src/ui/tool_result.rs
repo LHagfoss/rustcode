@@ -75,8 +75,12 @@ pub(super) fn render_tool_result<'a>(
         | "copy_file" => render_mutation_result(result, width, show_picker),
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
+        // `ask_question` is excluded: its result is the user's answer, which
+        // must stay visible (question + choice render as the entry headline,
+        // the full answer renders here for the expanded view).
         "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent" | "cancel_agent"
-        | "complete_task" | "ask_question" => Vec::new(),
+        | "complete_task" => Vec::new(),
+        "ask_question" => render_generic_result(result, show_picker),
         _ => render_generic_result(result, show_picker),
     };
 
