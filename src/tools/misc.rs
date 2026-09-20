@@ -304,16 +304,18 @@ pub fn list_skills(args: &Value) -> Result<String, String> {
         return Err("arguments must be a JSON object".to_string());
     }
 
-    let skills = crate::skills::discover_skills();
+    let mut skills = crate::skills::discover_skills();
     if skills.is_empty() {
         return Ok("No skills discovered. Place SKILL.md files in .rustcode/skills/ or ~/.config/rustcode/skills/.".to_string());
     }
+    // Higher-priority skills first so the model sees the most relevant ones.
+    skills.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.name.cmp(&b.name)));
 
     let mut out = format!("<available_skills count=\"{}\">\n", skills.len());
     for skill in skills {
         out.push_str(&format!(
-            "  <skill><name>{}</name><description>{}</description></skill>\n",
-            skill.name, skill.description
+            "  <skill><name>{}</name><description>{}</description><priority>{}</priority></skill>\n",
+            skill.name, skill.description, skill.priority
         ));
     }
     out.push_str(

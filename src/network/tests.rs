@@ -5183,6 +5183,9 @@ fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt()
         name: "solidtime".to_string(),
         description: "Solidtime workflow".to_string(),
         path: std::path::PathBuf::from("/skills/solidtime"),
+        triggers: Vec::new(),
+        keywords: Vec::new(),
+        priority: 0,
     }];
     let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills, &[])
         .expect("named skill route");
