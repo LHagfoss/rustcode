@@ -341,7 +341,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(prompt) = cli_args.prompt {
-        raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
+        if let Some(max_iters) = cli_args.loop_count {
+            let report =
+                raw_cli::run_raw_cli_loop(&prompt, model_override.as_deref(), max_iters).await?;
+            println!(
+                "Loop finished after {} turn(s){}.",
+                report.iters,
+                if report.completed_via_done {
+                    " (done marker)"
+                } else {
+                    " (iteration cap)"
+                }
+            );
+        } else {
+            raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
+        }
         crate::config::flush_history();
         return Ok(());
     }

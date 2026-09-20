@@ -19,6 +19,10 @@ pub struct Cli {
     #[arg(short = 'p', long = "prompt")]
     pub prompt: Option<String>,
 
+    /// Repeat a headless prompt up to N turns until `<loop:done/>` (circuit breaker, max 10)
+    #[arg(long = "loop")]
+    pub loop_count: Option<usize>,
+
     /// Override the active AI model name
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
@@ -173,6 +177,12 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn parses_loop_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "-p", "hi", "--loop", "5"]).unwrap();
+        assert_eq!(cli.loop_count, Some(5));
     }
 
     #[test]

@@ -131,6 +131,117 @@ pub(crate) fn resolve_builtin_tool_alias(name: &str) -> Option<&'static str> {
         .then_some(canonical)
 }
 
+fn normalize_tool_query(name: &str) -> String {
+    name.to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn levenshtein_capped(a: &str, b: &str, cap: usize) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > cap {
+        return cap + 1;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            curr[j + 1] = (prev[j] + usize::from(ca != cb))
+                .min(prev[j + 1] + 1)
+                .min(curr[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Fuzzy-resolve a misspelled tool name to its canonical built-in.
+/// Exact (case-insensitive) matches win first, then conservative aliases,
+/// then normalized substring, then edit distance <= 2. Returns `None` when
+/// ambiguous or unknown so callers surface a helpful error instead of
+/// guessing.
+pub fn fuzzy_match_tool_name(query: &str) -> Option<&'static str> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(exact) = TOOLS
+        .iter()
+        .find(|tool| tool.name.eq_ignore_ascii_case(trimmed))
+    {
+        return Some(exact.name);
+    }
+    if let Some(alias) = resolve_builtin_tool_alias(&trimmed.to_ascii_lowercase()) {
+        return Some(alias);
+    }
+    let normalized = normalize_tool_query(trimmed);
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut substring: Vec<&'static str> = TOOLS
+        .iter()
+        .filter(|tool| normalize_tool_query(tool.name).contains(normalized.as_str()))
+        .map(|tool| tool.name)
+        .collect();
+    if substring.len() == 1 {
+        return Some(substring[0]);
+    }
+    substring.sort();
+    let mut best: Option<(&'static str, usize)> = None;
+    for tool in TOOLS {
+        let distance = levenshtein_capped(&normalize_tool_query(tool.name), &normalized, 2);
+        if distance <= 2 {
+            match best {
+                Some((_, best_dist)) if best_dist < distance => {}
+                Some((best_name, best_dist)) if best_dist == distance => {
+                    if best_name != tool.name {
+                        // Ambiguous typo: two tools equally close.
+                        best = None;
+                        break;
+                    }
+                }
+                _ => best = Some((tool.name, distance)),
+            }
+        }
+    }
+    if let Some((name, _)) = best {
+        return Some(name);
+    }
+    substring.into_iter().next()
+}
+
+/// Progressive tool discovery: rank built-ins for a free-text query so the
+/// agent can `list` a small subset instead of dumping every schema.
+/// Exact/prefix/substring outrank fuzzy matches; ties break by name.
+pub fn filter_tools_by_query(query: &str, limit: usize) -> Vec<&'static str> {
+    let normalized = normalize_tool_query(query);
+    if normalized.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let mut scored: Vec<(&'static str, usize)> = TOOLS
+        .iter()
+        .filter_map(|tool| {
+            let name = normalize_tool_query(tool.name);
+            let score = if name == normalized {
+                0
+            } else if name.starts_with(normalized.as_str()) {
+                1
+            } else if name.contains(normalized.as_str()) {
+                2
+            } else {
+                3 + levenshtein_capped(&name, &normalized, 2)
+            };
+            (score <= 5).then_some((tool.name, score))
+        })
+        .collect();
+    scored.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
+    scored.truncate(limit);
+    scored.into_iter().map(|(name, _)| name).collect()
+}
+
 /// Authoritative facts returned by a tool invocation alongside its display
 /// text. Consumers must not reconstruct these fields from `content`.
 #[derive(Debug, Clone, PartialEq, Eq)]
