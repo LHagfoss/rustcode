@@ -330,6 +330,14 @@ pub(super) async fn handle_app_event(
                                         }
                                     }
                                 }
+                                KeyCode::Tab => {
+                                    let mut s = app_state.lock().await;
+                                    s.focus_question(1);
+                                }
+                                KeyCode::BackTab => {
+                                    let mut s = app_state.lock().await;
+                                    s.focus_question(-1);
+                                }
                                 KeyCode::Enter => {
                                     let answer_event = {
                                         let s = app_state.lock().await;
@@ -370,6 +378,14 @@ pub(super) async fn handle_app_event(
                                         q.activate_custom_input();
                                     }
                                 }
+                            }
+                            KeyCode::Tab => {
+                                let mut s = app_state.lock().await;
+                                s.focus_question(1);
+                            }
+                            KeyCode::BackTab => {
+                                let mut s = app_state.lock().await;
+                                s.focus_question(-1);
                             }
                             KeyCode::Char(' ') => {
                                 let mut s = app_state.lock().await;

@@ -72,27 +72,13 @@ pub(crate) fn question_custom_answer_event(question: &PendingQuestion) -> AppEve
 }
 
 pub(crate) fn question_answer_event(question: &PendingQuestion) -> Option<AppEvent> {
-    if question.selected >= question.options.len() {
+    if question.selected > question.options.len() {
         return None;
     }
-
-    let answer = if question.is_multi_select {
-        let picked = question
-            .options
-            .iter()
-            .zip(question.chosen.iter())
-            .filter(|(_, chosen)| **chosen)
-            .map(|(option, _)| option.clone())
-            .collect::<Vec<_>>();
-        if picked.is_empty() {
-            question.options.get(question.selected)?.clone()
-        } else {
-            picked.join(", ")
-        }
-    } else {
-        question.options.get(question.selected)?.clone()
-    };
-
+    let answer = question.display_answer();
+    if answer.is_empty() {
+        return None;
+    }
     Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
 }
 

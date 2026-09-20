@@ -275,6 +275,47 @@ fn multi_select_question_answer_joins_selected_options() {
 }
 
 #[test]
+fn chained_question_modal_shows_position_descriptions_and_nav_hint() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    let mut state = AppState::new();
+    state.begin_question_chain(vec![
+        PendingQuestion::new(
+            "Where from?".to_owned(),
+            vec!["CHANGELOG".to_owned(), "API".to_owned()],
+            false,
+        )
+        .with_header("Source".to_owned())
+        .with_descriptions(vec!["curated".to_owned(), String::new()]),
+        PendingQuestion::new("How many?".to_owned(), vec!["3".to_owned()], false)
+            .with_header("Count".to_owned()),
+    ]);
+    terminal
+        .draw(|frame| {
+            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 100, 20))
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(
+        rendered.contains("Source · Question 1/2 (2 unanswered)"),
+        "chain header missing: {rendered:?}"
+    );
+    assert!(rendered.contains("Where from?"), "question missing");
+    assert!(rendered.contains("CHANGELOG"), "option missing");
+    assert!(rendered.contains("curated"), "description missing");
+    assert!(
+        rendered.contains("tab next"),
+        "chain nav hint missing: {rendered:?}"
+    );
+}
+
+#[test]
 fn settings_picker_uses_unified_modal_picker_style() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = AppState::new();

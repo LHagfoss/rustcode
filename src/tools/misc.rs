@@ -8,18 +8,31 @@ fn ask_question_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "question": { "type": "string", "description": "Question to ask the user" },
-            "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user" },
-            "is_multi_select": { "type": "boolean", "default": false }
-        },
-        "required": ["question", "options"]
+            "question": { "type": "string", "description": "Question to ask the user (single-question shape)" },
+            "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user (single-question shape)" },
+            "is_multi_select": { "type": "boolean", "default": false },
+            "questions": {
+                "type": "array",
+                "description": "Chained shape: ask several questions in one call; the user answers each in turn (arrow keys move, space ticks, tab switches question, enter submits all)",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "header": { "type": "string", "description": "Short label shown above the question (max ~30 chars)" },
+                        "question": { "type": "string" },
+                        "options": { "type": "array", "items": { "type": ["string", "object"] }, "description": "Choices; objects take {label, description}" },
+                        "multiple": { "type": "boolean", "default": false, "description": "Allow ticking several options" }
+                    },
+                    "required": ["question", "options"]
+                }
+            }
+        }
     })
 }
 
 pub const ASK_QUESTION: Tool = Tool {
     name: "ask_question",
-    description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
-    arguments: r#"{"question": "The question title or description to ask", "options": ["Option 1 text", "Option 2 text", "Option 3 text"], "is_multi_select": false}"#,
+    description: "Ask the user multiple-choice questions to clarify underspecified requirements, solicit design choices, or select options. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. Prefer the chained 'questions' array (each with a short header, question, options with label/description, and multiple flag) when several decisions are needed: the user answers each in turn with arrow keys, ticks with space for multi-select, moves with tab, and submits all with enter. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
+    arguments: r#"{"questions": [{"header": "Data source", "question": "Where should the version data come from?", "options": [{"label": "CHANGELOG.md", "description": "Curated release notes"}, {"label": "Releases API", "description": "Live GitHub data"}], "multiple": false}]} (chained; or legacy {"question": "...", "options": ["A", "B"], "is_multi_select": false})"#,
     handler: ask_question,
     requires_confirmation: false,
     schema: ask_question_schema,
@@ -325,6 +338,44 @@ pub fn list_skills(args: &Value) -> Result<String, String> {
 }
 
 pub fn ask_question(args: &Value) -> Result<String, String> {
+    // Chained shape: summarize every question; the interactive path in
+    // tool_exec handles the live modal, this is the non-interactive fallback.
+    if let Some(items) = args.get("questions").and_then(|v| v.as_array())
+        && !items.is_empty()
+    {
+        let mut out = String::new();
+        for (qi, item) in items.iter().enumerate() {
+            let question = item
+                .get("question")
+                .or_else(|| item.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no question)");
+            let multi = item
+                .get("multiple")
+                .or_else(|| item.get("is_multi_select"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            out.push_str(&format!(
+                "ASK_QUESTION {}/{}: {} | Multi: {}",
+                qi + 1,
+                items.len(),
+                question,
+                multi
+            ));
+            if let Some(options) = item.get("options").and_then(|v| v.as_array()) {
+                for (i, opt) in options.iter().enumerate() {
+                    let label = opt
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| opt.get("label").and_then(|v| v.as_str()).map(str::to_owned))
+                        .unwrap_or_default();
+                    out.push_str(&format!("\n{}. {}", i + 1, label));
+                }
+            }
+            out.push_str("\nOther: (type custom response)\n");
+        }
+        return Ok(out);
+    }
     let question = args
         .get("question")
         .and_then(|v| v.as_str())

@@ -454,7 +454,10 @@ mod tests {
             .await
             .expect("question event should be handled");
 
-        assert_eq!(rx.await.expect("question response"), "somewhere else");
+        assert_eq!(
+            rx.await.expect("question response"),
+            "User selected: somewhere else"
+        );
         let state = runtime.app_state().await;
         assert!(state.pending_question.is_none());
     }
@@ -485,5 +488,55 @@ mod tests {
         let state = runtime.app_state().await;
         assert_eq!(state.status, AppStatus::Idle);
         assert!(previous_token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn chained_questions_advance_then_submit_all_answers() {
+        use super::events::apply_question_answer;
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut state = AppState::new();
+        state.status = AppStatus::AwaitingQuestion;
+        state.begin_question_chain(vec![
+            PendingQuestion::new("First?".to_owned(), vec!["a".to_owned()], false)
+                .with_header("One".to_owned()),
+            PendingQuestion::new("Second?".to_owned(), vec!["b".to_owned()], false)
+                .with_header("Two".to_owned()),
+        ]);
+        state.question_response = Some(tx);
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+        // Answering the first question advances without resolving the call.
+        apply_question_answer(
+            &state,
+            &mut cancel_token,
+            QuestionAnswer::Selected("a".to_owned()),
+        )
+        .await;
+        assert!(rx.try_recv().is_err(), "chain must not resolve early");
+        {
+            let state = state.lock().await;
+            assert_eq!(state.pending_question.as_ref().unwrap().question, "Second?");
+            assert_eq!(state.status, AppStatus::AwaitingQuestion);
+        }
+
+        // Answering the last question submits every answer at once.
+        apply_question_answer(
+            &state,
+            &mut cancel_token,
+            QuestionAnswer::Selected("b".to_owned()),
+        )
+        .await;
+        let submitted = rx.await.expect("chain submits on the last answer");
+        assert!(
+            submitted.starts_with("User answers:"),
+            "unexpected submission: {submitted}"
+        );
+        assert!(submitted.contains("[One] First? → a"));
+        assert!(submitted.contains("[Two] Second? → b"));
+        let state = state.lock().await;
+        assert!(state.pending_question.is_none());
+        assert!(state.pending_question_queue.is_empty());
     }
 }
