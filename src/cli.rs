@@ -84,6 +84,13 @@ pub enum Commands {
         #[arg(long, conflicts_with_all = ["setup", "status", "enable"])]
         disable: bool,
     },
+
+    /// Check environment prerequisites (config, binaries, skills)
+    Doctor {
+        /// Create missing config/skill directories where possible
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -166,6 +173,17 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn parses_doctor_with_fix_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "doctor"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor { fix: false })
+        ));
+        let cli_fix = Cli::try_parse_from(["rustcode", "doctor", "--fix"]).unwrap();
+        assert!(matches!(cli_fix.command, Some(Commands::Doctor { fix: true })));
     }
 
     #[test]

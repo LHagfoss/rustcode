@@ -6,8 +6,9 @@ use std::time::Instant;
 mod audio;
 mod dispatch;
 mod envelope;
-mod exec;
+pub(crate) mod exec;
 mod filesystem;
+mod git;
 mod misc;
 mod parser;
 mod schema;
@@ -949,6 +950,10 @@ pub const TOOLS: &[Tool] = &[
     search::GREP,
     search::GLOB,
     search::LIST_DIRECTORY,
+    git::GIT_STATUS,
+    git::GIT_DIFF,
+    git::GIT_ADD,
+    git::GIT_COMMIT,
     filesystem::DELETE_FILE,
     filesystem::MOVE_FILE,
     filesystem::COPY_FILE,

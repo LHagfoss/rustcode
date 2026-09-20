@@ -15,6 +15,9 @@ pub struct SkillMetadata {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
+    pub triggers: Vec<String>,
+    pub keywords: Vec<String>,
+    pub priority: i32,
 }
 
 pub fn discover_skills() -> Vec<SkillMetadata> {
@@ -101,6 +104,71 @@ pub fn skill_routing_hint(
     ))
 }
 
+fn skill_relevance_score(prompt_lower: &str, skill: &SkillMetadata) -> i32 {
+    let mut score: i32 = 0;
+    for trigger in &skill.triggers {
+        if !trigger.is_empty() && prompt_lower.contains(trigger) {
+            score += 10;
+        }
+    }
+    for keyword in &skill.keywords {
+        if !keyword.is_empty() && prompt_lower.contains(keyword) {
+            score += 5;
+        }
+    }
+    // Priority nudges ordering but never promotes an irrelevant skill alone.
+    if score > 0 {
+        score += skill.priority.clamp(-10, 10);
+    }
+    score
+}
+
+/// Rank skills by trigger/keyword relevance for a prompt, excluding already
+/// loaded skills. Explicit name mentions are handled by
+/// [`skill_routing_hint`]; this covers the softer `triggers`/`keywords`
+/// frontmatter path (fortunto2-style `SkillRegistry::select`).
+pub fn select_skills_for_prompt<'a>(
+    prompt: &str,
+    skills: &'a [SkillMetadata],
+    loaded_skills: &[String],
+    limit: usize,
+) -> Vec<(&'a SkillMetadata, i32)> {
+    let prompt_lower = prompt.to_ascii_lowercase();
+    let mut scored: Vec<(&SkillMetadata, i32)> = skills
+        .iter()
+        .filter(|skill| {
+            !loaded_skills
+                .iter()
+                .any(|loaded| loaded.eq_ignore_ascii_case(&skill.name))
+                && !prompt_mentions_skill(prompt, &skill.name)
+        })
+        .map(|skill| (skill, skill_relevance_score(&prompt_lower, skill)))
+        .filter(|(_, score)| *score > 0)
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.name.cmp(&b.0.name)));
+    scored.truncate(limit);
+    scored
+}
+
+pub fn relevant_skills_hint(
+    prompt: &str,
+    skills: &[SkillMetadata],
+    loaded_skills: &[String],
+) -> Option<String> {
+    let ranked = select_skills_for_prompt(prompt, skills, loaded_skills, 3);
+    if ranked.is_empty() {
+        return None;
+    }
+    let mut out = String::from("# Relevant skills\nThe prompt matches these skills by trigger/keyword. Consider `list_skills`, then `use_skill` for the best match before exploring:");
+    for (skill, score) in ranked {
+        out.push_str(&format!(
+            "\n- {} (score {score}): {}",
+            skill.name, skill.description
+        ));
+    }
+    Some(out)
+}
+
 /// Return the names successfully loaded after the latest explicit user prompt.
 /// Keeping this boundary local avoids suppressing routing for a new request
 /// merely because an earlier request used the same skill.
@@ -150,11 +218,14 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
             if skill_md.exists()
                 && let Ok(frontmatter) = read_frontmatter(&skill_md)
             {
-                let (name, description) = parse_frontmatter(&frontmatter);
+                let parsed = parse_frontmatter(&frontmatter);
                 skills.push(SkillMetadata {
-                    name,
-                    description,
+                    name: parsed.name,
+                    description: parsed.description,
                     path: path.clone(),
+                    triggers: parsed.triggers,
+                    keywords: parsed.keywords,
+                    priority: parsed.priority,
                 });
             }
         }
@@ -185,43 +256,87 @@ fn read_frontmatter(path: &Path) -> std::io::Result<String> {
     Ok(frontmatter)
 }
 
-fn parse_frontmatter(content: &str) -> (String, String) {
+pub(crate) struct ParsedFrontmatter {
+    pub name: String,
+    pub description: String,
+    pub triggers: Vec<String>,
+    pub keywords: Vec<String>,
+    pub priority: i32,
+}
+
+fn parse_list_value(raw: &str) -> Vec<String> {
+    let mut text = raw.trim().to_string();
+    text = text.trim_matches(['\'', '"']).to_string();
+    if text.starts_with('[') && text.ends_with(']') {
+        text = text[1..text.len() - 1].to_string();
+    }
+    text.split(',')
+        .map(|part| {
+            part.trim()
+                .trim_matches(['\'', '"', '[', ']'])
+                .to_ascii_lowercase()
+        })
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
+    let fallback = || ParsedFrontmatter {
+        name: "unnamed".to_string(),
+        description: "No description available".to_string(),
+        triggers: Vec::new(),
+        keywords: Vec::new(),
+        priority: 0,
+    };
     if !content.starts_with("---") {
-        return (
-            "unnamed".to_string(),
-            "No description available".to_string(),
-        );
+        return fallback();
     }
 
     let end = content[3..].find("---");
-    if let Some(end_pos) = end {
-        let frontmatter = &content[3..3 + end_pos];
-        let mut name = String::new();
-        let mut description = String::new();
+    let Some(end_pos) = end else {
+        return fallback();
+    };
+    let frontmatter = &content[3..3 + end_pos];
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut triggers = Vec::new();
+    let mut keywords = Vec::new();
+    let mut priority: i32 = 0;
 
-        for line in frontmatter.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("name:") {
-                name = rest.trim().to_string();
-            } else if let Some(rest) = line.strip_prefix("description:") {
-                description = rest.trim().to_string();
-            }
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("name:") {
+            name = rest.trim().trim_matches(['\'', '"']).to_string();
+        } else if let Some(rest) = line.strip_prefix("description:") {
+            description = rest.trim().trim_matches(['\'', '"']).to_string();
+        } else if let Some(rest) = line.strip_prefix("triggers:") {
+            triggers = parse_list_value(rest);
+        } else if let Some(rest) = line.strip_prefix("keywords:") {
+            keywords = parse_list_value(rest);
+        } else if let Some(rest) = line.strip_prefix("priority:") {
+            priority = rest
+                .trim()
+                .trim_matches(['\'', '"'])
+                .parse::<i32>()
+                .unwrap_or(0)
+                .clamp(-100, 100);
         }
-
-        if name.is_empty() {
-            name = "unnamed".to_string();
-        }
-        if description.is_empty() {
-            description = "No description available".to_string();
-        }
-
-        return (name, description);
     }
 
-    (
-        "unnamed".to_string(),
-        "No description available".to_string(),
-    )
+    if name.is_empty() {
+        name = "unnamed".to_string();
+    }
+    if description.is_empty() {
+        description = "No description available".to_string();
+    }
+
+    ParsedFrontmatter {
+        name,
+        description,
+        triggers,
+        keywords,
+        priority,
+    }
 }
 
 const MAX_SKILL_CONTENT_BYTES: usize = 12_000;
@@ -281,28 +396,48 @@ mod tests {
         dir
     }
 
+    fn test_metadata(name: &str, description: &str) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: description.to_string(),
+            path: PathBuf::from(format!("/skills/{name}")),
+            triggers: Vec::new(),
+            keywords: Vec::new(),
+            priority: 0,
+        }
+    }
+
     #[test]
     fn test_parse_frontmatter_basic() {
         let content = "---\nname: my-skill\ndescription: A test skill\n---\nSkill content here";
-        let (name, desc) = parse_frontmatter(content);
-        assert_eq!(name, "my-skill");
-        assert_eq!(desc, "A test skill");
+        let parsed = parse_frontmatter(content);
+        assert_eq!(parsed.name, "my-skill");
+        assert_eq!(parsed.description, "A test skill");
     }
 
     #[test]
     fn test_parse_frontmatter_missing_fields() {
         let content = "---\n---\nContent";
-        let (name, desc) = parse_frontmatter(content);
-        assert_eq!(name, "unnamed");
-        assert_eq!(desc, "No description available");
+        let parsed = parse_frontmatter(content);
+        assert_eq!(parsed.name, "unnamed");
+        assert_eq!(parsed.description, "No description available");
     }
 
     #[test]
     fn test_parse_frontmatter_no_frontmatter() {
         let content = "Just plain content";
-        let (name, desc) = parse_frontmatter(content);
-        assert_eq!(name, "unnamed");
-        assert_eq!(desc, "No description available");
+        let parsed = parse_frontmatter(content);
+        assert_eq!(parsed.name, "unnamed");
+        assert_eq!(parsed.description, "No description available");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_triggers_keywords_priority() {
+        let content = "---\nname: deploy\ndescription: Deploy workflow\ntriggers: [deploy, ship it]\nkeywords: docker, k8s\npriority: 5\n---\nBody";
+        let parsed = parse_frontmatter(content);
+        assert_eq!(parsed.triggers, vec!["deploy", "ship it"]);
+        assert_eq!(parsed.keywords, vec!["docker", "k8s"]);
+        assert_eq!(parsed.priority, 5);
     }
 
     #[test]
@@ -396,18 +531,14 @@ mod tests {
 
         // Test parse directly since discover_skills scans fixed paths
         let content = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        let (name, desc) = parse_frontmatter(&content);
-        assert_eq!(name, "my-skill");
-        assert_eq!(desc, "My skill");
+        let parsed = parse_frontmatter(&content);
+        assert_eq!(parsed.name, "my-skill");
+        assert_eq!(parsed.description, "My skill");
     }
 
     #[test]
     fn skill_routing_hint_matches_an_explicit_available_skill_name() {
-        let skills = [SkillMetadata {
-            name: "solidtime".to_string(),
-            description: "Solidtime workflow".to_string(),
-            path: PathBuf::from("/skills/solidtime"),
-        }];
+        let skills = [test_metadata("solidtime", "Solidtime workflow")];
 
         let hint = skill_routing_hint("Please check Solidtime for this week.", &skills, &[])
             .expect("explicitly named skill should route");
@@ -418,11 +549,7 @@ mod tests {
 
     #[test]
     fn skill_routing_hint_ignores_unrelated_prompts() {
-        let skills = [SkillMetadata {
-            name: "solidtime".to_string(),
-            description: "Solidtime workflow".to_string(),
-            path: PathBuf::from("/skills/solidtime"),
-        }];
+        let skills = [test_metadata("solidtime", "Solidtime workflow")];
 
         assert!(skill_routing_hint("Please inspect the time module.", &skills, &[]).is_none());
         assert!(skill_routing_hint("Please inspect solidtimes.", &skills, &[]).is_none());
@@ -433,22 +560,14 @@ mod tests {
 
     #[test]
     fn skill_routing_hint_does_not_guess_from_a_name_component() {
-        let skills = [SkillMetadata {
-            name: "release-automation".to_string(),
-            description: "Release workflow".to_string(),
-            path: PathBuf::from("/skills/release-automation"),
-        }];
+        let skills = [test_metadata("release-automation", "Release workflow")];
 
         assert!(skill_routing_hint("Clean this up and release it.", &skills, &[]).is_none());
     }
 
     #[test]
     fn skill_routing_hint_does_not_route_email_to_cloudflare_email_service() {
-        let skills = [SkillMetadata {
-            name: "cloudflare-email-service".to_string(),
-            description: "Cloudflare email workflow".to_string(),
-            path: PathBuf::from("/skills/cloudflare-email-service"),
-        }];
+        let skills = [test_metadata("cloudflare-email-service", "Cloudflare email workflow")];
 
         assert!(
             skill_routing_hint("Build a Bun API that stores email addresses.", &skills, &[])
@@ -462,11 +581,7 @@ mod tests {
 
     #[test]
     fn successful_load_suppresses_same_turn_routing_hint() {
-        let skills = [SkillMetadata {
-            name: "solidtime".to_string(),
-            description: "Solidtime workflow".to_string(),
-            path: PathBuf::from("/skills/solidtime"),
-        }];
+        let skills = [test_metadata("solidtime", "Solidtime workflow")];
 
         assert!(
             skill_routing_hint(
@@ -496,11 +611,7 @@ mod tests {
             loaded("solidtime"),
             crate::app::ChatMessage::new("user", "new request: use solidtime"),
         ];
-        let skills = [SkillMetadata {
-            name: "solidtime".to_string(),
-            description: "Solidtime workflow".to_string(),
-            path: PathBuf::from("/skills/solidtime"),
-        }];
+        let skills = [test_metadata("solidtime", "Solidtime workflow")];
 
         let loaded_skills = loaded_skills_since_latest_user(&history);
         assert!(loaded_skills.is_empty());
@@ -520,5 +631,45 @@ mod tests {
             ),
         ];
         assert!(loaded_skills_since_latest_user(&history).is_empty());
+    }
+
+    fn trigger_metadata(
+        name: &str,
+        triggers: &[&str],
+        keywords: &[&str],
+        priority: i32,
+    ) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: format!("{name} workflow"),
+            path: PathBuf::from(format!("/skills/{name}")),
+            triggers: triggers.iter().map(|s| s.to_string()).collect(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            priority,
+        }
+    }
+
+    #[test]
+    fn select_prefers_trigger_over_keyword_and_priority_breaks_ties() {
+        let skills = vec![
+            trigger_metadata("shipper", &["deploy"], &[], 0),
+            trigger_metadata("docker-helper", &[], &["docker"], 0),
+            trigger_metadata("shipper-prio", &["deploy"], &[], 5),
+        ];
+        let ranked = select_skills_for_prompt("please deploy with docker", &skills, &[], 3);
+        assert_eq!(ranked[0].0.name, "shipper-prio");
+        assert_eq!(ranked[1].0.name, "shipper");
+        assert_eq!(ranked[2].0.name, "docker-helper");
+    }
+
+    #[test]
+    fn select_excludes_loaded_and_explicit_name_mentions() {
+        let skills = vec![trigger_metadata("deploy", &["deploy"], &[], 0)];
+        assert!(
+            select_skills_for_prompt("deploy now", &skills, &["deploy".to_string()], 3).is_empty()
+        );
+        // Explicit name mentions stay on the routing-hint path, not relevance.
+        assert!(select_skills_for_prompt("use deploy now", &skills, &[], 3).is_empty());
+        assert!(relevant_skills_hint("unrelated prompt", &skills, &[]).is_none());
     }
 }
