@@ -1,4 +1,4 @@
-use crate::app::{AppState, AppStatus, ApprovalDecision, QuestionAnswer};
+use crate::app::{AppState, ApprovalDecision, QuestionAnswer};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -38,21 +38,41 @@ pub(super) async fn apply_question_answer(
     cancel_token: &mut CancellationToken,
     answer: QuestionAnswer,
 ) {
-    let (answer, cancelled) = match answer {
-        QuestionAnswer::Selected(answer) | QuestionAnswer::Custom(answer) => (answer, false),
-        QuestionAnswer::Cancelled => {
-            cancel_token.cancel();
-            *cancel_token = CancellationToken::new();
-            ("User cancelled prompt.".to_owned(), true)
+    if matches!(answer, QuestionAnswer::Cancelled) {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+        let mut state = state.lock().await;
+        if let Some(tx) = state.question_response.take() {
+            let _ = tx.send("User cancelled prompt.".to_owned());
         }
+        state.clear_question_chain();
+        state.enter_idle();
+        state.request_redraw();
+        return;
+    }
+    let current = match answer {
+        QuestionAnswer::Selected(answer) | QuestionAnswer::Custom(answer) => answer,
+        QuestionAnswer::Cancelled => unreachable!("cancelled handled above"),
     };
     let mut state = state.lock().await;
-    if let Some(tx) = state.question_response.take() {
-        let _ = tx.send(answer);
+    if !state.pending_question_queue.is_empty() {
+        // More questions remain in the chain: record this answer, advance to
+        // the next question, and keep waiting — the tool call resolves only
+        // once every question is answered (or the chain is cancelled).
+        state.advance_question_chain(current);
+        state.request_redraw();
+        return;
     }
-    state.pending_question = None;
-    if cancelled {
-        state.enter_idle();
+    let answers = state.take_question_chain_answers(Some(current.clone()));
+    // A stale event with no active chain (e.g. a double Enter racing the
+    // submit) falls back to the raw answer instead of an empty submission.
+    let output = if answers.is_empty() {
+        format!("User selected: {current}")
+    } else {
+        crate::app::state::format_question_chain_answers(&answers)
+    };
+    if let Some(tx) = state.question_response.take() {
+        let _ = tx.send(output);
     }
     state.request_redraw();
 }

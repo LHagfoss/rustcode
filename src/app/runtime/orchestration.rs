@@ -166,26 +166,33 @@ impl AppRuntime {
                     crate::tools::has_background_tasks(&state.active_session_id);
                 match state.check_stall_watchdog(background_tasks_active, std::time::Instant::now())
                 {
-                    None => false,
+                    None => None,
                     Some(recovery) => {
                         if recovery.reset_orchestrator {
                             state.invalidate_orchestrator();
                         }
-                        state.history.push(crate::app::ChatMessage::new(
-                            "system",
-                            "[Watchdog: turn showed no progress for 5 minutes with nothing running; state reset to Idle. Reissue the request if work is still needed.]",
-                        ));
+                        let notice = if recovery.queue_preserved {
+                            "[Watchdog: queued work stalled with no active turn for 5 minutes; state reset and queued prompts restarted. Reissue anything still missing.]"
+                        } else {
+                            "[Watchdog: turn showed no progress for 5 minutes with nothing running; state reset to Idle. Reissue the request if work is still needed.]"
+                        };
+                        state
+                            .history
+                            .push(crate::app::ChatMessage::new("system", notice));
                         let session_id = state.active_session_id.clone();
                         crate::config::save_session_history(&session_id, &state.history);
                         state.clear_active_turn_projection();
                         state.enter_idle();
                         state.request_redraw();
-                        true
+                        Some(recovery.queue_preserved)
                     }
                 }
             };
-            if stall_recovered {
-                crate::logger::operational_event("turn.stall_recovered", serde_json::json!({}));
+            if let Some(queue_preserved) = stall_recovered {
+                crate::logger::operational_event(
+                    "turn.stall_recovered",
+                    serde_json::json!({ "queue_preserved": queue_preserved }),
+                );
                 needs_redraw = true;
             }
 

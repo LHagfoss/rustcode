@@ -1057,6 +1057,170 @@ fn committed_tool_result_shows_failure_status() {
 }
 
 #[test]
+fn ask_question_renders_prompt_and_answer_in_committed_history() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "ask_question".to_owned(),
+            arguments: r#"{"question":"Where should the version data come from?","options":["CHANGELOG.md","Releases API"]}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "ask_question: User selected: Releases API")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "ask_question".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: None,
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+                ..Default::default()
+            }),
+    );
+
+    // The question/answer pair must survive as a transcript entry: hiding it
+    // left users with no trace of what they were asked or what they chose.
+    let entry = super::tool_transcript_entry(&state.render_snapshot(), 1, 80, false)
+        .expect("ask_question must not be hidden from the transcript");
+    assert_eq!(entry.action, "Asked");
+    assert!(
+        entry
+            .target
+            .contains("Where should the version data come from?"),
+        "question missing from headline: {}",
+        entry.target
+    );
+    assert!(
+        entry.target.contains("Releases API"),
+        "answer missing from headline: {}",
+        entry.target
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rendered.iter().any(|line| line.contains("Asked")
+            && line.contains("Where should the version data come from?")),
+        "question headline missing: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("Releases API")),
+        "answer missing from transcript: {rendered:?}"
+    );
+}
+
+#[test]
+fn ask_question_cancellation_renders_visibly() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "ask_question".to_owned(),
+            arguments: r#"{"question":"Proceed?","options":["Yes","No"]}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "ask_question: User cancelled or provided no selection.",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "ask_question".to_owned(),
+            arguments_hash: String::new(),
+            success: false,
+            exit_code: None,
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+            ..Default::default()
+        }),
+    );
+
+    let entry = super::tool_transcript_entry(&state.render_snapshot(), 1, 80, false)
+        .expect("cancelled ask_question must stay visible");
+    assert!(
+        entry.target.contains("Proceed?"),
+        "question missing after cancellation: {}",
+        entry.target
+    );
+    assert!(!entry.success, "cancellation must not render as success");
+}
+
+#[test]
+fn chained_ask_question_renders_count_and_every_answer() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "ask_question".to_owned(),
+            arguments: r#"{"questions": [{"header": "Source", "question": "Where from?", "options": ["A", "B"]}, {"header": "Count", "question": "How many?", "options": ["1", "2"]}]}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "ask_question: User answers:\n[Source] Where from? → A\n[Count] How many? → 2",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "ask_question".to_owned(),
+            arguments_hash: String::new(),
+            success: true,
+            exit_code: None,
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+            ..Default::default()
+        }),
+    );
+
+    let entry = super::tool_transcript_entry(&state.render_snapshot(), 1, 80, false)
+        .expect("chained ask_question must stay visible");
+    assert_eq!(entry.action, "Asked");
+    assert!(
+        entry.target.contains("2 questions"),
+        "chain count missing: {}",
+        entry.target
+    );
+    assert!(
+        entry.target.contains("Where from?"),
+        "first answer missing: {}",
+        entry.target
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    // The headline may wrap across rows; check the count and the answers on
+    // the joined transcript.
+    assert!(
+        rendered.iter().any(|line| line.contains("2 questions")),
+        "chain count missing: {rendered:?}"
+    );
+    let joined = rendered.join("\n");
+    assert!(
+        joined.contains("Where from?") && joined.contains("How many?"),
+        "chain answers missing: {rendered:?}"
+    );
+}
+
+#[test]
 fn use_skill_renders_in_committed_history() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
@@ -3122,7 +3286,11 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
         .map(|cell| cell.symbol())
         .collect::<String>();
 
-    assert!(rendered.contains("Question 1/1 (1 unanswered)"));
+    assert!(rendered.contains("Question"));
+    assert!(
+        !rendered.contains("unanswered"),
+        "single questions show no chain chrome"
+    );
     assert!(rendered.contains("› 1. Option 1"));
     assert!(rendered.contains("enter to submit answer"));
     assert!(!rendered.contains("Ask RustCode to do anything"));
