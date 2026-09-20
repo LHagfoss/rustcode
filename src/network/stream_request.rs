@@ -3871,6 +3871,17 @@ pub async fn stream_request(
                         dbg_log!(
                             "stream_request: SSE absolute progress deadline elapsed ({kind}, events={stream_events_received}, bytes={stream_bytes_received})"
                         );
+                        crate::logger::operational_event(
+                            "stream.progress_deadline",
+                            serde_json::json!({
+                                "model": model,
+                                "kind": kind.to_string(),
+                                "events_received": stream_events_received,
+                                "bytes_received": stream_bytes_received,
+                                "partial_event_bytes": line_buf.len(),
+                                "elapsed_ms": stream_start.elapsed().as_millis() as u64,
+                            }),
+                        );
                         return Err(StreamFailure {
                             kind,
                             status: None,
