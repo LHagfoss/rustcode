@@ -487,8 +487,8 @@ pub(crate) async fn search_web_async(
         search_query.push_str(&format!(" site:{}", dom));
     }
 
-    let exa_key = std::env::var("EXA_API_KEY")
-        .unwrap_or_else(|_| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
+    let exa_key = crate::shell_env::env_var("EXA_API_KEY")
+        .unwrap_or_else(|| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
     if !exa_key.is_empty() {
         let body = serde_json::json!({
             "query": search_query,
@@ -541,7 +541,7 @@ pub(crate) async fn search_web_async(
         }
     }
 
-    if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
+    if let Some(api_key) = crate::shell_env::env_var("TAVILY_API_KEY") {
         let body = serde_json::json!({
             "api_key": api_key,
             "query": search_query,

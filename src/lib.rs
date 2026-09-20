@@ -18,6 +18,7 @@ mod notifications;
 mod paste;
 mod platform;
 mod raw_cli;
+mod shell_env;
 mod skills;
 mod symbols;
 mod tools;
@@ -113,6 +114,28 @@ pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
     state.request_redraw();
 }
 
+/// Import provider API keys from the user's login/interactive shell into this
+/// process when they are missing here. Keys exported in `~/.zshrc` are the
+/// classic miss: visible in every terminal, invisible to desktop/systemd/IDE
+/// launches. Runs once at startup; the 3s probe timeout bounds the cost.
+fn hydrate_shell_provider_keys() {
+    // Cheap path first: read the workspace config to learn which env names
+    // the user's profiles actually reference.
+    let configured: Vec<String> = std::env::current_dir()
+        .ok()
+        .map(|workspace| crate::config::load_config_for_workspace(&workspace).2)
+        .map(|config| {
+            config
+                .models
+                .iter()
+                .filter_map(|profile| profile.api_key_env_name())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::shell_env::hydrate_provider_keys(&configured);
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Cheap, once-per-process check: rotate debug.log out of the way if a
     // prior session let it grow past the size cap, instead of letting every
@@ -122,6 +145,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // preserves the message + location in debug.log even when the process
     // dies without a crash report.
     crate::logger::install_panic_hook();
+    // Provider keys are often exported in `~/.zshrc` (interactive-only) and
+    // invisible to GUI/systemd/IDE launches. Hydrate missing keys from the
+    // login shell once at startup so profiles, MCP servers, and tool shells
+    // all see the same values the user's terminal sees.
+    hydrate_shell_provider_keys();
 
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
