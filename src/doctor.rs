@@ -87,6 +87,45 @@ fn ensure_dir(path: &PathBuf) -> bool {
     std::fs::create_dir_all(path).is_ok() && path.is_dir()
 }
 
+/// Check each configured profile's API-key env var and report where it
+/// resolved from (process env vs login shell vs dotfile vs missing).
+/// Never prints values.
+fn check_provider_keys(workspace: &std::path::Path) -> Vec<DoctorCheck> {
+    let config = crate::config::load_config_for_workspace(workspace).2;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for profile in &config.models {
+        let Some(env_name) = profile.api_key_env_name() else {
+            continue;
+        };
+        if !seen.insert(env_name.to_string()) {
+            continue;
+        }
+        match crate::shell_env::env_var_source(env_name) {
+            crate::shell_env::EnvSource::Process => out.push(DoctorCheck::pass(
+                "provider-key",
+                format!("{env_name}: found in process env"),
+            )),
+            crate::shell_env::EnvSource::LoginShell => out.push(DoctorCheck::pass(
+                "provider-key",
+                format!("{env_name}: found via login shell (exported in shell rc, not in process env)"),
+            )),
+            crate::shell_env::EnvSource::Dotfile => out.push(DoctorCheck::pass(
+                "provider-key",
+                format!("{env_name}: found in shell dotfile (shell probe unavailable; parsed statically)"),
+            )),
+            crate::shell_env::EnvSource::Missing => out.push(DoctorCheck::fail(
+                "provider-key",
+                format!("{env_name}: missing (profile `{}` needs it)", profile.name),
+                Some(format!(
+                    "export {env_name}=<key> in ~/.zshenv (sourced by all zsh modes) or ~/.zprofile, then restart rustcode from a login shell; interactive-only ~/.zshrc exports are invisible to desktop/systemd/IDE launches"
+                )),
+            )),
+        }
+    }
+    out
+}
+
 /// Run all checks. When `fix` is true, create missing config/skill
 /// directories before reporting.
 pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
@@ -127,6 +166,11 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
         "config-load",
         format!("model={model_name} base={api_base}"),
     ));
+
+    // Provider API keys: report *where* each key resolved from so
+    // "works in my terminal but not in rustcode" is diagnosable. Values are
+    // never printed.
+    checks.extend(check_provider_keys(&workspace));
 
     // Binaries.
     checks.push(check_binary(
