@@ -4650,12 +4650,18 @@ fn command_child_lines_wrap_with_indentation() {
     );
 
     let rendered = super::render_committed_tool_result_group(&state, &[1], 40, false);
+    // Long chained commands collapse to a bounded preview (Codex-style,
+    // max 2 visual lines) instead of flooding scrollback.
     assert!(
-        rendered.len() > 2,
-        "long command should wrap across multiple lines: {rendered:?}"
+        rendered.len() <= 3,
+        "long command should collapse to a bounded preview: {rendered:?}"
     );
     assert!(rendered[0].to_string().starts_with("• Ran"));
     assert!(rendered[1].to_string().starts_with("  └ Bash"));
+    assert!(
+        rendered.iter().any(|line| line.to_string().contains('…')),
+        "collapsed preview should carry an ellipsis: {rendered:?}"
+    );
     // Continuation lines must have indentation ("    ")
     for line in &rendered[2..] {
         let text = line.to_string();
