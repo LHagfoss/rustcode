@@ -408,6 +408,46 @@ pub(super) fn tool_result_is_hidden(tool_name: &str) -> bool {
     matches!(tool_name, "set_goal" | "todo_write" | "complete_task")
 }
 
+/// Message indices whose tool bodies can expand in the transcript: visible
+/// (non-hidden) tool results. Render-time checks decide per entry whether a
+/// body is actually worth showing; this only feeds the expand-all toggle so
+/// it never has to duplicate those predicates.
+pub(super) fn expandable_tool_indices(history: &[ChatMessage]) -> Vec<usize> {
+    history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            if message.role != "tool" {
+                return None;
+            }
+            let name = resolve_tool_result_name(
+                None,
+                message
+                    .tool_result
+                    .as_ref()
+                    .map(|result| result.tool_name.as_str()),
+                &message.content,
+            )?;
+            if tool_result_is_hidden(&name) {
+                return None;
+            }
+            Some(index)
+        })
+        .collect()
+}
+
+/// Expand every collapsed tool body, or collapse them again when anything is
+/// already expanded. Wired to `ctrl+t`; the transcript hints point at it.
+pub(super) fn toggle_expand_all(state: &mut crate::app::AppState) {
+    if !state.expanded_thoughts.is_empty() {
+        state.expanded_thoughts.clear();
+        return;
+    }
+    state
+        .expanded_thoughts
+        .extend(expandable_tool_indices(state.active_history()));
+}
+
 /// Extract the human question from an `ask_question` call's arguments, across
 /// both the flat (`question`) and nested (`questions[0].question`) shapes the
 /// harness accepts.
@@ -892,7 +932,7 @@ pub(super) fn tool_child_line(
     }
     if show_hint {
         spans.push(Span::styled(
-            " (ctrl+o to expand)",
+            " (ctrl+t to expand)",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
         ));
     }
@@ -1185,7 +1225,7 @@ fn render_tool_result_group_snapshot(
                         if show_hint {
                             if let Some(last) = child.last_mut() {
                                 last.spans.push(Span::styled(
-                                    " (ctrl+o to expand)",
+                                    " (ctrl+t to expand)",
                                     get_themed_style(
                                         COLOR_MUTED(),
                                         COLOR_BG(),

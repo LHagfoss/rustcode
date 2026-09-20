@@ -579,6 +579,7 @@ pub fn build_help_text() -> String {
     help.push_str("  Ctrl+P           Open command picker\n");
     help.push_str("  Ctrl+V           Paste image or text from clipboard\n");
     help.push_str("  Ctrl+L           Clear screen\n");
+    help.push_str("  Ctrl+T           Expand/collapse all tool output\n");
     help.push_str("  ?                Show help and keyboard shortcuts\n");
     help.push_str("  Ctrl+A / Ctrl+E  Move cursor to start / end of line\n");
     help.push_str("  Alt+F / Alt+B    Move cursor word right / left\n");

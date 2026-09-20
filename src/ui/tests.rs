@@ -1570,7 +1570,7 @@ fn high_verbosity_hides_generic_tool_details() {
     assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
     assert!(!rendered.iter().any(|line| line.contains("completed")));
     assert!(!rendered.iter().any(|line| line.contains("line 2")));
-    assert!(!rendered.iter().any(|line| line.contains("ctrl+o")));
+    assert!(!rendered.iter().any(|line| line.contains("ctrl+t")));
 }
 
 #[test]
@@ -1617,8 +1617,8 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
     assert!(!high.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("… +31 lines")));
     assert!(!high.iter().any(|line| line.contains("line 25")));
-    assert!(low.iter().any(|line| line.contains("ctrl+o to expand")));
-    assert!(!high.iter().any(|line| line.contains("ctrl+o to expand")));
+    assert!(low.iter().any(|line| line.contains("ctrl+t to expand")));
+    assert!(!high.iter().any(|line| line.contains("ctrl+t to expand")));
     assert!(state.history == history);
 }
 
@@ -1955,7 +1955,7 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("Bash") && line.contains("ctrl+t to expand")),
         "command child should carry the expand hint: {rendered:?}"
     );
 

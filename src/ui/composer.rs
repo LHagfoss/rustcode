@@ -122,6 +122,11 @@ impl Composer {
                 state.auto_confirm = !state.auto_confirm;
                 ComposerAction::Handled
             }
+            KeyAction::ToggleExpand => {
+                super::tool_transcript::toggle_expand_all(state);
+                state.request_redraw();
+                ComposerAction::Handled
+            }
             KeyAction::Escape | KeyAction::Unhandled => ComposerAction::Unhandled,
         }
     }
@@ -290,6 +295,36 @@ mod tests {
         let mut large = AppState::new();
         Composer::default().handle_paste(&mut large, &"x".repeat(300));
         assert!(large.input_buffer.starts_with("<!--PASTE:300:"));
+    }
+
+    #[test]
+    fn ctrl_t_toggles_tool_body_expansion() {
+        use crate::app::{ChatMessage, ToolResultRecord};
+
+        let mut state = AppState::new();
+        state
+            .history
+            .push(ChatMessage::new("tool", "grep: match here"));
+        state.history[0].tool_result = Some(ToolResultRecord {
+            tool_name: "grep".to_owned(),
+            ..Default::default()
+        });
+
+        let toggle = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(
+            Composer::default().handle_key(&mut state, toggle),
+            ComposerAction::Handled
+        );
+        assert_eq!(
+            state.expanded_thoughts,
+            std::collections::HashSet::from([0])
+        );
+
+        assert_eq!(
+            Composer::default().handle_key(&mut state, toggle),
+            ComposerAction::Handled
+        );
+        assert!(state.expanded_thoughts.is_empty());
     }
 
     #[test]

@@ -40,6 +40,8 @@ pub(crate) enum KeyAction {
     NextSuggestion,
     ToggleAutoConfirm,
     Escape,
+    /// Expand all collapsed tool bodies, or collapse them again.
+    ToggleExpand,
     Unhandled,
 }
 
@@ -120,6 +122,7 @@ impl KeyMap {
                 KeyAction::KillLineStart
             }
             KeyCode::Char('w') | KeyCode::Char('W') if ctrl => KeyAction::DeleteWordBackward,
+            KeyCode::Char('t') | KeyCode::Char('T') if ctrl => KeyAction::ToggleExpand,
             KeyCode::Char('b') | KeyCode::Char('B') if alt => KeyAction::MoveWordLeft,
             KeyCode::Char('f') | KeyCode::Char('F') if alt => KeyAction::MoveWordRight,
             KeyCode::Char('d') | KeyCode::Char('D') if alt => KeyAction::DeleteWordForward,
@@ -175,6 +178,14 @@ mod tests {
         assert_eq!(
             map.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL)),
             KeyAction::CommandPaletteOrPreviousSuggestion
+        );
+        assert_eq!(
+            map.resolve(key(KeyCode::Char('t'), KeyModifiers::CONTROL)),
+            KeyAction::ToggleExpand
+        );
+        assert_eq!(
+            map.resolve(key(KeyCode::Char('T'), KeyModifiers::CONTROL)),
+            KeyAction::ToggleExpand
         );
     }
 
