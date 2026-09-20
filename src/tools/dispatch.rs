@@ -214,14 +214,19 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
             Ok(out) => ToolExecutionOutput::success(out),
             Err(e) => ToolExecutionOutput::failure(as_error_message(&e)),
         },
-        None => ToolExecutionOutput::failure_with_kind(
-            format!(
-                "error: unknown tool '{name}'. Available: {}",
-                TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
-            ),
-            ToolErrorKind::UnavailableDependency,
-            false,
-        ),
+        None => {
+            let suggestion = super::fuzzy_match_tool_name(name)
+                .map(|close| format!(" Did you mean '{close}'?"))
+                .unwrap_or_default();
+            ToolExecutionOutput::failure_with_kind(
+                format!(
+                    "error: unknown tool '{name}'.{suggestion} Available: {}",
+                    TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+                ),
+                ToolErrorKind::UnavailableDependency,
+                false,
+            )
+        }
     }
 }
 

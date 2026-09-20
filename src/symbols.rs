@@ -178,26 +178,25 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         };
 
         let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if let Some(lang) = SupportedLanguage::for_extension(ext) {
-                    let relative_path = path
-                        .strip_prefix(root_dir)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string();
+        if path.is_file()
+            && let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && let Some(lang) = SupportedLanguage::for_extension(ext)
+        {
+            let relative_path = path
+                .strip_prefix(root_dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
 
-                    let mtime = std::fs::metadata(path)
-                        .and_then(|m| m.modified())
-                        .unwrap_or(SystemTime::UNIX_EPOCH);
-                    let mtime_secs = mtime
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
+            let mtime = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let mtime_secs = mtime
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
 
-                    files.push((path.to_path_buf(), relative_path, mtime_secs, lang));
-                }
-            }
+            files.push((path.to_path_buf(), relative_path, mtime_secs, lang));
         }
     }
 
@@ -389,23 +388,14 @@ pub fn find_symbol(root_dir: &Path, query: &str) -> Result<Vec<SymbolInfo>, Stri
 /// Fuzzy-rank symbols for a query: exact/prefix/substring outrank weak
 /// matches; ties break by name, then path. Returns at most `limit` items.
 pub fn fuzzy_filter_symbols(symbols: &[SymbolInfo], query: &str, limit: usize) -> Vec<SymbolInfo> {
-    let normalized: String = query
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
+    let normalized: String = crate::tools::normalize_alphanumeric_lower(query);
     if normalized.is_empty() || limit == 0 {
         return Vec::new();
     }
     let mut scored: Vec<(&SymbolInfo, usize)> = symbols
         .iter()
         .filter_map(|sym| {
-            let name: String = sym
-                .name
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect();
+            let name: String = crate::tools::normalize_alphanumeric_lower(&sym.name);
             let score = if name == normalized {
                 0
             } else if name.starts_with(normalized.as_str()) {
