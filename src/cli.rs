@@ -95,6 +95,22 @@ pub enum Commands {
         #[arg(long)]
         fix: bool,
     },
+
+    /// Score a headless turn from raw stats (rounds/calls/recoveries/completion)
+    Bench {
+        /// Tool rounds used
+        #[arg(long, default_value_t = 0)]
+        rounds: usize,
+        /// Tool calls made
+        #[arg(long, default_value_t = 0)]
+        calls: usize,
+        /// Recovery events
+        #[arg(long, default_value_t = 0)]
+        recoveries: usize,
+        /// Turn completed successfully
+        #[arg(long, default_value_t = false)]
+        completed: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -183,6 +199,31 @@ mod tests {
     fn parses_loop_flag() {
         let cli = Cli::try_parse_from(["rustcode", "-p", "hi", "--loop", "5"]).unwrap();
         assert_eq!(cli.loop_count, Some(5));
+    }
+
+    #[test]
+    fn parses_bench_stats() {
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "bench",
+            "--rounds",
+            "4",
+            "--calls",
+            "6",
+            "--recoveries",
+            "1",
+            "--completed",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Bench {
+                rounds: 4,
+                calls: 6,
+                recoveries: 1,
+                completed: true
+            })
+        ));
     }
 
     #[test]
