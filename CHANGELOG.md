@@ -1,3 +1,7 @@
+## [v0.55.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.1) - 2026-09-20
+
+### Features
+-
 ## [v0.55.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.0) - 2026-09-20
 
 ### Features
