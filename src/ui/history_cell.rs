@@ -421,20 +421,29 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             if omitted_lines > 0 && index == 2 {
                 lines.push(Line::from(Span::styled(
                     format!("    … +{omitted_lines} lines"),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+                    get_themed_style(
+                        COLOR_MUTED(),
+                        COLOR_BG(),
+                        Modifier::ITALIC | Modifier::DIM,
+                        show_picker,
+                    ),
                 )));
             }
             lines.push(Line::from(vec![
                 Span::styled(
                     "    ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
                 ),
                 Span::styled(
                     truncate_to_width(&text, (width as usize).saturating_sub(4).max(1)),
                     get_themed_style(
                         if stderr { COLOR_TIP() } else { COLOR_MUTED() },
                         COLOR_BG(),
-                        Modifier::empty(),
+                        if stderr {
+                            Modifier::empty()
+                        } else {
+                            Modifier::DIM
+                        },
                         show_picker,
                     ),
                 ),
