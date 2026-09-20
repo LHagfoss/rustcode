@@ -2663,3 +2663,31 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
         );
     }
 }
+
+#[test]
+fn fuzzy_match_resolves_case_typos_and_aliases() {
+    assert_eq!(super::fuzzy_match_tool_name("view_file"), Some("view_file"));
+    assert_eq!(super::fuzzy_match_tool_name("VIEW_FILE"), Some("view_file"));
+    assert_eq!(super::fuzzy_match_tool_name("read"), Some("view_file"));
+    assert_eq!(super::fuzzy_match_tool_name("bash"), Some("run_command"));
+    // Single-edit typo resolves.
+    assert_eq!(
+        super::fuzzy_match_tool_name("gti_status"),
+        Some("git_status")
+    );
+    assert!(super::fuzzy_match_tool_name("definitely-not-a-tool-xyz").is_none());
+    assert!(super::fuzzy_match_tool_name("").is_none());
+}
+
+#[test]
+fn filter_tools_ranks_exact_before_fuzzy_and_respects_limit() {
+    let ranked = super::filter_tools_by_query("git_status", 10);
+    assert_eq!(ranked.first(), Some(&"git_status"));
+    let limited = super::filter_tools_by_query("git", 2);
+    assert_eq!(limited.len(), 2);
+    assert_eq!(limited, vec!["git_add", "git_commit"]);
+    let all_git = super::filter_tools_by_query("git", 10);
+    assert!(all_git.contains(&"git_status"));
+    assert!(all_git.contains(&"git_diff"));
+    assert!(super::filter_tools_by_query("", 5).is_empty());
+}
