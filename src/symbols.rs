@@ -386,6 +386,47 @@ pub fn find_symbol(root_dir: &Path, query: &str) -> Result<Vec<SymbolInfo>, Stri
     Ok(out)
 }
 
+/// Fuzzy-rank symbols for a query: exact/prefix/substring outrank weak
+/// matches; ties break by name, then path. Returns at most `limit` items.
+pub fn fuzzy_filter_symbols(symbols: &[SymbolInfo], query: &str, limit: usize) -> Vec<SymbolInfo> {
+    let normalized: String = query
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if normalized.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let mut scored: Vec<(&SymbolInfo, usize)> = symbols
+        .iter()
+        .filter_map(|sym| {
+            let name: String = sym
+                .name
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let score = if name == normalized {
+                0
+            } else if name.starts_with(normalized.as_str()) {
+                1
+            } else if name.contains(normalized.as_str()) {
+                2
+            } else {
+                return None;
+            };
+            Some((sym, score))
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then(a.0.name.cmp(&b.0.name))
+            .then(a.0.path.cmp(&b.0.path))
+    });
+    scored.truncate(limit);
+    scored.into_iter().map(|(sym, _)| sym.clone()).collect()
+}
+
 pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
     let conn = init_db()?;
     let root_str = root_dir.to_string_lossy().to_string();
@@ -583,5 +624,30 @@ func HandleRequest(r *Router) error {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn test_symbol(name: &str, path: &str) -> SymbolInfo {
+        SymbolInfo {
+            path: path.to_string(),
+            name: name.to_string(),
+            kind: "fn".to_string(),
+            start_line: 0,
+            end_line: 1,
+            signature: String::new(),
+        }
+    }
+
+    #[test]
+    fn fuzzy_filter_ranks_exact_before_prefix_before_substring() {
+        let symbols = vec![
+            test_symbol("my_handler", "b.rs"),
+            test_symbol("handler", "a.rs"),
+            test_symbol("handle_request", "c.rs"),
+        ];
+        let ranked = fuzzy_filter_symbols(&symbols, "handler", 10);
+        assert_eq!(ranked[0].name, "handler");
+        assert!(ranked.iter().any(|s| s.name == "handle_request"));
+        assert_eq!(fuzzy_filter_symbols(&symbols, "", 10).len(), 0);
+        assert_eq!(fuzzy_filter_symbols(&symbols, "handler", 1).len(), 1);
     }
 }
