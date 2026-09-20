@@ -329,6 +329,15 @@ impl TaskSubscription {
     pub fn try_recv(&self) -> Result<TaskEvent, TryRecvError> {
         self.receiver.try_recv()
     }
+
+    /// Blocking receive with a deadline, for wait-style consumers that must
+    /// not hand-roll sleep/poll loops around [`Self::try_recv`].
+    pub fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<TaskEvent, mpsc::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
 }
 
 impl Drop for TaskSubscription {
@@ -1046,6 +1055,37 @@ mod tests {
             TaskEvent::Finished { id, output: Ok(_), .. } if id == *task.id()
         ));
         assert!(manager.list("session").is_empty());
+    }
+
+    #[test]
+    fn subscription_recv_timeout_waits_for_late_terminal_event() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        manager
+            .spawn_with_id(
+                "recv-timeout-task",
+                TaskSpec::new("session", test_request("printf done")),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            TaskEvent::Started { .. }
+        ));
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            TaskEvent::Finished { .. }
+        ));
+    }
+
+    #[test]
+    fn subscription_recv_timeout_expires_without_events() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        assert!(matches!(
+            events.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
     }
 
     #[test]
