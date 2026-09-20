@@ -105,6 +105,14 @@ pub(crate) fn background_task_history_message_with_call_id(
     )
 }
 
+/// A background task completion withheld while a turn is in flight, so it
+/// joins history at the next turn boundary instead of derailing the
+/// current turn's context mid-stream.
+pub(crate) struct PendingBackgroundOutput {
+    pub task_id: String,
+    pub output: crate::tools::ToolExecutionOutput,
+}
+
 pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
     if state.background_wakeup_ids.insert(task_id.to_string()) {
         state
@@ -112,6 +120,27 @@ pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
             .push(format!("__task_wakeup__:{task_id}"));
     }
     state.request_redraw();
+}
+
+/// Move withheld background completions into history at a turn boundary.
+/// Returns how many were flushed.
+pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
+    if state.pending_background_outputs.is_empty() {
+        return 0;
+    }
+    let stashed: Vec<PendingBackgroundOutput> =
+        std::mem::take(&mut state.pending_background_outputs);
+    let count = stashed.len();
+    for pending in stashed {
+        state.history.push(background_task_history_message(
+            &pending.task_id,
+            pending.output,
+        ));
+    }
+    let session_id = state.active_session_id.clone();
+    crate::config::save_session_history(&session_id, &state.history);
+    state.request_redraw();
+    count
 }
 
 /// Import provider API keys from the user's login/interactive shell into this
