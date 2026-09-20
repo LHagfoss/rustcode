@@ -8,6 +8,7 @@ mod clipboard;
 mod config;
 mod context;
 mod discord_rpc;
+mod doctor;
 mod inline_terminal;
 mod mcp;
 mod memory;
@@ -164,6 +165,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if !report.errors.is_empty() {
                 std::process::exit(1);
             }
+        }
+        return Ok(());
+    }
+
+    if let Some(cli::Commands::Doctor { fix }) = cli_args.command.as_ref() {
+        let code = crate::doctor::run_doctor(*fix);
+        if code != 0 {
+            std::process::exit(code);
         }
         return Ok(());
     }
