@@ -1225,6 +1225,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sse_progress_deadline_uses_first_event_budget_before_first_event() {
+        let start = tokio::time::Instant::now();
+        let first_event_deadline = start + retry::FIRST_EVENT_TIMEOUT;
+        assert_eq!(
+            sse_progress_deadline(first_event_deadline, start, 0),
+            first_event_deadline
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_progress_deadline_tracks_last_progress_after_first_event() {
+        let start = tokio::time::Instant::now();
+        let first_event_deadline = start + retry::FIRST_EVENT_TIMEOUT;
+        let later = start + std::time::Duration::from_secs(3600);
+        assert_eq!(
+            sse_progress_deadline(first_event_deadline, later, 2),
+            later + retry::STREAM_IDLE_TIMEOUT
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_blank_lines_do_not_extend_first_event_deadline() {
+        // Regression test for the hung-turn pattern: a provider or proxy that
+        // emits periodic blank keep-alive lines must not postpone the
+        // absolute first-event budget forever.
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let stream_start = tokio::time::Instant::now();
+        let first_event_deadline = stream_start + retry::FIRST_EVENT_TIMEOUT;
+        let read_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(reader);
+            let mut events = 0usize;
+            let last_progress = stream_start;
+            loop {
+                let deadline = sse_progress_deadline(first_event_deadline, last_progress, events);
+                let mut line = String::new();
+                match tokio::time::timeout_at(deadline, read_sse_line(&mut reader, &mut line)).await
+                {
+                    Err(_) => return events,
+                    Ok(Ok(0)) => return events,
+                    Ok(Ok(_)) => {
+                        if crate::network::parse_sse_line(line.trim()).is_some() {
+                            events += 1;
+                        }
+                    }
+                    Ok(Err(_)) => return events,
+                }
+            }
+        });
+
+        // Keep-alive blanks, each well inside the per-read budget.
+        for _ in 0..3 {
+            tokio::time::advance(retry::FIRST_EVENT_TIMEOUT / 4).await;
+            tokio::task::yield_now().await;
+            tokio::io::AsyncWriteExt::write_all(&mut writer, b"\n")
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+        // Push virtual time past the absolute first-event budget.
+        tokio::time::advance(retry::FIRST_EVENT_TIMEOUT).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            read_task.await.unwrap(),
+            0,
+            "blank keep-alives must not count as progress"
+        );
+    }
+
+    #[tokio::test]
     async fn sse_eof_returns_final_unterminated_line() {
         let (mut writer, reader) = tokio::io::duplex(64);
         tokio::io::AsyncWriteExt::write_all(&mut writer, b"data: final")
@@ -2708,6 +2778,27 @@ async fn read_sse_line_with_state<R: tokio::io::AsyncBufRead + Unpin>(
     Ok(bytes.len())
 }
 
+/// Absolute read deadline for the SSE stream loop.
+///
+/// While no meaningful event arrived, the first-event budget
+/// (`FIRST_EVENT_TIMEOUT` since headers) applies; afterwards the idle budget
+/// (`STREAM_IDLE_TIMEOUT` since the last meaningful event) applies. Only
+/// meaningful events move the progress markers — keep-alive blank/comment
+/// lines and partial line bytes must not extend these budgets, otherwise a
+/// provider or proxy emitting periodic blank lines could stall the stream
+/// forever without any timeout firing.
+fn sse_progress_deadline(
+    first_event_deadline: tokio::time::Instant,
+    last_progress: tokio::time::Instant,
+    events_received: usize,
+) -> tokio::time::Instant {
+    if events_received == 0 {
+        first_event_deadline.min(last_progress + retry::STREAM_IDLE_TIMEOUT)
+    } else {
+        last_progress + retry::STREAM_IDLE_TIMEOUT
+    }
+}
+
 /// Metadata-only summary of an outbound chat-completion request: round shape
 /// and size, not content. This is what gets written to debug.log by default
 /// in place of the full serialized payload (see `request_debug_log_line`).
@@ -3739,18 +3830,71 @@ pub async fn stream_request(
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
 
     dbg_log!("stream_request: Starting SSE stream read loop");
+    // Absolute progress deadlines anchored at headers. Keep-alive blank /
+    // comment lines carry no meaningful event and must not extend them: the
+    // per-fill timeout inside `read_sse_line_with_state` still tolerates a
+    // slow partial line, but these bounds fire even while the wire stays
+    // active. Without them a provider (or proxy) emitting periodic blank
+    // lines could stall the first event forever.
+    let stream_start = tokio::time::Instant::now();
+    let first_event_deadline = stream_start + retry::FIRST_EVENT_TIMEOUT;
+    let mut last_progress = stream_start;
     loop {
         if cancel_token.is_cancelled() {
             dbg_log!("stream_request: Stream reading cancelled via token");
             return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
 
+        // Absolute deadline for this read (see `sse_progress_deadline`):
+        // keep-alive blank/comment lines never move these markers.
+        let absolute_deadline =
+            sse_progress_deadline(first_event_deadline, last_progress, stream_events_received);
+
         tokio::select! {
-            r = read_sse_line_with_state(
-                &mut reader,
-                &mut line_buf,
-                stream_events_received == 0,
+            r = tokio::time::timeout_at(
+                absolute_deadline,
+                read_sse_line_with_state(
+                    &mut reader,
+                    &mut line_buf,
+                    stream_events_received == 0,
+                ),
             ) => {
+                let r = match r {
+                    Err(_) => {
+                        let past_first_deadline = stream_events_received == 0
+                            && tokio::time::Instant::now() >= first_event_deadline;
+                        let kind = if past_first_deadline {
+                            StreamFailureKind::FirstEventTimeout
+                        } else {
+                            StreamFailureKind::StreamIdleTimeout
+                        };
+                        dbg_log!(
+                            "stream_request: SSE absolute progress deadline elapsed ({kind}, events={stream_events_received}, bytes={stream_bytes_received})"
+                        );
+                        crate::logger::operational_event(
+                            "stream.progress_deadline",
+                            serde_json::json!({
+                                "model": model,
+                                "kind": kind.to_string(),
+                                "events_received": stream_events_received,
+                                "bytes_received": stream_bytes_received,
+                                "partial_event_bytes": line_buf.len(),
+                                "elapsed_ms": stream_start.elapsed().as_millis() as u64,
+                            }),
+                        );
+                        return Err(StreamFailure {
+                            kind,
+                            status: None,
+                            detail: Some(format!(
+                                "SSE stream {kind} with {stream_events_received} events after {stream_bytes_received} bytes"
+                            )),
+                            bytes_received: stream_bytes_received,
+                            events_received: stream_events_received,
+                            partial_event_bytes: line_buf.len(),
+                        });
+                    }
+                    Ok(inner) => inner,
+                };
                 match r {
                     Ok(0) => {
                         dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
@@ -3778,6 +3922,11 @@ pub async fn stream_request(
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
+                                // Only meaningful events move the progress
+                                // markers: keep-alive blank/comment lines and
+                                // unparsable payloads must not extend the
+                                // absolute first-event / idle budgets.
+                                last_progress = tokio::time::Instant::now();
                                 stream_trace.record(line_buf.len(), &value);
                                 let val = if responses_api {
                                     normalize_responses_event(
