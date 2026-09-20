@@ -627,7 +627,7 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
         .iter()
         .find(|line| line.contains("help:"))
         .expect("banner help row");
-    assert!(help_row.contains("/help for commands"));
+    assert!(help_row.contains("/help — use it for commands"));
 
     let hint_positions = ["/model", "/effort", "/context", "/help"]
         .into_iter()
@@ -643,6 +643,16 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
             .iter()
             .all(|position| *position == hint_positions[0]),
         "slash-command hints must share a second column: {rendered:?}"
+    );
+
+    let session_row = rendered
+        .iter()
+        .find(|line| line.contains("session:"))
+        .expect("banner session row");
+    assert_eq!(
+        session_row.chars().position(|character| character == 's'),
+        Some(5),
+        "welcome content should have comfortable left padding: {rendered:?}"
     );
 }
 
@@ -2288,6 +2298,52 @@ fn status_panel_help_box_lines_have_uniform_width() {
                 .collect::<String>()
         );
     }
+}
+
+#[test]
+fn command_panels_use_dynamic_titles_width_and_usage_section_spacing() {
+    use super::render_status_panel;
+
+    let mut usage_lines = Vec::new();
+    render_status_panel(
+        "Session usage:\nMessages: 2 user · 1 assistant · 0 tool calls\n  no token data yet - send a message first\n\nMonthly usage statistics:\n  2026-09: 1,024 prompt + 512 completion = 1,536 tokens (2 calls)",
+        100,
+        false,
+        &mut usage_lines,
+    );
+
+    assert!(usage_lines[0].to_string().contains(">_ RustCode · Usage"));
+    assert!(
+        usage_lines[0].width() < 100,
+        "a short command result should not stretch to the terminal edge: {usage_lines:?}"
+    );
+    let monthly_index = usage_lines
+        .iter()
+        .position(|line| line.to_string().contains("Monthly usage statistics"))
+        .expect("monthly usage heading");
+    assert!(monthly_index > 0);
+    assert!(
+        usage_lines[monthly_index - 1]
+            .to_string()
+            .trim_matches(['│', ' '])
+            .is_empty(),
+        "usage sections should have a visible blank row: {usage_lines:?}"
+    );
+
+    let mut info_lines = Vec::new();
+    render_status_panel(
+        "RustCode Info\nA short description",
+        100,
+        false,
+        &mut info_lines,
+    );
+    assert!(info_lines[0].to_string().contains(">_ RustCode · Info"));
+    assert!(
+        info_lines
+            .iter()
+            .all(|line| !line.to_string().contains("RustCode Info")),
+        "the panel title should replace the duplicated heading: {info_lines:?}"
+    );
 }
 
 #[test]
