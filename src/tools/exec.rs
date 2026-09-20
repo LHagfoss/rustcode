@@ -563,8 +563,8 @@ fn run_command_output_inner(
     // that synchronize their own background jobs (`wait`, or `$!` with
     // `kill`) are exempt: they reap what they spawn, so the verification
     // output they print must be preserved, not discarded.
-    let detached =
-        detached_requested || (has_background_operator && !command_manages_own_background_jobs(command_str));
+    let detached = detached_requested
+        || (has_background_operator && !command_manages_own_background_jobs(command_str));
     let run_in_bg = (background_requested || detached)
         && (detached || !is_short_discovery_command(command_str));
     let command_request = rustcode_command::CommandRequest {
