@@ -159,7 +159,9 @@ pub fn relevant_skills_hint(
     if ranked.is_empty() {
         return None;
     }
-    let mut out = String::from("# Relevant skills\nThe prompt matches these skills by trigger/keyword. Consider `list_skills`, then `use_skill` for the best match before exploring:");
+    let mut out = String::from(
+        "# Relevant skills\nThe prompt matches these skills by trigger/keyword. Consider `list_skills`, then `use_skill` for the best match before exploring:",
+    );
     for (skill, score) in ranked {
         out.push_str(&format!(
             "\n- {} (score {score}): {}",
@@ -567,7 +569,10 @@ mod tests {
 
     #[test]
     fn skill_routing_hint_does_not_route_email_to_cloudflare_email_service() {
-        let skills = [test_metadata("cloudflare-email-service", "Cloudflare email workflow")];
+        let skills = [test_metadata(
+            "cloudflare-email-service",
+            "Cloudflare email workflow",
+        )];
 
         assert!(
             skill_routing_hint("Build a Bun API that stores email addresses.", &skills, &[])
