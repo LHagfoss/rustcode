@@ -116,3 +116,30 @@ fn watchdog_recovery_clears_the_complete_active_projection() {
     assert!(state.current_token_usage.is_none());
     assert!(!state.orchestrator_running);
 }
+
+#[test]
+fn orphaned_queue_with_no_owner_is_recovered_without_dropping_prompts() {
+    // Invalidated (or never spawned) while prompts remained: the spawn slot
+    // is free but nothing will ever drain the queue.
+    let mut state = stale_active_state();
+    state.status = AppStatus::Queued;
+    state.pending_queue.push("user follow-up".to_string());
+    state.orchestrator_running = false;
+    let recovery = state
+        .check_stall_watchdog(false, Instant::now())
+        .expect("ownerless queue must trip");
+    assert!(!recovery.reset_orchestrator);
+    assert!(recovery.queue_preserved);
+}
+
+#[test]
+fn fresh_submission_with_free_slot_is_not_a_stall() {
+    // A just-submitted prompt (fresh generation, no loop yet) must reach the
+    // spawn block instead of tripping the watchdog.
+    let mut state = AppState::new();
+    state.status = AppStatus::Queued;
+    state.pending_queue.push("brand new".to_string());
+    state.orchestrator_running = false;
+    state.generation_start_time = Some(Instant::now());
+    assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
+}
