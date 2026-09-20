@@ -1,3 +1,8 @@
+## [v0.53.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.53.1) - 2026-09-20
+
+### Fixes
+- Welcome and command output panels now use more consistent padding, responsive widths, and command-specific titles.
+- `/usage` preserves a clear gap before monthly usage statistics, and the welcome panel includes a friendlier `/help` hint.
 ## [v0.53.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.53.0) - 2026-09-19
 
 ### Features
