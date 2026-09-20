@@ -1,3 +1,12 @@
+## [v0.55.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.0) - 2026-09-20
+
+### Features
+- Chained `ask_question` prompts, opencode-style: one call can carry several questions with headers, labeled options with descriptions, and per-question multi-select; answer each in turn, move with tab, submit all with enter (#1277).
+- `ask_question` answers now render in the transcript as `Asked <question> → <answer>` (chains summarize every pair), including cancellations (#1275).
+
+### Fixes
+- Compound start/verify/stop shell scripts that manage their own background jobs (`wait`, `$!` + `kill`) no longer auto-detach into a 0-byte result; bare trailing-`&` servers still do (#1276).
+- Stall watchdog recovers ownerless queued prompts instead of wedging forever; orchestrator lease is Drop-guarded and finish lines carry queue/status forensics (#1278).
 ## [v0.54.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.54.0) - 2026-09-20
 
 ### Features
