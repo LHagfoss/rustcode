@@ -277,6 +277,64 @@ pub async fn run_headless_turn(
     Ok(prose.trim().to_string())
 }
 
+/// Autonomous headless loop (BigHead-style): repeat headless turns on one
+/// session until the model emits `<loop:done/>` or the iteration cap hits.
+/// The cap (max 10) is the circuit breaker against runaway sessions.
+pub const LOOP_DONE_MARKER: &str = "<loop:done/>";
+pub const MAX_LOOP_ITERS: usize = 10;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopReport {
+    pub iters: usize,
+    pub completed_via_done: bool,
+}
+
+pub fn loop_should_continue(output: &str, iter: usize, max: usize) -> bool {
+    iter < max && !output.contains(LOOP_DONE_MARKER)
+}
+
+pub async fn run_raw_cli_loop(
+    prompt: &str,
+    model_override: Option<&str>,
+    max_iters: usize,
+) -> Result<LoopReport, Box<dyn std::error::Error>> {
+    let cap = max_iters.clamp(1, MAX_LOOP_ITERS);
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let state = build_state(prompt, model_override);
+    let state_arc = Arc::new(Mutex::new(state));
+
+    let mcp_servers = state_arc.lock().await.config.mcp_servers.clone();
+    for warning in crate::mcp::start_enabled_servers(&mcp_servers, |name| async move {
+        crate::mcp::start_server_by_name(&name).await
+    })
+    .await
+    {
+        eprintln!("{warning}");
+    }
+
+    let mut completed_via_done = false;
+    let mut iters = 0;
+    for iter in 1..=cap {
+        iters = iter;
+        let output = run_headless_turn(&client, Arc::clone(&state_arc)).await?;
+        if !loop_should_continue(&output, iter, cap) {
+            completed_via_done = output.contains(LOOP_DONE_MARKER);
+            break;
+        }
+        state_arc.lock().await.history.push(ChatMessage::new(
+            "user",
+            "Continue the task. Emit `<loop:done/>` when fully complete.".to_string(),
+        ));
+    }
+    Ok(LoopReport {
+        iters,
+        completed_via_done,
+    })
+}
+
 /// Entry point for the raw CLI agent mode.
 pub async fn run_raw_cli(
     prompt: &str,
@@ -516,5 +574,13 @@ mod tests {
         };
         assert!(tracker.observe_event(&cancelled));
         assert!(tracker.complete());
+    }
+
+    #[test]
+    fn loop_breaker_stops_at_done_marker_or_cap() {
+        assert!(super::loop_should_continue("work continues", 1, 5));
+        assert!(!super::loop_should_continue("all done <loop:done/>", 1, 5));
+        assert!(!super::loop_should_continue("work continues", 5, 5));
+        assert_eq!(super::MAX_LOOP_ITERS, 10);
     }
 }

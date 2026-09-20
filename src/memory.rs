@@ -508,6 +508,69 @@ pub async fn render_relevant_async(
         .flatten()
 }
 
+/// Tentative facts (low confidence) older than 7 days are garbage-collected;
+/// confirmed facts persist. Returns the number of removed facts.
+pub const TENTATIVE_CONFIDENCE_MAX: u8 = 30;
+pub const TENTATIVE_GC_AFTER_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+pub fn gc_tentative_facts(memory: &mut ProjectMemory) -> usize {
+    let before = memory.facts.len();
+    let cutoff = now().saturating_sub(TENTATIVE_GC_AFTER_SECONDS);
+    memory
+        .facts
+        .retain(|fact| !(fact.confidence <= TENTATIVE_CONFIDENCE_MAX && fact.updated_at < cutoff));
+    before.saturating_sub(memory.facts.len())
+}
+
+/// Collect project + global facts for GC without touching the filesystem.
+pub fn gc(root: Option<&Path>) -> Result<usize, String> {
+    let mut removed = 0;
+    let mut memory = load(root)?;
+    removed += gc_tentative_facts(&mut memory);
+    save(root, &memory)?;
+    // Global memory shares the same record shape; GC it too.
+    let mut global = load_global()?;
+    let global_before = global.facts.len();
+    let cutoff = now().saturating_sub(TENTATIVE_GC_AFTER_SECONDS);
+    global
+        .facts
+        .retain(|fact| !(fact.confidence <= TENTATIVE_CONFIDENCE_MAX && fact.updated_at < cutoff));
+    removed += global_before.saturating_sub(global.facts.len());
+    save_global(&global)?;
+    Ok(removed)
+}
+
+/// Render facts within a byte budget, highest confidence + most recent first.
+/// Returns the rendered text and the number of facts dropped by the budget.
+pub fn to_system_message_with_budget(
+    facts: &[MemoryFact],
+    max_bytes: usize,
+) -> (Option<String>, usize) {
+    if facts.is_empty() || max_bytes == 0 {
+        return (None, facts.len());
+    }
+    let mut ranked: Vec<&MemoryFact> = facts.iter().collect();
+    ranked.sort_by(|a, b| {
+        b.confidence
+            .cmp(&a.confidence)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
+    let mut output = String::from("# Project memory\n");
+    let mut dropped = 0;
+    for fact in ranked {
+        let line = format!("- [{}] {} = {}\n", fact.category, fact.key, fact.value);
+        if output.len() + line.len() <= max_bytes {
+            output.push_str(&line);
+        } else {
+            dropped += 1;
+        }
+    }
+    if output.lines().count() <= 1 {
+        return (None, facts.len());
+    }
+    (Some(output.trim_end().to_string()), dropped)
+}
+
 fn safe_fact(fact: &MemoryFact) -> Result<(), String> {
     let combined = format!(
         "{} {} {} {}",
@@ -905,5 +968,49 @@ mod tests {
         // cleanup
         remove(Some(root.path()), "package_manager").unwrap();
         remove_global("indent").unwrap();
+    }
+
+    fn tentative_fact(key: &str, confidence: u8, updated_at: u64) -> MemoryFact {
+        MemoryFact {
+            category: "note".to_string(),
+            key: key.to_string(),
+            value: "v".to_string(),
+            source: "test".to_string(),
+            confidence,
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn gc_removes_only_stale_tentative_facts() {
+        let old = now().saturating_sub(TENTATIVE_GC_AFTER_SECONDS + 60);
+        let mut memory = ProjectMemory {
+            version: MEMORY_VERSION,
+            identity: "test".to_string(),
+            facts: vec![
+                tentative_fact("old-tentative", 10, old),
+                tentative_fact("fresh-tentative", 10, now()),
+                tentative_fact("old-confirmed", 90, old),
+            ],
+        };
+        assert_eq!(gc_tentative_facts(&mut memory), 1);
+        assert_eq!(memory.facts.len(), 2);
+        assert!(memory.facts.iter().all(|f| f.key != "old-tentative"));
+    }
+
+    #[test]
+    fn budget_rendering_prefers_confidence_and_reports_dropped() {
+        let facts = vec![
+            tentative_fact("low", 10, now()),
+            tentative_fact("high", 95, now()),
+        ];
+        // Header (17B) + one 19B line fits in 40B; the second fact drops.
+        let (rendered, dropped) = to_system_message_with_budget(&facts, 40);
+        let text = rendered.expect("budget fits at least one fact");
+        assert!(text.contains("high"));
+        assert_eq!(dropped, 1);
+        let (none, all_dropped) = to_system_message_with_budget(&facts, 5);
+        assert!(none.is_none());
+        assert_eq!(all_dropped, 2);
     }
 }

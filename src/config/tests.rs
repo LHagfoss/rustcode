@@ -1319,3 +1319,18 @@ fn test_session_id_from_path_variations() {
     let path3 = PathBuf::from("/tmp/history.json");
     assert_eq!(session_id_from_path(&path3), None);
 }
+
+#[test]
+fn fallback_chain_starts_with_primary_then_small_then_rest_capped() {
+    let config = crate::config::AppConfig::default();
+    let primary = config.default.big().to_string();
+    let chain = crate::config::fallback_chain(&config, &primary);
+    assert!(!chain.is_empty());
+    assert_eq!(chain[0].name, primary);
+    assert!(chain.len() <= 3);
+    let names: Vec<&str> = chain.iter().map(|p| p.name.as_str()).collect();
+    let mut dedup = names.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(names.len(), dedup.len());
+}
