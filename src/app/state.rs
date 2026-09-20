@@ -156,6 +156,11 @@ pub struct AppState {
     /// user's selection back to the awaiting tool call.
     pub pending_question: Option<PendingQuestion>,
     pub question_response: Option<tokio::sync::oneshot::Sender<String>>,
+    /// Remaining questions in a chained `ask_question` call (everything after
+    /// the active `pending_question`), plus already-answered ones in order.
+    /// Empty for the legacy single-question shape.
+    pub pending_question_queue: Vec<PendingQuestion>,
+    pub pending_question_done: Vec<PendingQuestion>,
 
     /// The names of user-approved tools currently running in the background.
     /// While this is not empty, the modal overlay stays closed and the user can
@@ -379,6 +384,121 @@ impl AppState {
     pub(crate) fn enter_idle(&mut self) {
         self.status = AppStatus::Idle;
         self.idle_since = std::time::Instant::now();
+    }
+
+    /// Start a chained question flow: the first question becomes active, the
+    /// rest wait in the queue. Single-question callers pass an empty queue,
+    /// which behaves exactly like the legacy flow.
+    pub(crate) fn begin_question_chain(&mut self, mut questions: Vec<PendingQuestion>) {
+        self.pending_question_done.clear();
+        self.pending_question_queue.clear();
+        self.pending_question = if questions.is_empty() {
+            None
+        } else {
+            Some(questions.remove(0))
+        };
+        self.pending_question_queue = questions;
+    }
+
+    /// Drop the whole chain (cancel / session reset paths).
+    pub(crate) fn clear_question_chain(&mut self) {
+        self.pending_question = None;
+        self.pending_question_queue.clear();
+        self.pending_question_done.clear();
+    }
+
+    /// Total questions in the active chain (answered + active + queued).
+    pub(crate) fn question_chain_len(&self) -> usize {
+        self.pending_question_done.len()
+            + usize::from(self.pending_question.is_some())
+            + self.pending_question_queue.len()
+    }
+
+    /// 1-based position of the active question within its chain.
+    pub(crate) fn question_chain_position(&self) -> usize {
+        self.pending_question_done.len() + usize::from(self.pending_question.is_some())
+    }
+
+    /// Chain questions with a recorded answer (accepted via Enter).
+    pub(crate) fn question_chain_answered(&self) -> usize {
+        self.pending_question_done
+            .iter()
+            .filter(|question| question.is_answered())
+            .count()
+            + usize::from(
+                self.pending_question
+                    .as_ref()
+                    .is_some_and(PendingQuestion::is_answered),
+            )
+    }
+
+    /// Record `answer` for the active question and advance to the next queued
+    /// one. Returns true when another question became active.
+    pub(crate) fn advance_question_chain(&mut self, answer: String) -> bool {
+        if let Some(mut current) = self.pending_question.take() {
+            current.answer = Some(answer);
+            current.custom_input = None;
+            current.custom_cursor = 0;
+            self.pending_question_done.push(current);
+        }
+        if self.pending_question_queue.is_empty() {
+            false
+        } else {
+            self.pending_question = Some(self.pending_question_queue.remove(0));
+            true
+        }
+    }
+
+    /// Move focus between chain questions without answering (Tab /
+    /// Shift+Tab). Highlight, ticks, and recorded answers travel with each
+    /// question, so coming back restores exactly what the user left.
+    pub(crate) fn focus_question(&mut self, delta: isize) {
+        let Some(active) = self.pending_question.take() else {
+            return;
+        };
+        let mut ordered = std::mem::take(&mut self.pending_question_done);
+        let active_pos = ordered.len();
+        ordered.push(active);
+        ordered.extend(std::mem::take(&mut self.pending_question_queue));
+        if ordered.len() < 2 {
+            // Single question: restore untouched.
+            let mut iter = ordered.into_iter();
+            self.pending_question = iter.next();
+            self.pending_question_queue = iter.collect();
+            return;
+        }
+        let next = (active_pos as isize + delta).rem_euclid(ordered.len() as isize) as usize;
+        let mut iter = ordered.into_iter();
+        self.pending_question_done = iter.by_ref().take(next).collect();
+        self.pending_question = iter.next();
+        self.pending_question_queue = iter.collect();
+    }
+
+    /// Drain the whole chain for submission, recording `current_answer` for
+    /// the active question first. Returns `(header, question, answer)` triples
+    /// in original order; unanswered questions yield an empty answer.
+    pub(crate) fn take_question_chain_answers(
+        &mut self,
+        current_answer: Option<String>,
+    ) -> Vec<(String, String, String)> {
+        if let (Some(answer), Some(active)) = (current_answer, self.pending_question.as_mut()) {
+            active.answer = Some(answer);
+        }
+        let mut ordered = std::mem::take(&mut self.pending_question_done);
+        if let Some(active) = self.pending_question.take() {
+            ordered.push(active);
+        }
+        ordered.extend(std::mem::take(&mut self.pending_question_queue));
+        ordered
+            .into_iter()
+            .map(|question| {
+                (
+                    question.header.clone(),
+                    question.question.clone(),
+                    question.answer.clone().unwrap_or_default(),
+                )
+            })
+            .collect()
     }
 
     /// Detect a dead turn: status says work is in flight but nothing can make
@@ -895,6 +1015,8 @@ impl AppState {
             tool_confirmation_response: None,
             pending_question: None,
             question_response: None,
+            pending_question_queue: Vec::new(),
+            pending_question_done: Vec::new(),
             running_tools: Vec::new(),
             live_tool_calls: Arc::new(Vec::new()),
             live_tool_call_sequence: 0,
@@ -1529,6 +1651,9 @@ mod prompt_cache_tests;
 #[cfg(test)]
 #[path = "state/protocol_tests.rs"]
 mod protocol_tests;
+#[cfg(test)]
+#[path = "state/question_chain_tests.rs"]
+mod question_chain_tests;
 #[cfg(test)]
 #[path = "state/queue_pull_back_tests.rs"]
 mod queue_pull_back_tests;

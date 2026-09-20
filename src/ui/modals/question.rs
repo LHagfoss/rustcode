@@ -11,8 +11,19 @@ pub(in crate::ui) fn render_question_modal(
     };
     let panel = crate::ui::theme::get_palette(&state.config().theme).panel;
     let content_area = render_padded_panel_with_color(f, area, panel);
+    let chain_len = state.pending_question_chain_len();
+    let position = state.pending_question_chain_position();
+    let header_line = if chain_len > 1 {
+        let unanswered = chain_len.saturating_sub(state.pending_question_chain_answered());
+        format!(
+            "  {} · Question {position}/{chain_len} ({unanswered} unanswered)",
+            question.header
+        )
+    } else {
+        format!("  {}", question.header)
+    };
     let mut lines = vec![Line::from(Span::styled(
-        "  Question 1/1 (1 unanswered)",
+        header_line,
         Style::default()
             .fg(COLOR_TEXT())
             .add_modifier(Modifier::BOLD),
@@ -52,7 +63,7 @@ pub(in crate::ui) fn render_question_modal(
         for (index, option) in question.options.iter().enumerate() {
             let selected = question.selected == index;
             let checked = question.chosen.get(index).copied().unwrap_or(false);
-            lines.push(Line::from(vec![
+            let mut row = vec![
                 Span::styled(
                     if selected { "  › " } else { "    " },
                     Style::default().fg(if selected {
@@ -81,7 +92,14 @@ pub(in crate::ui) fn render_question_modal(
                         Modifier::empty()
                     }),
                 ),
-            ]));
+            ];
+            if let Some(description) = question.description(index) {
+                row.push(Span::styled(
+                    format!(" — {description}"),
+                    Style::default().fg(COLOR_MUTED()),
+                ));
+            }
+            lines.push(Line::from(row));
         }
         let custom_selected = question.selected == question.options.len();
         lines.push(Line::from(vec![
@@ -111,13 +129,19 @@ pub(in crate::ui) fn render_question_modal(
         None
     };
     lines.push(Line::from(""));
+    let chained = state.pending_question_chain_len() > 1;
+    let nav_hint = if chained {
+        " · tab next · shift+tab back"
+    } else {
+        ""
+    };
     lines.push(Line::from(Span::styled(
         if question.custom_input.is_some() {
-            "  enter to submit answer | esc to go back"
+            format!("  enter to submit answer | esc to go back{nav_hint}")
         } else if question.is_multi_select {
-            "  space to toggle | enter to submit answer | esc to interrupt"
+            format!("  space to toggle | enter to submit answer | esc to interrupt{nav_hint}")
         } else {
-            "  enter to submit answer | esc to interrupt"
+            format!("  enter to submit answer | esc to interrupt{nav_hint}")
         },
         Style::default().fg(COLOR_MUTED()),
     )));
