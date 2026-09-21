@@ -774,6 +774,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "Session",
+        name: "Continue pending work",
+        shortcut: "/continue",
+    },
+    PaletteItem {
+        group: "Session",
         name: "Copy last reply",
         shortcut: "/copy",
     },

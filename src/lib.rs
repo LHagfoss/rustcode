@@ -458,6 +458,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             app_state_struct
                 .history
                 .push(crate::app::ChatMessage::new("system", message));
+        } else if cli_args.continue_session {
+            let queued = crate::app::actions::queue_restored_segment(&mut app_state_struct);
+            if !queued {
+                app_state_struct.history.push(crate::app::ChatMessage::new(
+                    "system",
+                    "No pending session work is available to continue.",
+                ));
+            }
         }
     }
     if let Some(ref m_name) = model_override
