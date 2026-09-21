@@ -110,8 +110,8 @@ pub(super) fn render_popup_menu(
             .map(|i| i == idx)
             .unwrap_or(false);
 
-        let marker = if is_selected { "› " } else { "  " };
-        let left_text = format!("{marker}{:<10}  ", cmd.name);
+        // Keep the existing two-column alignment while leaving rows marker-free.
+        let left_text = format!("  {:<10}  ", cmd.name);
         let desc_text = cmd.desc.to_string();
         let total_len = left_text.width() + desc_text.width();
         let padding_len = (area.width as usize).saturating_sub(total_len);
@@ -119,7 +119,11 @@ pub(super) fn render_popup_menu(
             Span::styled(
                 left_text,
                 Style::default()
-                    .fg(COLOR_TEXT())
+                    .fg(if is_selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_TEXT()
+                    })
                     .bg(COLOR_PANEL())
                     .add_modifier(if is_selected {
                         Modifier::BOLD
