@@ -1,3 +1,10 @@
+## [v0.55.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.6) - 2026-09-21
+
+### Fixes
+Session reliability fixes:
+
+- Opening or resuming a session now stays idle; pending work continues only after `/continue` or `--continue`.
+- Improved task diagnostics and edit-tool guidance, including correct handling of benign Hugging Face authentication warnings.
 ## [v0.55.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.5) - 2026-09-21
 
 ### Fixes
