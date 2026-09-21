@@ -44,7 +44,7 @@ pub fn replace_file_content_schema() -> Value {
         "type": "object", "additionalProperties": false, "properties": {
             "path": { "type": "string", "description": "Absolute or relative path to file" },
             "target_content": { "type": "string", "description": "Canonical exact block to replace; never empty" },
-            "replacement_content": { "type": "string", "description": "Canonical replacement text" },
+            "replacement_content": { "type": "string", "description": "Required with target_content: complete replacement text; use an empty string only to delete the target" },
             "old_string": { "type": "string", "description": "Compatibility alias for target_content" },
             "new_string": { "type": "string", "description": "Compatibility alias for replacement_content" },
             "target": { "type": "string" }, "replacement": { "type": "string" },
@@ -620,8 +620,11 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
             let (target, replacement) = edit_target_and_replacement(item);
             let target =
                 target.ok_or_else(|| format!("edits[{i}] is missing target_content/old_string"))?;
-            let replacement = replacement
-                .ok_or_else(|| format!("edits[{i}] is missing replacement_content/new_string"))?;
+            let replacement = replacement.ok_or_else(|| {
+                format!(
+                    "edits[{i}] is missing replacement_content/new_string; provide the complete replacement text (use an empty string only to delete the target)"
+                )
+            })?;
             let start_line = item
                 .get("start_line")
                 .and_then(parse_json_number)
@@ -641,8 +644,9 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     } else {
         let (target, replacement) = edit_target_and_replacement(args);
         let target = target.ok_or("missing 'target_content' (or 'old_string') argument")?;
-        let replacement =
-            replacement.ok_or("missing 'replacement_content' (or 'new_string') argument")?;
+        let replacement = replacement.ok_or(
+            "missing 'replacement_content' (or 'new_string') argument; provide the complete replacement text (use an empty string only to delete the target)",
+        )?;
         let start_line = args
             .get("start_line")
             .and_then(parse_json_number)
