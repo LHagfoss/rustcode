@@ -1,3 +1,8 @@
+## [v0.55.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.3) - 2026-09-21
+
+### Fixes
+- Prevent interactive shell environment probing from stealing the terminal process group on macOS.
+- Skip redundant startup shell probing when configured provider credentials are already inherited.
 ## [v0.55.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.2) - 2026-09-20
 
 ### Features
