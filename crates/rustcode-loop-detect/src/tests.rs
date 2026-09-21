@@ -895,6 +895,20 @@ fn semantic_failure_classes_collapse_equivalent_command_failures() {
     assert_eq!(semantic_failure_class("ordinary command output"), None);
 }
 
+#[test]
+fn semantic_failure_class_ignores_hugging_face_unauthenticated_warning() {
+    assert_eq!(
+        semantic_failure_class(
+            "Warning: You are sending unauthenticated requests to the Hugging Face Hub."
+        ),
+        None
+    );
+    assert_eq!(
+        semantic_failure_class("Error: unauthenticated request was rejected by the server"),
+        Some("authentication")
+    );
+}
+
 fn observation(output: &str, state: Option<&str>, failure: Option<&str>) -> ProgressObservation {
     ProgressObservation {
         action: "test".to_string(),

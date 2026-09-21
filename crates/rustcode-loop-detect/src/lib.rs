@@ -522,10 +522,15 @@ pub fn stagnation_key(output: &str) -> &str {
 pub fn semantic_failure_class(output: &str) -> Option<&'static str> {
     let lower = output.to_ascii_lowercase();
     if lower.contains("401 unauthorized")
-        || lower.contains("unauthenticated")
         || lower.contains("no token found")
         || lower.contains("authentication failed")
         || lower.contains("authentication error")
+        || (lower.contains("unauthenticated")
+            && [
+                "error", "failed", "failure", "denied", "rejected", "required", "invalid",
+            ]
+            .iter()
+            .any(|marker| lower.contains(marker)))
     {
         Some("authentication")
     } else if lower.contains("unknown flag")
