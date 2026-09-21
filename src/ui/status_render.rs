@@ -630,13 +630,9 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     // Help gets its own row because it explains the command interface rather
     // than changing one of the values above.
-    // At very narrow widths the shared column may be outside the box. Keep
-    // the existing compact help fallback so /help remains discoverable.
-    let help_column = if hint_column + "/help".width() <= inner_w {
-        hint_column
-    } else {
-        label_w
-    };
+    // Start the explanatory help copy immediately after its label. Unlike the
+    // value hints above, this row needs the extra room before `/help`.
+    let help_column = label_w;
     let help_available = inner_w.saturating_sub(help_column);
     let mut help_spans = vec![
         Span::styled(
@@ -647,22 +643,18 @@ pub(crate) fn build_claude_startup_banner_snapshot(
             " ".repeat(help_column.saturating_sub(label_w)),
             Style::default().bg(reset_bg),
         ),
-        Span::styled(
-            fit_to_width("/help", help_available).trim_end().to_owned(),
-            Style::default().fg(primary).bg(reset_bg),
-        ),
     ];
-    let help_suffix = if total_width >= 80 {
-        " — use it for commands"
-    } else {
-        " for commands"
-    };
-    if "/help".width() + help_suffix.width() <= help_available {
+    let help_prefix = "run this command to get help: ";
+    if help_prefix.width() + "/help".width() <= help_available {
         help_spans.push(Span::styled(
-            help_suffix,
+            help_prefix,
             Style::default().fg(muted_c).bg(reset_bg),
         ));
     }
+    help_spans.push(Span::styled(
+        fit_to_width("/help", help_available).trim_end().to_owned(),
+        Style::default().fg(primary).bg(reset_bg),
+    ));
     banner.push(make_row(help_spans));
 
     // Blank line before the bottom border
