@@ -1,3 +1,8 @@
+## [v0.55.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.5) - 2026-09-21
+
+### Fixes
+- Recover stalled provider SSE streams with a transport-level read timeout and a recoverable idle-stream error.
+- Restore the startup banner help prompt: `run this command to get help: /help`.
 ## [v0.55.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.4) - 2026-09-21
 
 ### Fixes
