@@ -81,6 +81,7 @@ fn explicit_external_action_request(prompt: &str) -> bool {
         matches!(
             *word,
             "send"
+                | "reply"
                 | "post"
                 | "publish"
                 | "upload"
@@ -99,6 +100,8 @@ fn is_external_action_tool(tool_name: &str) -> bool {
     let name = normalized.rsplit("__").next().unwrap_or(&normalized);
     [
         "send_email",
+        "send_chat_message",
+        "reply_to_chat_message",
         "reply_email",
         "post_message",
         "publish",
@@ -123,6 +126,19 @@ fn successful_external_action_after(history: &[ChatMessage], user_index: usize) 
         }
         is_external_action_tool(&result.tool_name)
     })
+}
+
+pub(super) fn outstanding_external_action(history: &[ChatMessage]) -> bool {
+    let Some((index, message)) = history
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role == "user")
+    else {
+        return false;
+    };
+    explicit_external_action_request(&message.content)
+        && !successful_external_action_after(history, index)
 }
 
 /// Select the recovery policy from the task, while preserving the ordinary
@@ -161,16 +177,7 @@ fn task_aware_recovery_prompt(
     _compiler_debugging: bool,
     ordinary_prompt: &'static str,
 ) -> &'static str {
-    let latest_user = history
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, message)| message.role == "user");
-    let outstanding_external_action = latest_user.is_some_and(|(index, message)| {
-        explicit_external_action_request(&message.content)
-            && !successful_external_action_after(history, index)
-    });
-    if outstanding_external_action {
+    if outstanding_external_action(history) {
         OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT
     } else {
         ordinary_prompt
@@ -530,6 +537,13 @@ mod tests {
     }
 
     #[test]
+    fn unanswered_chat_reply_remains_an_outstanding_external_action() {
+        let history = vec![ChatMessage::new("user", "Reply to Aleks and @ him only.")];
+        assert!(super::outstanding_external_action(&history));
+        assert!(loop_recovery_prompt(&history, false, false).contains("external action"));
+    }
+
+    #[test]
     fn completed_external_action_and_read_only_email_question_use_ordinary_recovery() {
         let completed = vec![
             ChatMessage::new("user", "Email Pat the recommendation."),
@@ -563,6 +577,19 @@ mod tests {
         ];
         assert_eq!(
             loop_recovery_prompt(&read_email, false, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        let completed_reply = vec![
+            ChatMessage::new("user", "Reply to Aleks."),
+            ChatMessage::new("tool", "sent").with_tool_result(ToolResultRecord {
+                tool_name: "reply_to_chat_message".into(),
+                success: true,
+                ..ToolResultRecord::default()
+            }),
+        ];
+        assert_eq!(
+            loop_recovery_prompt(&completed_reply, false, false),
             LOOP_RECOVERY_PROMPT
         );
     }

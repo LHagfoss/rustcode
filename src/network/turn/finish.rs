@@ -9,7 +9,7 @@ use super::super::fetch_model_quota;
 use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
-use super::recovery::completed_inspection_synthesis;
+use super::recovery::{completed_inspection_synthesis, outstanding_external_action};
 use super::{TurnContext, run_single_turn};
 
 pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
@@ -279,6 +279,7 @@ fn can_complete_interactive_plain_response(
     ctx: &TurnContext,
     cancel_token: &tokio_util::sync::CancellationToken,
     finish_reason: &FinishReason,
+    has_outstanding_external_action: bool,
 ) -> bool {
     matches!(finish_reason, FinishReason::Stop)
         && !cancel_token.is_cancelled()
@@ -287,6 +288,7 @@ fn can_complete_interactive_plain_response(
         && ctx.progress.failed_mutations == 0
         && ctx.verification.ledger.last_failure().is_none()
         && ctx.lifecycle.stop_reason.is_none()
+        && !has_outstanding_external_action
         && has_substantive_final_prose(&ctx.response.final_content)
 }
 
@@ -404,9 +406,19 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         }
     }
 
+    let has_outstanding_external_action = {
+        let state = state.lock().await;
+        outstanding_external_action(&state.history)
+    };
+
     if finish_gate_passed
         && !policy.is_headless()
-        && can_complete_interactive_plain_response(ctx, cancel_token, &response_finish_reason)
+        && can_complete_interactive_plain_response(
+            ctx,
+            cancel_token,
+            &response_finish_reason,
+            has_outstanding_external_action,
+        )
     {
         dbg_log!("Normal interactive prose accepted as completion");
         let mut s = state.lock().await;
@@ -544,6 +556,26 @@ mod tests {
             finished_notification_status(&ctx, false),
             crate::notifications::FinishedStatus::Incomplete
         );
+    }
+
+    #[test]
+    fn outstanding_external_action_blocks_plain_response_completion() {
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "The reply was not sent.".to_owned();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        assert!(can_complete_interactive_plain_response(
+            &ctx,
+            &cancel_token,
+            &FinishReason::Stop,
+            false,
+        ));
+        assert!(!can_complete_interactive_plain_response(
+            &ctx,
+            &cancel_token,
+            &FinishReason::Stop,
+            true,
+        ));
     }
 
     #[test]
@@ -734,6 +766,7 @@ mod tests {
             &ctx,
             &cancel_token,
             &normal,
+            false,
         ));
 
         let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -743,6 +776,7 @@ mod tests {
             &forced,
             &cancel_token,
             &normal,
+            false,
         ));
 
         let output_limit = FinishReason::Length;
@@ -751,6 +785,7 @@ mod tests {
             &ctx,
             &cancel_token,
             &output_limit,
+            false,
         ));
 
         let mut failed_verification = interactive_plain_context("Done.");
@@ -762,6 +797,7 @@ mod tests {
             &failed_verification,
             &cancel_token,
             &normal,
+            false,
         ));
 
         let empty = interactive_plain_context("");
@@ -769,12 +805,14 @@ mod tests {
             &empty,
             &cancel_token,
             &normal,
+            false,
         ));
         let thought_only = interactive_plain_context("<think>still working</think>");
         assert!(!can_complete_interactive_plain_response(
             &thought_only,
             &cancel_token,
             &normal,
+            false,
         ));
 
         let mut stopped = interactive_plain_context("Done.");
@@ -783,6 +821,7 @@ mod tests {
             &stopped,
             &cancel_token,
             &normal,
+            false,
         ));
     }
 

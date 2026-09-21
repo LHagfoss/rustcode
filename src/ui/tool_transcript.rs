@@ -1461,7 +1461,7 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("reasoning loop")
 }
 
-const COMPACT_DEFERRED_TOOL_WARNING: &str = "[Warning, check debug for more info]";
+const COMPACT_TOOL_WARNING: &str = "[Warning, check debug for more info]";
 
 fn is_deferred_tool_batch_notice(content: &str) -> bool {
     let content = content.trim();
@@ -1471,14 +1471,20 @@ fn is_deferred_tool_batch_notice(content: &str) -> bool {
         && content.contains("were not executed or scheduled.")
 }
 
+fn is_validation_rejection_notice(content: &str) -> bool {
+    let content = content.trim();
+    content.starts_with("[Tool call rejected before execution:")
+        && content.contains("] Emit one corrected tool call.")
+}
+
 /// Return the presentation-safe form of a system notice.
 ///
 /// Detailed harness diagnostics stay in canonical history and debug logs, but
-/// implementation details such as deferred tool names and call ids should not
-/// expand into a wide, noisy transcript row.
+/// implementation details such as validation schemas, deferred tool names, and
+/// call ids should not expand into a wide, noisy transcript row.
 pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
-    if is_deferred_tool_batch_notice(content) {
-        Some(COMPACT_DEFERRED_TOOL_WARNING)
+    if is_deferred_tool_batch_notice(content) || is_validation_rejection_notice(content) {
+        Some(COMPACT_TOOL_WARNING)
     } else if is_hidden_system_notice(content) {
         None
     } else {
@@ -1538,6 +1544,16 @@ mod tests {
             ),
             Some("[Warning, check debug for more info]")
         );
+    }
+
+    #[test]
+    fn validation_rejection_notice_has_a_compact_ui_projection() {
+        let detailed = "[Tool call rejected before execution: invalid arguments for 'reply_to_chat_message'. Schema path: $.message_id is required. Expected arguments for 'reply_to_chat_message' use these keys: [\"chat_name\", \"confirm\", \"message\", \"message_id\"]. Example: {...}] Emit one corrected tool call. Batch independent read-only calls freely.";
+        assert_eq!(
+            super::system_notice_for_display(detailed),
+            Some("[Warning, check debug for more info]")
+        );
+        assert!(!super::is_hidden_system_notice(detailed));
     }
 
     fn tool_message_with_record(record: crate::app::ToolResultRecord) -> crate::app::ChatMessage {
