@@ -1406,6 +1406,19 @@ fn replace_file_content_schema_declares_every_handler_alias() {
 }
 
 #[test]
+fn replace_file_content_missing_replacement_error_is_actionable() {
+    let err = replace_file_content_tool(&serde_json::json!({
+        "path": "src/example.rs",
+        "target_content": "old",
+    }))
+    .expect_err("missing replacement content must be rejected");
+
+    assert!(err.contains("replacement_content"), "got: {err}");
+    assert!(err.contains("complete replacement text"), "got: {err}");
+    assert!(err.contains("empty string"), "got: {err}");
+}
+
+#[test]
 fn unrelated_missing_target_is_not_falsely_reported_as_already_applied() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("code.rs");
