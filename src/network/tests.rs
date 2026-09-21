@@ -3118,6 +3118,22 @@ fn harness_notes_reach_the_model_but_session_chatter_does_not() {
 }
 
 #[test]
+fn validation_rejection_keeps_detailed_history_and_model_diagnostics() {
+    let detail = "[Tool call rejected before execution: invalid arguments for 'reply_to_chat_message'. Schema path: $.message_id is required. Expected arguments for 'reply_to_chat_message' use these keys: [\"chat_name\", \"confirm\", \"message\", \"message_id\"]. Example: {...}] Emit one corrected tool call.";
+    let history = vec![ChatMessage::new("system", detail)];
+
+    assert_eq!(history[0].content, detail);
+    assert!(is_model_directed_note(&history[0]));
+    let provider_messages = history::to_messages(&history, "system prompt");
+    assert!(provider_messages.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| content.contains("$.message_id is required"))
+    }));
+}
+
+#[test]
 fn loop_abort_allows_bounded_recoveries_before_forced_final() {
     // #984: the harness offers several guided nudges with tools enabled
     // before the terminal lockout, instead of disabling tools after one strike.
