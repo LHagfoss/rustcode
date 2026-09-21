@@ -474,6 +474,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
+        // Keep the transport-level body read bounded as a second safety net
+        // for providers that close or stall an SSE connection without waking
+        // the stream future. The stream loop also tracks meaningful-event
+        // progress, so this does not impose a total response deadline.
+        .read_timeout(std::time::Duration::from_secs(120))
         .tcp_keepalive(std::time::Duration::from_secs(15))
         .build()?;
     {
