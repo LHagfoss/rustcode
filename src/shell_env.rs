@@ -123,6 +123,21 @@ pub fn hydrate_provider_keys(configured: &[String]) {
             names.push(Box::leak(extra.clone().into_boxed_str()));
         }
     }
+
+    // An interactive launch already inherited the environment from the
+    // user's shell in the common case. Avoid starting another interactive
+    // shell before the TUI owns the terminal when all configured providers
+    // are already available. Apart from unnecessary startup work, an
+    // interactive probe can briefly manipulate the controlling terminal's
+    // process group on some macOS terminals.
+    if !configured.is_empty()
+        && configured
+            .iter()
+            .all(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    {
+        return;
+    }
+
     hydrate_missing(&names);
 }
 
@@ -210,6 +225,24 @@ fn probe_once(shell: &str, flags: &[&str]) -> Option<HashMap<String, String>> {
         .env("POWERLEVEL9K_INSTANT_PROMPT", "off");
     // Drop ZSH startup slowness knobs that are safe to disable for a probe.
     cmd.env("ZSH_AUTOSUGGEST_MANUAL_REBIND", "1");
+
+    // The probe may use `-i` so it can source interactive shell config, but
+    // it must never participate in the parent's terminal job-control group.
+    // In particular, an interactive zsh can otherwise leave the parent TUI
+    // in a background process group on macOS, causing `tcsetattr` during raw
+    // mode setup to raise SIGTTOU (`suspended (tty output)`).
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+
+        cmd.pre_exec(|| {
+            // The probe child is not a process-group leader, so setsid should
+            // normally succeed. If a platform rejects it, retaining the
+            // existing probe fallback is safer than aborting startup.
+            let _ = libc::setsid();
+            Ok(())
+        });
+    }
 
     let mut child = cmd.spawn().ok()?;
     let (tx, rx) = std::sync::mpsc::channel();
