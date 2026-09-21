@@ -521,6 +521,15 @@ pub async fn handle_enter(
                     s.history.push(ChatMessage::new("system", message));
                 }
             }
+            "/continue" => {
+                let queued = crate::app::actions::session::queue_restored_segment(&mut s);
+                let message = if queued {
+                    "Queued the pending session work."
+                } else {
+                    "No pending session work is available to continue."
+                };
+                s.history.push(ChatMessage::new("system", message));
+            }
             "/history" => {
                 let (sessions, truncated) = build_session_list_with_truncation(&s);
                 if sessions.is_empty() {

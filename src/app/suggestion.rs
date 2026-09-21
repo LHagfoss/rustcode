@@ -29,6 +29,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Copy last assistant reply to clipboard",
     },
     CommandInfo {
+        name: "/continue",
+        desc: "Continue restored pending session work",
+    },
+    CommandInfo {
         name: "/exit",
         desc: "Exit the app",
     },

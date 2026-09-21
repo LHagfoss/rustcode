@@ -377,9 +377,8 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     true
 }
 
-/// Resume a persisted productive segment after a restart. Seeds the
-/// background turn context from the session sidecar and queues the internal
-/// wakeup so the idle orchestrator continues the long task automatically.
+/// Restore a persisted productive segment after a restart. The restored
+/// context remains idle until the user explicitly continues it.
 /// Stale or foreign checkpoints are ignored.
 pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
     let Some(checkpoint) = crate::config::load_segment_checkpoint(&s.active_session_id) else {
@@ -396,8 +395,27 @@ pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
         return;
     }
     s.background_turn_context = Some(Box::new(context));
-    s.pending_queue
-        .insert(0, "__task_wakeup__:productive_segment".to_string());
+}
+
+/// Queue an explicitly requested continuation of a restored productive
+/// segment. Opening or resuming a session must not call this implicitly.
+pub(crate) fn queue_restored_segment(s: &mut AppState) -> bool {
+    if s.background_turn_context.is_none() {
+        restore_segment_checkpoint(s);
+    }
+    if s.background_turn_context.is_none() {
+        return false;
+    }
+
+    if !s
+        .pending_queue
+        .iter()
+        .any(|prompt| prompt == "__task_wakeup__:productive_segment")
+    {
+        s.pending_queue
+            .insert(0, "__task_wakeup__:productive_segment".to_string());
+    }
+    true
 }
 
 pub fn extract_code_blocks_or_content(content: &str) -> String {

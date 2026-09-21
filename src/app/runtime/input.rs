@@ -1126,6 +1126,16 @@ pub(super) async fn handle_app_event(
                                     "/resume" => {
                                         crate::app::resume_latest_session(&mut s);
                                     }
+                                    "/continue" => {
+                                        let queued =
+                                            crate::app::actions::queue_restored_segment(&mut s);
+                                        let message = if queued {
+                                            "Queued the pending session work."
+                                        } else {
+                                            "No pending session work is available to continue."
+                                        };
+                                        s.history.push(ChatMessage::new("system", message));
+                                    }
                                     "/agents" => {
                                         s.show_subagent_picker = true;
                                         s.subagent_picker_index = 0;
