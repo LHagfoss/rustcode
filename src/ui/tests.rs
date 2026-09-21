@@ -678,9 +678,9 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
         .iter()
         .find(|line| line.contains("help:"))
         .expect("banner help row");
-    assert!(help_row.contains("/help — use it for commands"));
+    assert!(help_row.contains("run this command to get help: /help"));
 
-    let hint_positions = ["/model", "/effort", "/context", "/help"]
+    let hint_positions = ["/model", "/effort", "/context"]
         .into_iter()
         .map(|command| {
             rendered

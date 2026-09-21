@@ -2644,6 +2644,16 @@ impl SseReadError {
     fn kind(&self) -> StreamFailureKind {
         match self {
             Self::Timeout { kind, .. } => *kind,
+            Self::Io(error)
+                if error.to_ascii_lowercase().contains("timed out")
+                    || error.to_ascii_lowercase().contains("timeout") =>
+            {
+                // reqwest's transport-level read timeout can surface through
+                // StreamReader as an I/O error instead of reaching the
+                // application-level timeout wrapper. Keep it recoverable and
+                // visible as the same idle-stream failure.
+                StreamFailureKind::StreamIdleTimeout
+            }
             Self::Io(error) if error.contains("invalid UTF-8") => StreamFailureKind::MalformedSse,
             Self::Io(error) if error.contains(RESPONSE_BODY_DECODE_ERROR) => {
                 StreamFailureKind::ResponseBodyDecode
@@ -2703,6 +2713,11 @@ mod sse_read_error_tests {
         assert_eq!(
             SseReadError::Io("error decoding response body: connection reset".to_owned()).kind(),
             StreamFailureKind::ResponseBodyDecode
+        );
+        assert_eq!(
+            SseReadError::Io("request or response body error: operation timed out".to_owned())
+                .kind(),
+            StreamFailureKind::StreamIdleTimeout
         );
         assert_eq!(
             SseReadError::Io("connection reset by peer".to_owned()).kind(),
