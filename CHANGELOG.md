@@ -1,3 +1,8 @@
+## [v0.55.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.4) - 2026-09-21
+
+### Fixes
+- Refine command recommendation styling for clearer selection and input text.
+- Compact rejected-tool diagnostics in the transcript and prevent failed external actions from being reported as completed.
 ## [v0.55.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.3) - 2026-09-21
 
 ### Fixes
