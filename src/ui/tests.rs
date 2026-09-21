@@ -465,6 +465,10 @@ fn inline_command_selection_is_distinct_from_typed_input() {
         state.input_buffer = input.to_owned();
         state.cursor_position = input.len();
         state.active_suggestion_index = Some(0);
+        state.history.push(crate::app::ChatMessage::new(
+            "user",
+            "existing conversation",
+        ));
 
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
@@ -483,8 +487,14 @@ fn inline_command_selection_is_distinct_from_typed_input() {
             .expect("typed command should be visible") as u16;
         assert_eq!(
             buffer[(input_column, input_row)].fg,
-            COLOR_PRIMARY(),
-            "typed slash command should retain the primary color"
+            COLOR_TEXT(),
+            "typed slash command should use the default text color"
+        );
+        assert!(
+            !buffer[(input_column, input_row)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "typed slash command should use normal weight"
         );
 
         let filtered_cmds = crate::app::suggestion::filtered_commands(input);
@@ -500,10 +510,51 @@ fn inline_command_selection_is_distinct_from_typed_input() {
                 );
             })
             .unwrap();
-        let selected_cell = &popup_terminal.backend().buffer()[(0, 0)];
-        assert_eq!(selected_cell.fg, COLOR_TEXT());
+        let selected_cell = &popup_terminal.backend().buffer()[(2, 0)];
+        assert_eq!(selected_cell.fg, COLOR_PRIMARY());
         assert!(selected_cell.modifier.contains(Modifier::BOLD));
+        assert!(
+            !(0..2).any(|row| {
+                (0..100)
+                    .any(|column| popup_terminal.backend().buffer()[(column, row)].symbol() == "›")
+            }),
+            "command recommendations should not render arrow markers"
+        );
     }
+}
+
+#[test]
+fn inline_command_recommendations_style_unselected_rows_as_default_text() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::{backend::TestBackend, style::Modifier};
+
+    let mut state = AppState::new();
+    state.input_buffer = "/".to_owned();
+    state.cursor_position = 1;
+    state.active_suggestion_index = Some(1);
+
+    let filtered_cmds = crate::app::suggestion::filtered_commands(&state.input_buffer);
+    let snapshot = state.render_snapshot();
+    let mut terminal = Terminal::new(TestBackend::new(100, 2)).unwrap();
+    terminal
+        .draw(|frame| {
+            super::modals::render_popup_menu(
+                frame,
+                &snapshot,
+                &filtered_cmds,
+                ratatui::layout::Rect::new(0, 0, 100, 2),
+            );
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let unselected_cell = &buffer[(2, 0)];
+    assert_eq!(unselected_cell.fg, COLOR_TEXT());
+    assert!(!unselected_cell.modifier.contains(Modifier::BOLD));
+    assert_eq!(
+        unselected_cell.symbol(),
+        filtered_cmds[0].name[0..1].to_owned()
+    );
 }
 
 #[test]

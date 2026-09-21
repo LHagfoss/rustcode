@@ -105,11 +105,7 @@ pub(super) fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 }
 
 fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, Style)> {
-    let text_style = if state.input_buffer().starts_with('/') {
-        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
-    } else {
-        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
-    };
+    let text_style = get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker);
     let marker_style =
         get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
     let mut styled_chars = Vec::new();
