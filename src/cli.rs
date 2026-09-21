@@ -11,7 +11,7 @@ pub struct Cli {
     #[arg(short = 'r', long = "resume")]
     pub resume: bool,
 
-    /// Alias for --resume
+    /// Resume the most recent chat session and continue pending work
     #[arg(short = 'c', long = "continue")]
     pub continue_session: bool,
 
