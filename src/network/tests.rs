@@ -887,6 +887,140 @@ async fn gated_json_server(
     (format!("http://{address}"), accepted_rx, release_tx)
 }
 
+async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind streaming test server");
+    let address = listener
+        .local_addr()
+        .expect("streaming test server address");
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept streaming request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        loop {
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .expect("read streaming request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        accepted_tx.send(()).ok();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"wakeup request reached provider\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write streaming response");
+    });
+    (format!("http://{address}"), accepted_rx)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_wakeup_releases_state_during_native_schema_selection_and_starts_provider_request()
+ {
+    use crate::app::state::AppState;
+    use crate::config::{ApiProtocol, ModelProfile, ToolProtocol};
+    use crate::network::policy::InteractivePolicy;
+    use crate::tools::install_native_schema_test_gate;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let marker = "issue-1279-native-schema-gate";
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let mut app = AppState::new();
+    app.api_base_url = provider_url.clone();
+    app.model_name = "issue-1279-model".to_string();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: provider_url,
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        tool_protocol: Some(ToolProtocol::ApiNative),
+        ..ModelProfile::default()
+    }];
+    app.history.push(ChatMessage::new("user", marker));
+    app.pending_queue = vec!["__task_wakeup__:issue-1279".to_string()];
+    let state = Arc::new(Mutex::new(app));
+    let gate = install_native_schema_test_gate(marker, 3);
+    let lease = state
+        .lock()
+        .await
+        .claim_orchestrator()
+        .expect("test orchestrator lease");
+    let task = tokio::spawn(crate::network::process_queue_orchestrator(
+        reqwest::Client::new(),
+        Arc::clone(&state),
+        CancellationToken::new(),
+        Arc::new(InteractivePolicy),
+        lease,
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gate.is_entered() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider-startup schema selection must reach the deterministic gate");
+
+    let lock_acquired = tokio::time::timeout(Duration::from_millis(100), async {
+        let _guard = state.lock().await;
+    })
+    .await
+    .is_ok();
+    gate.release();
+
+    let provider_started = tokio::time::timeout(Duration::from_secs(10), provider_request)
+        .await
+        .is_ok();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("wakeup orchestrator must finish")
+        .expect("wakeup orchestrator must not panic");
+
+    assert!(
+        lock_acquired,
+        "AppState lock remained held while provider schema computation was gated"
+    );
+    assert!(provider_started, "provider must observe the wakeup request");
+    let state = state.lock().await;
+    assert!(state.pending_queue.is_empty());
+    assert!(!state.orchestrator_running);
+}
+
 #[tokio::test]
 async fn gemini_gateway_uses_capability_probe() {
     let (url, request_accepted, release_response) = gated_json_server(serde_json::json!({})).await;
