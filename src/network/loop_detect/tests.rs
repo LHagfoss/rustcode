@@ -16,6 +16,26 @@ fn search_variants_share_category() {
 }
 
 #[test]
+fn recovery_advisory_labels_are_canonical_and_unknown_is_conservative() {
+    let labels = [
+        ("novel_evidence", RecoveryAdvisory::NovelEvidence),
+        ("confirmatory_evidence", RecoveryAdvisory::ConfirmatoryEvidence),
+        ("no_new_information", RecoveryAdvisory::NoNewInformation),
+        ("unknown", RecoveryAdvisory::Unknown),
+        ("read_only", RecoveryAdvisory::Unknown),
+    ];
+    for (label, expected) in labels {
+        let decision = crate::laya::AdvisoryDecision {
+            label: label.to_string(),
+            confidence: 0.999,
+            effects: vec!["read_only".to_string()],
+            rationale_code: None,
+        };
+        assert_eq!(recovery_advisory(&decision, 0.98), expected);
+    }
+}
+
+#[test]
 fn verification_flag_variants_share_category() {
     let (_, all_tests) = signatures("run_command", &json!({"command": "cargo test"}));
     let (_, library_tests) = signatures("run_command", &json!({"command": "cargo test --lib"}));

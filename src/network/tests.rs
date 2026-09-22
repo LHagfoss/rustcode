@@ -3332,6 +3332,163 @@ fn repeated_read_only_inspection_has_a_larger_but_finite_recovery_budget() {
 }
 
 #[test]
+fn laya_repetition_advisory_is_bounded_to_one_relaxed_read_only_credit() {
+    let decision = crate::laya::AdvisoryDecision {
+        label: "novel_evidence".to_string(),
+        confidence: 0.999,
+        effects: vec!["read_only".to_string()],
+        rationale_code: Some("fixture".to_string()),
+    };
+
+    assert_eq!(
+        loop_detect::recovery_advisory(&decision, 0.98),
+        loop_detect::RecoveryAdvisory::NovelEvidence
+    );
+    assert!(loop_detect::laya_recovery_credit_available(
+        crate::laya::LayaMode::Relaxed,
+        &decision,
+        0.98,
+        0,
+        1,
+        true,
+    ));
+    assert!(!loop_detect::laya_recovery_credit_available(
+        crate::laya::LayaMode::Shadow,
+        &decision,
+        0.98,
+        0,
+        1,
+        true,
+    ));
+    assert!(!loop_detect::laya_recovery_credit_available(
+        crate::laya::LayaMode::Relaxed,
+        &decision,
+        0.98,
+        1,
+        1,
+        true,
+    ));
+}
+
+#[test]
+fn laya_repetition_advisory_rejects_low_confidence_and_non_read_only_effects() {
+    for label in ["novel_evidence", "confirmatory_evidence"] {
+        for effects in [
+            vec!["mutation".to_string()],
+            vec!["read_only".to_string(), "process_control".to_string()],
+        ] {
+            let decision = crate::laya::AdvisoryDecision {
+                label: label.to_string(),
+                confidence: 0.999,
+                effects,
+                rationale_code: None,
+            };
+            assert!(!loop_detect::laya_recovery_credit_available(
+                crate::laya::LayaMode::Relaxed,
+                &decision,
+                0.98,
+                0,
+                1,
+                true,
+            ));
+        }
+
+        let decision = crate::laya::AdvisoryDecision {
+            label: label.to_string(),
+            confidence: 0.5,
+            effects: vec!["read_only".to_string()],
+            rationale_code: None,
+        };
+        assert!(!loop_detect::laya_recovery_credit_available(
+            crate::laya::LayaMode::Relaxed,
+            &decision,
+            0.98,
+            0,
+            1,
+            true,
+        ));
+    }
+}
+
+#[test]
+fn laya_repetition_advisory_rejects_mutation_or_mixed_batches() {
+    let decision = crate::laya::AdvisoryDecision {
+        label: "confirmatory_evidence".to_string(),
+        confidence: 0.999,
+        effects: vec!["read_only".to_string()],
+        rationale_code: None,
+    };
+    assert!(!loop_detect::laya_recovery_credit_available(
+        crate::laya::LayaMode::Relaxed,
+        &decision,
+        0.98,
+        0,
+        1,
+        false,
+    ));
+
+    for call in [
+        crate::tools::ToolCall {
+            name: "write_to_file".to_string(),
+            arguments: serde_json::json!({"path": "src/lib.rs", "content": "x"}),
+            call_id: None,
+        },
+        crate::tools::ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": "curl https://example.com"}),
+            call_id: None,
+        },
+        crate::tools::ToolCall {
+            name: "background_output".to_string(),
+            arguments: serde_json::json!({"task_id": "task-1"}),
+            call_id: None,
+        },
+    ] {
+        assert!(
+            !crate::tools::is_read_only_call(&call),
+            "unsafe call must not qualify for repetition credit: {}",
+            call.name
+        );
+    }
+}
+
+#[test]
+fn laya_repetition_credit_is_turn_and_segment_scoped() {
+    let mut ctx = TurnContext::new();
+    ctx.recovery.laya_read_only_recoveries_used = 1;
+    ctx.recovery.laya_pending_recovery_advisory =
+        Some(loop_detect::RecoveryAdvisory::NovelEvidence);
+    ctx.budget.tool_rounds = 4;
+    ctx.progress.meaningful_events = 9;
+    let checkpoint = ctx.segment_checkpoint("session", true, false);
+    let encoded = serde_json::to_string(&checkpoint).unwrap();
+    assert!(!encoded.contains("laya_read_only_recoveries_used"));
+    assert!(!encoded.contains("laya_pending_recovery_advisory"));
+
+    let mut restored = TurnContext::new();
+    assert!(restored.restore_segment(&checkpoint, "session"));
+    assert_eq!(restored.recovery.laya_read_only_recoveries_used, 0);
+    assert_eq!(restored.recovery.laya_pending_recovery_advisory, None);
+
+    ctx.begin_next_segment();
+    assert_eq!(ctx.recovery.laya_read_only_recoveries_used, 0);
+    assert_eq!(ctx.recovery.laya_pending_recovery_advisory, None);
+    assert_eq!(ctx.budget.tool_rounds, 4);
+    assert_eq!(ctx.progress.meaningful_events, 9);
+}
+
+#[test]
+fn canonical_structured_read_only_classification_beats_name_only_fallback() {
+    let call = crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "git status --short"}),
+        call_id: Some("alias-regression".to_string()),
+    };
+    assert!(crate::tools::is_read_only_call(&call));
+    assert!(!loop_detect::is_read_only(&call.name));
+}
+
+#[test]
 fn loop_warnings_are_coalesced_within_a_user_turn() {
     let mut history = vec![
         ChatMessage::new("user", "do it"),

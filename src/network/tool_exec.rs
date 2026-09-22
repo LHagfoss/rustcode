@@ -6,8 +6,8 @@ use super::compiler::{append_compiler_diagnostics, cached_compiler_check, run_co
 use super::events::{ToolResult, ToolResultMetadata};
 use super::subagents::handle_agent_tool;
 use super::{
-    REPLAYABLE_READ_LIMIT, is_mutating_tool, is_read_only_tool, mutation_made_progress, path_mtime,
-    tool_signature, view_file_unchanged_since_last_read,
+    REPLAYABLE_READ_LIMIT, is_mutating_tool, mutation_made_progress, path_mtime, tool_signature,
+    view_file_unchanged_since_last_read,
 };
 
 #[cfg(test)]
@@ -866,8 +866,12 @@ pub(crate) async fn execute_tool_batch_with_assessments(
         };
         let execution_live_key = live_key.clone();
         let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
-            let is_read_only = is_read_only_tool(&name_clone)
-                || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone);
+            let call_for_policy = crate::tools::ToolCall {
+                name: name_clone.clone(),
+                arguments: args_clone.clone(),
+                call_id: call_id_owned.clone(),
+            };
+            let is_read_only = crate::tools::is_read_only_call(&call_for_policy);
             let mut replay_artifact = None;
 
             let mut is_repeat = false;
@@ -1231,7 +1235,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
             finalized.metadata.inspection = Some(inspection);
         }
         *result = finalized;
-        if is_read_only_tool(&call.name) {
+        if crate::tools::is_read_only_call(call) {
             let sig = tool_signature(&call.name, &call.arguments);
             if let Some(cached) = state.lock().await.recent_read_outputs.get_mut(&sig) {
                 cached.success = result.metadata.success;

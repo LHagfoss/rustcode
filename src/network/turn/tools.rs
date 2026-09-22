@@ -144,6 +144,138 @@ fn shell_call_is_read_only(
     crate::tools::is_read_only_call(call)
 }
 
+fn repetition_batch_is_eligible(
+    calls: &[crate::tools::ToolCall],
+    assessments: &crate::tools::ShellAssessmentCache,
+) -> bool {
+    !calls.is_empty()
+        && calls.iter().all(|call| {
+            // This is deliberately the canonical full-call classifier. A
+            // Laya shell assessment may relax an unknown command for shell
+            // policy, but it may not make that command eligible for repetition
+            // recovery.
+            if !crate::tools::is_read_only_call(call) {
+                return false;
+            }
+            if call.name == "run_command" {
+                return crate::tools::shell_assessment_for_call(assessments, call).is_some_and(
+                    |assessment| {
+                        assessment.facts.classification
+                            == crate::tools::ShellClassification::ReadOnly
+                            && assessment.effective_authorization
+                                == crate::tools::AuthorizationDecision::Allow
+                    },
+                );
+            }
+            crate::tools::tool_safety(&call.name) == crate::tools::ToolSafety::ReadOnly
+        })
+}
+
+fn repetition_advisory_input(
+    calls: &[crate::tools::ToolCall],
+    reason: loop_detect::ProgressReason,
+    action: &str,
+    ctx: &TurnContext,
+) -> serde_json::Value {
+    let calls = calls
+        .iter()
+        .take(8)
+        .map(|call| {
+            let (_, category) = loop_detect::signatures(&call.name, &call.arguments);
+            serde_json::json!({
+                "tool_kind": call.name,
+                // Keep normalized arguments useful to the sidecar without
+                // sending raw commands, paths, tokens, or tool output.
+                "normalized_arguments_fingerprint": format!(
+                    "{:016x}",
+                    loop_detect::stable_hash(&category)
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "tool_calls": calls,
+        "recovery_reason": reason.label(),
+        "progress_fingerprints": [
+            format!("{:016x}", loop_detect::stable_hash(action)),
+            format!("{:016x}", loop_detect::stable_hash(reason.label())),
+        ],
+        "no_progress_streak": ctx.progress.ledger.no_progress_streak(),
+        "meaningful_events": ctx.progress.meaningful_events,
+    })
+}
+
+async fn request_repetition_advisory(
+    laya: &crate::laya::LayaRuntime,
+    ctx: &TurnContext,
+    calls: &[crate::tools::ToolCall],
+    assessments: &crate::tools::ShellAssessmentCache,
+    reason: loop_detect::ProgressReason,
+    action: &str,
+) -> Option<(crate::laya::AdvisoryDecision, loop_detect::RecoveryAdvisory)> {
+    if !repetition_batch_is_eligible(calls, assessments) {
+        return None;
+    }
+    if matches!(laya.config().mode, crate::laya::LayaMode::Off) {
+        return None;
+    }
+    let request = crate::laya::AdvisoryRequest {
+        id: laya.next_request_id(crate::laya::AdvisoryKind::Repetition),
+        kind: crate::laya::AdvisoryKind::Repetition,
+        input: repetition_advisory_input(calls, reason, action, ctx),
+        deadline: std::time::Duration::from_millis(laya.config().timeout_ms),
+    };
+    let min_confidence = laya.config().min_confidence;
+    let mode = laya.config().mode;
+    let started = std::time::Instant::now();
+    let result = laya.evaluate(request).await;
+    let (decision, advisory) = match result {
+        Ok(decision) => {
+            let advisory = loop_detect::recovery_advisory(&decision, min_confidence);
+            (Some(decision), Some(advisory))
+        }
+        Err(_) => (None, None),
+    };
+    crate::logger::operational_event(
+        "laya.repetition",
+        serde_json::json!({
+            "decision_kind": "repetition",
+            "mode": mode.to_string(),
+            "advisory": advisory.map(|advisory| format!("{advisory:?}")),
+            "confidence_bucket": decision.as_ref().map(|decision| {
+                if decision.confidence >= min_confidence { "high" } else { "low" }
+            }).unwrap_or("none"),
+            "latency_bucket": match started.elapsed().as_millis() {
+                0..=9 => "0_9ms",
+                10..=49 => "10_49ms",
+                50..=149 => "50_149ms",
+                _ => "150ms_plus",
+            },
+        }),
+    );
+    decision.zip(advisory)
+}
+
+fn laya_can_extend_recovery(
+    ctx: &TurnContext,
+    mode: crate::laya::LayaMode,
+    min_confidence: f32,
+    max_extra_recoveries: usize,
+    decision: Option<&crate::laya::AdvisoryDecision>,
+    eligible_read_only_batch: bool,
+) -> bool {
+    decision.is_some_and(|decision| {
+        loop_detect::laya_recovery_credit_available(
+            mode,
+            decision,
+            min_confidence,
+            ctx.recovery.laya_read_only_recoveries_used,
+            max_extra_recoveries,
+            eligible_read_only_batch,
+        )
+    })
+}
+
 fn selected_tool_call_indices(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
@@ -406,6 +538,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     thought_tokens: Option<u32>,
     native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 ) -> ToolHandlingOutcome {
+    // A pending Laya credit is valid only for the single recovery round that
+    // immediately follows the decision that granted it.
+    ctx.recovery.laya_pending_recovery_advisory = None;
     // Phase 3: normalize provider output into protocol-independent events.
     let protocol = {
         let state = state.lock().await;
@@ -639,13 +774,72 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         }
         match loop_status {
             loop_detect::LoopStatus::Abort(n) => {
-                match loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
-                {
+                let local_recovery_action =
+                    loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch);
+                let (laya, laya_mode, laya_min_confidence, laya_max_extra_recoveries) = {
+                    let state = state.lock().await;
+                    let laya = state.laya.clone();
+                    let config = laya.config();
+                    let mode = config.mode;
+                    let min_confidence = config.min_confidence;
+                    let max_extra_recoveries = config.max_extra_read_only_recoveries;
+                    (laya, mode, min_confidence, max_extra_recoveries)
+                };
+                let laya_eligible =
+                    repetition_batch_is_eligible(&executable_tool_calls, &ctx.shell_assessments);
+                let laya_advisory =
+                    if local_recovery_action == LoopRecoveryAction::ForceFinal && laya_eligible {
+                        request_repetition_advisory(
+                            &laya,
+                            ctx,
+                            &executable_tool_calls,
+                            &ctx.shell_assessments,
+                            loop_detect::ProgressReason::NoNewInformation,
+                            loop_offender.as_deref().unwrap_or("repeated tool output"),
+                        )
+                        .await
+                    } else {
+                        None
+                    };
+                let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
+                    laya_can_extend_recovery(
+                        ctx,
+                        laya_mode,
+                        laya_min_confidence,
+                        laya_max_extra_recoveries,
+                        Some(decision),
+                        laya_eligible,
+                    )
+                });
+                let recovery_action = if use_laya_credit {
+                    LoopRecoveryAction::Recover
+                } else {
+                    local_recovery_action
+                };
+                match recovery_action {
                     LoopRecoveryAction::Recover => {
-                        ctx.recovery.loop_recovery_attempts =
-                            ctx.recovery.loop_recovery_attempts.saturating_add(1);
-                        log_recovery_decision(ctx, "tool_loop", "recover", "loop_detector_abort");
-                        ctx.recovery.loop_detector.reset();
+                        if use_laya_credit {
+                            let (_, advisory) =
+                                laya_advisory.expect("Laya credit requires an advisory decision");
+                            ctx.recovery.laya_read_only_recoveries_used = ctx
+                                .recovery
+                                .laya_read_only_recoveries_used
+                                .saturating_add(1);
+                            ctx.recovery.laya_pending_recovery_advisory = Some(advisory);
+                            log_recovery_decision(ctx, "tool_loop", "recover", "laya_repetition");
+                        } else {
+                            ctx.recovery.loop_recovery_attempts =
+                                ctx.recovery.loop_recovery_attempts.saturating_add(1);
+                            log_recovery_decision(
+                                ctx,
+                                "tool_loop",
+                                "recover",
+                                "loop_detector_abort",
+                            );
+                        }
+                        if !use_laya_credit {
+                            ctx.recovery.loop_detector.reset();
+                        }
                         dbg_log!(
                             "Loop detector: abort after {} repeats — allowing bounded recovery turn",
                             n
@@ -851,6 +1045,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 return ToolHandlingOutcome::Stop;
             }
 
+            let laya = state.lock().await.laya.clone();
+            let laya_config = laya.config().clone();
             let mut s = state.lock().await;
             s.status = AppStatus::Streaming;
             let mut completed = false;
@@ -1032,6 +1228,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
                 let mut mutation_progress = false;
                 if is_mutating_tool(&name) {
+                    ctx.recovery.laya_pending_recovery_advisory = None;
                     let made_progress = mutation_made_progress(metadata.success, &content);
                     let failed = !made_progress;
                     mutation_progress =
@@ -1125,11 +1322,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .unwrap_or_else(|| {
                         loop_detect::stable_hash(loop_detect::stagnation_key(&content))
                     });
+                let call_is_read_only = call
+                    .map(crate::tools::is_read_only_call)
+                    .unwrap_or_else(|| loop_detect::is_read_only(&name));
                 let action = call
                     .map(|call| {
                         let (exact, category) =
                             loop_detect::signatures(&call.name, &call.arguments);
-                        if verification_command || loop_detect::is_read_only(&call.name) {
+                        if verification_command || call_is_read_only {
                             category
                         } else {
                             exact
@@ -1250,11 +1450,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         state_fingerprint,
                         failure_fingerprint,
                         changed_workspace,
-                        fresh_read: loop_detect::is_read_only(&name) && !metadata.replayed,
+                        fresh_read: call_is_read_only && !metadata.replayed,
                         search_result,
                         no_result,
                         verification: verification_command,
-                        read_only: loop_detect::is_read_only(&name),
+                        read_only: call_is_read_only,
                         replayed: metadata.replayed,
                         success: metadata.success && semantic_failure.is_none(),
                     });
@@ -1597,22 +1797,77 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     |notice| format!("[Evidence-based recovery: {notice}]"),
                 );
-                let recovery_action = if targeted_recovery_exhausted {
+                let local_recovery_action = if targeted_recovery_exhausted {
                     LoopRecoveryAction::ForceFinal
                 } else {
                     loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
                 };
+                let laya_mode = laya_config.mode;
+                let laya_min_confidence = laya_config.min_confidence;
+                let laya_max_extra_recoveries = laya_config.max_extra_read_only_recoveries;
+                let laya_eligible =
+                    repetition_batch_is_eligible(&executable_tool_calls, &ctx.shell_assessments);
+                let laya_advisory =
+                    if local_recovery_action == LoopRecoveryAction::ForceFinal && laya_eligible {
+                        request_repetition_advisory(
+                            &laya,
+                            ctx,
+                            &executable_tool_calls,
+                            &ctx.shell_assessments,
+                            reason,
+                            &action,
+                        )
+                        .await
+                    } else {
+                        None
+                    };
+                let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
+                    laya_can_extend_recovery(
+                        ctx,
+                        laya_mode,
+                        laya_min_confidence,
+                        laya_max_extra_recoveries,
+                        Some(decision),
+                        laya_eligible,
+                    )
+                });
+                let recovery_action = if use_laya_credit {
+                    LoopRecoveryAction::Recover
+                } else {
+                    local_recovery_action
+                };
                 match recovery_action {
                     LoopRecoveryAction::Recover => {
-                        ctx.recovery.loop_recovery_attempts =
-                            ctx.recovery.loop_recovery_attempts.saturating_add(1);
+                        if use_laya_credit {
+                            let (_, advisory) =
+                                laya_advisory.expect("Laya credit requires an advisory decision");
+                            ctx.recovery.laya_read_only_recoveries_used = ctx
+                                .recovery
+                                .laya_read_only_recoveries_used
+                                .saturating_add(1);
+                            ctx.recovery.laya_pending_recovery_advisory = Some(advisory);
+                        } else {
+                            ctx.recovery.loop_recovery_attempts =
+                                ctx.recovery.loop_recovery_attempts.saturating_add(1);
+                        }
                         ctx.metrics.evidence_recoveries += 1;
                         if targeted_recovery {
                             ctx.metrics.grounded_recoveries += 1;
                         }
-                        log_recovery_decision(ctx, "evidence", "recover", reason.label());
-                        ctx.recovery.loop_detector.reset();
-                        ctx.recovery.reasoning_loop_detector.reset();
+                        log_recovery_decision(
+                            ctx,
+                            "evidence",
+                            "recover",
+                            if use_laya_credit {
+                                "laya_repetition"
+                            } else {
+                                reason.label()
+                            },
+                        );
+                        if !use_laya_credit {
+                            ctx.recovery.loop_detector.reset();
+                            ctx.recovery.reasoning_loop_detector.reset();
+                        }
                         let recovery_prompt = loop_recovery_prompt(
                             &s.history,
                             ctx.progress.made_edits,
@@ -1941,13 +2196,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::GroundedArtifactEvidence;
+    use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
         apply_round_stagnation, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
         grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
-        selected_tool_call_indices, selected_tool_call_indices_with_assessments,
-        should_apply_loop_recovery, targeted_no_progress_guidance,
+        repetition_advisory_input, selected_tool_call_indices,
+        selected_tool_call_indices_with_assessments, should_apply_loop_recovery,
+        targeted_no_progress_guidance,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -2035,6 +2291,24 @@ mod tests {
         assert_eq!(apply_round_stagnation(2, true, 5), 0);
         assert_eq!(apply_round_stagnation(2, false, 0), 2);
         assert_eq!(apply_round_stagnation(usize::MAX, false, 3), usize::MAX);
+    }
+
+    #[test]
+    fn repetition_advisory_input_is_bounded_and_redacted() {
+        let mut ctx = TurnContext::new();
+        ctx.progress.meaningful_events = 4;
+        let calls = vec![read_call("git status --short && secret-token")];
+        let input = repetition_advisory_input(
+            &calls,
+            super::loop_detect::ProgressReason::NoNewInformation,
+            "cmd:git:status",
+            &ctx,
+        );
+        let rendered = input.to_string();
+        assert!(rendered.contains("normalized_arguments_fingerprint"));
+        assert!(rendered.contains("no_new_information"));
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("git status"));
     }
 
     #[test]
