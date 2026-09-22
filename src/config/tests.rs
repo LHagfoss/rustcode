@@ -1146,6 +1146,43 @@ fn project_config_overrides_global_defaults_from_near_to_far() {
 }
 
 #[test]
+fn workspace_laya_mode_update_changes_project_effective_mode_without_clobbering_overrides() {
+    let global_dir = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let workspace = root.path().join("nested");
+    let project_dir = workspace.join(PROJECT_CONFIG_DIR);
+    fs::create_dir_all(&project_dir).unwrap();
+
+    let mut global = AppConfig::default();
+    global.laya.mode = crate::laya::LayaMode::Off;
+    save_config_to(global_dir.path(), &global);
+    fs::write(
+        project_dir.join(PROJECT_CONFIG_FILE),
+        "version = 1\n[default]\nbig = \"project-model\"\n[laya]\nmode = \"shadow\"\nadapter = \"adapter.py\"\nmodel = \"model\"\n",
+    )
+    .unwrap();
+
+    save_laya_mode_for_workspace_in(
+        global_dir.path(),
+        &workspace,
+        crate::laya::LayaMode::Relaxed,
+    )
+    .unwrap();
+
+    let (_, _, mut effective) = load_config_from(global_dir.path());
+    for path in project_config_paths(&workspace) {
+        apply_project_toml_config(&mut effective, read_toml_config(&path).unwrap());
+    }
+    assert_eq!(effective.laya.mode, crate::laya::LayaMode::Relaxed);
+    assert_eq!(effective.default.big(), "project-model");
+    assert_eq!(effective.laya.adapter.as_deref(), Some("adapter.py"));
+    assert_eq!(effective.laya.model.as_deref(), Some("model"));
+
+    let (_, _, global_after) = load_config_from(global_dir.path());
+    assert_eq!(global_after.laya.mode, crate::laya::LayaMode::Off);
+}
+
+#[test]
 fn project_overrides_are_not_persisted_into_global_config() {
     let global = AppConfig::default();
     let mut merged = global.clone();

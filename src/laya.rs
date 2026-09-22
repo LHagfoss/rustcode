@@ -164,7 +164,9 @@ pub struct LayaStatus {
     pub python: String,
     pub python_available: bool,
     pub adapter_configured: bool,
+    pub adapter_available: bool,
     pub model_configured: bool,
+    pub model_available: bool,
     pub availability: Availability,
 }
 
@@ -173,16 +175,18 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
     let python = config.python_executable().to_owned();
     let python_available = executable_available(&python);
     let adapter_configured = configured(config.adapter.as_deref());
+    let adapter_available = readable_file(config.adapter.as_deref());
     let model_configured = configured(config.model.as_deref());
+    let model_available = readable_file(config.model.as_deref());
     let availability = if config.mode == LayaMode::Off {
         Availability::Disabled
     } else if !supported_platform() {
         Availability::UnsupportedArchitecture
     } else if !python_available {
         Availability::MissingPython
-    } else if !adapter_configured {
+    } else if !adapter_available {
         Availability::MissingAdapter
-    } else if !model_configured {
+    } else if !model_available {
         Availability::MissingModel
     } else {
         Availability::Ready
@@ -194,7 +198,9 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
         python,
         python_available,
         adapter_configured,
+        adapter_available,
         model_configured,
+        model_available,
         availability,
     }
 }
@@ -211,13 +217,17 @@ pub fn format_status(config: &LayaConfig) -> String {
         } else {
             "missing"
         },
-        if status.adapter_configured {
-            "configured"
+        if status.adapter_available {
+            "available"
+        } else if status.adapter_configured {
+            "configured, missing"
         } else {
             "not configured"
         },
-        if status.model_configured {
-            "configured"
+        if status.model_available {
+            "available"
+        } else if status.model_configured {
+            "configured, missing"
         } else {
             "not configured"
         },
@@ -227,6 +237,14 @@ pub fn format_status(config: &LayaConfig) -> String {
 
 fn configured(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn readable_file(value: Option<&str>) -> bool {
+    let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    let path = Path::new(value);
+    path.is_file() && std::fs::File::open(path).is_ok()
 }
 
 fn executable_available(executable: &str) -> bool {
@@ -316,6 +334,7 @@ fn default_max_extra_read_only_recoveries() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn modes_serialize_as_lowercase_values() {
@@ -352,5 +371,47 @@ mod tests {
             ..LayaConfig::default()
         };
         assert_eq!(config.fail_closed().mode, LayaMode::Off);
+    }
+
+    #[test]
+    fn status_reports_a_missing_adapter_path_without_running_python() {
+        let dir = TempDir::new().unwrap();
+        let model = dir.path().join("model.gguf");
+        std::fs::write(&model, b"local model").unwrap();
+        let config = LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some(std::env::current_exe().unwrap().display().to_string()),
+            adapter: Some(dir.path().join("missing-adapter.py").display().to_string()),
+            model: Some(model.display().to_string()),
+            ..LayaConfig::default()
+        };
+
+        let status = diagnose(&config);
+        assert!(!status.adapter_available);
+        assert!(status.model_available);
+        if supported_platform() {
+            assert_eq!(status.availability, Availability::MissingAdapter);
+        }
+    }
+
+    #[test]
+    fn status_reports_a_missing_model_path_without_running_python() {
+        let dir = TempDir::new().unwrap();
+        let adapter = dir.path().join("adapter.py");
+        std::fs::write(&adapter, b"sidecar").unwrap();
+        let config = LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some(std::env::current_exe().unwrap().display().to_string()),
+            adapter: Some(adapter.display().to_string()),
+            model: Some(dir.path().join("missing-model").display().to_string()),
+            ..LayaConfig::default()
+        };
+
+        let status = diagnose(&config);
+        assert!(status.adapter_available);
+        assert!(!status.model_available);
+        if supported_platform() {
+            assert_eq!(status.availability, Availability::MissingModel);
+        }
     }
 }

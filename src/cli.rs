@@ -126,11 +126,19 @@ pub enum LayaCommand {
     Status,
     /// Enable Laya in shadow or narrowly relaxed mode
     Enable {
-        #[arg(long, value_enum)]
+        #[arg(long, value_parser = parse_laya_enable_mode)]
         mode: LayaMode,
     },
     /// Disable Laya advisory evaluation
     Disable,
+}
+
+fn parse_laya_enable_mode(value: &str) -> Result<LayaMode, String> {
+    match value {
+        "shadow" => Ok(LayaMode::Shadow),
+        "relaxed" => Ok(LayaMode::Relaxed),
+        _ => Err("Laya enable mode must be one of: shadow, relaxed".to_owned()),
+    }
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -350,6 +358,11 @@ mod tests {
     #[test]
     fn rejects_invalid_laya_modes() {
         assert!(Cli::try_parse_from(["rustcode", "laya", "enable", "--mode", "unsafe"]).is_err());
+    }
+
+    #[test]
+    fn rejects_off_as_an_laya_enable_mode() {
+        assert!(Cli::try_parse_from(["rustcode", "laya", "enable", "--mode", "off"]).is_err());
     }
 
     #[test]
