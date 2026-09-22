@@ -160,6 +160,28 @@ impl JobStore {
         }
         let expires = now.checked_add_signed(lease).ok_or_else(|| DaemonError::InvalidInput("lease overflow".into()))?;
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage)?;
+        let active_runs = {
+            let mut stmt = tx.prepare("SELECT payload FROM job_runs WHERE active=1").map_err(storage)?;
+            stmt.query_map([], |r| r.get::<_, String>(0)).map_err(storage)?
+                .map(|r| decode::<JobRunRecord>(r.map_err(storage)?)).collect::<Result<Vec<_>>>()?
+        };
+        for mut run in active_runs {
+            if run.state != JobRunState::Running
+                || run.lease_expires_at.is_some_and(|expiry| expiry > now)
+            {
+                continue;
+            }
+            let mut job = get_job(&tx, &run.job_id)?;
+            run.state = JobRunState::Ambiguous;
+            run.finished_at = Some(now);
+            run.lease_expires_at = None;
+            run.error_class = Some("expired_lease".into());
+            save_run(&tx, &run)?;
+            if run.schedule_revision == job.schedule_revision {
+                advance(&mut job, now)?;
+                save_job(&tx, &job)?;
+            }
+        }
         let jobs = {
             let mut stmt = tx.prepare("SELECT payload FROM jobs WHERE paused=0 AND next_due<=?1 ORDER BY next_due,id").map_err(storage)?;
             stmt.query_map([now.timestamp_millis()], |r| r.get::<_, String>(0)).map_err(storage)?
@@ -173,8 +195,8 @@ impl JobStore {
             if let Some(json) = active {
                 let mut run: JobRunRecord = decode(json)?;
                 if run.lease_expires_at.is_some_and(|expiry| expiry > now) { continue; }
-                if run.state == JobRunState::Running || run.schedule_revision != job.schedule_revision {
-                    run.state = if run.state == JobRunState::Running { JobRunState::Ambiguous } else { JobRunState::Cancelled };
+                if run.schedule_revision != job.schedule_revision {
+                    run.state = JobRunState::Cancelled;
                     run.finished_at = Some(now);
                     run.lease_expires_at = None;
                     run.error_class = Some("expired_lease".into());
@@ -598,6 +620,52 @@ mod tests {
         assert_eq!(history[0].started_at, Some(at(0)));
         assert_eq!(history[0].finished_at, Some(at(1)));
         assert!(history[0].lease_expires_at.is_none());
+    }
+
+    #[test]
+    fn expired_running_is_recovered_while_job_is_paused() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("paused", at(0))).unwrap();
+        let run = store.claim_due(at(0), "a", Duration::minutes(1), 1).unwrap().remove(0);
+        start(&mut store, &run, at(0));
+        store.set_paused("paused", true, at(0)).unwrap();
+
+        assert!(store.claim_due(at(1), "b", Duration::minutes(5), 1).unwrap().is_empty());
+
+        let recovered = store.history("paused", 1).unwrap().remove(0);
+        assert_eq!(recovered.state, JobRunState::Ambiguous);
+        assert_eq!(recovered.finished_at, Some(at(1)));
+        assert!(recovered.lease_expires_at.is_none());
+        assert_eq!(recovered.error_class.as_deref(), Some("expired_lease"));
+        assert_eq!(store.get("paused").unwrap().next_due_at, at(1440));
+        assert!(store.get("paused").unwrap().paused);
+    }
+
+    #[test]
+    fn claim_limit_does_not_bound_expired_running_recovery() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("running-a", at(0))).unwrap();
+        store.create(job("running-b", at(0))).unwrap();
+        let running = store.claim_due(at(0), "a", Duration::minutes(1), 2).unwrap();
+        for run in &running {
+            start(&mut store, run, at(0));
+        }
+        let mut claim_first = job("claim-first", at(0));
+        claim_first.schedule = ScheduleSpec::Once { at: at(0) };
+        store.create(claim_first).unwrap();
+
+        let claims = store.claim_due(at(1), "b", Duration::minutes(5), 1).unwrap();
+
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].job_id, "claim-first");
+        for id in ["running-a", "running-b"] {
+            let recovered = store.history(id, 1).unwrap().remove(0);
+            assert_eq!(recovered.state, JobRunState::Ambiguous);
+            assert_eq!(recovered.finished_at, Some(at(1)));
+            assert!(recovered.lease_expires_at.is_none());
+            assert_eq!(recovered.error_class.as_deref(), Some("expired_lease"));
+            assert_eq!(store.get(id).unwrap().next_due_at, at(1440));
+        }
     }
 
     #[test]
