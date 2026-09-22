@@ -1836,8 +1836,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .as_deref()
                     .map(|reason| (reason, crate::tools::ToolErrorKind::Validation))
                     .unwrap_or((
-                        "not executed in this model round; reissue it only if still needed",
-                        crate::tools::ToolErrorKind::Internal,
+                        "intentionally deferred by the scheduler; reissue it only if still needed after reviewing the executed results",
+                        crate::tools::ToolErrorKind::Deferred,
                     ));
                 if let Some(message) = unanswered_call_results_with_kind(
                     std::slice::from_ref(call_ref),
@@ -2443,6 +2443,7 @@ mod tests {
     };
     use crate::network::events::ToolResultMetadata;
     use crate::network::loop_detect;
+    use crate::network::{call_refs_for, unanswered_call_results_with_kind};
     use crate::tools::ToolCall;
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
 
@@ -2799,6 +2800,47 @@ mod tests {
             crate::config::ToolSchedulingPolicy::default(),
         );
         assert_eq!(selected, vec![0, 2]);
+    }
+
+    #[test]
+    fn scheduler_deferred_mutations_are_not_retryable_failures() {
+        let calls = vec![
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "a", "content": "a"}),
+                call_id: None,
+            },
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "b", "content": "b"}),
+                call_id: None,
+            },
+        ];
+        let selected = selected_tool_call_indices(
+            &calls,
+            &[None, None],
+            crate::config::ToolSchedulingPolicy::default(),
+        );
+        let refs = call_refs_for(&calls, &["call_a".into(), "call_b".into()]);
+        let deferred_refs: Vec<_> = refs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !selected.contains(index))
+            .map(|(_, call)| call.clone())
+            .collect();
+        let results = unanswered_call_results_with_kind(
+            &deferred_refs,
+            "intentionally deferred by the scheduler",
+            crate::tools::ToolErrorKind::Deferred,
+        );
+
+        assert_eq!(selected, vec![0]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].tool_result.as_ref().unwrap().parsed_error_kind(),
+            Some(crate::tools::ToolErrorKind::Deferred)
+        );
+        assert!(!results[0].tool_result.as_ref().unwrap().retryable);
     }
 
     #[test]
