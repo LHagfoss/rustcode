@@ -1181,6 +1181,40 @@ done
     }
 
     #[test]
+    fn status_names_missing_runtime_prerequisite_categories() {
+        let status = format_status(&LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some("/missing/python".to_owned()),
+            adapter: Some("/missing/adapter.py".to_owned()),
+            model: Some("/missing/checkpoint".to_owned()),
+            ..LayaConfig::default()
+        });
+
+        assert!(status.contains("Python executable: /missing/python (missing)"));
+        assert!(status.contains("Adapter: configured, missing"));
+        assert!(status.contains("Model: configured, missing"));
+    }
+
+    #[test]
+    fn readme_documents_pinned_offline_laya_setup_and_disable_path() {
+        let readme = include_str!("../README.md");
+        for required in [
+            "Apple Silicon",
+            "Python 3.11+",
+            "laya-mlx==0.2.0",
+            "checkpoint",
+            "does not install software",
+            "rustcode laya disable",
+            "mode = \"shadow\"",
+        ] {
+            assert!(
+                readme.contains(required),
+                "README is missing the Laya setup requirement: {required}"
+            );
+        }
+    }
+
+    #[test]
     fn status_rejects_a_non_executable_python_file() {
         let dir = TempDir::new().unwrap();
         let python = dir.path().join("python");

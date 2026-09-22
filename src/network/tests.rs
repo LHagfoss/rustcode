@@ -2332,6 +2332,100 @@ async fn interactive_policy_reuses_a_cached_relaxed_shell_assessment() {
     assert!(state.lock().await.pending_tool_confirmation.is_none());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn off_mode_keeps_local_policy_without_sidecar_or_advisory_event() {
+    use crate::network::policy::TurnPolicy;
+
+    let dir = tempfile::tempdir().expect("Laya off-mode fixture directory");
+    let marker = dir.path().join("spawned");
+    let adapter = dir.path().join("must-not-run.sh");
+    let model = dir.path().join("checkpoint");
+    std::fs::write(
+        &adapter,
+        format!("#!/bin/sh\ntouch {}\nexit 99\n", marker.display()),
+    )
+    .expect("write sidecar fixture");
+    std::fs::write(&model, b"fixture").expect("write checkpoint fixture");
+
+    let log_path = crate::config::get_config_dir()
+        .expect("test config directory")
+        .join("debug.log");
+    let before = std::fs::read_to_string(&log_path).unwrap_or_default();
+
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    app.laya = crate::laya::LayaRuntime::new(crate::laya::LayaConfig {
+        mode: crate::laya::LayaMode::Off,
+        python: Some("sh".to_owned()),
+        adapter: Some(adapter.display().to_string()),
+        model: Some(model.display().to_string()),
+        ..Default::default()
+    });
+    let state = Arc::new(Mutex::new(app));
+    let call = crate::tools::ToolCall {
+        name: "run_command".to_owned(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: Some("off-integration".to_owned()),
+    };
+
+    let assessments = crate::tools::ShellAssessmentCache::default();
+    let laya = state.lock().await.laya.clone();
+    assert!(
+        crate::tools::assess_shell_call(&call, crate::config::AgentMode::Build, false, &laya,)
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        crate::tools::authorize_tool_with_args(
+            &call.name,
+            &call.arguments,
+            crate::config::AgentMode::Build,
+            false,
+            false,
+        ),
+        crate::tools::AuthorizationDecision::RequireConfirmation
+    );
+
+    let policy = super::policy::InteractivePolicy;
+    let task_state = Arc::clone(&state);
+    let task_call = call.clone();
+    let task = tokio::spawn(async move {
+        policy
+            .should_approve_with_assessments(&task_state, &[task_call], &assessments)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if state.lock().await.pending_tool_confirmation.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("off mode should preserve the local confirmation path");
+
+    assert!(
+        !marker.exists(),
+        "off mode must not spawn the configured adapter"
+    );
+    let after = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert_eq!(
+        before.matches("laya.shell_policy").count(),
+        after.matches("laya.shell_policy").count(),
+        "off mode must not emit an advisory event"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("local confirmation response channel");
+    response.send(false).expect("policy task is still waiting");
+    assert!(!task.await.expect("policy task should finish"));
+}
+
 #[tokio::test]
 async fn execution_requires_confirmation_when_relaxed_laya_assessment_is_missing() {
     let mut app = AppState::new();
