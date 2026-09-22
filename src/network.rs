@@ -156,6 +156,40 @@ If the requested change is already present or cannot be applied safely, explain 
 
 pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. This is an advisory recovery message; tools remain enabled. Do not restate the requirements or repeat the same unchanged action. Take one bounded, evidence-producing step: use a safe read-only tool when more evidence is genuinely needed, mutate only when you have a trustworthy target and the user authorized the change, or give a clear diagnostic/final response.]";
 
+/// Select native tool schemas without holding the application state mutex over
+/// synchronous MCP/filesystem work. Cache metadata is snapshotted before the
+/// computation and sticky names are committed only if that snapshot is still
+/// current when the computation finishes.
+pub(crate) async fn prepare_native_tool_schemas(
+    state: &Arc<Mutex<AppState>>,
+    policy: crate::tools::ToolSchemaPolicy,
+    messages: &[serde_json::Value],
+    workspace_root: Option<&std::path::Path>,
+) -> (
+    Vec<serde_json::Value>,
+    crate::tools::McpSchemaSelectionStats,
+) {
+    let snapshot = {
+        let mut s = state.lock().await;
+        let session_id = s.active_session_id.clone();
+        s.prompt_cache
+            .native_tool_schema_snapshot(policy, messages, &session_id)
+    };
+    let result = crate::tools::native_tools_schema_for_context_with_sticky_at(
+        snapshot.policy,
+        messages,
+        &snapshot.sticky_names,
+        workspace_root,
+    );
+    {
+        let mut s = state.lock().await;
+        let _ = s
+            .prompt_cache
+            .commit_native_tool_schema_selection(&snapshot, &result.1.selected_names);
+    }
+    result
+}
+
 /// Bounded recovery nudges before the harness asks for a final text answer for
 /// a mutating or otherwise unsafe loop.
 pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 3;
@@ -1433,22 +1467,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     });
     inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
 
-    let (mut native_tool_schemas, context_budget) = {
-        let mut s = state.lock().await;
-        let native_tool_schemas = native_schema_policy
-            .map(|policy| {
-                let session_id = s.active_session_id.clone();
-                s.prompt_cache
-                    .native_tool_schemas(
-                        policy,
-                        &msgs,
-                        &session_id,
-                        task_working_directory.as_deref(),
-                    )
-                    .0
-            })
-            .unwrap_or_default();
-        (native_tool_schemas, s.active_context_budget())
+    let context_budget = state.lock().await.active_context_budget();
+    let mut native_tool_schemas = match native_schema_policy {
+        Some(policy) => {
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0
+        }
+        None => Vec::new(),
     };
     let prompt_budget = (context_budget.hard_effective_limit as usize)
         .saturating_sub(context_budget.completion_reserve as usize);
@@ -1471,17 +1497,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // describe the same request that will be sent, rather than the raw
     // pre-trim projection.
     if let Some(policy) = native_schema_policy {
-        let mut s = state.lock().await;
-        let session_id = s.active_session_id.clone();
-        native_tool_schemas = s
-            .prompt_cache
-            .native_tool_schemas(
-                policy,
-                &msgs,
-                &session_id,
-                task_working_directory.as_deref(),
-            )
-            .0;
+        native_tool_schemas =
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0;
         let schema_preflight = compaction::calculate_preflight_budget_for_projection(
             &msgs,
             &native_tool_schemas,

@@ -42,6 +42,9 @@ pub(crate) use schema::{
     tool_system_prompt_for_policy,
 };
 
+#[cfg(test)]
+pub(crate) use schema::{NativeSchemaTestGate, install_native_schema_test_gate};
+
 use schema::{AGENT_TOOL_SPECS, collect_mcp_tools, schema_for_agent_tool, schema_for_tool};
 
 #[cfg(test)]

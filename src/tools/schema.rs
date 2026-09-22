@@ -5,6 +5,106 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
+#[cfg(test)]
+use std::sync::{
+    Condvar, Mutex as StdMutex, OnceLock,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+#[cfg(test)]
+static NATIVE_SCHEMA_TEST_GATE: OnceLock<StdMutex<Option<Arc<NativeSchemaTestGateState>>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+struct NativeSchemaTestGateState {
+    marker: String,
+    pause_on_call: usize,
+    matching_calls: AtomicUsize,
+    entered: AtomicBool,
+    released: StdMutex<bool>,
+    release_cv: Condvar,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct NativeSchemaTestGate {
+    state: Arc<NativeSchemaTestGateState>,
+}
+
+#[cfg(test)]
+impl NativeSchemaTestGate {
+    pub(crate) fn is_entered(&self) -> bool {
+        self.state.entered.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn release(&self) {
+        let mut released = self.state.released.lock().unwrap();
+        *released = true;
+        self.state.release_cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Drop for NativeSchemaTestGate {
+    fn drop(&mut self) {
+        self.release();
+        let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+        let mut installed = slot.lock().unwrap();
+        if installed
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        {
+            *installed = None;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_native_schema_test_gate(
+    marker: impl Into<String>,
+    pause_on_call: usize,
+) -> NativeSchemaTestGate {
+    let state = Arc::new(NativeSchemaTestGateState {
+        marker: marker.into(),
+        pause_on_call,
+        matching_calls: AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+        released: StdMutex::new(false),
+        release_cv: Condvar::new(),
+    });
+    let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+    let mut installed = slot.lock().unwrap();
+    assert!(
+        installed.is_none(),
+        "native schema test gate already installed"
+    );
+    *installed = Some(state.clone());
+    NativeSchemaTestGate { state }
+}
+
+#[cfg(test)]
+fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
+    let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+    let Some(state) = slot.lock().unwrap().clone() else {
+        return;
+    };
+    if !messages
+        .iter()
+        .any(|message| message.to_string().contains(&state.marker))
+    {
+        return;
+    }
+    let call = state.matching_calls.fetch_add(1, Ordering::AcqRel) + 1;
+    if call != state.pause_on_call {
+        return;
+    }
+    state.entered.store(true, Ordering::Release);
+    let mut released = state.released.lock().unwrap();
+    while !*released {
+        released = state.release_cv.wait(released).unwrap();
+    }
+}
+
 /// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
 /// mirrors what `tool_system_prompt` lists for the text protocols, reused here
 /// to build the native function schema.
@@ -1315,6 +1415,8 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     sticky_names: &[String],
     workspace_root: Option<&Path>,
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
+    #[cfg(test)]
+    maybe_pause_native_schema_test_gate(messages);
     let phase = tool_schema_phase(messages, workspace_root);
     let terms = context_terms(messages);
     let mut tools = build_builtin_native_tools_schema(policy, Some(&terms), phase);
