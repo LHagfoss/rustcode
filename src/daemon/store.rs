@@ -47,6 +47,11 @@ fn save_run(connection: &Connection, run: &JobRunRecord) -> Result<()> {
 }
 
 fn advance(job: &mut JobRecord, now: DateTime<Utc>) -> Result<()> {
+    if matches!(job.schedule, ScheduleSpec::Once { .. }) {
+        job.paused = true;
+        job.updated_at = now;
+        return Ok(());
+    }
     match job.schedule.next_after(now.max(job.next_due_at)) {
         Ok(next) => job.next_due_at = next,
         // Exhausted one-shot (or finite cron) jobs retain their history and pause.
@@ -67,6 +72,35 @@ fn bounded(value: Option<String>) -> Option<String> {
 }
 
 impl JobStore {
+    /// Called once after acquiring exclusive daemon ownership. Running actions
+    /// from an earlier process become ambiguous during the next claim scan;
+    /// unstarted claims are safe to recover. Retry deadlines remain intact.
+    pub fn recover_previous_owner(&mut self, owner: &str, now: DateTime<Utc>) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let runs = {
+            let mut stmt = tx
+                .prepare("SELECT payload FROM job_runs WHERE active=1")
+                .map_err(storage)?;
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .map_err(storage)?
+                .map(|r| decode::<JobRunRecord>(r.map_err(storage)?))
+                .collect::<Result<Vec<_>>>()?
+        };
+        for mut run in runs {
+            if run.lease_owner.as_deref() != Some(owner)
+                && !(run.state == JobRunState::Claimed
+                    && run.attempt > 1
+                    && run.started_at.is_none())
+            {
+                run.lease_expires_at = Some(now);
+                save_run(&tx, &run)?;
+            }
+        }
+        tx.commit().map_err(storage)
+    }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::initialize(Connection::open(path).map_err(storage)?)
     }

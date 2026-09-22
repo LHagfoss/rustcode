@@ -211,8 +211,18 @@ impl DaemonServer {
 
     /// Task 4 supplies the concrete executor; Task 2 control-only servers remain
     /// usable without executing persisted actions.
-    pub fn install_executor(&mut self, executor: Arc<dyn super::executor::JobExecutor>, concurrency: usize) -> super::scheduler::SchedulerHandle {
-        let scheduler = super::scheduler::Scheduler::new(self.handler.store(), Arc::new(super::scheduler::SystemClock), executor, self.handler.registration.instance_id.clone(), concurrency);
+    pub fn install_executor(
+        &mut self,
+        executor: Arc<dyn super::executor::JobExecutor>,
+        concurrency: usize,
+    ) -> super::scheduler::SchedulerHandle {
+        let scheduler = super::scheduler::Scheduler::new(
+            self.handler.store(),
+            Arc::new(super::scheduler::SystemClock),
+            executor,
+            self.handler.registration.instance_id.clone(),
+            concurrency,
+        );
         self.handler.set_scheduler(scheduler.clone());
         self.scheduler = Some(scheduler.clone());
         scheduler
@@ -461,6 +471,78 @@ mod tests {
             matches!(client.request(DaemonRequest::Get { job_id: job.id }).await.unwrap(), DaemonResponse::Error { code, .. } if code == "not_found")
         );
         running.finish().await;
+    }
+
+    #[tokio::test]
+    async fn installed_scheduler_wakes_on_create_reports_active_and_drains_on_shutdown() {
+        use crate::daemon::{
+            executor::{ExecutionFuture, JobExecutor, JobRunContext, RunOutcome},
+            model::JobRunState,
+        };
+        struct Executor(Arc<Mutex<JobStore>>);
+        impl JobExecutor for Executor {
+            fn execute(&self, context: JobRunContext) -> ExecutionFuture {
+                let store = self.0.clone();
+                Box::pin(async move {
+                    assert_eq!(
+                        store.lock().unwrap().history(&context.job.id, 1).unwrap()[0].state,
+                        JobRunState::Running
+                    );
+                    context.cancellation.cancelled().await;
+                    RunOutcome::Cancelled {
+                        output: Some("stopped".into()),
+                    }
+                })
+            }
+        }
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let lifecycle = DaemonLifecycle::new(directory.path());
+        let mut server = lifecycle.bind().unwrap();
+        let store = server.handler.store();
+        server.install_executor(Arc::new(Executor(store.clone())), 1);
+        let registration = DaemonRegistration::read(&lifecycle.registration_path()).unwrap();
+        let shutdown = server.shutdown_handle();
+        let mut task = tokio::spawn(server.run());
+        let client = DaemonClient::new(lifecycle.socket_path());
+        assert!(matches!(
+            client
+                .request(DaemonRequest::Create { job: job() })
+                .await
+                .unwrap(),
+            DaemonResponse::Job { .. }
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let DaemonResponse::Status { status } =
+                    client.request(DaemonRequest::Status).await.unwrap()
+                    && status.active_runs == 1
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            client
+                .request(DaemonRequest::Shutdown {
+                    instance_id: registration.instance_id
+                })
+                .await
+                .unwrap(),
+            DaemonResponse::Ack
+        );
+        shutdown.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), &mut task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let runs = store.lock().unwrap().history("example", 1).unwrap();
+        assert_eq!(runs[0].state, JobRunState::Cancelled);
+        assert_eq!(runs[0].output.as_deref(), Some("stopped"));
+        assert!(!lifecycle.registration_path().exists());
     }
 
     #[tokio::test]

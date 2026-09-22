@@ -6,6 +6,7 @@ use super::{
     store::JobStore,
 };
 use chrono::{DateTime, Duration, Utc};
+use futures_util::FutureExt;
 use std::{
     collections::HashSet,
     sync::{
@@ -81,6 +82,10 @@ impl Scheduler {
         if self.started.swap(true, Ordering::SeqCst) {
             return Err(DaemonError::Conflict("scheduler already started".into()));
         }
+        self.store
+            .lock()
+            .unwrap()
+            .recover_previous_owner(&self.owner, self.clock.now())?;
         let mut tasks = JoinSet::new();
         let mut sessions = HashSet::new();
         let mut active_jobs = HashSet::new();
@@ -168,17 +173,18 @@ impl Scheduler {
                         // Catch executor panics as unknown effects, and bound an
                         // executor that ignores cancellation. Never retry either.
                         let executor = this.executor.clone();
-                        let mut execution = tokio::spawn(async move { executor.execute(context).await });
+                        let execution = std::panic::AssertUnwindSafe(async move { executor.execute(context).await }).catch_unwind();
+                        tokio::pin!(execution);
                         let outcome = tokio::select! {
-                            result = &mut execution => result.unwrap_or_else(|e| RunOutcome::Ambiguous { error: e.to_string(), output: None }),
+                            result = &mut execution => result.unwrap_or_else(|_| RunOutcome::Ambiguous { error: "executor panicked".into(), output: None }),
                             _ = cancellation.cancelled() => {
                                 match tokio::time::timeout(std::time::Duration::from_secs(5), &mut execution).await {
-                                    Ok(result) => result.unwrap_or_else(|e| RunOutcome::Ambiguous { error: e.to_string(), output: None }),
-                                    Err(_) => { execution.abort(); let _ = execution.await; RunOutcome::Ambiguous { error: "cancellation deadline exceeded".into(), output: None } }
+                                    Ok(result) => result.unwrap_or_else(|_| RunOutcome::Ambiguous { error: "executor panicked".into(), output: None }),
+                                    Err(_) => RunOutcome::Ambiguous { error: "cancellation deadline exceeded".into(), output: None },
                                 }
                             }
                             _ = tokio::time::sleep(std::time::Duration::from_secs(1800)) => {
-                                cancellation.cancel(); execution.abort(); let _ = execution.await;
+                                cancellation.cancel();
                                 RunOutcome::Ambiguous { error: "execution deadline exceeded".into(), output: None }
                             }
                         };
@@ -710,6 +716,216 @@ mod tests {
         assert_eq!(executor.calls.lock().unwrap().len(), 1);
         assert_eq!(executor.calls.lock().unwrap()[0].job.id, "claimed");
         scheduler.shutdown();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_expires_previous_owners_lease_without_waiting() {
+        use crate::daemon::model::{JobRunState, RunSettlement};
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("running", at(0), None)).unwrap();
+        let run = store
+            .claim_due(at(0), "dead-owner", Duration::hours(1), 1)
+            .unwrap()
+            .remove(0);
+        store
+            .settle_run(
+                &run.id,
+                "dead-owner",
+                run.lease_fence,
+                RunSettlement {
+                    state: JobRunState::Running,
+                    finished_at: at(0),
+                    result_summary: None,
+                    error_class: None,
+                    output: None,
+                },
+            )
+            .unwrap();
+        let executor = RecordingExecutor::default();
+        let scheduler = scheduler(store, TestClock::new(at(1)), executor.clone(), 1);
+        let task = tokio::spawn(scheduler.clone().run());
+        wait_state(&scheduler, "running", JobRunState::Ambiguous).await;
+        assert!(executor.calls.lock().unwrap().is_empty());
+        scheduler.shutdown();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn run_now_consumes_future_one_shot_only_once() {
+        use crate::daemon::model::JobRunState;
+        let mut store = JobStore::in_memory().unwrap();
+        let mut once = job("once", at(10), None);
+        once.schedule = ScheduleSpec::Once { at: at(10) };
+        store.create(once).unwrap();
+        let executor = RecordingExecutor::default();
+        let clock = TestClock::new(at(0));
+        let scheduler = scheduler(store, clock.clone(), executor.clone(), 1);
+        scheduler.run_now("once").unwrap();
+        let task = tokio::spawn(scheduler.clone().run());
+        wait_state(&scheduler, "once", JobRunState::Succeeded).await;
+        assert!(
+            scheduler
+                .store()
+                .lock()
+                .unwrap()
+                .get("once")
+                .unwrap()
+                .paused
+        );
+        clock.set(at(10));
+        scheduler.notify_changed();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(executor.calls.lock().unwrap().len(), 1);
+        scheduler.shutdown();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn aborting_scheduler_drops_execution_future_and_preserves_unknown_run() {
+        use crate::daemon::model::JobRunState;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct DropSignal(Arc<AtomicBool>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        struct PendingExecutor(Arc<AtomicBool>, Arc<AtomicBool>);
+        impl JobExecutor for PendingExecutor {
+            fn execute(&self, _: JobRunContext) -> crate::daemon::executor::ExecutionFuture {
+                let started = self.0.clone();
+                let guard = DropSignal(self.1.clone());
+                Box::pin(async move {
+                    let _guard = guard;
+                    started.store(true, Ordering::SeqCst);
+                    std::future::pending().await
+                })
+            }
+        }
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("pending", at(0), None)).unwrap();
+        let scheduler = Scheduler::new(
+            Arc::new(Mutex::new(store)),
+            Arc::new(TestClock::new(at(0))),
+            Arc::new(PendingExecutor(started.clone(), dropped.clone())),
+            "owner",
+            1,
+        );
+        let task = tokio::spawn(scheduler.clone().run());
+        for _ in 0..100 {
+            if started.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(started.load(Ordering::SeqCst));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        for _ in 0..100 {
+            if dropped.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "executor detached after scheduler abort"
+        );
+        assert_eq!(
+            scheduler
+                .store()
+                .lock()
+                .unwrap()
+                .history("pending", 1)
+                .unwrap()[0]
+                .state,
+            JobRunState::Running
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_deadline_survives_reopen_and_rejects_stale_fence() {
+        use crate::daemon::model::{JobRunState, RunSettlement};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("jobs.db");
+        let mut store = JobStore::open(&path).unwrap();
+        store.create(job("retry", at(0), None)).unwrap();
+        let original = store
+            .claim_due(at(0), "old", Duration::hours(1), 1)
+            .unwrap()
+            .remove(0);
+        store
+            .settle_run(
+                &original.id,
+                "old",
+                original.lease_fence,
+                RunSettlement {
+                    state: JobRunState::Running,
+                    finished_at: at(0),
+                    result_summary: None,
+                    error_class: None,
+                    output: None,
+                },
+            )
+            .unwrap();
+        store
+            .retry_run(
+                &original.id,
+                "old",
+                original.lease_fence,
+                at(0),
+                "offline".into(),
+                Some("saved".into()),
+            )
+            .unwrap();
+        let deadline = store.get("retry").unwrap().next_due_at;
+        drop(store);
+        let clock = TestClock::new(at(0));
+        let executor = RecordingExecutor {
+            block: true,
+            ..Default::default()
+        };
+        let scheduler = scheduler(
+            JobStore::open(&path).unwrap(),
+            clock.clone(),
+            executor.clone(),
+            1,
+        );
+        let task = tokio::spawn(scheduler.clone().run());
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(executor.calls.lock().unwrap().is_empty());
+        assert_eq!(scheduler.snapshot().1, Some(deadline));
+        clock.set(deadline);
+        scheduler.notify_changed();
+        wait_calls(&executor, 1).await;
+        let context = executor.calls.lock().unwrap()[0].clone();
+        assert_eq!(context.run.id, original.id);
+        assert_eq!(context.run.attempt, 2);
+        assert_eq!(context.run.output.as_deref(), Some("saved"));
+        assert!(matches!(
+            scheduler.store().lock().unwrap().settle_run(
+                &original.id,
+                "old",
+                original.lease_fence,
+                RunSettlement {
+                    state: JobRunState::Succeeded,
+                    finished_at: deadline,
+                    result_summary: None,
+                    error_class: None,
+                    output: None
+                }
+            ),
+            Err(crate::daemon::DaemonError::Conflict(_))
+        ));
+        scheduler.shutdown();
+        executor.gate.notify_waiters();
         task.await.unwrap().unwrap();
     }
 }
