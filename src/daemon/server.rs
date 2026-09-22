@@ -154,6 +154,7 @@ pub struct DaemonServer {
     pub handler: RequestHandler,
     pub request_timeout: Duration,
     shutdown: Arc<Notify>,
+    scheduler: Option<super::scheduler::SchedulerHandle>,
     _ownership: Arc<Ownership>,
 }
 
@@ -199,6 +200,7 @@ impl DaemonServer {
             handler,
             request_timeout: Duration::from_secs(2),
             shutdown: Arc::new(Notify::new()),
+            scheduler: None,
             _ownership: Arc::new(ownership),
         })
     }
@@ -207,7 +209,33 @@ impl DaemonServer {
         self.shutdown.clone()
     }
 
+    /// Task 4 supplies the concrete executor; Task 2 control-only servers remain
+    /// usable without executing persisted actions.
+    pub fn install_executor(&mut self, executor: Arc<dyn super::executor::JobExecutor>, concurrency: usize) -> super::scheduler::SchedulerHandle {
+        let scheduler = super::scheduler::Scheduler::new(self.handler.store(), Arc::new(super::scheduler::SystemClock), executor, self.handler.registration.instance_id.clone(), concurrency);
+        self.handler.set_scheduler(scheduler.clone());
+        self.scheduler = Some(scheduler.clone());
+        scheduler
+    }
+
     pub async fn run(self) -> Result<()> {
+        if let Some(scheduler) = &self.scheduler {
+            // Keep ownership until both control plane and executions have stopped.
+            let task = scheduler.clone().run();
+            tokio::pin!(task);
+            let result = tokio::select! {
+                result = self.run_control() => result,
+                result = &mut task => return result.map_err(Into::into),
+            };
+            scheduler.shutdown();
+            task.await?;
+            result
+        } else {
+            self.run_control().await
+        }
+    }
+
+    async fn run_control(&self) -> Result<()> {
         loop {
             let (stream, _) = tokio::select! {
                 biased;

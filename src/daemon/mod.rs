@@ -5,6 +5,8 @@ pub mod lifecycle;
 pub mod model;
 pub mod protocol;
 pub mod schedule;
+pub mod scheduler;
+pub mod executor;
 #[cfg(unix)]
 pub mod server;
 pub mod store;

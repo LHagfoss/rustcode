@@ -155,6 +155,10 @@ impl JobStore {
     /// RunOnce coalesces overdue occurrences. Expired Running runs are ambiguous,
     /// never returned for replay. Limits bound returned claims, not recovery work.
     pub fn claim_due(&mut self, now: DateTime<Utc>, owner: &str, lease: Duration, limit: usize) -> Result<Vec<JobRunRecord>> {
+        self.claim_due_matching(now, owner, lease, limit, |_| true)
+    }
+
+    pub fn claim_due_matching(&mut self, now: DateTime<Utc>, owner: &str, lease: Duration, limit: usize, mut eligible: impl FnMut(&JobRecord) -> bool) -> Result<Vec<JobRunRecord>> {
         if owner.trim().is_empty() || lease <= Duration::zero() {
             return Err(DaemonError::InvalidInput("lease owner and positive duration required".into()));
         }
@@ -195,6 +199,7 @@ impl JobStore {
             if let Some(json) = active {
                 let mut run: JobRunRecord = decode(json)?;
                 if run.lease_expires_at.is_some_and(|expiry| expiry > now) { continue; }
+                if !eligible(&job) { continue; }
                 if run.schedule_revision != job.schedule_revision {
                     run.state = JobRunState::Cancelled;
                     run.finished_at = Some(now);
@@ -217,6 +222,7 @@ impl JobStore {
                 continue;
             }
             let id: String = tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0)).map_err(storage)?;
+            if !eligible(&job) { continue; }
             let run = JobRunRecord { id: id.clone(), idempotency_key: id, job_id: job.id.clone(),
                 schedule_revision: job.schedule_revision, scheduled_at: job.next_due_at,
                 state: JobRunState::Claimed, attempt: 1, lease_owner: Some(owner.into()), lease_fence: 1,
@@ -231,7 +237,44 @@ impl JobStore {
     }
 
     pub fn settle_run(&mut self, id: &str, owner: &str, fence: i64, settlement: RunSettlement) -> Result<()> {
-        self.transition_run(id, owner, fence, settlement, false)
+        self.transition_run(id, owner, fence, settlement, false, false)
+    }
+
+    /// Retry state reuses the occurrence/idempotency key. The claim's expiry is
+    /// its durable retry deadline; no action has started for the next attempt.
+    pub fn retry_run(&mut self, id: &str, owner: &str, fence: i64, now: DateTime<Utc>, error: String, output: Option<String>) -> Result<()> {
+        self.transition_run(id, owner, fence, RunSettlement { state: JobRunState::Failed, finished_at: now, result_summary: Some(error), error_class: Some("transient".into()), output }, false, true)
+    }
+
+    pub fn run_now(&mut self, id: &str, now: DateTime<Utc>) -> Result<()> {
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage)?;
+        let mut job = get_job(&tx, id)?;
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM job_runs WHERE job_id=?1 AND active=1)", [id], |r| r.get(0)).map_err(storage)?;
+        if active || job.paused { return Err(DaemonError::Conflict("job is paused or already active".into())); }
+        job.schedule_revision = job.schedule_revision.checked_add(1).ok_or_else(|| storage("schedule revision exhausted"))?;
+        job.next_due_at = now;
+        job.updated_at = now;
+        save_job(&tx, &job)?;
+        tx.commit().map_err(storage)
+    }
+
+    /// Ignore capacity/session-blocked jobs until completion wakes the loop.
+    /// Foreign leases still supply recovery deadlines, including paused jobs.
+    pub fn next_wake(&self, now: DateTime<Utc>, active_jobs: &std::collections::HashSet<String>, sessions: &std::collections::HashSet<String>, capacity: bool) -> Result<Option<DateTime<Utc>>> {
+        let mut next = None;
+        for job in self.list()? {
+            if active_jobs.contains(&job.id) { continue; }
+            let json: Option<String> = self.connection.query_row("SELECT payload FROM job_runs WHERE job_id=?1 AND active=1", [&job.id], |r| r.get(0)).optional().map_err(storage)?;
+            let active = json.map(decode::<JobRunRecord>).transpose()?;
+            let deadline = if let Some(run) = active {
+                if run.state == JobRunState::Running { run.lease_expires_at }
+                else if !job.paused && capacity && !job.target_session.as_ref().is_some_and(|s| sessions.contains(s)) { Some(job.next_due_at.max(run.lease_expires_at.unwrap_or(now))) }
+                else { None }
+            } else if !job.paused && capacity && !job.target_session.as_ref().is_some_and(|s| sessions.contains(s)) { Some(job.next_due_at) }
+            else { None };
+            if let Some(deadline) = deadline { next = Some(next.map_or(deadline, |old: DateTime<Utc>| old.min(deadline))); }
+        }
+        Ok(next)
     }
 
     /// Cancel only before the durable action boundary, using the current lease.
@@ -239,10 +282,10 @@ impl JobStore {
         self.transition_run(id, owner, fence, RunSettlement {
             state: JobRunState::Cancelled, finished_at: now,
             result_summary: None, error_class: Some(reason.into()), output: None,
-        }, true)
+        }, true, false)
     }
 
-    fn transition_run(&mut self, id: &str, owner: &str, fence: i64, settlement: RunSettlement, cancel_claimed: bool) -> Result<()> {
+    fn transition_run(&mut self, id: &str, owner: &str, fence: i64, settlement: RunSettlement, cancel_claimed: bool, retry: bool) -> Result<()> {
         if settlement.state == JobRunState::Claimed { return Err(DaemonError::InvalidInput("cannot settle as claimed".into())); }
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage)?;
         let json: Option<String> = tx.query_row("SELECT payload FROM job_runs WHERE id=?1 AND active=1", [id], |r| r.get(0)).optional().map_err(storage)?;
@@ -268,7 +311,23 @@ impl JobStore {
             run.result_summary = bounded(settlement.result_summary);
             run.error_class = bounded(settlement.error_class);
             run.output = bounded(settlement.output);
-            advance(&mut job, settlement.finished_at)?;
+            if retry && run.attempt < job.retry_policy.max_attempts {
+                let policy = &job.retry_policy;
+                let base = policy.initial_backoff_seconds.saturating_mul(1u64.checked_shl(run.attempt.saturating_sub(1)).unwrap_or(u64::MAX));
+                // Stable small jitter survives restarts and never exceeds the cap.
+                let jitter = run.id.bytes().fold(0u64, |sum, b| sum + u64::from(b)) % (base / 10 + 1);
+                let seconds = base.saturating_add(jitter).min(policy.max_backoff_seconds).min(31_536_000);
+                let next = settlement.finished_at + Duration::seconds(seconds.max(1) as i64);
+                run.state = JobRunState::Claimed;
+                run.attempt += 1;
+                run.started_at = None;
+                run.finished_at = None;
+                run.lease_expires_at = Some(next);
+                job.next_due_at = next;
+                job.updated_at = settlement.finished_at;
+            } else {
+                advance(&mut job, settlement.finished_at)?;
+            }
             save_job(&tx, &job)?;
         }
         save_run(&tx, &run)?;
