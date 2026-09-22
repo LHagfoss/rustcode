@@ -16,6 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const DISCORD_CLIENT_ID: &str = "1533154312622964970";
 const DISCORD_LARGE_IMAGE: &str = "rustcode_logo";
+const DISCORD_LARGE_IMAGE_TEXT: &str = "RustCode — GitHub repository";
+const DISCORD_REPOSITORY_BUTTON_LABEL: &str = "Visit repo";
+const DISCORD_REPOSITORY_URL: &str = "https://github.com/LHagfoss/rustcode";
 const MAX_ACTIVITY_CHARS: usize = 128;
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
@@ -159,6 +162,22 @@ fn sanitize(value: &str) -> String {
     value
 }
 
+fn activity_payload<'a>(presence: &'a DiscordPresence, start_time: u64) -> activity::Activity<'a> {
+    activity::Activity::new()
+        .state(&presence.state)
+        .details(&presence.details)
+        .assets(
+            activity::Assets::new()
+                .large_image(DISCORD_LARGE_IMAGE)
+                .large_text(DISCORD_LARGE_IMAGE_TEXT),
+        )
+        .buttons(vec![activity::Button::new(
+            DISCORD_REPOSITORY_BUTTON_LABEL,
+            DISCORD_REPOSITORY_URL,
+        )])
+        .timestamps(activity::Timestamps::new().start(start_time as i64))
+}
+
 /// Candidate Unix IPC sockets used by Discord's desktop client. This is only
 /// a read-only status probe; actual connection remains delegated to the RPC
 /// crate. Windows uses named pipes, so there is no filesystem probe there.
@@ -240,11 +259,7 @@ impl DiscordRpcHandler {
         let Some(client) = &mut self.client else {
             return false;
         };
-        let payload = activity::Activity::new()
-            .state(&presence.state)
-            .details(&presence.details)
-            .assets(activity::Assets::new().large_image(DISCORD_LARGE_IMAGE))
-            .timestamps(activity::Timestamps::new().start(self.start_time as i64));
+        let payload = activity_payload(presence, self.start_time);
         if client.set_activity(payload).is_ok() {
             true
         } else {
@@ -399,6 +414,32 @@ mod tests {
         );
         assert!(!presence.details.contains('\n'));
         assert!(presence.details.chars().count() <= MAX_ACTIVITY_CHARS + 1);
+    }
+
+    #[test]
+    fn activity_payload_contains_repository_button_and_safe_asset_metadata() {
+        let presence = DiscordPresence {
+            state: "Thinking".to_owned(),
+            details: "rustcode · out 1.2k".to_owned(),
+        };
+        let payload = serde_json::to_value(activity_payload(&presence, 42))
+            .expect("Discord activity should serialize");
+
+        assert_eq!(payload["state"], "Thinking");
+        assert_eq!(payload["details"], "rustcode · out 1.2k");
+        assert_eq!(payload["assets"]["large_image"], "rustcode_logo");
+        assert_eq!(
+            payload["assets"]["large_text"],
+            "RustCode — GitHub repository"
+        );
+        assert_eq!(payload["timestamps"]["start"], 42);
+        assert_eq!(payload["buttons"][0]["label"], "Visit repo");
+        assert_eq!(
+            payload["buttons"][0]["url"],
+            "https://github.com/LHagfoss/rustcode"
+        );
+        assert!(!payload.to_string().contains("/Users/"));
+        assert!(!payload.to_string().contains("token"));
     }
 
     #[test]

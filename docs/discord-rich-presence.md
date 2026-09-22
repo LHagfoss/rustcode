@@ -9,6 +9,11 @@ unavailable, RustCode silently retries in the background and the TUI remains
 usable. It does not open a Discord login flow and never reads or stores Discord
 passwords, account tokens, cookies, or browser profiles.
 
+The activity includes a `Visit repo` button that opens the RustCode repository:
+<https://github.com/LHagfoss/rustcode>. The large `rustcode_logo` image also
+shows `RustCode — GitHub repository` on hover. Discord does not make Rich
+Presence images clickable, so the button is the supported repository link.
+
 When a generated session title is unavailable, the activity uses only the
 basename of the workspace, repository, or current folder (for example,
 "rustcode"). It never publishes an absolute local path. During a request,
