@@ -197,6 +197,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_active_turn_preserves_queued_prompts() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.pending_queue = vec!["follow-up prompt".to_owned()];
+        state
+            .claim_orchestrator()
+            .expect("the active turn owns the orchestrator");
+        let mut runtime = AppRuntime::for_test(state);
+
+        assert!(matches!(
+            runtime.handle_event(AppEvent::CancelActiveTurn).await,
+            Ok(AppRunControl::Continue)
+        ));
+
+        let state = runtime.app_state().await;
+        assert_eq!(state.pending_queue, ["follow-up prompt"]);
+        assert!(state.orchestrator_running);
+    }
+
+    #[tokio::test]
     async fn stale_render_metrics_cannot_overwrite_new_state() {
         let runtime = AppRuntime::for_test(AppState::new());
         let (revision, input_area) = {
