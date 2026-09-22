@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -19,6 +22,7 @@ const DEFAULT_PYTHON: &str = "python3";
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 256;
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -433,7 +437,7 @@ impl SidecarProcess {
         let confidence = decision
             .confidence
             .ok_or(AdvisoryError::MalformedResponse)?;
-        let effects = decision.effects.ok_or(AdvisoryError::MalformedResponse)?;
+        let effects = normalize_effects(decision.effects.ok_or(AdvisoryError::MalformedResponse)?);
         if !confidence.is_finite()
             || !(0.0..=1.0).contains(&confidence)
             || !supported_label(&decision.label)
@@ -474,6 +478,11 @@ impl LayaRuntime {
 
     pub fn config(&self) -> &LayaConfig {
         &self.config
+    }
+
+    pub(crate) fn next_request_id(&self, kind: AdvisoryKind) -> String {
+        let sequence = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("rustcode-{kind:?}-{sequence}").to_lowercase()
     }
 
     pub fn status(&self) -> LayaStatus {
@@ -660,6 +669,30 @@ fn supported_label(label: &str) -> bool {
         label,
         "read_only" | "novel_evidence" | "confirmatory_evidence" | "no_new_information" | "unknown"
     )
+}
+
+fn normalize_effects(effects: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for effect in effects {
+        let effect = effect.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+        let effect = match effect.as_str() {
+            "read" => "read_only",
+            "workspace_mutation" | "mutating" => "mutation",
+            "process" => "process_control",
+            "network" | "external" => "network_or_external",
+            "read_only" | "mutation" | "process_control" | "network_or_external" | "unknown" => {
+                effect.as_str()
+            }
+            _ => "unknown",
+        };
+        if !normalized.iter().any(|item| item == effect) {
+            normalized.push(effect.to_owned());
+        }
+    }
+    if normalized.is_empty() {
+        normalized.push("unknown".to_owned());
+    }
+    normalized
 }
 
 async fn read_bounded_line<R>(reader: &mut R) -> Result<Vec<u8>, AdvisoryError>

@@ -24,6 +24,22 @@ SUPPORTED_LABELS = {
     "no_new_information",
     "unknown",
 }
+SUPPORTED_EFFECTS = {
+    "read_only",
+    "mutation",
+    "process_control",
+    "network_or_external",
+    "unknown",
+}
+EFFECT_ALIASES = {
+    "read-only": "read_only",
+    "read": "read_only",
+    "workspace_mutation": "mutation",
+    "mutating": "mutation",
+    "process": "process_control",
+    "network": "network_or_external",
+    "external": "network_or_external",
+}
 DIAGNOSTIC_CATEGORIES = {
     "unsupported_python",
     "unsupported_architecture",
@@ -133,6 +149,34 @@ def _answer_value(result: Any) -> Any:
     return answers["decision"]
 
 
+def _normalize_effects(answer: Any, label: str) -> list[str]:
+    raw_effects: Any = None
+    if isinstance(answer, dict):
+        raw_effects = answer.get("effects", answer.get("effect"))
+    if isinstance(raw_effects, str):
+        raw_effects = [raw_effects]
+    if not isinstance(raw_effects, list):
+        raw_effects = []
+
+    effects: list[str] = []
+    saw_raw_effect = bool(raw_effects)
+    for raw_effect in raw_effects:
+        if not isinstance(raw_effect, str):
+            if "unknown" not in effects:
+                effects.append("unknown")
+            continue
+        normalized = raw_effect.strip().lower().replace(" ", "_")
+        normalized = EFFECT_ALIASES.get(normalized, normalized)
+        if normalized in SUPPORTED_EFFECTS and normalized not in effects:
+            effects.append(normalized)
+        elif "unknown" not in effects:
+            effects.append("unknown")
+
+    if effects:
+        return effects[:16]
+    return ["unknown"] if saw_raw_effect else (["read_only"] if label == "read_only" else ["unknown"])
+
+
 def _normalize_decision(result: Any, kind: str, input_data: dict[str, Any]) -> dict[str, Any]:
     answer = _answer_value(result)
     if isinstance(answer, dict):
@@ -149,9 +193,10 @@ def _normalize_decision(result: Any, kind: str, input_data: dict[str, Any]) -> d
     if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
         raise ValueError("model returned invalid confidence")
 
-    effects = input_data.get("candidate_effects")
-    if not isinstance(effects, list) or not all(isinstance(effect, str) for effect in effects):
-        effects = ["read_only"] if kind == "repetition" else ["unknown"]
+    # Candidate effects are local hints only. Never copy them into the
+    # decision: the model result (or its normalized label) is authoritative
+    # for the advisory effect, and Rust still applies its local policy floor.
+    effects = _normalize_effects(answer, label)
     return {
         "label": label,
         "confidence": confidence,

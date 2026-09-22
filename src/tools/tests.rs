@@ -2418,6 +2418,157 @@ fn authorize_relaxed_mode_falls_back_on_advisory_disagreement_or_failure() {
 }
 
 #[test]
+fn relaxed_mode_does_not_downgrade_path_qualified_or_wrapped_interpreters() {
+    use crate::laya::{AdvisoryDecision, LayaMode};
+    use crate::tools::{ShellClassification, shell_policy_facts};
+
+    let advisory = AdvisoryDecision {
+        label: "read_only".to_string(),
+        confidence: 0.999,
+        effects: vec!["read_only".to_string()],
+        rationale_code: Some("fixture".to_string()),
+    };
+    for command in [
+        "/tmp/python --version",
+        "./python --version",
+        "/opt/tools/python3 --help",
+        "env python --version",
+        "command python --version",
+    ] {
+        let facts = shell_policy_facts(command);
+        assert_ne!(
+            facts.classification,
+            ShellClassification::Unclassified,
+            "{command}"
+        );
+        assert_ne!(
+            effective_shell_authorization(
+                AuthorizationDecision::RequireConfirmation,
+                &facts,
+                Some(&advisory),
+                LayaMode::Relaxed,
+                0.98,
+            ),
+            AuthorizationDecision::Allow,
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn shell_advisory_telemetry_is_compact_and_redacted() {
+    use crate::tools::{ShellClassification, ShellPolicyFacts, shell_advisory_event_fields};
+
+    let fields = shell_advisory_event_fields(
+        &ShellPolicyFacts {
+            classification: ShellClassification::Unclassified,
+            has_redirection: false,
+            has_backgrounding: false,
+            has_privilege_escalation: false,
+            known_destructive: false,
+            has_network_effect: false,
+            has_mixed_list: false,
+            has_command_substitution: false,
+            explicit_mutation: false,
+            unclassified: true,
+        },
+        Some(&crate::laya::AdvisoryDecision {
+            label: "read_only".to_string(),
+            confidence: 0.999,
+            effects: vec!["read_only".to_string()],
+            rationale_code: Some("fixture".to_string()),
+        }),
+        std::time::Duration::from_millis(12),
+        "none",
+    );
+    assert_eq!(fields["decision_kind"], "shell_policy");
+    assert_eq!(fields["local_classification"], "unclassified");
+    assert_eq!(fields["confidence_bucket"], "high");
+    assert_eq!(fields["latency_bucket"], "10_49ms");
+    assert_eq!(fields["failure_category"], "none");
+    assert!(fields.get("command").is_none());
+    assert!(fields.get("input").is_none());
+}
+
+#[tokio::test]
+async fn live_sidecar_read_only_response_enables_relaxed_assessment() {
+    let (_dir, runtime) = fake_shell_runtime("live-read-only", crate::laya::LayaMode::Relaxed);
+    let call = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: None,
+    };
+
+    let assessment = assess_shell_call(&call, crate::config::AgentMode::Build, false, &runtime)
+        .await
+        .expect("eligible shell call should be assessed");
+    assert_eq!(
+        assessment
+            .advisory
+            .as_ref()
+            .map(|decision| decision.effects.clone()),
+        Some(vec!["read_only".to_string()])
+    );
+    assert_eq!(
+        assessment.effective_authorization,
+        AuthorizationDecision::Allow
+    );
+}
+
+#[tokio::test]
+async fn repeated_no_call_id_assessments_get_fresh_sidecar_request_ids() {
+    let (_dir, runtime) = fake_shell_runtime("repeated", crate::laya::LayaMode::Relaxed);
+    let call = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: None,
+    };
+
+    let first = assess_shell_call(&call, crate::config::AgentMode::Build, false, &runtime)
+        .await
+        .expect("first assessment");
+    let second = assess_shell_call(&call, crate::config::AgentMode::Build, false, &runtime)
+        .await
+        .expect("second assessment");
+    assert_eq!(first.effective_authorization, AuthorizationDecision::Allow);
+    assert_eq!(second.effective_authorization, AuthorizationDecision::Allow);
+}
+
+fn fake_shell_runtime(
+    mode: &str,
+    laya_mode: crate::laya::LayaMode,
+) -> (tempfile::TempDir, crate::laya::LayaRuntime) {
+    let dir = tempfile::tempdir().expect("fake sidecar tempdir");
+    let adapter = dir.path().join("fake-sidecar.sh");
+    let model = dir.path().join(mode);
+    let script = r####"#!/bin/sh
+model_path="$2"
+mode=$(basename "$model_path")
+printf '%s\n' '{"protocol":1,"backend":"fake","model":"fixture","kinds":["shell_policy","repetition"]}'
+while IFS= read -r request; do
+    id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    if [ "$mode" = "live-read-only" ]; then
+        printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read-only"]}}\n' "$id"
+    else
+        printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"]}}\n' "$id"
+    fi
+done
+"####;
+    std::fs::write(&adapter, script).expect("write fake sidecar");
+    std::fs::write(&model, b"fixture").expect("write fake model");
+    (
+        dir,
+        crate::laya::LayaRuntime::new(crate::laya::LayaConfig {
+            mode: laya_mode,
+            python: Some("sh".to_string()),
+            adapter: Some(adapter.display().to_string()),
+            model: Some(model.display().to_string()),
+            ..Default::default()
+        }),
+    )
+}
+
+#[test]
 fn shell_assessment_cache_rejects_a_stale_call_signature() {
     use crate::tools::{
         ShellAssessment, shell_assessment_cache_key, shell_assessment_matches_call,

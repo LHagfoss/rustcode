@@ -610,9 +610,13 @@ fn has_explicit_mutation(command: &str) -> bool {
 
 fn is_bounded_unclassified_candidate(command: &str) -> bool {
     let tokens = command.split_whitespace().collect::<Vec<_>>();
-    let Some(binary) = tokens.first().map(|token| token.rsplit(['/', '\\']).next()) else {
+    let Some(first_token) = tokens.first().copied() else {
         return false;
     };
+    if first_token.rsplit(['/', '\\']).next() != Some(first_token) {
+        return false;
+    }
+    let binary = Some(first_token);
     matches!(
         binary,
         Some("python" | "python3" | "node" | "ruby" | "perl")

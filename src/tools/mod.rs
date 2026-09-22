@@ -2,7 +2,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod audio;
 mod delegate;
@@ -1052,6 +1052,56 @@ fn shell_classification_label(classification: ShellClassification) -> &'static s
     }
 }
 
+fn confidence_bucket(advisory: Option<&crate::laya::AdvisoryDecision>) -> &'static str {
+    let Some(confidence) = advisory.map(|decision| decision.confidence) else {
+        return "none";
+    };
+    if confidence >= 0.98 {
+        "high"
+    } else if confidence >= 0.75 {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
+fn latency_bucket(latency: Duration) -> &'static str {
+    match latency.as_millis() {
+        0..=9 => "0_9ms",
+        10..=49 => "10_49ms",
+        50..=149 => "50_149ms",
+        _ => "150ms_plus",
+    }
+}
+
+pub(crate) fn shell_advisory_event_fields(
+    facts: &ShellPolicyFacts,
+    advisory: Option<&crate::laya::AdvisoryDecision>,
+    latency: Duration,
+    failure_category: &str,
+) -> Value {
+    serde_json::json!({
+        "decision_kind": "shell_policy",
+        "local_classification": shell_classification_label(facts.classification),
+        "local_label": shell_classification_label(facts.classification),
+        "confidence_bucket": confidence_bucket(advisory),
+        "latency_bucket": latency_bucket(latency),
+        "failure_category": failure_category,
+    })
+}
+
+fn advisory_failure_category(error: &crate::laya::AdvisoryError) -> &'static str {
+    match error {
+        crate::laya::AdvisoryError::Disabled => "disabled",
+        crate::laya::AdvisoryError::Unavailable => "unavailable",
+        crate::laya::AdvisoryError::InvalidRequest => "invalid_request",
+        crate::laya::AdvisoryError::Timeout => "timeout",
+        crate::laya::AdvisoryError::MalformedResponse => "malformed_response",
+        crate::laya::AdvisoryError::ModelError => "model_error",
+        crate::laya::AdvisoryError::ProcessExit => "process_exit",
+    }
+}
+
 pub(crate) async fn assess_shell_call(
     call: &ToolCall,
     mode: crate::config::AgentMode,
@@ -1070,6 +1120,8 @@ pub(crate) async fn assess_shell_call(
     let local_authorization =
         authorize_tool_with_args(&call.name, &call.arguments, mode, auto_confirm, false);
     let mut advisory = None;
+    let mut failure_category = "not_attempted";
+    let advisory_started = Instant::now();
     if facts.eligible_for_relaxed_advisory()
         && matches!(
             local_authorization,
@@ -1077,7 +1129,7 @@ pub(crate) async fn assess_shell_call(
         )
     {
         let request = crate::laya::AdvisoryRequest {
-            id: shell_assessment_cache_key(call),
+            id: laya.next_request_id(crate::laya::AdvisoryKind::ShellPolicy),
             kind: crate::laya::AdvisoryKind::ShellPolicy,
             input: serde_json::json!({
                 "command": command.chars().take(512).collect::<String>(),
@@ -1095,7 +1147,13 @@ pub(crate) async fn assess_shell_call(
             }),
             deadline: std::time::Duration::from_millis(laya.config().timeout_ms),
         };
-        advisory = laya.evaluate(request).await.ok();
+        match laya.evaluate(request).await {
+            Ok(result) => {
+                advisory = Some(result);
+                failure_category = "none";
+            }
+            Err(error) => failure_category = advisory_failure_category(&error),
+        }
     }
     let effective_authorization = effective_shell_authorization(
         local_authorization.clone(),
@@ -1104,6 +1162,17 @@ pub(crate) async fn assess_shell_call(
         laya_mode,
         laya.config().min_confidence,
     );
+    if laya_mode == crate::laya::LayaMode::Shadow {
+        crate::logger::operational_event(
+            "laya.shell_policy",
+            shell_advisory_event_fields(
+                &facts,
+                advisory.as_ref(),
+                advisory_started.elapsed(),
+                failure_category,
+            ),
+        );
+    }
     Some(ShellAssessment {
         cache_key: shell_assessment_cache_key(call),
         call_signature: shell_call_signature(call),
