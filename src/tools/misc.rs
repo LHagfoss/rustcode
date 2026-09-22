@@ -5,7 +5,7 @@ use super::{Tool, ToolCapability, ToolSafety};
 use crate::daemon::{
     client::DaemonClient,
     lifecycle::DaemonLifecycle,
-    model::{JobRecord, RetryPolicy, ScheduleSpec},
+    model::{JobAction, JobRecord, RetryPolicy, ScheduleSpec},
     protocol::{DaemonRequest, DaemonResponse},
 };
 
@@ -121,8 +121,32 @@ fn create_job(args: &Value) -> Result<JobRecord, String> {
     schedule
         .validate()
         .map_err(|error| format!("invalid schedule: {error}"))?;
-    let action = serde_json::from_value(args.get("action").cloned().ok_or("missing 'action'")?)
+    let mut action: JobAction = serde_json::from_value(
+        args.get("action").cloned().ok_or("missing 'action'")?,
+    )
         .map_err(|error| format!("invalid action: {error}"))?;
+    if let JobAction::McpCall {
+        server,
+        workspace: action_workspace,
+        server_config,
+        ..
+    } = &mut action
+        && server_config.is_none()
+    {
+        let workspace_path = std::path::Path::new(action_workspace);
+        let (_, _, config) = crate::config::load_config_for_workspace(workspace_path);
+        let snapshot = config
+            .mcp_servers
+            .iter()
+            .find(|candidate| candidate.name == *server)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "MCP server '{server}' is not configured for workspace {action_workspace}"
+                )
+            })?;
+        *server_config = Some(snapshot);
+    }
     let next_due_at = match schedule {
         ScheduleSpec::Once { at } => at,
         _ => schedule
