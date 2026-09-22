@@ -2295,6 +2295,147 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
 }
 
 #[tokio::test]
+async fn interactive_policy_reuses_a_cached_relaxed_shell_assessment() {
+    use crate::network::policy::TurnPolicy;
+
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    app.laya = crate::laya::LayaRuntime::new(crate::laya::LayaConfig {
+        mode: crate::laya::LayaMode::Relaxed,
+        ..Default::default()
+    });
+    let state = Arc::new(Mutex::new(app));
+    let call = crate::tools::ToolCall {
+        name: "run_command".to_owned(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: Some("cached-call".to_owned()),
+    };
+    let facts = crate::tools::shell_policy_facts("python --version");
+    let mut assessments = crate::tools::ShellAssessmentCache::new();
+    assessments.insert(
+        crate::tools::shell_assessment_cache_key(&call),
+        crate::tools::ShellAssessment {
+            cache_key: crate::tools::shell_assessment_cache_key(&call),
+            call_signature: crate::tools::shell_call_signature(&call),
+            classification: facts.classification,
+            facts,
+            local_authorization: crate::tools::AuthorizationDecision::RequireConfirmation,
+            advisory: None,
+            effective_authorization: crate::tools::AuthorizationDecision::Allow,
+        },
+    );
+
+    let approved = super::policy::InteractivePolicy
+        .should_approve_with_assessments(&state, &[call], &assessments)
+        .await;
+    assert!(approved);
+    assert!(state.lock().await.pending_tool_confirmation.is_none());
+}
+
+#[tokio::test]
+async fn execution_requires_confirmation_when_relaxed_laya_assessment_is_missing() {
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    app.laya = crate::laya::LayaRuntime::new(crate::laya::LayaConfig {
+        mode: crate::laya::LayaMode::Relaxed,
+        ..Default::default()
+    });
+    let state = Arc::new(Mutex::new(app));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let state_for_task = Arc::clone(&state);
+    let cancel_for_task = cancel.clone();
+    let task = tokio::spawn(async move {
+        super::tool_exec::confirm_and_execute_for_call(
+            &reqwest::Client::new(),
+            &state_for_task,
+            &cancel_for_task,
+            "run_command",
+            &serde_json::json!({"command": "python --version"}),
+            "run_command",
+            true,
+            None,
+            None,
+            None,
+        )
+        .await
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if state.lock().await.pending_tool_confirmation.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("missing assessment should fall back to confirmation");
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("confirmation response channel");
+    response.send(false).expect("confirmation task alive");
+    let (result, _, _) = task.await.expect("execution task should finish");
+    assert_eq!(
+        result.error_kind,
+        Some(crate::tools::ToolErrorKind::PermissionDenied)
+    );
+}
+
+#[tokio::test]
+async fn batch_bypass_executes_only_with_the_cached_relaxed_assessment() {
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    app.laya = crate::laya::LayaRuntime::new(crate::laya::LayaConfig {
+        mode: crate::laya::LayaMode::Relaxed,
+        ..Default::default()
+    });
+    let state = Arc::new(Mutex::new(app));
+    let call = crate::tools::ToolCall {
+        name: "run_command".to_owned(),
+        arguments: serde_json::json!({"command": "python3 --version"}),
+        call_id: Some("approved-call".to_owned()),
+    };
+    let facts = crate::tools::shell_policy_facts("python3 --version");
+    let mut assessments = crate::tools::ShellAssessmentCache::new();
+    assessments.insert(
+        crate::tools::shell_assessment_cache_key(&call),
+        crate::tools::ShellAssessment {
+            cache_key: crate::tools::shell_assessment_cache_key(&call),
+            call_signature: crate::tools::shell_call_signature(&call),
+            classification: facts.classification,
+            facts,
+            local_authorization: crate::tools::AuthorizationDecision::RequireConfirmation,
+            advisory: None,
+            effective_authorization: crate::tools::AuthorizationDecision::Allow,
+        },
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut dirty = false;
+    let mut compiler_cache = None;
+    let mut user_wait = std::time::Duration::ZERO;
+    let results = super::tool_exec::execute_tool_batch_with_assessments(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &[call],
+        true,
+        &None,
+        &mut dirty,
+        &mut compiler_cache,
+        &mut user_wait,
+        None,
+        &assessments,
+    )
+    .await;
+    assert_eq!(results.len(), 1);
+    assert!(results[0].metadata.success, "{results:?}");
+    assert!(state.lock().await.pending_tool_confirmation.is_none());
+}
+
+#[tokio::test]
 async fn test_compact_history_strips_thinking_blocks() {
     // #985 immutable-history contract: `<think>` blocks stay verbatim in
     // storage and are stripped only at request-render time

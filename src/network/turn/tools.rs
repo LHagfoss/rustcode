@@ -9,9 +9,7 @@ use super::super::lifecycle;
 use super::super::loop_detect;
 use super::super::policy;
 use super::super::text::has_intended_tool_call;
-use super::super::tool_exec::{
-    execute_tool_batch, get_tool_project_root, tool_result_history_message,
-};
+use super::super::tool_exec::{get_tool_project_root, tool_result_history_message};
 use super::super::verification;
 use super::super::{
     FORCE_ANSWER_PROMPT, LoopRecoveryAction, active_todo_checkpoint, cached_compiler_check,
@@ -82,6 +80,35 @@ fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> Stri
     }
 }
 
+async fn populate_shell_assessments(
+    state: &Arc<Mutex<AppState>>,
+    ctx: &mut TurnContext,
+    calls: &[crate::tools::ToolCall],
+) {
+    let (mode, auto_confirm, laya) = {
+        let state = state.lock().await;
+        (state.agent_mode, state.auto_confirm, state.laya.clone())
+    };
+    for call in calls {
+        if call.name != "run_command" {
+            continue;
+        }
+        let key = crate::tools::shell_assessment_cache_key(call);
+        if ctx
+            .shell_assessments
+            .get(&key)
+            .is_some_and(|assessment| crate::tools::shell_assessment_matches_call(assessment, call))
+        {
+            continue;
+        }
+        if let Some(assessment) =
+            crate::tools::assess_shell_call(call, mode, auto_confirm, &laya).await
+        {
+            ctx.shell_assessments.insert(key, assessment);
+        }
+    }
+}
+
 fn targeted_no_progress_guidance(
     reason: loop_detect::ProgressReason,
     streak: usize,
@@ -103,10 +130,38 @@ fn targeted_no_progress_guidance(
     )
 }
 
+fn shell_call_is_read_only(
+    call: &crate::tools::ToolCall,
+    assessments: &crate::tools::ShellAssessmentCache,
+) -> bool {
+    if call.name == "run_command" {
+        return crate::tools::shell_assessment_for_call(assessments, call)
+            .map(|assessment| {
+                assessment.effective_authorization == crate::tools::AuthorizationDecision::Allow
+            })
+            .unwrap_or_else(|| crate::tools::is_read_only_call(call));
+    }
+    crate::tools::is_read_only_call(call)
+}
+
 fn selected_tool_call_indices(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
     policy: crate::config::ToolSchedulingPolicy,
+) -> Vec<usize> {
+    selected_tool_call_indices_with_assessments(
+        calls,
+        validation_errors,
+        policy,
+        &Default::default(),
+    )
+}
+
+fn selected_tool_call_indices_with_assessments(
+    calls: &[crate::tools::ToolCall],
+    validation_errors: &[Option<String>],
+    policy: crate::config::ToolSchedulingPolicy,
+    assessments: &crate::tools::ShellAssessmentCache,
 ) -> Vec<usize> {
     let first_control = calls.iter().enumerate().find(|(index, call)| {
         validation_errors[*index].is_none()
@@ -133,7 +188,7 @@ fn selected_tool_call_indices(
                     crate::tools::ToolSafety::ControlPlane
                 )
                 || !seen.insert(crate::tools::duplicate_tool_call_key(call))
-                || !crate::tools::is_read_only_call(call)
+                || !shell_call_is_read_only(call, assessments)
             {
                 continue;
             }
@@ -180,7 +235,7 @@ fn selected_tool_call_indices(
         if !seen.insert(crate::tools::duplicate_tool_call_key(call)) {
             continue;
         }
-        if !crate::tools::is_read_only_call(call) {
+        if !shell_call_is_read_only(call, assessments) {
             if mutating >= mutation_cap {
                 continue;
             }
@@ -456,12 +511,17 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             .map(|profile| profile.tool_scheduling_policy())
             .unwrap_or_default()
     };
+    populate_shell_assessments(state, ctx, &parsed_tool_calls).await;
     // Preserve control-plane priority (for example, load a requested skill
     // before acting). The default policy selects one valid call; explicitly
     // trusted profiles may select a bounded read/mutation batch. Invalid or
     // over-budget calls remain in the transcript as non-executed results.
-    let selected_call_indices =
-        selected_tool_call_indices(&parsed_tool_calls, &validation_errors, scheduling_policy);
+    let selected_call_indices = selected_tool_call_indices_with_assessments(
+        &parsed_tool_calls,
+        &validation_errors,
+        scheduling_policy,
+        &ctx.shell_assessments,
+    );
     let selected_call_index = selected_call_indices.first().copied();
     let executable_tool_calls = selected_call_indices
         .iter()
@@ -523,7 +583,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         && selected_call_indices.iter().all(|index| {
             tool_calls
                 .get(*index)
-                .is_some_and(|call| loop_detect::is_read_only_call(&call.name, &call.arguments))
+                .is_some_and(|call| shell_call_is_read_only(call, &ctx.shell_assessments))
         });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
@@ -661,7 +721,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         if !cancel_token.is_cancelled() {
             ctx.budget.tool_rounds += 1;
 
-            let approved = policy.should_approve(state, &executable_tool_calls).await;
+            let approved = policy
+                .should_approve_with_assessments(
+                    state,
+                    &executable_tool_calls,
+                    &ctx.shell_assessments,
+                )
+                .await;
 
             {
                 let mut s = state.lock().await;
@@ -699,7 +765,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // Phase 4: execute only the selected, complete calls and record
             // progress evidence. The other calls are closed below, never
             // silently dropped or described as if they ran.
-            let results = execute_tool_batch(
+            let results = super::super::tool_exec::execute_tool_batch_with_assessments(
                 client,
                 state,
                 cancel_token,
@@ -710,6 +776,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 &mut ctx.compiler.cache,
                 &mut ctx.lifecycle.user_wait_duration,
                 None,
+                &ctx.shell_assessments,
             )
             .await;
             let mut executed_results = results.into_iter();
@@ -1879,7 +1946,8 @@ mod tests {
         apply_round_stagnation, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
         grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
-        selected_tool_call_indices, should_apply_loop_recovery, targeted_no_progress_guidance,
+        selected_tool_call_indices, selected_tool_call_indices_with_assessments,
+        should_apply_loop_recovery, targeted_no_progress_guidance,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -2033,6 +2101,36 @@ mod tests {
             },
         );
         assert_eq!(selected, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn scheduler_uses_a_cached_relaxed_shell_assessment_as_read_only() {
+        let calls = vec![read_call("python --version"), read_call("python --help")];
+        let errors = vec![None, None];
+        let mut assessments = crate::tools::ShellAssessmentCache::new();
+        for call in &calls {
+            let facts =
+                crate::tools::shell_policy_facts(call.arguments["command"].as_str().unwrap());
+            assessments.insert(
+                crate::tools::shell_assessment_cache_key(call),
+                crate::tools::ShellAssessment {
+                    cache_key: crate::tools::shell_assessment_cache_key(call),
+                    call_signature: crate::tools::shell_call_signature(call),
+                    classification: facts.classification,
+                    facts,
+                    local_authorization: crate::tools::AuthorizationDecision::RequireConfirmation,
+                    advisory: None,
+                    effective_authorization: crate::tools::AuthorizationDecision::Allow,
+                },
+            );
+        }
+        let selected = selected_tool_call_indices_with_assessments(
+            &calls,
+            &errors,
+            crate::config::ToolSchedulingPolicy::default(),
+            &assessments,
+        );
+        assert_eq!(selected, vec![0, 1]);
     }
 
     #[test]

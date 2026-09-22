@@ -2239,6 +2239,293 @@ fn authorization_is_centralized_and_conservative() {
 }
 
 #[test]
+fn shell_facts_distinguish_read_only_candidates_and_hazards() {
+    use crate::tools::{ShellClassification, shell_policy_facts};
+
+    for command in ["git status --short", "ls src", "rg -n TODO src"] {
+        let facts = shell_policy_facts(command);
+        assert_eq!(
+            facts.classification,
+            ShellClassification::ReadOnly,
+            "{command}"
+        );
+        assert!(!facts.has_hazard(), "{command}: {facts:?}");
+    }
+
+    let cases = [
+        ("rm -f scratch.txt", "known destructive command"),
+        ("git restore -- src/lib.rs", "destructive Git"),
+        ("cat src/lib.rs > /tmp/lib.rs", "redirection"),
+        ("echo $(pwd)", "command substitution"),
+        ("sleep 1 &", "backgrounding"),
+        ("sudo ls", "privilege escalation"),
+        ("ls | rg TODO", "pipeline"),
+        ("ls; pwd", "mixed command list"),
+        ("curl https://example.com", "network"),
+        ("cargo test", "explicit mutation"),
+        ("mystery-command --inspect", "unknown command"),
+    ];
+    for (command, label) in cases {
+        let facts = shell_policy_facts(command);
+        assert!(facts.has_hazard(), "{label}: {command}: {facts:?}");
+        assert_ne!(
+            facts.classification,
+            ShellClassification::ReadOnly,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn authorize_relaxed_mode_only_downgrades_an_eligible_unknown_shell_command() {
+    use crate::laya::{AdvisoryDecision, LayaMode};
+    use crate::tools::shell_policy_facts;
+
+    let advisory = AdvisoryDecision {
+        label: "read_only".to_string(),
+        confidence: 0.999,
+        effects: vec!["read_only".to_string()],
+        rationale_code: Some("fixture".to_string()),
+    };
+    let args = serde_json::json!({"command": "python --version"});
+    let local = authorize_tool_with_args(
+        "run_command",
+        &args,
+        crate::config::AgentMode::Build,
+        false,
+        false,
+    );
+    assert_eq!(local, AuthorizationDecision::RequireConfirmation);
+
+    let effective = effective_shell_authorization(
+        local.clone(),
+        &shell_policy_facts(args["command"].as_str().unwrap()),
+        Some(&advisory),
+        LayaMode::Relaxed,
+        0.98,
+    );
+    assert_eq!(effective, AuthorizationDecision::Allow);
+
+    for command in [
+        "rm -f scratch.txt",
+        "git restore -- src/lib.rs",
+        "cat src/lib.rs > /tmp/lib.rs",
+        "echo $(pwd)",
+        "sleep 1 &",
+        "sudo ls",
+        "ls | rg TODO",
+        "ls; pwd",
+        "curl https://example.com",
+        "cargo test",
+    ] {
+        let local = authorize_tool_with_args(
+            "run_command",
+            &serde_json::json!({"command": command}),
+            crate::config::AgentMode::Build,
+            false,
+            false,
+        );
+        let effective = effective_shell_authorization(
+            local.clone(),
+            &shell_policy_facts(command),
+            Some(&advisory),
+            LayaMode::Relaxed,
+            0.98,
+        );
+        assert_ne!(effective, AuthorizationDecision::Allow, "{command}");
+        if !matches!(local, AuthorizationDecision::Allow) {
+            assert_eq!(effective, local, "relaxed mode changed {command}");
+        }
+    }
+
+    let plan_local = authorize_tool_with_args(
+        "run_command",
+        &args,
+        crate::config::AgentMode::Plan,
+        false,
+        false,
+    );
+    assert!(matches!(plan_local, AuthorizationDecision::Deny(_)));
+    assert!(matches!(
+        effective_shell_authorization(
+            plan_local,
+            &shell_policy_facts("python --version"),
+            Some(&advisory),
+            LayaMode::Relaxed,
+            0.98,
+        ),
+        AuthorizationDecision::Deny(_)
+    ));
+}
+
+#[test]
+fn authorize_relaxed_mode_falls_back_on_advisory_disagreement_or_failure() {
+    use crate::laya::{AdvisoryDecision, LayaMode};
+    use crate::tools::shell_policy_facts;
+
+    let local = AuthorizationDecision::RequireConfirmation;
+    let facts = shell_policy_facts("python --version");
+    for advisory in [
+        AdvisoryDecision {
+            label: "unknown".to_string(),
+            confidence: 0.999,
+            effects: vec!["read_only".to_string()],
+            rationale_code: None,
+        },
+        AdvisoryDecision {
+            label: "read_only".to_string(),
+            confidence: 0.5,
+            effects: vec!["read_only".to_string()],
+            rationale_code: None,
+        },
+        AdvisoryDecision {
+            label: "read_only".to_string(),
+            confidence: 0.999,
+            effects: vec!["network_or_external".to_string()],
+            rationale_code: None,
+        },
+    ] {
+        assert_eq!(
+            effective_shell_authorization(
+                local.clone(),
+                &facts,
+                Some(&advisory),
+                LayaMode::Relaxed,
+                0.98,
+            ),
+            local
+        );
+    }
+    assert_eq!(
+        effective_shell_authorization(local.clone(), &facts, None, LayaMode::Relaxed, 0.98),
+        local
+    );
+    assert_eq!(
+        effective_shell_authorization(
+            local.clone(),
+            &facts,
+            Some(&AdvisoryDecision {
+                label: "read_only".to_string(),
+                confidence: 0.999,
+                effects: vec!["read_only".to_string()],
+                rationale_code: None,
+            }),
+            LayaMode::Shadow,
+            0.98,
+        ),
+        local
+    );
+}
+
+#[test]
+fn shell_assessment_cache_rejects_a_stale_call_signature() {
+    use crate::tools::{
+        ShellAssessment, shell_assessment_cache_key, shell_assessment_matches_call,
+        shell_call_signature,
+    };
+
+    let original = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: Some("call-1".to_string()),
+    };
+    let assessment = ShellAssessment {
+        cache_key: shell_assessment_cache_key(&original),
+        call_signature: shell_call_signature(&original),
+        classification: ShellClassification::Unclassified,
+        facts: shell_policy_facts("python --version"),
+        local_authorization: AuthorizationDecision::RequireConfirmation,
+        advisory: None,
+        effective_authorization: AuthorizationDecision::RequireConfirmation,
+    };
+    assert!(shell_assessment_matches_call(&assessment, &original));
+
+    let changed = ToolCall {
+        arguments: serde_json::json!({"command": "rm -f scratch.txt"}),
+        ..original
+    };
+    assert!(!shell_assessment_matches_call(&assessment, &changed));
+}
+
+#[test]
+fn execution_authorization_requires_a_matching_assessment_when_laya_is_active() {
+    use crate::tools::{
+        ShellAssessment, execution_authorization, shell_assessment_cache_key, shell_call_signature,
+    };
+
+    let call = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: Some("call-2".to_string()),
+    };
+    let assessment = ShellAssessment {
+        cache_key: shell_assessment_cache_key(&call),
+        call_signature: shell_call_signature(&call),
+        classification: ShellClassification::Unclassified,
+        facts: shell_policy_facts("python --version"),
+        local_authorization: AuthorizationDecision::RequireConfirmation,
+        advisory: None,
+        effective_authorization: AuthorizationDecision::Allow,
+    };
+    assert_eq!(
+        execution_authorization(
+            &call.name,
+            &call.arguments,
+            call.call_id.as_deref(),
+            crate::config::AgentMode::Build,
+            false,
+            true,
+            true,
+            Some(&assessment),
+        ),
+        AuthorizationDecision::Allow
+    );
+    assert_eq!(
+        execution_authorization(
+            &call.name,
+            &call.arguments,
+            call.call_id.as_deref(),
+            crate::config::AgentMode::Build,
+            false,
+            true,
+            true,
+            None,
+        ),
+        AuthorizationDecision::RequireConfirmation
+    );
+
+    let changed = serde_json::json!({"command": "rm -f scratch.txt"});
+    assert_eq!(
+        execution_authorization(
+            &call.name,
+            &changed,
+            call.call_id.as_deref(),
+            crate::config::AgentMode::Build,
+            false,
+            true,
+            true,
+            Some(&assessment),
+        ),
+        AuthorizationDecision::RequireConfirmation
+    );
+}
+
+#[tokio::test]
+async fn off_mode_does_not_create_a_shell_assessment() {
+    let call = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python3 --version"}),
+        call_id: Some("off-call".to_string()),
+    };
+    let runtime = crate::laya::LayaRuntime::new(crate::laya::LayaConfig::default());
+    assert!(
+        assess_shell_call(&call, crate::config::AgentMode::Build, false, &runtime,)
+            .await
+            .is_none()
+    );
+}
+
+#[test]
 fn manage_task_is_allowed_without_confirmation() {
     // MANAGE_TASK is ToolSafety::ProcessControl, not Unknown, so it must
     // not be swept into the conservative Unknown-confirmation fallback.

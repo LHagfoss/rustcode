@@ -20,6 +20,50 @@ const SUDO_LONG_OPTS_WITH_VALUE: &[&str] = &[
     "role",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellClassification {
+    ReadOnly,
+    WorkspaceMutation,
+    ProcessControl,
+    NetworkOrExternal,
+    Unclassified,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShellPolicyFacts {
+    pub(crate) classification: ShellClassification,
+    pub(crate) has_redirection: bool,
+    pub(crate) has_backgrounding: bool,
+    pub(crate) has_privilege_escalation: bool,
+    pub(crate) known_destructive: bool,
+    pub(crate) has_network_effect: bool,
+    pub(crate) has_mixed_list: bool,
+    pub(crate) has_command_substitution: bool,
+    pub(crate) explicit_mutation: bool,
+    pub(crate) unclassified: bool,
+}
+
+impl ShellPolicyFacts {
+    pub(crate) fn has_hazard(&self) -> bool {
+        self.has_redirection
+            || self.has_backgrounding
+            || self.has_privilege_escalation
+            || self.known_destructive
+            || self.has_network_effect
+            || self.has_mixed_list
+            || self.has_command_substitution
+            || self.explicit_mutation
+            || self.classification == ShellClassification::Unknown
+    }
+
+    pub(crate) fn eligible_for_relaxed_advisory(&self) -> bool {
+        self.classification == ShellClassification::Unclassified
+            && self.unclassified
+            && !self.has_hazard()
+    }
+}
+
 /// Conservatively split shell text at boundaries that may introduce another
 /// command. This is intentionally not a complete shell parser: splitting too
 /// eagerly can only make the policy require confirmation, never bypass it.
@@ -427,6 +471,217 @@ pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
         None
     } else {
         Some("unclassified or potentially mutating shell command".to_string())
+    }
+}
+
+fn command_binary(segment: &str) -> Option<&str> {
+    segment
+        .split_whitespace()
+        .next()
+        .map(|token| token.rsplit(['/', '\\']).next().unwrap_or(token))
+}
+
+fn has_network_effect(command: &str) -> bool {
+    command_confirmation_segments(command)
+        .iter()
+        .any(|segment| {
+            let tokens = segment.split_whitespace().collect::<Vec<_>>();
+            let Some(binary) = command_binary(segment) else {
+                return false;
+            };
+            matches!(
+                binary,
+                "curl"
+                    | "wget"
+                    | "ssh"
+                    | "scp"
+                    | "sftp"
+                    | "rsync"
+                    | "nc"
+                    | "ncat"
+                    | "telnet"
+                    | "ftp"
+                    | "ping"
+            ) || (binary == "git"
+                && matches!(
+                    git_subcommand(&tokens).map(|(subcommand, _)| subcommand),
+                    Some("clone" | "fetch" | "pull" | "push" | "ls-remote" | "submodule")
+                ))
+                || (binary == "gh"
+                    && matches!(
+                        tokens.get(1..),
+                        Some(
+                            ["issue", "create", ..]
+                                | ["issue", "close", ..]
+                                | ["pr", "create", ..]
+                                | ["pr", "merge", ..]
+                        )
+                    ))
+        })
+}
+
+fn has_process_effect(command: &str) -> bool {
+    command_confirmation_segments(command)
+        .iter()
+        .any(|segment| {
+            matches!(
+                command_binary(segment),
+                Some(
+                    "kill"
+                        | "pkill"
+                        | "killall"
+                        | "service"
+                        | "systemctl"
+                        | "launchctl"
+                        | "jobs"
+                        | "fg"
+                        | "bg"
+                        | "disown"
+                        | "nohup"
+                )
+            )
+        })
+}
+
+fn has_explicit_mutation(command: &str) -> bool {
+    command_confirmation_segments(command)
+        .iter()
+        .any(|segment| {
+            let tokens = segment.split_whitespace().collect::<Vec<_>>();
+            let Some(binary) = command_binary(segment) else {
+                return false;
+            };
+            let git_mutation = binary == "git"
+                && git_subcommand(&tokens).is_some_and(|(subcommand, _)| {
+                    matches!(
+                        subcommand,
+                        "add"
+                            | "am"
+                            | "apply"
+                            | "bisect"
+                            | "branch"
+                            | "checkout"
+                            | "cherry-pick"
+                            | "clean"
+                            | "commit"
+                            | "config"
+                            | "fetch"
+                            | "merge"
+                            | "mv"
+                            | "pull"
+                            | "push"
+                            | "rebase"
+                            | "reset"
+                            | "restore"
+                            | "rm"
+                            | "stash"
+                            | "switch"
+                            | "tag"
+                    )
+                });
+            git_mutation
+                || matches!(
+                    binary,
+                    "rm" | "mv"
+                        | "cp"
+                        | "touch"
+                        | "mkdir"
+                        | "rmdir"
+                        | "install"
+                        | "chmod"
+                        | "chown"
+                        | "truncate"
+                        | "tee"
+                        | "cargo"
+                        | "make"
+                        | "ninja"
+                        | "npm"
+                        | "pnpm"
+                        | "yarn"
+                        | "pip"
+                        | "pip3"
+                )
+                || (matches!(binary, "sed" | "yq")
+                    && tokens.iter().any(|token| {
+                        *token == "-i" || *token == "--in-place" || token.starts_with("-i")
+                    }))
+        })
+}
+
+fn is_bounded_unclassified_candidate(command: &str) -> bool {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    let Some(binary) = tokens.first().map(|token| token.rsplit(['/', '\\']).next()) else {
+        return false;
+    };
+    matches!(
+        binary,
+        Some("python" | "python3" | "node" | "ruby" | "perl")
+    ) && tokens.get(1..).is_some_and(|arguments| {
+        !arguments.is_empty()
+            && arguments
+                .iter()
+                .all(|argument| matches!(*argument, "--help" | "-h" | "--version" | "-V"))
+    })
+}
+
+fn command_confirmation_segments(command: &str) -> Vec<String> {
+    split_command_segments(&without_null_redirects(command))
+}
+
+pub(crate) fn shell_policy_facts(command: &str) -> ShellPolicyFacts {
+    let scannable = without_null_redirects(command);
+    let segments = command_confirmation_segments(command);
+    let has_redirection = scannable
+        .chars()
+        .any(|character| matches!(character, '<' | '>'));
+    let has_backgrounding = scannable.contains('&');
+    let has_mixed_list = scannable
+        .chars()
+        .any(|character| matches!(character, ';' | '\n' | '|' | '&'));
+    let has_command_substitution =
+        scannable.contains("$()") || scannable.contains("$(") || scannable.contains('`');
+    let has_privilege_escalation = segments
+        .iter()
+        .any(|segment| matches!(command_binary(segment), Some("sudo" | "doas")));
+    let known_destructive = segments
+        .iter()
+        .any(|segment| destructive_git_scope(segment).is_some());
+    let has_network_effect = has_network_effect(command);
+    let explicit_mutation = has_explicit_mutation(command);
+    let process_effect = has_process_effect(command);
+    let unclassified = segments
+        .iter()
+        .any(|segment| !segment.trim().is_empty() && !is_read_only_segment(segment));
+    let classification = if known_destructive || explicit_mutation {
+        ShellClassification::WorkspaceMutation
+    } else if has_network_effect {
+        ShellClassification::NetworkOrExternal
+    } else if process_effect || has_privilege_escalation || has_backgrounding {
+        ShellClassification::ProcessControl
+    } else if has_redirection || has_command_substitution || has_mixed_list {
+        ShellClassification::Unknown
+    } else if !unclassified && command_confirmation_scope(command).is_none() {
+        ShellClassification::ReadOnly
+    } else if is_bounded_unclassified_candidate(command) {
+        ShellClassification::Unclassified
+    } else {
+        ShellClassification::Unknown
+    };
+
+    ShellPolicyFacts {
+        classification,
+        has_redirection,
+        has_backgrounding,
+        has_privilege_escalation,
+        known_destructive,
+        has_network_effect,
+        has_mixed_list,
+        has_command_substitution,
+        explicit_mutation,
+        unclassified: matches!(
+            classification,
+            ShellClassification::Unclassified | ShellClassification::Unknown
+        ) && unclassified,
     }
 }
 

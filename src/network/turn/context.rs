@@ -14,6 +14,7 @@ pub struct TurnContext {
     pub response: ResponseState,
     pub metrics: MetricsState,
     pub lifecycle: LifecycleState,
+    pub(crate) shell_assessments: crate::tools::ShellAssessmentCache,
     pub(crate) request_prefix_cache: RequestPrefixCache,
 }
 
@@ -262,6 +263,7 @@ impl TurnContext {
                 user_wait_duration: Duration::ZERO,
                 stop_reason: None,
             },
+            shell_assessments: std::collections::HashMap::new(),
             request_prefix_cache: RequestPrefixCache::default(),
         }
     }
