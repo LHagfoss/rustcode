@@ -394,6 +394,17 @@ fn laya_can_extend_recovery(
         })
 }
 
+fn consume_laya_recovery_credit(ctx: &mut TurnContext, advisory: loop_detect::RecoveryAdvisory) {
+    ctx.recovery.laya_read_only_recoveries_used = ctx
+        .recovery
+        .laya_read_only_recoveries_used
+        .saturating_add(1);
+    // A credited recovery is still a recovery round. Count it against the
+    // same hard ceiling so the next repetition reaches the terminal gate.
+    ctx.recovery.loop_recovery_attempts = ctx.recovery.loop_recovery_attempts.saturating_add(1);
+    ctx.recovery.laya_pending_recovery_advisory = Some(advisory);
+}
+
 fn laya_recovery_boundary_reached(attempts: u8, read_only_batch: bool) -> bool {
     read_only_batch
         && attempts >= crate::network::MAX_LOOP_RECOVERY_ROUNDS
@@ -1021,11 +1032,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         if use_laya_credit {
                             let (_, advisory) =
                                 laya_advisory.expect("Laya credit requires an advisory decision");
-                            ctx.recovery.laya_read_only_recoveries_used = ctx
-                                .recovery
-                                .laya_read_only_recoveries_used
-                                .saturating_add(1);
-                            ctx.recovery.laya_pending_recovery_advisory = Some(advisory);
+                            consume_laya_recovery_credit(ctx, advisory);
                             log_recovery_decision(ctx, "tool_loop", "recover", "laya_repetition");
                         } else {
                             ctx.recovery.loop_recovery_attempts =
@@ -2064,11 +2071,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         if use_laya_credit {
                             let (_, advisory) =
                                 laya_advisory.expect("Laya credit requires an advisory decision");
-                            ctx.recovery.laya_read_only_recoveries_used = ctx
-                                .recovery
-                                .laya_read_only_recoveries_used
-                                .saturating_add(1);
-                            ctx.recovery.laya_pending_recovery_advisory = Some(advisory);
+                            consume_laya_recovery_credit(ctx, advisory);
                         } else {
                             ctx.recovery.loop_recovery_attempts =
                                 ctx.recovery.loop_recovery_attempts.saturating_add(1);
@@ -2640,6 +2643,31 @@ mod tests {
             1,
             Some(&decision),
             true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn consuming_laya_credit_counts_toward_the_hard_ceiling() {
+        let mut ctx = TurnContext::new();
+        ctx.recovery.loop_recovery_attempts =
+            crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS - 1;
+
+        super::consume_laya_recovery_credit(
+            &mut ctx,
+            super::loop_detect::RecoveryAdvisory::NovelEvidence,
+        );
+
+        assert_eq!(
+            ctx.recovery.loop_recovery_attempts,
+            crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS
+        );
+        assert_eq!(
+            super::loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, true),
+            super::LoopRecoveryAction::ForceFinal
+        );
+        assert!(!super::laya_recovery_boundary_reached(
+            ctx.recovery.loop_recovery_attempts,
             true,
         ));
     }

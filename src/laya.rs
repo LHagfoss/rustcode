@@ -202,6 +202,7 @@ pub struct LayaStatus {
     pub model_available: bool,
     pub paths_available: bool,
     pub runtime_ready: bool,
+    pub runtime_observed: bool,
     pub failure_category: Option<String>,
     pub availability: Availability,
 }
@@ -243,6 +244,7 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
         model_available,
         paths_available: python_available && adapter_available && model_available,
         runtime_ready: false,
+        runtime_observed: false,
         failure_category: None,
         availability,
     }
@@ -261,7 +263,7 @@ pub fn format_runtime_status(runtime: &LayaRuntime) -> String {
 
 fn format_status_report(status: &LayaStatus) -> String {
     format!(
-        "Laya mode: {}\nPlatform: {}\nProtocol: {} ({})\nPython executable: {} ({})\nAdapter: {}\nModel: {}\nPaths available: {}\nRuntime ready: {}\nFailure category: {}\nAvailability: {}",
+        "Laya mode: {}\nPlatform: {}\nProtocol: {} ({})\nPython executable: {} ({})\nAdapter: {}\nModel: {}\nPaths available: {}\nRuntime state: {}\nRuntime ready: {}\nFailure category: {}\nAvailability: {}",
         status.mode,
         status.platform,
         status.protocol_version,
@@ -291,10 +293,23 @@ fn format_status_report(status: &LayaStatus) -> String {
             "not configured"
         },
         if status.paths_available { "yes" } else { "no" },
+        runtime_state_label(status),
         if status.runtime_ready { "yes" } else { "no" },
         status.failure_category.as_deref().unwrap_or("none"),
         status.availability,
     )
+}
+
+fn runtime_state_label(status: &LayaStatus) -> &'static str {
+    if !status.runtime_observed {
+        "unobserved (no active runtime snapshot)"
+    } else if status.runtime_ready {
+        "ready"
+    } else if status.failure_category.is_some() {
+        "observed failure"
+    } else {
+        "observed, not ready"
+    }
 }
 
 fn configured(value: Option<&str>) -> bool {
@@ -527,6 +542,8 @@ impl LayaRuntime {
         let mut status = diagnose(&self.config);
         if let Ok(state) = self.state.try_lock() {
             status.runtime_ready = state.process.is_some();
+            status.runtime_observed =
+                state.started || state.process.is_some() || state.last_failure.is_some();
             status.failure_category = state.last_failure.as_ref().map(advisory_error_category);
         }
         status
@@ -1330,6 +1347,7 @@ done
         assert!(status.contains("Paths available:"));
         assert!(status.contains("Runtime ready: no"));
         assert!(status.contains("Failure category:"));
+        assert!(status.contains("Runtime state: unobserved (no active runtime snapshot)"));
     }
 
     #[test]
@@ -1342,7 +1360,15 @@ done
             ..LayaConfig::default()
         });
 
-        assert!(format_runtime_status(&runtime).contains("Availability: missing_python"));
+        let expected_availability = if supported_platform() {
+            Availability::MissingPython
+        } else {
+            Availability::UnsupportedArchitecture
+        };
+        assert!(
+            format_runtime_status(&runtime)
+                .contains(&format!("Availability: {expected_availability}"))
+        );
         assert!(format_runtime_status(&runtime).contains("Runtime ready: no"));
 
         for (failure, category) in [
