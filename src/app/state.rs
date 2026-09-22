@@ -942,11 +942,23 @@ impl AppState {
 
     pub fn new() -> Self {
         let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        Self::new_with_workspace_session(&workspace, None)
+    }
+
+    /// Explicit construction for daemon turns without changing the active TUI session.
+    pub(crate) fn new_with_workspace_session(
+        workspace: &std::path::Path,
+        session: Option<&str>,
+    ) -> Self {
         let (api_base_url, model_name, mut config) =
             crate::config::load_config_for_workspace(&workspace);
         config.start_time = Some(std::time::SystemTime::now());
-        let active_session_id = crate::config::start_session(&mut config);
-        crate::config::record_session_settings(&active_session_id, &config);
+        let active_session_id = session
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::config::start_session(&mut config));
+        if session.is_none() {
+            crate::config::record_session_settings(&active_session_id, &config);
+        }
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
         let laya = crate::laya::LayaRuntime::new(config.laya.clone());
@@ -958,8 +970,10 @@ impl AppState {
             std::time::Instant::now(),
         );
         let cwd_and_branch = workspace_location.display();
-        crate::ui::theme::ensure_themes_dir();
-        crate::ui::theme::set_active_theme(&config.theme);
+        if session.is_none() {
+            crate::ui::theme::ensure_themes_dir();
+            crate::ui::theme::set_active_theme(&config.theme);
+        }
 
         let app = Self {
             input_buffer: String::new(),

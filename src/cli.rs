@@ -118,6 +118,131 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         completed: bool,
     },
+
+    /// Manage the background scheduler daemon
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
+
+    /// Manage scheduled jobs through the running daemon
+    Cron {
+        #[command(subcommand)]
+        command: CronCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum DaemonCommands {
+    /// Start the daemon in the background
+    Start {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the daemon in the foreground
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop the running daemon
+    Stop {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show daemon status
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the tail of the daemon log
+    Logs {
+        #[arg(long, default_value_t = 100, value_parser = parse_log_lines)]
+        lines: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum CronCommands {
+    /// Add a scheduled job
+    Add {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        workspace: String,
+        /// Schedule JSON, including an explicit timezone for recurring schedules
+        #[arg(long)]
+        schedule: String,
+        /// Action JSON
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        target_session: Option<String>,
+        /// Retry policy JSON
+        #[arg(long)]
+        retry_policy: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List scheduled jobs
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pause a scheduled job
+    Pause {
+        job_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resume a scheduled job
+    Resume {
+        job_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a scheduled job now
+    Run {
+        job_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recent runs for a scheduled job
+    History {
+        job_id: String,
+        #[arg(long, default_value_t = 20, value_parser = parse_history_limit)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a scheduled job
+    Delete {
+        job_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+fn parse_log_lines(value: &str) -> Result<usize, String> {
+    parse_bounded_usize(value, 1, 1000, "lines")
+}
+
+fn parse_history_limit(value: &str) -> Result<usize, String> {
+    parse_bounded_usize(value, 1, 50, "limit")
+}
+
+fn parse_bounded_usize(value: &str, min: usize, max: usize, name: &str) -> Result<usize, String> {
+    let value = value
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be an integer"))?;
+    if !(min..=max).contains(&value) {
+        return Err(format!("{name} must be between {min} and {max}"));
+    }
+    Ok(value)
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -468,6 +593,105 @@ mod tests {
         assert_eq!(
             resolve_sync_action(Some(SyncCommands::Pull), true, false),
             Err("sync flags cannot be combined with a sync subcommand")
+        );
+    }
+
+    #[test]
+    fn parses_daemon_control_commands() {
+        for action in ["start", "run", "stop", "status"] {
+            let cli = Cli::try_parse_from(["rustcode", "daemon", action, "--json"]).unwrap();
+            assert!(matches!(cli.command, Some(Commands::Daemon { .. })));
+        }
+        let cli = Cli::try_parse_from(["rustcode", "daemon", "logs", "--lines", "25"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Daemon {
+                command: DaemonCommands::Logs {
+                    lines: 25,
+                    json: false
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_cron_add_structured_arguments() {
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "cron",
+            "add",
+            "--id",
+            "daily-report",
+            "--name",
+            "Daily report",
+            "--workspace",
+            "/work",
+            "--schedule",
+            r#"{"kind":"cron","expression":"0 9 * * *","timezone":"Europe/Oslo"}"#,
+            "--action",
+            r#"{"type":"prompt","prompt":"Report","workspace":"/work","model_profile":null,"session_id":null}"#,
+            "--target-session",
+            "session-1",
+            "--retry-policy",
+            r#"{"max_attempts":2,"initial_backoff_seconds":5,"max_backoff_seconds":30}"#,
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Cron {
+                command: CronCommands::Add {
+                    id,
+                    target_session: Some(target),
+                    json: true,
+                    ..
+                }
+            }) if id == "daily-report" && target == "session-1"
+        ));
+    }
+
+    #[test]
+    fn parses_cron_job_controls_and_history_limit() {
+        for action in ["pause", "resume", "run", "delete"] {
+            let cli = Cli::try_parse_from(["rustcode", "cron", action, "job-1", "--json"]).unwrap();
+            assert!(matches!(cli.command, Some(Commands::Cron { .. })));
+        }
+        let history = Cli::try_parse_from([
+            "rustcode", "cron", "history", "job-1", "--limit", "7", "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            history.command,
+            Some(Commands::Cron {
+                command: CronCommands::History {
+                    job_id,
+                    limit: 7,
+                    json: true
+                }
+            }) if job_id == "job-1"
+        ));
+        assert!(Cli::try_parse_from(["rustcode", "cron", "list", "--json"]).is_ok());
+    }
+
+    #[test]
+    fn rejects_incomplete_cron_add_and_unbounded_output_options() {
+        assert!(
+            Cli::try_parse_from([
+                "rustcode",
+                "cron",
+                "add",
+                "--id",
+                "job-1",
+                "--name",
+                "Job",
+                "--workspace",
+                "/work",
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["rustcode", "daemon", "logs", "--lines", "0"]).is_err());
+        assert!(
+            Cli::try_parse_from(["rustcode", "cron", "history", "job-1", "--limit", "51"]).is_err()
         );
     }
 }

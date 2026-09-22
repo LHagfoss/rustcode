@@ -349,7 +349,8 @@ pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
 }
 
 pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
-    let Ok(registry) = crate::mcp::get_mcp_registry().lock() else {
+    let registry_handle = crate::mcp::get_mcp_registry();
+    let Ok(registry) = registry_handle.lock() else {
         return false;
     };
     let mut clients = registry.values().cloned().collect::<Vec<_>>();

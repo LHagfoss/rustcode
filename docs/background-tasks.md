@@ -5,6 +5,10 @@ turn is paused, such as development servers, file watchers, and long test
 runs. The task manager is shared by the process, while ownership, visibility,
 events, and cancellation are scoped to a RustCode session.
 
+For durable wall-clock work owned by RustCode, use the [scheduler daemon](daemon.md).
+It provides persistent jobs, leases, run history, pause/resume, and bounded
+polling without asking a model turn to implement a sleep loop.
+
 ## Starting a task
 
 The model starts a task through `run_command`:

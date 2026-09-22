@@ -463,53 +463,56 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 };
             }
 
+            let mcp_registry = crate::mcp::get_mcp_registry();
             tokio::task::spawn_blocking(move || {
-                crate::tools::set_active_session_id(Some(session_id));
-                crate::tools::set_active_workspace_context(
-                    workspace_root_for_task,
-                    task_working_directory_for_task,
-                    false,
-                );
-                let result = if name_owned == "run_command" && live_key_owned.is_some() {
-                    let callback: crate::tools::CommandProgressCallback =
-                        Arc::new(move |bytes, stderr| {
-                            let _ = progress_tx.send((bytes.to_vec(), stderr));
-                        });
-                    crate::tools::run_command_output_with_progress_cancellable_for_call(
-                        &args_owned,
-                        callback,
-                        Some(cancel_token_for_task),
-                        call_id_owned.as_deref(),
-                    )
-                    .unwrap_or_else(|error| {
-                        crate::tools::ToolExecutionOutput::failure_with_kind(
-                            format!("error: {error}"),
-                            crate::tools::ToolErrorKind::CommandFailed,
-                            true,
+                crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
+                    crate::tools::set_active_session_id(Some(session_id));
+                    crate::tools::set_active_workspace_context(
+                        workspace_root_for_task,
+                        task_working_directory_for_task,
+                        false,
+                    );
+                    let result = if name_owned == "run_command" && live_key_owned.is_some() {
+                        let callback: crate::tools::CommandProgressCallback =
+                            Arc::new(move |bytes, stderr| {
+                                let _ = progress_tx.send((bytes.to_vec(), stderr));
+                            });
+                        crate::tools::run_command_output_with_progress_cancellable_for_call(
+                            &args_owned,
+                            callback,
+                            Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
                         )
-                    })
-                } else if name_owned == "render_video" && live_key_owned.is_some() {
-                    let callback: crate::tools::CommandProgressCallback =
-                        Arc::new(move |bytes, stderr| {
-                            let _ = progress_tx.send((bytes.to_vec(), stderr));
-                        });
-                    crate::tools::execute_video_with_progress(
-                        &name_owned,
-                        &args_owned,
-                        Some(cancel_token_for_task),
-                        Some(callback),
-                    )
-                } else {
-                    crate::tools::execute_with_metadata_cancellable_for_call(
-                        &name_owned,
-                        &args_owned,
-                        Some(cancel_token_for_task),
-                        call_id_owned.as_deref(),
-                    )
-                };
-                crate::tools::set_active_workspace_context(None, None, false);
-                crate::tools::set_active_session_id(None);
-                result
+                        .unwrap_or_else(|error| {
+                            crate::tools::ToolExecutionOutput::failure_with_kind(
+                                format!("error: {error}"),
+                                crate::tools::ToolErrorKind::CommandFailed,
+                                true,
+                            )
+                        })
+                    } else if name_owned == "render_video" && live_key_owned.is_some() {
+                        let callback: crate::tools::CommandProgressCallback =
+                            Arc::new(move |bytes, stderr| {
+                                let _ = progress_tx.send((bytes.to_vec(), stderr));
+                            });
+                        crate::tools::execute_video_with_progress(
+                            &name_owned,
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                            Some(callback),
+                        )
+                    } else {
+                        crate::tools::execute_with_metadata_cancellable_for_call(
+                            &name_owned,
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
+                        )
+                    };
+                    crate::tools::set_active_workspace_context(None, None, false);
+                    crate::tools::set_active_session_id(None);
+                    result
+                })
             })
             .await
             .unwrap_or_else(|e| {
@@ -642,35 +645,39 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let cancel_token_for_task = cancel_token.clone();
                 let live_key_for_task = live_key.map(str::to_owned);
                 let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+                let mcp_registry = crate::mcp::get_mcp_registry();
                 let run_fut = tokio::task::spawn_blocking(move || {
-                    crate::tools::set_active_session_id(Some(session_id));
-                    crate::tools::set_active_workspace_context(
-                        workspace_root_for_task,
-                        task_working_directory_for_task,
-                        false,
-                    );
-                    let result = if name_owned == "render_video" && live_key_for_task.is_some() {
-                        let callback: crate::tools::CommandProgressCallback =
-                            Arc::new(move |bytes, stderr| {
-                                let _ = progress_tx.send((bytes.to_vec(), stderr));
-                            });
-                        crate::tools::execute_video_with_progress(
-                            &name_owned,
-                            &args_owned,
-                            Some(cancel_token_for_task),
-                            Some(callback),
-                        )
-                    } else {
-                        crate::tools::execute_with_metadata_cancellable_for_call(
-                            &name_owned,
-                            &args_owned,
-                            Some(cancel_token_for_task),
-                            call_id_owned.as_deref(),
-                        )
-                    };
-                    crate::tools::set_active_workspace_context(None, None, false);
-                    crate::tools::set_active_session_id(None);
-                    result
+                    crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
+                        crate::tools::set_active_session_id(Some(session_id));
+                        crate::tools::set_active_workspace_context(
+                            workspace_root_for_task,
+                            task_working_directory_for_task,
+                            false,
+                        );
+                        let result = if name_owned == "render_video" && live_key_for_task.is_some()
+                        {
+                            let callback: crate::tools::CommandProgressCallback =
+                                Arc::new(move |bytes, stderr| {
+                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                });
+                            crate::tools::execute_video_with_progress(
+                                &name_owned,
+                                &args_owned,
+                                Some(cancel_token_for_task),
+                                Some(callback),
+                            )
+                        } else {
+                            crate::tools::execute_with_metadata_cancellable_for_call(
+                                &name_owned,
+                                &args_owned,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                            )
+                        };
+                        crate::tools::set_active_workspace_context(None, None, false);
+                        crate::tools::set_active_session_id(None);
+                        result
+                    })
                 });
                 let is_cancellable_process = matches!(
                     name,
