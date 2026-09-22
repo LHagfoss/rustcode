@@ -4777,6 +4777,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
+    assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("Token usage by category"),
         "rendered: {rendered:?}"
@@ -4809,11 +4810,17 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .iter()
         .position(|line| line.contains("Free space"))
         .expect("free-space row should be rendered");
-    assert_eq!(summary_row, header_row + 3);
+    assert!(header_row > 0);
+    assert!(
+        lines[header_row - 1].trim().is_empty(),
+        "context modal should have top padding above the header: {rendered:?}"
+    );
+    assert_eq!(summary_row, header_row + 2);
     assert_eq!(first_grid_row, summary_row);
     assert_eq!(category_header_row, summary_row + 2);
-    assert!(
-        21usize.saturating_sub(free_space_row + 1) <= 1,
-        "context modal should not leave a large gap after its stats: free_space_row={free_space_row}, rendered={rendered:?}"
+    assert_eq!(
+        21usize.saturating_sub(free_space_row + 1),
+        0,
+        "context modal should not leave bottom padding after its stats: free_space_row={free_space_row}, rendered={rendered:?}"
     );
 }

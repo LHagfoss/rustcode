@@ -38,7 +38,7 @@ pub(crate) enum KeyAction {
     Complete,
     CommandPaletteOrPreviousSuggestion,
     NextSuggestion,
-    ToggleAutoConfirm,
+    ToggleAgentMode,
     Escape,
     Unhandled,
 }
@@ -88,7 +88,8 @@ impl KeyMap {
                 }
             }
             KeyCode::Esc => KeyAction::Escape,
-            KeyCode::BackTab => KeyAction::ToggleAutoConfirm,
+            KeyCode::BackTab => KeyAction::ToggleAgentMode,
+            KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => KeyAction::ToggleAgentMode,
             KeyCode::Tab => KeyAction::Complete,
             KeyCode::Up => KeyAction::HistoryPrevious,
             KeyCode::Down => KeyAction::HistoryNext,
@@ -179,12 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn terminal_fallbacks_keep_backtab_and_mac_word_keys_usable() {
+    fn shift_tab_bindings_toggle_agent_mode_and_keep_mac_word_keys_usable() {
         let map = KeyMap::for_terminal(TerminalKind::AppleTerminal);
 
         assert_eq!(
             map.resolve(key(KeyCode::BackTab, KeyModifiers::NONE)),
-            KeyAction::ToggleAutoConfirm
+            KeyAction::ToggleAgentMode
+        );
+        assert_eq!(
+            map.resolve(key(KeyCode::Tab, KeyModifiers::SHIFT)),
+            KeyAction::ToggleAgentMode
         );
         assert_eq!(
             map.resolve(key(KeyCode::Char('∫'), KeyModifiers::NONE)),

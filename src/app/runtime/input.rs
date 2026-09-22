@@ -18,6 +18,11 @@ pub(super) struct InputContext<'a> {
     pub(super) composer: &'a ui::Composer,
 }
 
+fn is_shift_tab(key: crossterm::event::KeyEvent) -> bool {
+    matches!(key.code, KeyCode::BackTab)
+        || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
+}
+
 pub(super) async fn handle_app_event(
     app_event: AppEvent,
     ctx: InputContext<'_>,
@@ -191,20 +196,25 @@ pub(super) async fn handle_app_event(
                         if let Some(event) = ui::approval_event_for_key(key, selected) {
                             let _ = app_event_sender.send(event);
                         } else {
-                            match key.code {
-                                KeyCode::Tab => {
-                                    let mut s = app_state.lock().await;
-                                    s.overlays().toggle_auto_confirm();
+                            if is_shift_tab(key) {
+                                let mut s = app_state.lock().await;
+                                s.overlays().toggle_auto_confirm();
+                            } else {
+                                match key.code {
+                                    KeyCode::Tab => {
+                                        let mut s = app_state.lock().await;
+                                        s.overlays().toggle_auto_confirm();
+                                    }
+                                    KeyCode::Up => {
+                                        let mut s = app_state.lock().await;
+                                        s.overlays().move_approval_selection(-1);
+                                    }
+                                    KeyCode::Down => {
+                                        let mut s = app_state.lock().await;
+                                        s.overlays().move_approval_selection(1);
+                                    }
+                                    _ => {}
                                 }
-                                KeyCode::Up => {
-                                    let mut s = app_state.lock().await;
-                                    s.overlays().move_approval_selection(-1);
-                                }
-                                KeyCode::Down => {
-                                    let mut s = app_state.lock().await;
-                                    s.overlays().move_approval_selection(1);
-                                }
-                                _ => {}
                             }
                         }
                         return Ok(InputFlow::ContinueIteration);
@@ -1322,10 +1332,6 @@ pub(super) async fn handle_app_event(
                 }
 
                 match key.code {
-                    KeyCode::BackTab => {
-                        let mut s = app_state.lock().await;
-                        s.auto_confirm = !s.auto_confirm;
-                    }
                     KeyCode::Esc => {
                         let mut s = app_state.lock().await;
                         if s.dismiss_completion() {
@@ -1394,38 +1400,6 @@ pub(super) async fn handle_app_event(
                             } else {
                                 s.move_cursor_line_down();
                             }
-                        }
-                    }
-                    KeyCode::Tab => {
-                        let mut s = app_state.lock().await;
-                        s.dismissed_completion = None;
-                        let has_at =
-                            crate::app::get_at_word_query(&s.input_buffer, s.cursor_position)
-                                .is_some();
-                        if s.active_suggestion_index.is_some() || has_at {
-                            crate::app::apply_autocomplete(&mut s);
-                        } else if crate::app::suggestion::command_token(&s.input_buffer).is_some() {
-                            s.cycle_suggestion();
-                        } else {
-                            // Toggle Agent Mode (Build vs Plan)
-                            s.agent_mode = match s.agent_mode {
-                                crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
-                                crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
-                            };
-                            s.config.agent_mode = s.agent_mode;
-                            crate::config::save_entire_config(&s.config);
-
-                            let notice = match s.agent_mode {
-                                crate::config::AgentMode::Build => {
-                                    "Switched to Build Mode (Full Code Editing)"
-                                }
-                                crate::config::AgentMode::Plan => {
-                                    "Switched to Plan Mode (Read-only / Design only)"
-                                }
-                            };
-                            // Accidental Tabs must not stack duplicate mode
-                            // notices in durable history (issue #1223).
-                            crate::app::actions::push_ephemeral_status(&mut s, notice.to_string());
                         }
                     }
                     KeyCode::Left => {
@@ -1672,4 +1646,26 @@ pub(super) async fn handle_app_event(
         _ => {}
     }
     Ok(InputFlow::ContinueLoop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_shift_tab;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn shift_tab_is_normalized_from_supported_terminal_events() {
+        assert!(is_shift_tab(KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::NONE
+        )));
+        assert!(is_shift_tab(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::SHIFT
+        )));
+        assert!(!is_shift_tab(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE
+        )));
+    }
 }

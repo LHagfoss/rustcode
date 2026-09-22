@@ -1467,7 +1467,7 @@ If the request context names a skill, load it first. For a likely specialized wo
              - File writing, deletion, shell commands, delegation, and unknown tools are disabled; you can read, search, ask questions, and design, but CANNOT modify files or execute commands.\n\
              - Investigate before planning with `grep`, `glob`, and `view_file`: read the manifest, real call sites, crates, and existing patterns.\n\
              - Make the plan specific to THIS repository: name files, functions/structs, and inspected line ranges; resolve unknowns now, never guess dependencies or module layout, and state verified facts and uncertainties.\n\
-             - Explain the plan and tell the user to switch to Build Mode (press Tab) to implement it.\n\n"
+             - Explain the plan and tell the user to switch to Build Mode (press Shift+Tab) to implement it.\n\n"
         );
     }
 

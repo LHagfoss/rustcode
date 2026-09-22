@@ -242,9 +242,9 @@ pub(in crate::ui) fn render_context_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    // The stats column needs twelve content rows; keep one row of bottom
-    // breathing room instead of stretching the popup into the empty viewport.
-    let modal_area = input_anchor_rect(f, input_area, 16);
+    // The stats column needs twelve content rows. Reserve one row above the
+    // header, then size the panel so the content reaches its bottom edge.
+    let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -252,21 +252,21 @@ pub(in crate::ui) fn render_context_modal(
     );
 
     let inner_area = modal_area.inner(Margin {
-        vertical: 1,
+        vertical: 0,
         horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1), // Top padding
             Constraint::Length(1), // Header
-            Constraint::Length(1), // Spacer
             Constraint::Min(6),    // Content
         ])
         .split(inner_area);
 
     let title_text = "context usage";
-    let right_esc = "esc";
+    let right_esc = "Esc to close";
     let padding_header =
         (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
@@ -281,7 +281,7 @@ pub(in crate::ui) fn render_context_modal(
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[0],
+        modal_chunks[1],
     );
 
     let breakdown = calculate_context_breakdown(state);

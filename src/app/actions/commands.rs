@@ -2,7 +2,7 @@ use super::*;
 
 /// Ephemeral status classes that must collapse instead of accumulating in
 /// durable history (issues #1222, #1223): repeated `/ps` polls only differ
-/// by elapsed seconds, and accidental Tab mode-toggles only flip Plan/Build.
+/// by elapsed seconds, and mode toggles only flip Plan/Build.
 fn ephemeral_status_class(content: &str) -> Option<&'static str> {
     if content.starts_with("No background terminals are running.")
         || (content.contains("background terminal") && content.contains("running:"))

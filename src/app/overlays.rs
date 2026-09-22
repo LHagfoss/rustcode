@@ -1,7 +1,8 @@
 use crate::app::events::Overlay;
-use crate::app::state::{AppState, AppStatus};
+use crate::app::state::{AppState, AppStatus, ChatMessage, History};
 
 pub(crate) struct OverlayState<'a> {
+    history: &'a mut History,
     status: &'a mut AppStatus,
     show_model_picker: &'a mut bool,
     show_theme_picker: &'a mut bool,
@@ -23,6 +24,7 @@ pub(crate) struct OverlayState<'a> {
 impl<'a> OverlayState<'a> {
     pub(crate) fn new(state: &'a mut AppState) -> Self {
         Self {
+            history: &mut state.history,
             status: &mut state.status,
             show_model_picker: &mut state.show_model_picker,
             show_theme_picker: &mut state.show_theme_picker,
@@ -129,6 +131,13 @@ impl<'a> OverlayState<'a> {
 
     pub(crate) fn toggle_auto_confirm(&mut self) {
         *self.auto_confirm = !*self.auto_confirm;
+        let status = if *self.auto_confirm {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.history
+            .push(ChatMessage::new("system", format!("YOLO mode {status}")));
     }
 }
 
@@ -149,6 +158,7 @@ mod tests {
         let mut state = AppState::new();
         state.show_model_picker = true;
         state.show_command_picker = true;
+        state.show_context_modal = true;
 
         {
             let mut overlays = OverlayState::new(&mut state);
@@ -158,6 +168,7 @@ mod tests {
 
         assert!(!state.show_model_picker);
         assert!(!state.show_command_picker);
+        assert!(!state.show_context_modal);
     }
 
     #[test]
@@ -175,6 +186,11 @@ mod tests {
 
         assert_eq!(state.status, AppStatus::AwaitingToolConfirmation);
         assert!(state.auto_confirm);
+        let history = state.history.snapshot().into_vec();
+        assert_eq!(
+            history.last().map(|message| message.content.as_str()),
+            Some("YOLO mode enabled")
+        );
     }
 
     #[test]
