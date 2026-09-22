@@ -631,6 +631,7 @@ mod tests {
         assert!(!lifecycle.socket_path().exists());
         assert!(!lifecycle.registration_path().exists());
         fs::remove_dir(lifecycle.database_path()).unwrap();
+        tokio::task::yield_now().await;
         drop(lifecycle.bind().unwrap());
     }
 }
