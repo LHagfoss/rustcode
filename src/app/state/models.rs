@@ -783,47 +783,6 @@ impl PromptCache {
         self.mcp_selected_names = selected_names.to_vec();
         true
     }
-
-    pub(crate) fn native_tool_schemas(
-        &mut self,
-        policy: crate::tools::ToolSchemaPolicy,
-        messages: &[serde_json::Value],
-        session_id: &str,
-        workspace_root: Option<&std::path::Path>,
-    ) -> (
-        Vec<serde_json::Value>,
-        crate::tools::McpSchemaSelectionStats,
-    ) {
-        let generation = crate::mcp::mcp_generation();
-        let user_message_count = messages
-            .iter()
-            .filter(|message| {
-                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
-            })
-            .count();
-        if self.mcp_selection_generation != generation
-            || self.mcp_selection_policy != Some(policy)
-            || self.mcp_selection_session_id.as_deref() != Some(session_id)
-            || self
-                .mcp_selection_user_count
-                .is_some_and(|previous| user_message_count > previous)
-        {
-            self.mcp_selected_names.clear();
-            self.mcp_selection_generation = generation;
-            self.mcp_selection_policy = Some(policy);
-            self.mcp_selection_session_id = Some(session_id.to_string());
-        }
-        self.mcp_selection_user_count = Some(user_message_count);
-
-        let result = crate::tools::native_tools_schema_for_context_with_sticky_at(
-            policy,
-            messages,
-            &self.mcp_selected_names,
-            workspace_root,
-        );
-        self.mcp_selected_names = result.1.selected_names.clone();
-        result
-    }
 }
 
 /// What the pointer is currently over. Only clickable things get a variant, so

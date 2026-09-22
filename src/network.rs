@@ -1467,22 +1467,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     });
     inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
 
-    let (mut native_tool_schemas, context_budget) = {
-        let mut s = state.lock().await;
-        let native_tool_schemas = native_schema_policy
-            .map(|policy| {
-                let session_id = s.active_session_id.clone();
-                s.prompt_cache
-                    .native_tool_schemas(
-                        policy,
-                        &msgs,
-                        &session_id,
-                        task_working_directory.as_deref(),
-                    )
-                    .0
-            })
-            .unwrap_or_default();
-        (native_tool_schemas, s.active_context_budget())
+    let context_budget = state.lock().await.active_context_budget();
+    let mut native_tool_schemas = match native_schema_policy {
+        Some(policy) => {
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0
+        }
+        None => Vec::new(),
     };
     let prompt_budget = (context_budget.hard_effective_limit as usize)
         .saturating_sub(context_budget.completion_reserve as usize);
@@ -1505,17 +1497,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // describe the same request that will be sent, rather than the raw
     // pre-trim projection.
     if let Some(policy) = native_schema_policy {
-        let mut s = state.lock().await;
-        let session_id = s.active_session_id.clone();
-        native_tool_schemas = s
-            .prompt_cache
-            .native_tool_schemas(
-                policy,
-                &msgs,
-                &session_id,
-                task_working_directory.as_deref(),
-            )
-            .0;
+        native_tool_schemas =
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0;
         let schema_preflight = compaction::calculate_preflight_budget_for_projection(
             &msgs,
             &native_tool_schemas,

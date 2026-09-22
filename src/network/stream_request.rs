@@ -3219,50 +3219,49 @@ pub async fn stream_request(
             .or_else(|| profile.as_ref().map(|p| p.context_budget().thinking_budget))
     };
 
-    let (tool_protocol, native_tool_schemas, mcp_selection, tool_surface) = {
-        let mut s = state.lock().await;
-        let tool_protocol = s.active_tool_protocol();
-        let agent_tools = crate::tools::agent_tool_count(schema_policy, s.agent_mode);
-        let text_surface = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-            crate::tools::ToolSurface {
-                agent: agent_tools,
-                ..Default::default()
-            }
-        } else {
-            crate::tools::textual_tool_surface(schema_policy, s.agent_mode)
-        };
-        if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
-            let session_id = s.active_session_id.clone();
-            let workspace_root = s
-                .task_working_directory
+    let (tool_protocol, agent_mode, workspace_root) = {
+        let s = state.lock().await;
+        (
+            s.active_tool_protocol(),
+            s.agent_mode,
+            s.task_working_directory
                 .clone()
                 .or_else(|| s.workspace_root.clone())
-                .or_else(|| std::env::current_dir().ok());
-            let (schemas, selection) = s.prompt_cache.native_tool_schemas(
+                .or_else(|| std::env::current_dir().ok()),
+        )
+    };
+    let text_surface = if !allow_tools {
+        crate::tools::ToolSurface::default()
+    } else if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+        crate::tools::ToolSurface {
+            agent: crate::tools::agent_tool_count(schema_policy, agent_mode),
+            ..Default::default()
+        }
+    } else {
+        crate::tools::textual_tool_surface(schema_policy, agent_mode)
+    };
+    let (native_tool_schemas, mcp_selection, tool_surface) =
+        if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
+            let (schemas, selection) = crate::network::prepare_native_tool_schemas(
+                &state,
                 schema_policy,
                 &aligned_messages,
-                &session_id,
                 workspace_root.as_deref(),
-            );
+            )
+            .await;
             let surface = crate::tools::ToolSurface {
                 builtin: selection.builtin_available,
                 mcp: selection.available,
                 agent: text_surface.agent,
             };
-            (tool_protocol, schemas, selection, surface)
+            (schemas, selection, surface)
         } else {
             (
-                tool_protocol,
                 Vec::new(),
                 crate::tools::McpSchemaSelectionStats::default(),
-                if allow_tools {
-                    text_surface
-                } else {
-                    crate::tools::ToolSurface::default()
-                },
+                text_surface,
             )
-        }
-    };
+        };
 
     // Estimate the actual continuation prompt before serializing the payload
     // so an adaptive ceiling cannot ask the provider for output that cannot
