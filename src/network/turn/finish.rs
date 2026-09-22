@@ -9,7 +9,9 @@ use super::super::fetch_model_quota;
 use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
-use super::recovery::{completed_inspection_synthesis, outstanding_external_action};
+use super::recovery::{
+    completed_inspection_synthesis, outstanding_external_action, reasoning_loop_final_response,
+};
 use super::{TurnContext, run_single_turn};
 
 pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
@@ -292,6 +294,27 @@ fn can_complete_interactive_plain_response(
         && has_substantive_final_prose(&ctx.response.final_content)
 }
 
+fn terminalize_exhausted_reasoning_response(
+    ctx: &mut TurnContext,
+    response_finish_reason: &FinishReason,
+) -> bool {
+    if ctx.recovery.reasoning_recovery_attempts == 0 {
+        return false;
+    }
+
+    let output_budget_exhausted = matches!(response_finish_reason, FinishReason::Length);
+    let answer_missing = !has_substantive_final_prose(&ctx.response.final_content);
+    if !output_budget_exhausted && !answer_missing {
+        return false;
+    }
+
+    ctx.response.final_content = reasoning_loop_final_response().to_string();
+    ctx.response.final_content_persisted = false;
+    ctx.lifecycle.task_completed = false;
+    ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static>(
     state: &Arc<Mutex<AppState>>,
@@ -321,6 +344,13 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         );
         let mut s = state.lock().await;
         s.continuous_mode = false;
+    }
+
+    if terminalize_exhausted_reasoning_response(ctx, &response_finish_reason) {
+        dbg_log!(
+            "Reasoning recovery exhausted without a complete answer; returning concise diagnostic"
+        );
+        return FinishGateOutcome::Stop;
     }
 
     // Normalize thinking-only finales before the finish gate evaluates or
@@ -850,5 +880,42 @@ mod tests {
         // No work, no prose: leave alone (existing recovery paths handle it).
         let ctx = TurnContext::new();
         assert_eq!(presentable_final_content(&ctx), "");
+    }
+
+    #[test]
+    fn exhausted_reasoning_output_becomes_a_concise_terminal_diagnostic() {
+        let mut ctx = TurnContext::new();
+        ctx.recovery.reasoning_recovery_attempts = 2;
+        ctx.response.final_content = format!(
+            "<think>{}</think>",
+            "unchanged oversized tool result ".repeat(1_000)
+        );
+
+        assert!(terminalize_exhausted_reasoning_response(
+            &mut ctx,
+            &FinishReason::Length
+        ));
+        assert_eq!(
+            ctx.response.final_content,
+            super::super::recovery::reasoning_loop_final_response()
+        );
+        assert!(!ctx.response.final_content_persisted);
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::LoopEscalation)
+        );
+    }
+
+    #[test]
+    fn ordinary_length_response_is_not_rewritten_without_reasoning_recovery() {
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "partial but useful response".to_string();
+
+        assert!(!terminalize_exhausted_reasoning_response(
+            &mut ctx,
+            &FinishReason::Length
+        ));
+        assert_eq!(ctx.response.final_content, "partial but useful response");
+        assert_eq!(ctx.lifecycle.stop_reason, None);
     }
 }
