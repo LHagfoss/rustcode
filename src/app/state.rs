@@ -99,6 +99,9 @@ pub struct AppState {
     /// Successful image analyses keyed by the image bytes' stable hash.
     pub image_analysis_cache: std::collections::HashMap<String, String>,
     pub config: crate::config::AppConfig,
+    /// Process-lived, lazy Laya advisory runtime. Construction never starts
+    /// a Python process; evaluation is performed only by later policy callers.
+    pub laya: crate::laya::LayaRuntime,
 
     #[allow(dead_code)]
     pub cwd_and_branch: String,
@@ -946,6 +949,7 @@ impl AppState {
         crate::config::record_session_settings(&active_session_id, &config);
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
+        let laya = crate::laya::LayaRuntime::new(config.laya.clone());
         let subagent_supervisor =
             crate::app::SubagentSupervisor::new(config.subagent_concurrency_limit);
         let history = History::default();
@@ -995,6 +999,7 @@ impl AppState {
             image_analysis_cache: std::collections::HashMap::new(),
             model_name,
             config,
+            laya,
             cwd_and_branch,
             workspace_location,
             workspace_root: None,
