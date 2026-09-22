@@ -94,9 +94,23 @@ impl McpClient {
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> Result<Arc<Self>, String> {
-        let mut child = Command::new(&command)
-            .args(&args)
+        Self::start_in_workspace(name, command, args, env, None).await
+    }
+
+    pub async fn start_in_workspace(
+        name: String,
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Arc<Self>, String> {
+        let mut process = Command::new(&command);
+        if let Some(workspace) = workspace {
+            process.current_dir(workspace);
+        }
+        let mut child = process.args(&args)
             .envs(&env)
+            .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -298,6 +312,12 @@ impl McpClient {
         Ok(resp)
     }
 
+    /// Return only the tool result; JSON-RPC request IDs must not affect polling hashes.
+    pub async fn call_tool(&self, tool: &str, arguments: Value) -> Result<Value, String> {
+        let response = self.call("tools/call", json!({"name": tool, "arguments": arguments})).await?;
+        response.get("result").cloned().ok_or_else(|| "MCP response missing result".into())
+    }
+
     pub fn notify(&self, method: &str, params: Value) -> Result<(), String> {
         let req = json!({
             "jsonrpc": "2.0",
@@ -325,8 +345,57 @@ impl McpClient {
 }
 
 pub async fn start_server_by_name(name: &str) -> Result<(), String> {
+    let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    start_server_by_name_in_workspace(name, &workspace).await
+}
+
+/// A job owns this client; it is never shared across workspace configurations.
+pub(crate) async fn start_owned_server(name: &str, workspace: &std::path::Path) -> Result<Arc<McpClient>, String> {
+    if !workspace.is_absolute() || !workspace.is_dir() {
+        return Err("MCP workspace must be an existing absolute directory".into());
+    }
+    let config = crate::config::load_config_for_workspace(workspace).2;
+    let server = config.mcp_servers.into_iter().find(|server| server.name == name && server.enabled)
+        .ok_or_else(|| format!("MCP server '{name}' is missing or disabled"))?;
+    tokio::time::timeout(Duration::from_secs(10), McpClient::start_in_workspace(
+        server.name, server.command, server.args, server.env, Some(workspace),
+    )).await.map_err(|_| format!("MCP server '{name}' startup timed out"))?
+}
+
+/// The headless runner currently consumes the global registry. Serialize daemon
+/// prompt turns and remove only their own registrations, including on timeout.
+pub(crate) struct ScheduledServers(Vec<Arc<McpClient>>);
+
+impl ScheduledServers {
+    pub(crate) fn new() -> Self { Self(Vec::new()) }
+
+    pub(crate) fn insert(&mut self, client: Arc<McpClient>) -> Result<(), String> {
+        let mut registry = get_mcp_registry().lock().map_err(|e| e.to_string())?;
+        if registry.contains_key(&client.name) {
+            return Err(format!("MCP server '{}' is already owned by another turn", client.name));
+        }
+        registry.insert(client.name.clone(), client.clone());
+        self.0.push(client);
+        bump_mcp_generation();
+        Ok(())
+    }
+}
+
+impl Drop for ScheduledServers {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = get_mcp_registry().lock() {
+            for client in &self.0 {
+                if registry.get(&client.name).is_some_and(|entry| Arc::ptr_eq(entry, client)) {
+                    registry.remove(&client.name);
+                }
+            }
+            bump_mcp_generation();
+        }
+    }
+}
+
+pub async fn start_server_by_name_in_workspace(name: &str, workspace: &std::path::Path) -> Result<(), String> {
     let config = {
-        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let cfg = crate::config::load_config_for_workspace(&workspace).2;
         cfg.mcp_servers.iter().find(|s| s.name == name).cloned()
     };
@@ -337,11 +406,12 @@ pub async fn start_server_by_name(name: &str) -> Result<(), String> {
         }
         shutdown_server(name).await;
 
-        let client = McpClient::start(
+        let client = McpClient::start_in_workspace(
             srv_config.name.clone(),
             srv_config.command,
             srv_config.args,
             srv_config.env,
+            Some(workspace),
         )
         .await?;
         if let Ok(mut reg) = get_mcp_registry().lock() {

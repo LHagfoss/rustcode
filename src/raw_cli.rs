@@ -66,6 +66,58 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
     state
 }
 
+/// Load a recorded workspace and session, without consulting or replacing the
+/// user's active session. MCP startup is separate so callers own its lifetime.
+pub fn build_scheduled_state(
+    prompt: &str,
+    workspace: &std::path::Path,
+    model_profile: Option<&str>,
+    session_id: &str,
+) -> Result<AppState, String> {
+    if !workspace.is_absolute() || !workspace.is_dir() {
+        return Err("scheduled workspace must be an existing absolute directory".into());
+    }
+    if session_id.is_empty() || !session_id.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c)) {
+        return Err("invalid scheduled session id".into());
+    }
+    let mut state = AppState::new_with_workspace_session(workspace, Some(session_id));
+    if let Some(name) = model_profile {
+        let profile = state.config.models.iter().find(|profile| profile.name == name)
+            .ok_or_else(|| format!("unknown model profile: {name}"))?;
+        state.api_base_url = profile.url.clone();
+        state.model_name = profile.model.clone();
+    }
+    state.workspace_root = Some(workspace.to_path_buf());
+    state.task_working_directory = Some(workspace.to_path_buf());
+    state.history = crate::config::load_session_history_direct(session_id).into();
+    state.history.push(ChatMessage::new("user", prompt.to_owned()));
+    state.session_title_tool_available = state.history.len() == 1;
+    Ok(state)
+}
+
+pub(crate) async fn run_scheduled_turn(
+    state: AppState,
+    workspace: &std::path::Path,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<String, String> {
+    static PROMPT_LOCK: Mutex<()> = Mutex::const_new(());
+    let _guard = tokio::select! {
+        _ = cancellation.cancelled() => return Err("scheduled turn cancelled before startup".into()),
+        guard = PROMPT_LOCK.lock() => guard,
+    };
+    let mut owned = crate::mcp::ScheduledServers::new();
+    for server in state.config.mcp_servers.iter().filter(|server| server.enabled) {
+        match crate::mcp::start_owned_server(&server.name, workspace).await {
+            Ok(client) => owned.insert(client)?,
+            Err(error) => crate::dbg_log!("[daemon] MCP startup: {error}"),
+        }
+    }
+    let client = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10))
+        .build().map_err(|error| error.to_string())?;
+    run_headless_turn_cancellable(&client, Arc::new(Mutex::new(state)), cancellation)
+        .await.map_err(|error| error.to_string())
+}
+
 /// Non-interactive turn policy for `--prompt` execution. Auto-approves tool
 /// calls (printing each to stdout) but still enforces plan-mode safety and runs
 /// the shared completion/finish gate, so headless runs match interactive
@@ -183,6 +235,14 @@ pub async fn run_headless_turn(
     state_arc: Arc<Mutex<AppState>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
+    run_headless_turn_cancellable(client, state_arc, cancel_token).await
+}
+
+pub(crate) async fn run_headless_turn_cancellable(
+    client: &reqwest::Client,
+    state_arc: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+) -> Result<String, Box<dyn std::error::Error>> {
     let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
 
     let quiet = !state_arc.lock().await.raw_cli_mode;
@@ -217,7 +277,10 @@ pub async fn run_headless_turn(
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         // TaskSubscription uses a synchronous channel, but
                         // polling it this way keeps Tokio's executor free.
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => return Err(std::io::Error::other("headless turn cancelled").into()),
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                        }
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         return Err(std::io::Error::other(

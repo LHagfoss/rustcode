@@ -11,6 +11,9 @@ pub mod executor;
 pub mod server;
 pub mod store;
 
+#[cfg(test)]
+mod action_tests;
+
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

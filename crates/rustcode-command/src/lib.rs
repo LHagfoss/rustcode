@@ -141,7 +141,19 @@ fn shell_command(command: &str) -> Command {
 }
 
 fn build_command(request: &CommandRequest) -> Command {
+    build_command_with_environment(request, None)
+}
+
+fn build_command_with_environment(request: &CommandRequest, allowlist: Option<&[String]>) -> Command {
     let mut command = shell_command(&request.command);
+    if let Some(allowlist) = allowlist {
+        command.env_clear();
+        for name in allowlist {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+    }
     command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -177,6 +189,18 @@ pub fn run_with_timeout_cancellable(
     run_internal(request, Some(request.timeout), progress, None, cancellation)
 }
 
+/// Scheduled commands inherit only explicitly recorded environment names.
+/// Ordinary foreground and background callers retain their existing behavior.
+pub fn run_with_timeout_cancellable_env(
+    request: &CommandRequest,
+    progress: Option<ProgressCallback>,
+    cancellation: Option<CancellationCallback>,
+    allowlist: &[String],
+) -> Result<CommandOutput, String> {
+    run_command_internal(request, Some(request.timeout), progress, None, cancellation,
+        build_command_with_environment(request, Some(allowlist)))
+}
+
 /// Run a resolved command until it exits. This is retained for the root
 /// background adapter, whose existing behavior has no command timeout.
 pub fn run_until_exit(
@@ -194,9 +218,21 @@ fn run_internal(
     started: Option<StartedCallback>,
     cancellation: Option<CancellationCallback>,
 ) -> Result<CommandOutput, String> {
-    let mut child = build_command(request)
+    run_command_internal(request, timeout, progress, started, cancellation, build_command(request))
+}
+
+fn run_command_internal(
+    request: &CommandRequest,
+    timeout: Option<Duration>,
+    progress: Option<ProgressCallback>,
+    started: Option<StartedCallback>,
+    cancellation: Option<CancellationCallback>,
+    mut command: Command,
+) -> Result<CommandOutput, String> {
+    let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn process: {e}"))?;
+    let start = Instant::now();
     if let Some(callback) = started {
         callback(child.id());
     }
@@ -208,7 +244,6 @@ fn run_internal(
     let err_handle = spawn_output_reader(child_stderr, progress, true);
 
     let status = if let Some(timeout) = timeout {
-        let start = Instant::now();
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -235,6 +270,21 @@ fn run_internal(
             .map_err(|e| format!("failed to wait on process: {e}"))?
     };
 
+    // Descendants can retain stdout/stderr after the shell exits. Include pipe
+    // draining in the hard timeout instead of blocking forever in join().
+    while !out_handle.is_finished() || !err_handle.is_finished() {
+        if cancellation.as_ref().is_some_and(|callback| callback()) {
+            terminate_process_tree(&mut child, request.process_group);
+            return Err("command cancelled by user".to_string());
+        }
+        if let Some(timeout) = timeout {
+            if start.elapsed() >= timeout {
+                terminate_process_tree(&mut child, request.process_group);
+                return Err(format!("command timed out after {} ms and was killed", timeout.as_millis()));
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
     let stdout = out_handle.join().unwrap_or_default().finish();
     let stderr = err_handle.join().unwrap_or_default().finish();
     let signal = terminating_signal(&status, &request.command);
