@@ -1499,21 +1499,25 @@ fn save_laya_mode_for_workspace_in(
         return Err("global configuration is invalid".to_owned());
     }
     config.laya.mode = mode;
-    save_config_to(config_dir, &config);
-    Ok(())
+    save_config_to_result(config_dir, &config)
 }
 
 fn save_config_to(dir: &Path, config: &AppConfig) {
+    if let Err(error) = save_config_to_result(dir, config) {
+        eprintln!("[rustcode] WARNING: {error}");
+    }
+}
+
+fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
     if !config.is_valid {
-        return;
+        return Err("configuration is invalid".to_owned());
     }
-    if let Err(error) = fs::create_dir_all(dir) {
-        eprintln!(
-            "[rustcode] WARNING: Failed to create config directory {}: {error}",
+    fs::create_dir_all(dir).map_err(|error| {
+        format!(
+            "failed to create config directory {}: {error}",
             dir.display()
-        );
-        return;
-    }
+        )
+    })?;
 
     let file = TomlConfig {
         version: Some(CONFIG_FORMAT_VERSION),
@@ -1536,14 +1540,11 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         start_time: config.start_time,
     };
 
-    match toml::to_string_pretty(&file) {
-        Ok(contents) => {
-            if let Err(error) = write_config_file(&dir.join(CONFIG_TOML_FILE), &contents) {
-                eprintln!("[rustcode] WARNING: Failed to save config.toml: {error}");
-            }
-        }
-        Err(error) => eprintln!("[rustcode] WARNING: Failed to serialize config.toml: {error}"),
-    }
+    let path = dir.join(CONFIG_TOML_FILE);
+    let contents = toml::to_string_pretty(&file)
+        .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
+    write_config_file(&path, &contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 fn save_toml_config(path: &Path, file: &TomlConfig) -> Result<(), String> {

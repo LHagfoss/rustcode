@@ -1183,6 +1183,26 @@ fn workspace_laya_mode_update_changes_project_effective_mode_without_clobbering_
 }
 
 #[test]
+fn laya_global_mode_update_reports_persistence_failure() {
+    let config_target = TempDir::new().unwrap();
+    let invalid_config_dir = config_target.path().join("not-a-directory");
+    fs::write(&invalid_config_dir, "not a directory").unwrap();
+    let workspace = TempDir::new().unwrap();
+
+    let result = save_laya_mode_for_workspace_in(
+        &invalid_config_dir,
+        workspace.path(),
+        crate::laya::LayaMode::Shadow,
+    );
+
+    let error = result.expect_err("global Laya persistence should report its write failure");
+    assert!(
+        error.contains("not-a-directory"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn project_overrides_are_not_persisted_into_global_config() {
     let global = AppConfig::default();
     let mut merged = global.clone();
