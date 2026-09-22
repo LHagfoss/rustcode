@@ -291,7 +291,7 @@ fn ephemeral_status_collapses_repeated_background_and_mode_notices() {
         &mut state,
         "Switched to Build Mode (Full Code Editing)".to_string(),
     );
-    // Accidental Tab toggles collapse into one mode notice.
+    // Repeated mode toggles collapse into one mode notice.
     let modes: Vec<_> = state
         .history
         .iter()
