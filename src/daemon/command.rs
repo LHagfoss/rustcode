@@ -46,29 +46,7 @@ pub(crate) fn create_job(
         .map_err(|error| invalid(error.to_string()))?;
     let mut action: JobAction = serde_json::from_str(action_json)
         .map_err(|error| invalid(format!("invalid action: {error}")))?;
-    if let JobAction::McpCall {
-        server,
-        workspace: action_workspace,
-        server_config,
-        ..
-    } = &mut action
-        && server_config.is_none()
-    {
-        let (_, _, config) =
-            crate::config::load_config_for_workspace(std::path::Path::new(action_workspace));
-        *server_config = Some(
-            config
-                .mcp_servers
-                .iter()
-                .find(|candidate| candidate.name == *server)
-                .cloned()
-                .ok_or_else(|| {
-                    invalid(format!(
-                        "MCP server '{server}' is not configured for workspace {action_workspace}"
-                    ))
-                })?,
-        );
-    }
+    hydrate_mcp_actions(&mut action)?;
     let next_due_at = match schedule {
         ScheduleSpec::Once { at } => at,
         _ => schedule
@@ -96,6 +74,38 @@ pub(crate) fn create_job(
     };
     job.validate().map_err(|error| invalid(error.to_string()))?;
     Ok(job)
+}
+
+fn hydrate_mcp_actions(action: &mut JobAction) -> Result<(), CommandError> {
+    match action {
+        JobAction::McpCall {
+            server,
+            workspace,
+            server_config,
+            ..
+        } if server_config.is_none() => {
+            let server_name = server.clone();
+            let action_workspace = workspace.clone();
+            let (_, _, config) = crate::config::load_config_for_workspace(
+                std::path::Path::new(&action_workspace),
+            );
+            *server_config = Some(
+                config
+                    .mcp_servers
+                    .iter()
+                    .find(|candidate| candidate.name == server_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "MCP server '{server_name}' is not configured for workspace {action_workspace}"
+                        ))
+                    })?,
+            );
+        }
+        JobAction::Poll { action, .. } => hydrate_mcp_actions(action)?,
+        _ => {}
+    }
+    Ok(())
 }
 
 pub(crate) fn format_response(

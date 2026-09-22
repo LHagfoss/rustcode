@@ -230,7 +230,12 @@ impl DaemonLifecycle {
     }
 
     pub async fn run(&self) -> Result<()> {
-        self.bind()?.run().await
+        let mut server = self.bind()?;
+        server.install_executor(
+            std::sync::Arc::new(super::executor::ActionExecutor::default()),
+            4,
+        );
+        server.run().await
     }
 
     pub async fn status(&self) -> Result<Option<DaemonStatus>> {
