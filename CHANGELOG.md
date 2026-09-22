@@ -1,3 +1,12 @@
+## [v0.55.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.8) - 2026-09-22
+
+### Features
+- Added a rustcode-managed scheduler daemon for reliable scheduled work.
+- Added opt-in Laya policy integration.
+- Fixed wakeup turns stalling during native schema preparation by computing schemas outside the application-state lock.
+- Improved deferred-call handling and reasoning recovery diagnostics.
+- Preserved queued prompts after turn cancellation.
+- Added a repository link to Discord Rich Presence.
 ## [v0.55.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.7) - 2026-09-22
 
 ### Fixes
