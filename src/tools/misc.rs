@@ -1,6 +1,214 @@
+use chrono::Utc;
 use serde_json::Value;
 
 use super::{Tool, ToolCapability, ToolSafety};
+use crate::daemon::{
+    client::DaemonClient,
+    lifecycle::DaemonLifecycle,
+    model::{JobRecord, RetryPolicy, ScheduleSpec},
+    protocol::{DaemonRequest, DaemonResponse},
+};
+
+const MAX_SCHEDULED_JOBS_OUTPUT_BYTES: usize = 16_384;
+const MAX_LIST_JOBS: usize = 100;
+const MAX_HISTORY_RUNS: usize = 50;
+
+fn manage_scheduled_jobs_schema() -> Value {
+    let misfire = serde_json::json!({"type":"string","enum":["skip_missed","run_once"],"default":"skip_missed"});
+    serde_json::json!({
+        "type":"object",
+        "properties": {
+            "operation": {"type":"string","enum":["create","list","pause","resume","run","history","delete"]},
+            "job_id": {"type":"string","minLength":1},
+            "id": {"type":"string","minLength":1},
+            "name": {"type":"string","minLength":1},
+            "workspace": {"type":"string","minLength":1},
+            "target_session": {"type":["string","null"]},
+            "schedule": {"oneOf":[
+                {"type":"object","properties":{"kind":{"const":"daily"},"hour":{"type":"integer","minimum":0,"maximum":23},"minute":{"type":"integer","minimum":0,"maximum":59},"timezone":{"type":"string"},"misfire_policy":misfire.clone()},"required":["kind","hour","minute","timezone"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"monthly"},"day":{"type":"integer","minimum":1,"maximum":31},"hour":{"type":"integer","minimum":0,"maximum":23},"minute":{"type":"integer","minimum":0,"maximum":59},"timezone":{"type":"string"},"misfire_policy":misfire.clone()},"required":["kind","day","hour","minute","timezone"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"cron"},"expression":{"type":"string"},"timezone":{"type":"string"},"misfire_policy":misfire},"required":["kind","expression","timezone"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"once"},"at":{"type":"string","format":"date-time"}},"required":["kind","at"],"additionalProperties":false}
+            ]},
+            "action": {"oneOf":[
+                {"type":"object","properties":{"type":{"const":"mcp_call"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{},"workspace":{"type":"string"}},"required":["type","server","tool","workspace"],"additionalProperties":false},
+                {"type":"object","properties":{"type":{"const":"prompt"},"prompt":{"type":"string"},"workspace":{"type":"string"},"model_profile":{"type":["string","null"]},"session_id":{"type":["string","null"]}},"required":["type","prompt","workspace"],"additionalProperties":false},
+                {"type":"object","properties":{"type":{"const":"shell_command"},"command":{"type":"string"},"working_directory":{"type":"string"},"environment_allowlist":{"type":"array","items":{"type":"string"}},"timeout_seconds":{"type":"integer","minimum":1},"authorized":{"type":"boolean"}},"required":["type","command","working_directory","timeout_seconds"],"additionalProperties":false},
+                {"type":"object","properties":{"type":{"const":"poll"},"action":{"type":"object"},"interval_seconds":{"type":"integer","minimum":1},"max_runs":{"type":"integer","minimum":1},"deadline_seconds":{"type":"integer","minimum":1},"stop_on_change":{"type":"boolean"}},"required":["type","action","interval_seconds","max_runs","deadline_seconds"],"additionalProperties":false}
+            ]},
+            "retry_policy": {"type":"object","properties":{"max_attempts":{"type":"integer","minimum":1},"initial_backoff_seconds":{"type":"integer"},"max_backoff_seconds":{"type":"integer"}},"required":["max_attempts","initial_backoff_seconds","max_backoff_seconds"],"additionalProperties":false},
+            "limit": {"type":"integer","minimum":1,"maximum":50}
+        },
+        "required":["operation"],
+        "additionalProperties":false
+    })
+}
+
+pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
+    name: "manage_scheduled_jobs",
+    description: "Create and manage durable scheduled jobs through the RustCode daemon. Supports create, list, pause, resume, run, history, and delete. The daemon must already be running.",
+    arguments: r#"{"operation":"create|list|pause|resume|run|history|delete", "job_id":"required for job operations", "id":"required for create", "name":"required for create", "workspace":"required for create", "schedule":{"kind":"daily|monthly|cron|once",...}, "action":{"type":"mcp_call|prompt|shell_command|poll",...}, "limit":50}"#,
+    handler: manage_scheduled_jobs,
+    requires_confirmation: true,
+    schema: manage_scheduled_jobs_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::ControlPlane,
+};
+
+fn manage_scheduled_jobs(args: &Value) -> Result<String, String> {
+    let config_dir =
+        crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
+    let client = DaemonClient::new(DaemonLifecycle::new(config_dir).socket_path());
+    manage_scheduled_jobs_with_client(args, &client)
+}
+
+pub(crate) fn manage_scheduled_jobs_with_client(
+    args: &Value,
+    client: &DaemonClient,
+) -> Result<String, String> {
+    let operation = required_string(args, "operation")?;
+    let request = match operation {
+        "create" => DaemonRequest::Create {
+            job: create_job(args)?,
+        },
+        "list" => DaemonRequest::List,
+        "pause" | "resume" => DaemonRequest::SetPaused {
+            job_id: required_string(args, "job_id")?.to_owned(),
+            paused: operation == "pause",
+        },
+        "run" => DaemonRequest::RunNow {
+            job_id: required_string(args, "job_id")?.to_owned(),
+        },
+        "history" => DaemonRequest::History {
+            job_id: required_string(args, "job_id")?.to_owned(),
+            limit: args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20)
+                .clamp(1, MAX_HISTORY_RUNS as u64) as usize,
+        },
+        "delete" => DaemonRequest::Delete {
+            job_id: required_string(args, "job_id")?.to_owned(),
+        },
+        _ => return Err(format!("unknown operation '{operation}'")),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|error| format!("error: daemon client runtime unavailable: {error}"))?;
+    let response = runtime
+        .block_on(client.request(request))
+        .map_err(|error| format!("error: daemon unavailable: {error}"))?;
+    format_daemon_response(operation, response)
+}
+
+fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> {
+    args.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("missing '{field}'"))
+}
+
+fn create_job(args: &Value) -> Result<JobRecord, String> {
+    let now = Utc::now();
+    let id = required_string(args, "id")?.to_owned();
+    let name = required_string(args, "name")?.to_owned();
+    let workspace = required_string(args, "workspace")?.to_owned();
+    let schedule: ScheduleSpec =
+        serde_json::from_value(args.get("schedule").cloned().ok_or("missing 'schedule'")?)
+            .map_err(|error| format!("invalid schedule: {error}"))?;
+    schedule
+        .validate()
+        .map_err(|error| format!("invalid schedule: {error}"))?;
+    let action = serde_json::from_value(args.get("action").cloned().ok_or("missing 'action'")?)
+        .map_err(|error| format!("invalid action: {error}"))?;
+    let next_due_at = match schedule {
+        ScheduleSpec::Once { at } => at,
+        _ => schedule
+            .next_after(now)
+            .map_err(|error| format!("invalid schedule: {error}"))?,
+    };
+    let job = JobRecord {
+        id,
+        name,
+        paused: false,
+        schedule,
+        action,
+        workspace,
+        target_session: args
+            .get("target_session")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        retry_policy: match args.get("retry_policy") {
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid retry_policy: {error}"))?,
+            None => RetryPolicy::default(),
+        },
+        next_due_at,
+        schedule_revision: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    job.validate()
+        .map_err(|error| format!("invalid job: {error}"))?;
+    Ok(job)
+}
+
+fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<String, String> {
+    match response {
+        DaemonResponse::Error { message, .. } => Err(format!("error: {message}")),
+        DaemonResponse::Ack => Ok(match operation {
+            "create" => "Scheduled job created.".to_owned(),
+            "pause" => "Scheduled job paused.".to_owned(),
+            "resume" => "Scheduled job resumed.".to_owned(),
+            "delete" => "Scheduled job deleted.".to_owned(),
+            _ => "Scheduled job updated.".to_owned(),
+        }),
+        DaemonResponse::RunAccepted { job_id, state } => {
+            Ok(format!("Run accepted for '{job_id}' ({state:?})."))
+        }
+        DaemonResponse::Jobs { jobs } => {
+            let total = jobs.len();
+            let rows: Vec<Value> = jobs.into_iter().take(MAX_LIST_JOBS).map(|job| serde_json::json!({
+                "id":job.id,"name":job.name,"paused":job.paused,"next_due_at":job.next_due_at,
+                "schedule":job.schedule
+            })).collect();
+            bounded_rows("jobs", rows, total)
+        }
+        DaemonResponse::History { runs } => {
+            let total = runs.len();
+            let rows: Vec<Value> = runs.into_iter().take(MAX_HISTORY_RUNS).map(|run| serde_json::json!({
+                "id":run.id,"job_id":run.job_id,"scheduled_at":run.scheduled_at,"state":run.state,
+                "attempt":run.attempt,"started_at":run.started_at,"finished_at":run.finished_at,
+                "result_summary":run.result_summary,"error_class":run.error_class
+            })).collect();
+            bounded_rows("runs", rows, total)
+        }
+        DaemonResponse::Job { job } if operation == "create" => {
+            Ok(format!("Scheduled job '{}' created.", job.id))
+        }
+        other => Err(format!(
+            "error: unexpected daemon response for {operation}: {other:?}"
+        )),
+    }
+}
+
+fn bounded_rows(key: &str, mut rows: Vec<Value>, total: usize) -> Result<String, String> {
+    loop {
+        let included = rows.len();
+        let output = serde_json::to_string(&serde_json::json!({
+            key: rows,
+            "total": total,
+            "truncated": included < total,
+        }))
+        .map_err(|error| format!("error: serializing daemon response: {error}"))?;
+        if output.len() <= MAX_SCHEDULED_JOBS_OUTPUT_BYTES || included == 0 {
+            return Ok(output);
+        }
+        rows.pop();
+    }
+}
 
 pub(crate) const MAX_SESSION_TITLE_CHARS: usize = 80;
 
