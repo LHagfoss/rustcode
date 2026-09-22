@@ -1,7 +1,7 @@
 //! Durable scheduler state. Mutations use IMMEDIATE transactions so independent
 //! connections cannot claim the same occurrence. A Claimed run has not executed;
 //! the executor must settle it as Running *before* starting any external action.
-use super::model::{JobRecord, JobRunRecord, JobRunState, MisfirePolicy, RunSettlement};
+use super::model::{JobRecord, JobRunRecord, JobRunState, MisfirePolicy, RunSettlement, ScheduleSpec};
 use super::{DaemonError, Result};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -101,9 +101,21 @@ impl JobStore {
         self.connection.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(storage)
     }
 
+    /// Retains the caller's due field for compatibility, but requires the initial
+    /// occurrence derived from created_at. Overdue one-shots remain due.
     pub fn create(&mut self, job: JobRecord) -> Result<()> {
-        job.validate()?;
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage)?;
+        job.validate()?;
+        if job.updated_at != job.created_at {
+            return Err(DaemonError::InvalidInput("creation timestamps must match".into()));
+        }
+        let initial_due = match &job.schedule {
+            ScheduleSpec::Once { at } => *at,
+            schedule => schedule.next_after(job.created_at)?,
+        };
+        if job.next_due_at != initial_due {
+            return Err(DaemonError::InvalidInput("initial due time does not match schedule".into()));
+        }
         if tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=?1)", [&job.id], |r| r.get::<_, bool>(0)).map_err(storage)? {
             return Err(DaemonError::Conflict(format!("job {} already exists", job.id)));
         }
@@ -197,6 +209,18 @@ impl JobStore {
     }
 
     pub fn settle_run(&mut self, id: &str, owner: &str, fence: i64, settlement: RunSettlement) -> Result<()> {
+        self.transition_run(id, owner, fence, settlement, false)
+    }
+
+    /// Cancel only before the durable action boundary, using the current lease.
+    pub fn cancel_claimed(&mut self, id: &str, owner: &str, fence: i64, now: DateTime<Utc>, reason: &str) -> Result<()> {
+        self.transition_run(id, owner, fence, RunSettlement {
+            state: JobRunState::Cancelled, finished_at: now,
+            result_summary: None, error_class: Some(reason.into()), output: None,
+        }, true)
+    }
+
+    fn transition_run(&mut self, id: &str, owner: &str, fence: i64, settlement: RunSettlement, cancel_claimed: bool) -> Result<()> {
         if settlement.state == JobRunState::Claimed { return Err(DaemonError::InvalidInput("cannot settle as claimed".into())); }
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage)?;
         let json: Option<String> = tx.query_row("SELECT payload FROM job_runs WHERE id=?1 AND active=1", [id], |r| r.get(0)).optional().map_err(storage)?;
@@ -212,6 +236,10 @@ impl JobStore {
             run.state = JobRunState::Running;
             run.started_at = Some(settlement.finished_at);
         } else {
+            let required = if cancel_claimed { JobRunState::Claimed } else { JobRunState::Running };
+            if run.state != required {
+                return Err(DaemonError::Conflict("invalid action boundary transition".into()));
+            }
             run.state = settlement.state;
             run.finished_at = Some(settlement.finished_at);
             run.lease_expires_at = None;
@@ -241,7 +269,7 @@ mod tests {
         JobAction, JobRecord, JobRunState, MisfirePolicy, RetryPolicy, RunSettlement,
         ScheduleSpec,
     };
-    use chrono::{Duration, TimeZone, Utc};
+    use chrono::{Duration, TimeZone, Timelike, Utc};
 
     fn at(minute: i64) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
@@ -253,7 +281,7 @@ mod tests {
             id: id.into(),
             name: format!("job {id}"),
             paused: false,
-            schedule: ScheduleSpec::daily(8, 0, "UTC", MisfirePolicy::SkipMissed).unwrap(),
+            schedule: ScheduleSpec::daily(due.hour() as u8, due.minute() as u8, "UTC", MisfirePolicy::SkipMissed).unwrap(),
             action: JobAction::McpCall {
                 server: "teams".into(),
                 tool: "send_chat_message".into(),
@@ -296,6 +324,38 @@ mod tests {
         assert_eq!(store.get("b").unwrap(), expected);
         assert_eq!(store.list().unwrap().iter().map(|job| job.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert!(matches!(store.create(job("b", at(9))), Err(DaemonError::Conflict(_))));
+    }
+
+    #[test]
+    fn creation_rejects_due_time_that_does_not_match_schedule() {
+        let mut store = JobStore::in_memory().unwrap();
+        let mut inconsistent = job("wrong-due", at(5));
+        inconsistent.schedule = ScheduleSpec::Once { at: at(6) };
+
+        assert!(matches!(
+            store.create(inconsistent),
+            Err(DaemonError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            store.get("wrong-due"),
+            Err(DaemonError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn creation_rejects_inconsistent_creation_timestamps() {
+        let mut store = JobStore::in_memory().unwrap();
+        let mut inconsistent = job("wrong-updated", at(5));
+        inconsistent.updated_at = inconsistent.created_at + Duration::seconds(1);
+
+        assert!(matches!(
+            store.create(inconsistent),
+            Err(DaemonError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            store.get("wrong-updated"),
+            Err(DaemonError::NotFound(_))
+        ));
     }
 
     #[test]
@@ -355,6 +415,7 @@ mod tests {
             store.settle_run(&first.id, "daemon-a", first.lease_fence, settlement.clone()),
             Err(DaemonError::Conflict(_))
         ));
+        start(&mut store, &second, at(2));
         store.settle_run(&second.id, "daemon-b", second.lease_fence, settlement).unwrap();
         assert_eq!(store.history("due", 10).unwrap()[0].state, JobRunState::Succeeded);
     }
@@ -365,9 +426,10 @@ mod tests {
         store.create(job("due", at(0))).unwrap();
         let mut last_id = String::new();
         for day in 0..110 {
-            let now = if day == 0 { at(0) } else { at(day * 1440 - 960) };
+            let now = at(day * 1440);
             let run = store.claim_due(now, "daemon", Duration::minutes(5), 1).unwrap().remove(0);
             last_id = run.id.clone();
+            start(&mut store, &run, now);
             store.settle_run(&run.id, "daemon", run.lease_fence, success(now)).unwrap();
         }
         let history = store.history("due", 1_000).unwrap();
@@ -381,6 +443,11 @@ mod tests {
             result_summary: None, error_class: None, output: None }
     }
 
+    fn start(store: &mut JobStore, run: &JobRunRecord, now: DateTime<Utc>) {
+        store.settle_run(&run.id, run.lease_owner.as_deref().unwrap(), run.lease_fence,
+            RunSettlement { state: JobRunState::Running, ..success(now) }).unwrap();
+    }
+
     #[test]
     fn persists_across_reopen_and_coordinates_independent_connections() {
         let dir = tempfile::tempdir().unwrap();
@@ -390,11 +457,12 @@ mod tests {
         let mut second = JobStore::open(&path).unwrap();
         let run = first.claim_due(at(0), "a", Duration::minutes(5), 1).unwrap().remove(0);
         assert!(second.claim_due(at(0), "b", Duration::minutes(5), 1).unwrap().is_empty());
+        start(&mut second, &run, at(0));
         second.settle_run(&run.id, "a", run.lease_fence, success(at(1))).unwrap();
         drop(first);
         drop(second);
         let reopened = JobStore::open(&path).unwrap();
-        assert_eq!(reopened.get("durable").unwrap().next_due_at, at(480));
+        assert_eq!(reopened.get("durable").unwrap().next_due_at, at(1440));
         assert_eq!(reopened.history("durable", 10).unwrap()[0].state, JobRunState::Succeeded);
     }
 
@@ -406,12 +474,15 @@ mod tests {
         once.schedule = ScheduleSpec::Once { at: at(0) };
         store.create(once).unwrap();
         let mut catchup = job("catchup", at(0));
-        catchup.schedule = ScheduleSpec::daily(8, 0, "UTC", MisfirePolicy::RunOnce).unwrap();
+        catchup.schedule = ScheduleSpec::daily(0, 0, "UTC", MisfirePolicy::RunOnce).unwrap();
         store.create(catchup).unwrap();
         let claims = store.claim_due(at(120), "a", Duration::minutes(5), 10).unwrap();
         assert_eq!(claims.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["catchup", "once"]);
-        assert_eq!(store.get("skip").unwrap().next_due_at, at(480));
-        for run in claims { store.settle_run(&run.id, "a", run.lease_fence, success(at(121))).unwrap(); }
+        assert_eq!(store.get("skip").unwrap().next_due_at, at(1440));
+        for run in claims {
+            start(&mut store, &run, at(120));
+            store.settle_run(&run.id, "a", run.lease_fence, success(at(121))).unwrap();
+        }
         assert!(store.get("once").unwrap().paused);
         assert!(store.claim_due(at(122), "a", Duration::minutes(5), 10).unwrap().is_empty());
     }
@@ -424,8 +495,127 @@ mod tests {
         assert!(matches!(store.settle_run(&run.id, "a", run.lease_fence, success(at(5))), Err(DaemonError::Conflict(_))));
         let mut settlement = success(at(1));
         settlement.output = Some("é".repeat(20_000));
+        start(&mut store, &run, at(0));
         store.settle_run(&run.id, "a", run.lease_fence, settlement).unwrap();
         assert!(store.history("due", 1).unwrap()[0].output.as_ref().unwrap().len() <= MAX_OUTPUT_BYTES);
         assert!(matches!(store.settle_run(&run.id, "a", run.lease_fence, success(at(2))), Err(DaemonError::Conflict(_))));
+    }
+
+    #[test]
+    fn terminal_settlement_requires_running_action_boundary() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("due", at(0))).unwrap();
+        let run = store
+            .claim_due(at(0), "a", Duration::minutes(5), 1)
+            .unwrap()
+            .remove(0);
+
+        assert!(matches!(
+            store.settle_run(&run.id, "a", run.lease_fence, success(at(1))),
+            Err(DaemonError::Conflict(_))
+        ));
+        assert_eq!(
+            store.history("due", 1).unwrap()[0].state,
+            JobRunState::Claimed
+        );
+    }
+
+    #[test]
+    fn creation_validates_first_recurring_occurrence_and_overdue_one_shots() {
+        let mut store = JobStore::in_memory().unwrap();
+        let mut recurring = job("recurring", at(5));
+        recurring.next_due_at = at(1445);
+        assert!(matches!(store.create(recurring), Err(DaemonError::InvalidInput(_))));
+        assert!(store.list().unwrap().is_empty());
+
+        let mut timestamps = job("timestamps", at(5));
+        timestamps.updated_at = at(-11);
+        assert!(matches!(store.create(timestamps), Err(DaemonError::InvalidInput(_))));
+
+        for (id, due) in [("overdue", at(-20)), ("immediate", at(-10))] {
+            let mut once = job(id, due);
+            once.schedule = ScheduleSpec::Once { at: due };
+            store.create(once).unwrap();
+        }
+        assert_eq!(store.claim_due(at(0), "a", Duration::minutes(5), 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn all_terminal_states_require_running() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("due", at(0))).unwrap();
+        let run = store.claim_due(at(0), "a", Duration::minutes(5), 1).unwrap().remove(0);
+        for state in [JobRunState::Succeeded, JobRunState::Failed, JobRunState::Cancelled, JobRunState::Ambiguous] {
+            assert!(matches!(store.settle_run(&run.id, "a", run.lease_fence,
+                RunSettlement { state, ..success(at(1)) }), Err(DaemonError::Conflict(_))));
+        }
+        assert_eq!(store.get("due").unwrap().next_due_at, at(0));
+        start(&mut store, &run, at(1));
+        assert!(matches!(store.cancel_claimed(&run.id, "a", run.lease_fence, at(2), "shutdown"), Err(DaemonError::Conflict(_))));
+        assert_eq!(store.history("due", 1).unwrap()[0].state, JobRunState::Running);
+    }
+
+    #[test]
+    fn cancellation_requires_current_unexpired_lease_and_revision() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("due", at(0))).unwrap();
+        let run = store.claim_due(at(0), "a", Duration::minutes(5), 1).unwrap().remove(0);
+        for (owner, fence, now) in [("b", run.lease_fence, at(1)), ("a", run.lease_fence + 1, at(1)), ("a", run.lease_fence, at(5))] {
+            assert!(matches!(store.cancel_claimed(&run.id, owner, fence, now, "shutdown"), Err(DaemonError::Conflict(_))));
+        }
+        let mut changed = store.get("due").unwrap();
+        changed.schedule_revision += 1;
+        save_job(&store.connection, &changed).unwrap();
+        assert!(matches!(store.cancel_claimed(&run.id, "a", run.lease_fence, at(1), "shutdown"), Err(DaemonError::Conflict(_))));
+        changed.schedule_revision -= 1;
+        save_job(&store.connection, &changed).unwrap();
+        store.cancel_claimed(&run.id, "a", run.lease_fence, at(1), "shutdown").unwrap();
+        assert!(matches!(store.cancel_claimed(&run.id, "a", run.lease_fence, at(2), "shutdown"), Err(DaemonError::Conflict(_))));
+        assert_eq!(store.get("due").unwrap().next_due_at, at(1440));
+    }
+
+    #[test]
+    fn expired_running_is_durably_ambiguous_and_never_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.sqlite");
+        let mut store = JobStore::open(&path).unwrap();
+        let mut once = job("once", at(0));
+        once.schedule = ScheduleSpec::Once { at: at(0) };
+        store.create(once).unwrap();
+        let run = store.claim_due(at(0), "a", Duration::minutes(1), 1).unwrap().remove(0);
+        start(&mut store, &run, at(0));
+        drop(store);
+        let mut store = JobStore::open(&path).unwrap();
+        assert_eq!(store.history("once", 1).unwrap()[0].state, JobRunState::Running);
+        assert!(store.claim_due(at(1), "b", Duration::minutes(5), 1).unwrap().is_empty());
+        assert!(matches!(store.settle_run(&run.id, "a", run.lease_fence, success(at(1))), Err(DaemonError::Conflict(_))));
+        drop(store);
+        let mut store = JobStore::open(&path).unwrap();
+        assert!(store.claim_due(at(10), "c", Duration::minutes(5), 1).unwrap().is_empty());
+        let history = store.history("once", 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].state, JobRunState::Ambiguous);
+        assert_eq!(history[0].started_at, Some(at(0)));
+        assert_eq!(history[0].finished_at, Some(at(1)));
+        assert!(history[0].lease_expires_at.is_none());
+    }
+
+    #[test]
+    fn claimed_run_can_be_cancelled_before_external_action() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("due", at(0))).unwrap();
+        let run = store
+            .claim_due(at(0), "a", Duration::minutes(5), 1)
+            .unwrap()
+            .remove(0);
+
+        store
+            .cancel_claimed(&run.id, "a", run.lease_fence, at(1), "shutdown")
+            .unwrap();
+
+        let cancelled = store.history("due", 1).unwrap().remove(0);
+        assert_eq!(cancelled.state, JobRunState::Cancelled);
+        assert_eq!(cancelled.error_class.as_deref(), Some("shutdown"));
+        assert!(cancelled.started_at.is_none());
     }
 }
