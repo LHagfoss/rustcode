@@ -103,7 +103,7 @@ impl Composer {
                 ComposerAction::Handled
             }
             KeyAction::Complete => {
-                self.complete_or_toggle_mode(state);
+                self.complete(state);
                 ComposerAction::Handled
             }
             KeyAction::CommandPaletteOrPreviousSuggestion => {
@@ -118,8 +118,8 @@ impl Composer {
                 self.cycle_suggestion(state, true);
                 ComposerAction::Handled
             }
-            KeyAction::ToggleAutoConfirm => {
-                state.auto_confirm = !state.auto_confirm;
+            KeyAction::ToggleAgentMode => {
+                self.toggle_agent_mode(state);
                 ComposerAction::Handled
             }
             KeyAction::Escape | KeyAction::Unhandled => ComposerAction::Unhandled,
@@ -222,7 +222,7 @@ impl Composer {
         }
     }
 
-    fn complete_or_toggle_mode(&self, state: &mut AppState) {
+    fn complete(&self, state: &mut AppState) {
         state.dismissed_completion = None;
         let has_at =
             crate::app::get_at_word_query(&state.input_buffer, state.cursor_position).is_some();
@@ -230,20 +230,21 @@ impl Composer {
             crate::app::apply_autocomplete(state);
         } else if crate::app::suggestion::command_token(&state.input_buffer).is_some() {
             state.cycle_suggestion();
-        } else {
-            state.agent_mode = match state.agent_mode {
-                crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
-                crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
-            };
-            state.config.agent_mode = state.agent_mode;
-            crate::config::save_entire_config(&state.config);
-            let notice = match state.agent_mode {
-                crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
-                crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
-            };
-            // Collapse repeats instead of stacking history entries (#1223).
-            crate::app::actions::push_ephemeral_status(state, notice.to_string());
         }
+    }
+
+    fn toggle_agent_mode(&self, state: &mut AppState) {
+        state.agent_mode = match state.agent_mode {
+            crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
+            crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
+        };
+        state.config.agent_mode = state.agent_mode;
+        crate::config::save_entire_config(&state.config);
+        let notice = match state.agent_mode {
+            crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
+            crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
+        };
+        crate::app::actions::push_ephemeral_status(state, notice.to_string());
     }
 }
 
@@ -308,5 +309,46 @@ mod tests {
 
         composer.recall_next(&mut history_state);
         assert_eq!(history_state.input_buffer, "");
+    }
+
+    #[test]
+    fn shift_tab_toggles_agent_mode_without_changing_auto_confirm() {
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        state.agent_mode = crate::config::AgentMode::Build;
+        state.auto_confirm = false;
+        state.input_buffer = "cargo test".to_owned();
+        state.cursor_position = state.input_buffer.chars().count();
+        state.active_suggestion_index = Some(0);
+
+        assert_eq!(
+            composer.handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+            ),
+            ComposerAction::Handled
+        );
+        assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
+        assert!(!state.auto_confirm);
+
+        composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert_eq!(state.agent_mode, crate::config::AgentMode::Build);
+        assert!(!state.auto_confirm);
+    }
+
+    #[test]
+    fn plain_tab_does_not_toggle_agent_mode_without_completion() {
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        state.agent_mode = crate::config::AgentMode::Plan;
+        state.input_buffer = "/context".to_owned();
+        state.cursor_position = state.input_buffer.chars().count();
+        state.active_suggestion_index = Some(0);
+
+        assert_eq!(
+            composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),),
+            ComposerAction::Handled
+        );
+        assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
     }
 }

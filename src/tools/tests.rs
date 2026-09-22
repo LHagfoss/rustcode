@@ -1804,6 +1804,7 @@ fn plan_mode_prompt_demands_investigation_not_a_plan_to_investigate() {
         "got: {prompt}"
     );
     assert!(prompt.contains("resolve unknowns now"), "got: {prompt}");
+    assert!(prompt.contains("Shift+Tab"), "got: {prompt}");
 
     // Build mode must not carry the plan-mode restrictions.
     let build = tool_system_prompt(
