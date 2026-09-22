@@ -171,6 +171,13 @@ fn repetition_batch_is_eligible(
         })
 }
 
+fn credited_recovery_batch_is_read_only(
+    calls: &[crate::tools::ToolCall],
+    assessments: &crate::tools::ShellAssessmentCache,
+) -> bool {
+    repetition_batch_is_eligible(calls, assessments)
+}
+
 fn repetition_advisory_input(
     calls: &[crate::tools::ToolCall],
     reason: loop_detect::ProgressReason,
@@ -205,6 +212,70 @@ fn repetition_advisory_input(
     })
 }
 
+fn repetition_advisory_event_fields(
+    input: &serde_json::Value,
+    calls: &[crate::tools::ToolCall],
+    assessments: &crate::tools::ShellAssessmentCache,
+    decision: Option<&crate::laya::AdvisoryDecision>,
+    min_confidence: f32,
+    mode: crate::laya::LayaMode,
+    latency: std::time::Duration,
+    failure_category: &str,
+    relaxed_would_change_result: bool,
+) -> serde_json::Value {
+    let confidence_bucket = decision
+        .map(|decision| {
+            if decision.confidence >= min_confidence {
+                "high"
+            } else if decision.confidence >= 0.75 {
+                "medium"
+            } else {
+                "low"
+            }
+        })
+        .unwrap_or("none");
+    let latency_bucket = match latency.as_millis() {
+        0..=9 => "0_9ms",
+        10..=49 => "10_49ms",
+        50..=149 => "50_149ms",
+        _ => "150ms_plus",
+    };
+    serde_json::json!({
+        "decision_kind": "repetition",
+        "mode": mode.to_string(),
+        "request_hash": format!("{:016x}", loop_detect::stable_hash(&input.to_string())),
+        "local_classification": if repetition_batch_is_eligible(calls, assessments) {
+            "read_only"
+        } else {
+            "not_read_only"
+        },
+        "advisory": decision
+            .map(|decision| {
+                format!(
+                    "{:?}",
+                    loop_detect::recovery_advisory(decision, min_confidence)
+                )
+            })
+            .unwrap_or_else(|| "none".to_string()),
+        "confidence_bucket": confidence_bucket,
+        "latency_bucket": latency_bucket,
+        "failure_category": failure_category,
+        "relaxed_would_change_result": relaxed_would_change_result,
+    })
+}
+
+fn repetition_advisory_failure_category(error: &crate::laya::AdvisoryError) -> &'static str {
+    match error {
+        crate::laya::AdvisoryError::Disabled => "disabled",
+        crate::laya::AdvisoryError::Unavailable => "unavailable",
+        crate::laya::AdvisoryError::InvalidRequest => "invalid_request",
+        crate::laya::AdvisoryError::Timeout => "timeout",
+        crate::laya::AdvisoryError::MalformedResponse => "malformed_response",
+        crate::laya::AdvisoryError::ModelError => "model_error",
+        crate::laya::AdvisoryError::ProcessExit => "process_exit",
+    }
+}
+
 async fn request_repetition_advisory(
     laya: &crate::laya::LayaRuntime,
     ctx: &TurnContext,
@@ -212,6 +283,8 @@ async fn request_repetition_advisory(
     assessments: &crate::tools::ShellAssessmentCache,
     reason: loop_detect::ProgressReason,
     action: &str,
+    local_recovery_would_force_final: bool,
+    max_extra_recoveries: usize,
 ) -> Option<(crate::laya::AdvisoryDecision, loop_detect::RecoveryAdvisory)> {
     if !repetition_batch_is_eligible(calls, assessments) {
         return None;
@@ -219,39 +292,48 @@ async fn request_repetition_advisory(
     if matches!(laya.config().mode, crate::laya::LayaMode::Off) {
         return None;
     }
+    let input = repetition_advisory_input(calls, reason, action, ctx);
     let request = crate::laya::AdvisoryRequest {
         id: laya.next_request_id(crate::laya::AdvisoryKind::Repetition),
         kind: crate::laya::AdvisoryKind::Repetition,
-        input: repetition_advisory_input(calls, reason, action, ctx),
+        input: input.clone(),
         deadline: std::time::Duration::from_millis(laya.config().timeout_ms),
     };
     let min_confidence = laya.config().min_confidence;
     let mode = laya.config().mode;
     let started = std::time::Instant::now();
     let result = laya.evaluate(request).await;
-    let (decision, advisory) = match result {
+    let (decision, advisory, failure_category) = match result {
         Ok(decision) => {
             let advisory = loop_detect::recovery_advisory(&decision, min_confidence);
-            (Some(decision), Some(advisory))
+            (Some(decision), Some(advisory), "none")
         }
-        Err(_) => (None, None),
+        Err(error) => (None, None, repetition_advisory_failure_category(&error)),
     };
+    let relaxed_would_change_result = decision.as_ref().is_some_and(|decision| {
+        local_recovery_would_force_final
+            && loop_detect::laya_recovery_credit_available(
+                crate::laya::LayaMode::Relaxed,
+                decision,
+                min_confidence,
+                ctx.recovery.laya_read_only_recoveries_used,
+                max_extra_recoveries,
+                true,
+            )
+    });
     crate::logger::operational_event(
         "laya.repetition",
-        serde_json::json!({
-            "decision_kind": "repetition",
-            "mode": mode.to_string(),
-            "advisory": advisory.map(|advisory| format!("{advisory:?}")),
-            "confidence_bucket": decision.as_ref().map(|decision| {
-                if decision.confidence >= min_confidence { "high" } else { "low" }
-            }).unwrap_or("none"),
-            "latency_bucket": match started.elapsed().as_millis() {
-                0..=9 => "0_9ms",
-                10..=49 => "10_49ms",
-                50..=149 => "50_149ms",
-                _ => "150ms_plus",
-            },
-        }),
+        repetition_advisory_event_fields(
+            &input,
+            calls,
+            assessments,
+            decision.as_ref(),
+            min_confidence,
+            mode,
+            started.elapsed(),
+            failure_category,
+            relaxed_would_change_result,
+        ),
     );
     decision.zip(advisory)
 }
@@ -538,9 +620,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     thought_tokens: Option<u32>,
     native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 ) -> ToolHandlingOutcome {
-    // A pending Laya credit is valid only for the single recovery round that
-    // immediately follows the decision that granted it.
-    ctx.recovery.laya_pending_recovery_advisory = None;
     // Phase 3: normalize provider output into protocol-independent events.
     let protocol = {
         let state = state.lock().await;
@@ -609,6 +688,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     // this response closed and persist the complete assistant/call + result
     // transaction so the next request can safely re-issue a smaller call.
     if response_was_output_truncated && !parsed_tool_calls.is_empty() {
+        ctx.recovery.laya_pending_recovery_advisory = None;
         let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
         let mut s = state.lock().await;
         let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
@@ -663,6 +743,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         .map(|index| parsed_tool_calls[*index].clone())
         .collect::<Vec<_>>();
     if let Some(reason) = selected_call_index.and_then(|index| validation_errors[index].clone()) {
+        ctx.recovery.laya_pending_recovery_advisory = None;
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -721,6 +802,46 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .is_some_and(|call| shell_call_is_read_only(call, &ctx.shell_assessments))
         });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
+    if ctx.recovery.laya_pending_recovery_advisory.is_some() {
+        if !executable_tool_calls.is_empty()
+            && !credited_recovery_batch_is_read_only(&executable_tool_calls, &ctx.shell_assessments)
+        {
+            let reason = "Laya credited recovery permits only read-only inspection calls; the mutation, process, network, or mixed batch was rejected.";
+            ctx.recovery.laya_pending_recovery_advisory = None;
+            ctx.recovery.force_final = true;
+            let mut s = state.lock().await;
+            let rejected_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
+            let mut message = ChatMessage::new("assistant", ctx.response.final_content.clone())
+                .with_tool_calls(rejected_refs.clone());
+            message.response_time_ms = Some(turn_response_time_ms);
+            message.token_usage = turn_token_usage.clone();
+            message.thought_time_ms = thought_time_ms;
+            message.thought_tokens = thought_tokens;
+            s.history.push(message);
+            ctx.response.final_content_persisted = true;
+            s.history.extend(unanswered_call_results_with_kind(
+                &rejected_refs,
+                reason,
+                crate::tools::ToolErrorKind::Validation,
+            ));
+            s.history.push(ChatMessage::new(
+                "system",
+                format!("[{reason}] {FORCE_ANSWER_PROMPT}"),
+            ));
+            crate::config::save_history(&s.history);
+            s.clear_current_response();
+            s.status = AppStatus::Streaming;
+            s.stream_tracker = Some(StreamTracker::new());
+            drop(s);
+            ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+            ctx.lifecycle.turn_machine.abandon_tool_phase();
+            ctx.budget.tool_rounds += 1;
+            return ToolHandlingOutcome::Continue;
+        }
+        // The pending marker is intentionally consumed only after this batch
+        // has been classified. It cannot leak into a later turn or segment.
+        ctx.recovery.laya_pending_recovery_advisory = None;
+    }
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
         ctx.recovery.force_final,
@@ -796,6 +917,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             &ctx.shell_assessments,
                             loop_detect::ProgressReason::NoNewInformation,
                             loop_offender.as_deref().unwrap_or("repeated tool output"),
+                            local_recovery_action == LoopRecoveryAction::ForceFinal,
+                            laya_max_extra_recoveries,
                         )
                         .await
                     } else {
@@ -1816,6 +1939,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             &ctx.shell_assessments,
                             reason,
                             &action,
+                            local_recovery_action == LoopRecoveryAction::ForceFinal,
+                            laya_max_extra_recoveries,
                         )
                         .await
                     } else {
@@ -2200,7 +2325,8 @@ mod tests {
     use super::{
         apply_round_stagnation, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
         bounded_malformed_tool_history, content_bearing_inspection_status,
-        grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
+        credited_recovery_batch_is_read_only, grounded_artifact_recovery_message,
+        incomplete_tool_result, mutation_batch_guidance, repetition_advisory_event_fields,
         repetition_advisory_input, selected_tool_call_indices,
         selected_tool_call_indices_with_assessments, should_apply_loop_recovery,
         targeted_no_progress_guidance,
@@ -2309,6 +2435,80 @@ mod tests {
         assert!(rendered.contains("no_new_information"));
         assert!(!rendered.contains("secret-token"));
         assert!(!rendered.contains("git status"));
+    }
+
+    #[test]
+    fn credited_recovery_rejects_mutating_and_mixed_batches() {
+        let read = ToolCall {
+            name: "view_file".to_string(),
+            arguments: serde_json::json!({"path": "src/lib.rs"}),
+            call_id: None,
+        };
+        let mutation = ToolCall {
+            name: "write_to_file".to_string(),
+            arguments: serde_json::json!({"path": "src/lib.rs", "content": "x"}),
+            call_id: None,
+        };
+        let assessments = crate::tools::ShellAssessmentCache::default();
+
+        assert!(credited_recovery_batch_is_read_only(
+            std::slice::from_ref(&read),
+            &assessments,
+        ));
+        assert!(!credited_recovery_batch_is_read_only(
+            std::slice::from_ref(&mutation),
+            &assessments,
+        ));
+        assert!(!credited_recovery_batch_is_read_only(
+            &[read, mutation],
+            &assessments,
+        ));
+    }
+
+    #[test]
+    fn repetition_advisory_telemetry_is_redacted_and_complete() {
+        let mut ctx = TurnContext::new();
+        ctx.progress.meaningful_events = 4;
+        let calls = vec![ToolCall {
+            name: "view_file".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/private.rs",
+                "token": "secret-token",
+            }),
+            call_id: None,
+        }];
+        let input = repetition_advisory_input(
+            &calls,
+            super::loop_detect::ProgressReason::NoNewInformation,
+            "read:src/private.rs",
+            &ctx,
+        );
+        let fields = repetition_advisory_event_fields(
+            &input,
+            &calls,
+            &crate::tools::ShellAssessmentCache::default(),
+            Some(&crate::laya::AdvisoryDecision {
+                label: "novel_evidence".to_string(),
+                confidence: 0.999,
+                effects: vec!["read_only".to_string()],
+                rationale_code: Some("fixture".to_string()),
+            }),
+            0.98,
+            crate::laya::LayaMode::Shadow,
+            std::time::Duration::from_millis(12),
+            "none",
+            true,
+        );
+        let rendered = fields.to_string();
+        assert!(fields["request_hash"].as_str().is_some());
+        assert_eq!(fields["local_classification"], "read_only");
+        assert_eq!(fields["confidence_bucket"], "high");
+        assert_eq!(fields["latency_bucket"], "10_49ms");
+        assert_eq!(fields["failure_category"], "none");
+        assert_eq!(fields["relaxed_would_change_result"], true);
+        assert!(fields.get("input").is_none());
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("src/private.rs"));
     }
 
     #[test]

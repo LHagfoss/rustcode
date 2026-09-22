@@ -3371,6 +3371,35 @@ fn laya_repetition_advisory_is_bounded_to_one_relaxed_read_only_credit() {
 }
 
 #[test]
+fn recovery_advisory_labels_are_canonical_and_unknown_is_conservative() {
+    let labels = [
+        (
+            "novel_evidence",
+            loop_detect::RecoveryAdvisory::NovelEvidence,
+        ),
+        (
+            "confirmatory_evidence",
+            loop_detect::RecoveryAdvisory::ConfirmatoryEvidence,
+        ),
+        (
+            "no_new_information",
+            loop_detect::RecoveryAdvisory::NoNewInformation,
+        ),
+        ("unknown", loop_detect::RecoveryAdvisory::Unknown),
+        ("read_only", loop_detect::RecoveryAdvisory::Unknown),
+    ];
+    for (label, expected) in labels {
+        let decision = crate::laya::AdvisoryDecision {
+            label: label.to_string(),
+            confidence: 0.999,
+            effects: vec!["read_only".to_string()],
+            rationale_code: None,
+        };
+        assert_eq!(loop_detect::recovery_advisory(&decision, 0.98), expected);
+    }
+}
+
+#[test]
 fn laya_repetition_advisory_rejects_low_confidence_and_non_read_only_effects() {
     for label in ["novel_evidence", "confirmatory_evidence"] {
         for effects in [
