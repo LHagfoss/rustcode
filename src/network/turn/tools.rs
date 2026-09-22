@@ -735,6 +735,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mutation_batch = results
                 .iter()
                 .any(|result| is_mutating_tool(&result.tool_name));
+            ctx.metrics.mutating_tool_calls += results
+                .iter()
+                .filter(|result| is_mutating_tool(&result.tool_name))
+                .count();
             if mutation_batch {
                 let diagnostics = results
                     .iter()

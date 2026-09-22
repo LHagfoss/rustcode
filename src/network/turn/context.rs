@@ -115,6 +115,7 @@ pub struct ResponseState {
 
 pub struct MetricsState {
     pub tool_calls: usize,
+    pub mutating_tool_calls: usize,
     pub malformed_calls: usize,
     pub no_progress_results: usize,
     pub failure_replans: usize,
@@ -247,6 +248,7 @@ impl TurnContext {
             },
             metrics: MetricsState {
                 tool_calls: 0,
+                mutating_tool_calls: 0,
                 malformed_calls: 0,
                 no_progress_results: 0,
                 failure_replans: 0,

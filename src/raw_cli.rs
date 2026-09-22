@@ -173,13 +173,20 @@ pub(crate) async fn run_scheduled_turn(
         .iter()
         .filter(|server| server.enabled)
     {
-        let client = tokio::select! {
+        let result = tokio::select! {
             _ = cancellation.cancelled() => return Err(ScheduledTurnError::Transient("cancelled before prompt dispatch".into())),
-            result = crate::mcp::start_owned_server(server, workspace) => result.map_err(ScheduledTurnError::Transient)?,
+            result = crate::mcp::start_owned_server(server, workspace) => result,
         };
-        owned
-            .insert(client)
-            .map_err(ScheduledTurnError::Transient)?;
+        match result {
+            Ok(client) => {
+                if let Err(error) = owned.insert(client) {
+                    dbg_log!("[daemon] MCP startup registration failed: {error}");
+                }
+            }
+            Err(error) => {
+                dbg_log!("[daemon] MCP startup failed; continuing without server: {error}");
+            }
+        }
     }
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -427,8 +434,7 @@ pub(crate) async fn run_headless_turn_cancellable(
     }
 
     if let Some(reason) = headless_failure(&ctx) {
-        if ctx.metrics.tool_calls == 0
-            && ctx.budget.tool_rounds == 0
+        if ctx.metrics.mutating_tool_calls == 0
             && ctx.metrics.provider_errors > 0
         {
             return Err(Box::new(PreEffectTurnFailure(format!(
