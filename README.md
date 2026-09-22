@@ -216,6 +216,45 @@ CLI overrides > nearest project config > global config > built-in defaults
 Project files are partial overrides; omitted fields continue to come from the
 lower-precedence layer.
 
+### Optional local Laya advisory policy
+
+Laya is an optional, offline advisory helper. It is disabled by default, and
+the normal local policy remains authoritative when Laya is unavailable. The
+supported runtime is Apple Silicon macOS with Python 3.11+ and a preinstalled
+`laya-mlx==0.2.0` environment. Stage the pinned local checkpoint before use;
+RustCode does not install software or download models when Laya is enabled.
+The adapter and checkpoint are supplied as filesystem paths, not Hub IDs. See
+the [Laya sidecar protocol and pinning requirements](scripts/laya_sidecar_protocol.md)
+for the exact MLX and checkpoint revisions.
+
+Check local prerequisites without starting the sidecar:
+
+```bash
+rustcode laya status
+```
+
+Configure a project-local mode and the already-installed runtime like this:
+
+```toml
+[laya]
+mode = "shadow"
+python = "/Users/me/.venvs/rustcode-laya/bin/python"
+adapter = "/Users/me/rustcode/scripts/laya_sidecar.py"
+model = "/Users/me/models/aac6fef-laya-mlx"
+timeout_ms = 150
+startup_timeout_ms = 5000
+min_confidence = 0.98
+max_extra_read_only_recoveries = 1
+```
+
+`rustcode laya enable --mode shadow` and `rustcode laya enable --mode
+relaxed` only persist the selected mode; they do not install software. Disable
+the advisory path and restore the default local-only behavior with:
+
+```bash
+rustcode laya disable
+```
+
 ### Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a

@@ -19,8 +19,9 @@ use super::{Tool, ToolCapability, ToolSafety};
 mod policy;
 
 pub(crate) use policy::{
-    command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
-    pull_request_base, reject_broad_git_stage,
+    ShellClassification, ShellPolicyFacts, command_confirmation_preview,
+    command_confirmation_scope, command_requires_confirmation, pull_request_base,
+    reject_broad_git_stage, shell_policy_facts, shell_policy_facts_for_call,
 };
 use policy::{has_interactive_sudo, is_short_discovery_command};
 

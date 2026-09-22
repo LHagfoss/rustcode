@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Offline JSONL adapter for a preloaded local laya-mlx checkpoint."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import platform
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+PROTOCOL_VERSION = 1
+MAX_LINE_BYTES = 16 * 1024
+MAX_REQUEST_ID_BYTES = 256
+PINNED_LAYA_MLX_VERSION = "0.2.0"
+SUPPORTED_KINDS = ("shell_policy", "repetition")
+SUPPORTED_LABELS = {
+    "read_only",
+    "novel_evidence",
+    "confirmatory_evidence",
+    "no_new_information",
+    "unknown",
+}
+SUPPORTED_EFFECTS = {
+    "read_only",
+    "mutation",
+    "process_control",
+    "network_or_external",
+    "unknown",
+}
+EFFECT_ALIASES = {
+    "read-only": "read_only",
+    "read": "read_only",
+    "workspace_mutation": "mutation",
+    "mutating": "mutation",
+    "process": "process_control",
+    "network": "network_or_external",
+    "external": "network_or_external",
+}
+DIAGNOSTIC_CATEGORIES = {
+    "unsupported_python",
+    "unsupported_architecture",
+    "startup_error",
+    "readiness_error",
+    "oversized_request",
+    "unterminated_request",
+    "invalid_request",
+    "model_error",
+    "response_error",
+}
+
+
+def _diagnostic_line(category: str) -> str:
+    if category not in DIAGNOSTIC_CATEGORIES:
+        category = "internal_error"
+    return f"Laya sidecar error: {category}"
+
+
+def _diagnostic(category: str) -> None:
+    print(_diagnostic_line(category), file=sys.stderr)
+
+
+def _bounded_lines(stream: Any):
+    """Yield complete bounded lines without buffering an arbitrary physical line."""
+    while True:
+        chunk = stream.readline(MAX_LINE_BYTES + 1)
+        if not chunk:
+            return
+        if len(chunk) > MAX_LINE_BYTES:
+            while chunk and not chunk.endswith(b"\n"):
+                chunk = stream.readline(MAX_LINE_BYTES + 1)
+            yield None
+        else:
+            yield chunk
+
+
+def _write_json(message: dict[str, Any]) -> None:
+    encoded = json.dumps(message, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(encoded) + 1 > MAX_LINE_BYTES:
+        raise ValueError("sidecar message exceeds protocol line limit")
+    sys.stdout.buffer.write(encoded + b"\n")
+    sys.stdout.buffer.flush()
+
+
+def _error_response(request_id: str, category: str) -> dict[str, Any]:
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "id": request_id,
+        "ok": False,
+        "error": {"category": category},
+    }
+
+
+def _validate_request(request: Any) -> tuple[str, str, dict[str, Any]]:
+    if not isinstance(request, dict) or request.get("protocol") != PROTOCOL_VERSION:
+        raise ValueError("invalid protocol")
+    request_id = request.get("id")
+    kind = request.get("kind")
+    input_data = request.get("input")
+    deadline_ms = request.get("deadline_ms")
+    if (
+        not isinstance(request_id, str)
+        or not request_id
+        or len(request_id.encode("utf-8")) > MAX_REQUEST_ID_BYTES
+        or kind not in SUPPORTED_KINDS
+        or not isinstance(input_data, dict)
+        or isinstance(deadline_ms, bool)
+        or not isinstance(deadline_ms, int)
+        or deadline_ms < 0
+    ):
+        raise ValueError("invalid request fields")
+    if len(json.dumps(input_data, separators=(",", ":")).encode("utf-8")) > MAX_LINE_BYTES // 2:
+        raise ValueError("request input is too large")
+    return request_id, kind, input_data
+
+
+def _questions(kind: str) -> dict[str, Any]:
+    if kind == "shell_policy":
+        return {
+            "decision": {
+                "type": "choice",
+                "instructions": "Classify the requested operation conservatively.",
+                "criteria": ["read_only", "unknown"],
+            }
+        }
+    return {
+        "decision": {
+            "type": "choice",
+            "instructions": "Classify whether the bounded recovery has new evidence.",
+            "criteria": [
+                "novel_evidence",
+                "confirmatory_evidence",
+                "no_new_information",
+                "unknown",
+            ],
+        }
+    }
+
+
+def _answer_value(result: Any) -> Any:
+    if not isinstance(result, dict):
+        raise ValueError("model result is not an object")
+    answers = result.get("answers")
+    if not isinstance(answers, dict) or "decision" not in answers:
+        raise ValueError("model result has no decision answer")
+    return answers["decision"]
+
+
+def _normalize_effects(answer: Any, label: str, kind: str) -> list[str]:
+    raw_effects: Any = None
+    if isinstance(answer, dict):
+        raw_effects = answer.get("effects", answer.get("effect"))
+    if isinstance(raw_effects, str):
+        raw_effects = [raw_effects]
+    if not isinstance(raw_effects, list):
+        raw_effects = []
+
+    effects: list[str] = []
+    saw_raw_effect = bool(raw_effects)
+    for raw_effect in raw_effects:
+        if not isinstance(raw_effect, str):
+            if "unknown" not in effects:
+                effects.append("unknown")
+            continue
+        normalized = raw_effect.strip().lower().replace(" ", "_")
+        normalized = EFFECT_ALIASES.get(normalized, normalized)
+        if normalized in SUPPORTED_EFFECTS and normalized not in effects:
+            effects.append(normalized)
+        elif "unknown" not in effects:
+            effects.append("unknown")
+
+    if effects:
+        return effects[:16]
+    if not saw_raw_effect and kind == "repetition":
+        return []
+    return ["unknown"] if saw_raw_effect else (["read_only"] if label == "read_only" else ["unknown"])
+
+
+def _normalize_decision(result: Any, kind: str, input_data: dict[str, Any]) -> dict[str, Any]:
+    answer = _answer_value(result)
+    if isinstance(answer, dict):
+        label = answer.get("choice", answer.get("label"))
+        confidence = answer.get("confidence", answer.get("probability"))
+    else:
+        label = answer
+        confidence = result.get("confidence") if isinstance(result, dict) else None
+    if not isinstance(label, str) or label not in SUPPORTED_LABELS:
+        raise ValueError("model returned an unsupported label")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise ValueError("model returned no confidence")
+    confidence = float(confidence)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise ValueError("model returned invalid confidence")
+
+    # Candidate effects are local hints only. Never copy them into the
+    # decision: the model result (or its normalized label) is authoritative
+    # for the advisory effect, and Rust still applies its local policy floor.
+    effects = _normalize_effects(answer, label, kind)
+    return {
+        "label": label,
+        "confidence": confidence,
+        "effects": effects[:16],
+        "rationale_code": f"laya_{kind}",
+    }
+
+
+def _load_agent(model_path: Path) -> Any:
+    if not model_path.exists() or not (model_path.is_file() or model_path.is_dir()):
+        raise RuntimeError("configured model path is not readable")
+    try:
+        import laya_mlx as laya
+    except Exception as exc:  # pragma: no cover - depends on the local MLX install
+        raise RuntimeError("could not import pinned laya-mlx") from exc
+    if getattr(laya, "__version__", PINNED_LAYA_MLX_VERSION) != PINNED_LAYA_MLX_VERSION:
+        raise RuntimeError("installed laya-mlx version is not the pinned version")
+    # Passing a local path is intentional: this adapter never accepts a Hub ID
+    # and never downloads a checkpoint during a RustCode turn.
+    return laya.load(str(model_path))
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="RustCode's offline Laya JSONL sidecar")
+    parser.add_argument("--model", required=True, type=Path)
+    return parser.parse_args()
+
+
+def main() -> int:
+    if sys.version_info < (3, 11):
+        _diagnostic("unsupported_python")
+        return 2
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        _diagnostic("unsupported_architecture")
+        return 2
+
+    args = _parse_args()
+    try:
+        agent = _load_agent(args.model)
+    except Exception:  # startup failures must be visible and nonzero
+        _diagnostic("startup_error")
+        return 2
+
+    try:
+        _write_json(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "backend": "laya-mlx",
+                "model": args.model.name,
+                "kinds": list(SUPPORTED_KINDS),
+            }
+        )
+    except Exception:
+        _diagnostic("readiness_error")
+        return 2
+
+    for raw_line in _bounded_lines(sys.stdin.buffer):
+        if raw_line is None:
+            _diagnostic("oversized_request")
+            continue
+        if not raw_line.endswith(b"\n"):
+            _diagnostic("unterminated_request")
+            continue
+        request = None
+        try:
+            request = json.loads(raw_line)
+            request_id, kind, input_data = _validate_request(request)
+        except Exception:
+            _diagnostic("invalid_request")
+            request_id = request.get("id") if isinstance(request, dict) else None
+            if isinstance(request_id, str) and request_id:
+                try:
+                    _write_json(_error_response(request_id, "invalid_request"))
+                except Exception:
+                    _diagnostic("response_error")
+                    return 2
+            continue
+
+        started = time.monotonic()
+        try:
+            result = agent.predict(input_data, _questions(kind))
+            decision = _normalize_decision(result, kind, input_data)
+            response = {
+                "protocol": PROTOCOL_VERSION,
+                "id": request_id,
+                "ok": True,
+                "decision": decision,
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            }
+        except Exception:  # diagnostics stay off the protocol stream
+            _diagnostic("model_error")
+            response = _error_response(request_id, "model_error")
+        try:
+            _write_json(response)
+        except Exception:
+            _diagnostic("response_error")
+            return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

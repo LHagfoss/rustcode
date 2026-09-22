@@ -943,6 +943,10 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub discord_rpc_enabled: bool,
 
+    /// Optional local Laya advisory policy assistance. Disabled by default.
+    #[serde(default)]
+    pub laya: crate::laya::LayaConfig,
+
     #[serde(default)]
     pub agent_mode: AgentMode,
     #[serde(default)]
@@ -1033,6 +1037,8 @@ struct TomlConfig {
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discord_rpc_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    laya: Option<crate::laya::LayaConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1172,6 +1178,7 @@ impl Default for AppConfig {
             }],
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
+            laya: crate::laya::LayaConfig::default(),
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1457,17 +1464,60 @@ pub fn save_entire_config(config: &AppConfig) {
     }
 }
 
-fn save_config_to(dir: &Path, config: &AppConfig) {
+/// Persist a Laya mode change in the configuration scope that currently
+/// supplies the workspace's effective Laya settings. A project-level Laya
+/// block is written in place; otherwise the global configuration is updated.
+pub fn save_laya_mode_for_workspace(
+    workspace: &Path,
+    mode: crate::laya::LayaMode,
+) -> Result<(), String> {
+    let dir =
+        get_config_dir().ok_or_else(|| "configuration directory is unavailable".to_owned())?;
+    save_laya_mode_for_workspace_in(&dir, workspace, mode)
+}
+
+fn save_laya_mode_for_workspace_in(
+    config_dir: &Path,
+    workspace: &Path,
+    mode: crate::laya::LayaMode,
+) -> Result<(), String> {
+    let project_path = project_config_paths(workspace)
+        .into_iter()
+        .rev()
+        .find(|path| read_toml_config(path).is_ok_and(|file| file.laya.is_some()));
+
+    if let Some(path) = project_path {
+        let mut file = read_toml_config(&path)?;
+        let mut laya = file.laya.take().unwrap_or_default();
+        laya.mode = mode;
+        file.laya = Some(laya);
+        return save_toml_config(&path, &file);
+    }
+
+    let (_, _, mut config) = load_config_from(config_dir);
     if !config.is_valid {
-        return;
+        return Err("global configuration is invalid".to_owned());
     }
-    if let Err(error) = fs::create_dir_all(dir) {
-        eprintln!(
-            "[rustcode] WARNING: Failed to create config directory {}: {error}",
+    config.laya.mode = mode;
+    save_config_to_result(config_dir, &config)
+}
+
+fn save_config_to(dir: &Path, config: &AppConfig) {
+    if let Err(error) = save_config_to_result(dir, config) {
+        eprintln!("[rustcode] WARNING: {error}");
+    }
+}
+
+fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
+    if !config.is_valid {
+        return Err("configuration is invalid".to_owned());
+    }
+    fs::create_dir_all(dir).map_err(|error| {
+        format!(
+            "failed to create config directory {}: {error}",
             dir.display()
-        );
-        return;
-    }
+        )
+    })?;
 
     let file = TomlConfig {
         version: Some(CONFIG_FORMAT_VERSION),
@@ -1482,6 +1532,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         mcp_servers: Some(config.mcp_servers.clone()),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
+        laya: Some(config.laya.clone()),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
@@ -1489,21 +1540,43 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         start_time: config.start_time,
     };
 
-    match toml::to_string_pretty(&file) {
-        Ok(contents) => {
-            if let Err(error) = write_config_file(&dir.join(CONFIG_TOML_FILE), &contents) {
-                eprintln!("[rustcode] WARNING: Failed to save config.toml: {error}");
-            }
-        }
-        Err(error) => eprintln!("[rustcode] WARNING: Failed to serialize config.toml: {error}"),
-    }
+    let path = dir.join(CONFIG_TOML_FILE);
+    let contents = toml::to_string_pretty(&file)
+        .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
+    write_config_file(&path, &contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn save_toml_config(path: &Path, file: &TomlConfig) -> Result<(), String> {
+    let contents = toml::to_string_pretty(file)
+        .map_err(|error| format!("could not serialize {}: {error}", path.display()))?;
+    write_config_file(path, &contents)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
-    let file = toml::from_str::<TomlConfig>(&contents)
+    let mut document = toml::from_str::<toml::Value>(&contents)
         .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    let raw_laya = document
+        .as_table_mut()
+        .and_then(|table| table.remove("laya"));
+    let mut file = document
+        .try_into::<TomlConfig>()
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    if let Some(raw_laya) = raw_laya {
+        match raw_laya.try_into::<crate::laya::LayaConfig>() {
+            Ok(laya) => file.laya = Some(laya),
+            Err(error) => {
+                eprintln!(
+                    "[rustcode] WARNING: invalid [laya] configuration in {}; disabling Laya for this scope: {error}",
+                    path.display()
+                );
+                file.laya = Some(crate::laya::LayaConfig::default());
+            }
+        }
+    }
     if let Some(version) = file.version
         && version > CONFIG_FORMAT_VERSION
     {
@@ -1550,6 +1623,14 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(enabled) = file.discord_rpc_enabled {
         config.discord_rpc_enabled = enabled;
+    }
+    if let Some(laya) = file.laya {
+        if let Some(reason) = laya.validation_error() {
+            eprintln!(
+                "[rustcode] WARNING: invalid [laya] configuration; disabling Laya for this scope: {reason}"
+            );
+        }
+        config.laya = laya.fail_closed();
     }
     if let Some(agent_mode) = file.agent_mode {
         config.agent_mode = agent_mode;
@@ -1621,6 +1702,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.discord_rpc_enabled.is_some() {
         persisted.discord_rpc_enabled = global.discord_rpc_enabled;
     }
+    if file.laya.is_some() {
+        persisted.laya = global.laya.clone();
+    }
     if file.agent_mode.is_some() {
         persisted.agent_mode = global.agent_mode;
     }
@@ -1665,6 +1749,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         mcp_servers: None,
         audio: None,
         discord_rpc_enabled: None,
+        laya: None,
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,
