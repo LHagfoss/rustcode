@@ -114,6 +114,7 @@ pub enum ToolErrorKind {
     Cancelled,
     McpFailed,
     Internal,
+    Deferred,
     OutputLimit,
     ProviderFailed,
     UnavailableDependency,
@@ -132,6 +133,7 @@ impl ToolErrorKind {
             Self::Cancelled => "Cancelled",
             Self::McpFailed => "McpFailed",
             Self::Internal => "Internal",
+            Self::Deferred => "Deferred",
             Self::OutputLimit => "OutputLimit",
             Self::ProviderFailed => "ProviderFailed",
             Self::UnavailableDependency => "UnavailableDependency",
@@ -150,6 +152,7 @@ impl ToolErrorKind {
             "Cancelled" => Self::Cancelled,
             "McpFailed" => Self::McpFailed,
             "Internal" => Self::Internal,
+            "Deferred" => Self::Deferred,
             "OutputLimit" => Self::OutputLimit,
             "ProviderFailed" => Self::ProviderFailed,
             "UnavailableDependency" => Self::UnavailableDependency,
@@ -715,5 +718,10 @@ mod tests {
             Some(ToolErrorKind::CommandFailed)
         );
         assert_eq!(ToolErrorKind::CommandFailed.as_str(), "CommandFailed");
+        assert_eq!(
+            ToolErrorKind::from_persisted("Deferred"),
+            Some(ToolErrorKind::Deferred)
+        );
+        assert_eq!(ToolErrorKind::Deferred.as_str(), "Deferred");
     }
 }

@@ -643,6 +643,40 @@ fn persisted_tool_error_kind_round_trips_explicitly() {
     assert_eq!(reloaded.changed_paths, ["src/mcp.rs"]);
 }
 
+#[test]
+fn deferred_tool_calls_are_distinct_and_not_retryable() {
+    let calls = vec![crate::app::ToolCallRef {
+        id: "call_deferred".into(),
+        name: "run_command".into(),
+        arguments: r#"{"command":"echo deferred"}"#.into(),
+    }];
+
+    let deferred = unanswered_call_results_with_kind(
+        &calls,
+        "intentionally deferred by the scheduler",
+        crate::tools::ToolErrorKind::Deferred,
+    );
+    let record = deferred[0].tool_result.as_ref().unwrap();
+
+    assert_eq!(
+        record.parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Deferred)
+    );
+    assert!(!record.retryable);
+    assert!(deferred[0].content.contains("intentionally deferred"));
+
+    let internal = unanswered_call_results(&calls, "harness failure");
+    assert_eq!(
+        internal[0]
+            .tool_result
+            .as_ref()
+            .unwrap()
+            .parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Internal)
+    );
+    assert!(internal[0].tool_result.as_ref().unwrap().retryable);
+}
+
 #[tokio::test]
 async fn denied_tool_batch_records_permission_denied_metadata() {
     let state = Arc::new(Mutex::new(AppState::new()));
