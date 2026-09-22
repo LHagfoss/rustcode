@@ -9,6 +9,7 @@ mod clipboard;
 mod config;
 mod context;
 mod discord_rpc;
+pub mod daemon;
 mod doctor;
 mod inline_terminal;
 mod mcp;
