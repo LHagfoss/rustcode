@@ -361,7 +361,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
                     "system",
                     format!("[⚠ Build could not be verified — {errors}]"),
                 ));
-                crate::config::save_history(&s.history);
+                crate::config::save_session_history(&s.active_session_id, &s.history);
                 drop(s);
             } else {
                 ctx.recovery.finish_gate_retries += 1;
@@ -387,7 +387,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
                                  Compiler errors:\n{errors}]"
                             ),
                         ));
-                crate::config::save_history(&s.history);
+                crate::config::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
@@ -429,7 +429,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
             msg.thought_time_ms = thought_time_ms;
             msg.thought_tokens = thought_tokens;
             s.history.push(msg);
-            crate::config::save_history(&s.history);
+            crate::config::save_session_history(&s.active_session_id, &s.history);
             ctx.response.final_content_persisted = true;
         }
         ctx.lifecycle.task_completed = true;
@@ -454,7 +454,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
             msg.thought_time_ms = thought_time_ms;
             msg.thought_tokens = thought_tokens;
             s.history.push(msg);
-            crate::config::save_history(&s.history);
+            crate::config::save_session_history(&s.active_session_id, &s.history);
             ctx.response.final_content_persisted = true;
         }
         ctx.response.final_content = summary;
@@ -469,7 +469,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         msg.thought_time_ms = thought_time_ms;
         msg.thought_tokens = thought_tokens;
         s.history.push(msg);
-        crate::config::save_history(&s.history);
+        crate::config::save_session_history(&s.active_session_id, &s.history);
         ctx.response.final_content_persisted = true;
         ctx.lifecycle.task_completed = true;
         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
