@@ -41,6 +41,8 @@ pub(crate) struct ShellPolicyFacts {
     pub(crate) has_mixed_list: bool,
     pub(crate) has_command_substitution: bool,
     pub(crate) explicit_mutation: bool,
+    pub(crate) has_environment_override: bool,
+    pub(crate) has_asynchronous_execution: bool,
     pub(crate) unclassified: bool,
 }
 
@@ -54,6 +56,8 @@ impl ShellPolicyFacts {
             || self.has_mixed_list
             || self.has_command_substitution
             || self.explicit_mutation
+            || self.has_environment_override
+            || self.has_asynchronous_execution
             || self.classification == ShellClassification::Unknown
     }
 
@@ -682,11 +686,38 @@ pub(crate) fn shell_policy_facts(command: &str) -> ShellPolicyFacts {
         has_mixed_list,
         has_command_substitution,
         explicit_mutation,
+        has_environment_override: false,
+        has_asynchronous_execution: false,
         unclassified: matches!(
             classification,
             ShellClassification::Unclassified | ShellClassification::Unknown
         ) && unclassified,
     }
+}
+
+/// Classify the complete `run_command` call. Command text alone is not enough:
+/// environment overrides and asynchronous execution change what the shell can
+/// run and how long it can remain alive.
+pub(crate) fn shell_policy_facts_for_call(args: &Value) -> Option<ShellPolicyFacts> {
+    let command = args.get("command").and_then(Value::as_str)?;
+    let mut facts = shell_policy_facts(command);
+    facts.has_environment_override = args
+        .get("env")
+        .is_some_and(|env| !env.as_object().is_some_and(|map| map.is_empty()));
+    facts.has_asynchronous_execution = ["background", "detached"].iter().any(|name| {
+        args.get(*name)
+            .map(|value| value.as_bool() != Some(false))
+            .unwrap_or(false)
+    });
+    if facts.has_asynchronous_execution {
+        facts.classification = ShellClassification::ProcessControl;
+    } else if facts.has_environment_override {
+        facts.classification = ShellClassification::Unknown;
+    }
+    if facts.has_asynchronous_execution || facts.has_environment_override {
+        facts.unclassified = false;
+    }
+    Some(facts)
 }
 
 pub(crate) fn command_requires_confirmation(args: &Value) -> bool {

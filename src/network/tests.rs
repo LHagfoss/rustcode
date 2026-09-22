@@ -3494,7 +3494,7 @@ fn recovery_advisory_labels_are_canonical_and_unknown_is_conservative() {
 }
 
 #[test]
-fn laya_repetition_advisory_rejects_low_confidence_and_non_read_only_effects() {
+fn laya_repetition_advisory_uses_the_local_gate_for_effects_and_confidence() {
     for label in ["novel_evidence", "confirmatory_evidence"] {
         for effects in [
             vec!["mutation".to_string()],
@@ -3506,13 +3506,21 @@ fn laya_repetition_advisory_rejects_low_confidence_and_non_read_only_effects() {
                 effects,
                 rationale_code: None,
             };
-            assert!(!loop_detect::laya_recovery_credit_available(
+            assert!(loop_detect::laya_recovery_credit_available(
                 crate::laya::LayaMode::Relaxed,
                 &decision,
                 0.98,
                 0,
                 1,
                 true,
+            ));
+            assert!(!loop_detect::laya_recovery_credit_available(
+                crate::laya::LayaMode::Relaxed,
+                &decision,
+                0.98,
+                0,
+                1,
+                false,
             ));
         }
 
@@ -3531,6 +3539,24 @@ fn laya_repetition_advisory_rejects_low_confidence_and_non_read_only_effects() {
             true,
         ));
     }
+}
+
+#[test]
+fn package_shaped_repetition_answers_without_effects_can_use_only_the_local_read_only_gate() {
+    let decision = crate::laya::AdvisoryDecision {
+        label: "novel_evidence".to_string(),
+        confidence: 0.999,
+        effects: Vec::new(),
+        rationale_code: Some("laya_repetition".to_string()),
+    };
+    assert!(loop_detect::laya_recovery_credit_available(
+        crate::laya::LayaMode::Relaxed,
+        &decision,
+        0.98,
+        0,
+        1,
+        true,
+    ));
 }
 
 #[test]

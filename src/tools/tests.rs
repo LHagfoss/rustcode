@@ -2455,6 +2455,38 @@ fn relaxed_mode_does_not_downgrade_path_qualified_or_wrapped_interpreters() {
     }
 }
 
+#[tokio::test]
+async fn relaxed_shell_policy_assesses_the_complete_run_command_call() {
+    for extra in [
+        serde_json::json!({"env": {"PATH": "/tmp/attacker"}}),
+        serde_json::json!({"env": {"BASH_ENV": "/tmp/startup.sh"}}),
+        serde_json::json!({"background": true}),
+        serde_json::json!({"detached": true}),
+    ] {
+        let (_dir, runtime) = fake_shell_runtime("complete-call", crate::laya::LayaMode::Relaxed);
+        let mut arguments = serde_json::json!({"command": "python3 --version"});
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let call = ToolCall {
+            name: "run_command".to_string(),
+            arguments,
+            call_id: None,
+        };
+
+        let assessment = assess_shell_call(&call, crate::config::AgentMode::Build, false, &runtime)
+            .await
+            .expect("run_command should still produce a local assessment");
+        assert_eq!(
+            assessment.effective_authorization,
+            AuthorizationDecision::RequireConfirmation,
+            "execution override must not be relaxable: {:?}",
+            call.arguments
+        );
+    }
+}
+
 #[test]
 fn shell_advisory_telemetry_is_compact_and_redacted() {
     use crate::tools::{ShellClassification, ShellPolicyFacts, shell_advisory_event_fields};
@@ -2470,6 +2502,8 @@ fn shell_advisory_telemetry_is_compact_and_redacted() {
             has_mixed_list: false,
             has_command_substitution: false,
             explicit_mutation: false,
+            has_environment_override: false,
+            has_asynchronous_execution: false,
             unclassified: true,
         },
         Some(&crate::laya::AdvisoryDecision {
@@ -2480,12 +2514,19 @@ fn shell_advisory_telemetry_is_compact_and_redacted() {
         }),
         std::time::Duration::from_millis(12),
         "none",
+        crate::laya::LayaMode::Shadow,
+        "request-hash",
+        true,
     );
     assert_eq!(fields["decision_kind"], "shell_policy");
     assert_eq!(fields["local_classification"], "unclassified");
     assert_eq!(fields["confidence_bucket"], "high");
     assert_eq!(fields["latency_bucket"], "10_49ms");
     assert_eq!(fields["failure_category"], "none");
+    assert_eq!(fields["mode"], "shadow");
+    assert_eq!(fields["advisory_label"], "read_only");
+    assert!(fields["request_hash"].as_str().is_some());
+    assert_eq!(fields["relaxed_would_change_result"], true);
     assert!(fields.get("command").is_none());
     assert!(fields.get("input").is_none());
 }
@@ -2658,6 +2699,44 @@ fn execution_authorization_requires_a_matching_assessment_when_laya_is_active() 
             Some(&assessment),
         ),
         AuthorizationDecision::RequireConfirmation
+    );
+}
+
+#[test]
+fn an_approved_matching_confirmation_assessment_is_not_prompted_twice() {
+    use crate::tools::{
+        ShellAssessment, execution_authorization, shell_assessment_cache_key, shell_call_signature,
+    };
+
+    let call = ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "python --version"}),
+        call_id: Some("approved-confirmed-call".to_string()),
+    };
+    let facts = shell_policy_facts("python --version");
+    let assessment = ShellAssessment {
+        cache_key: shell_assessment_cache_key(&call),
+        call_signature: shell_call_signature(&call),
+        classification: facts.classification,
+        facts,
+        local_authorization: AuthorizationDecision::RequireConfirmation,
+        advisory: None,
+        effective_authorization: AuthorizationDecision::RequireConfirmation,
+    };
+
+    assert_eq!(
+        execution_authorization(
+            &call.name,
+            &call.arguments,
+            call.call_id.as_deref(),
+            crate::config::AgentMode::Build,
+            false,
+            true,
+            true,
+            Some(&assessment),
+        ),
+        AuthorizationDecision::Allow,
+        "the matching assessment records the call that was already approved"
     );
 }
 

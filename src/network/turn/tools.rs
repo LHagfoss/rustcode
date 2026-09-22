@@ -107,6 +107,7 @@ async fn populate_shell_assessments(
             ctx.shell_assessments.insert(key, assessment);
         }
     }
+    apply_batch_policy_floor(calls, &mut ctx.shell_assessments);
 }
 
 fn targeted_no_progress_guidance(
@@ -134,19 +135,49 @@ fn shell_call_is_read_only(
     call: &crate::tools::ToolCall,
     assessments: &crate::tools::ShellAssessmentCache,
 ) -> bool {
-    if call.name == "run_command" {
-        return crate::tools::shell_assessment_for_call(assessments, call)
-            .map(|assessment| {
-                assessment.effective_authorization == crate::tools::AuthorizationDecision::Allow
-            })
-            .unwrap_or_else(|| crate::tools::is_read_only_call(call));
-    }
+    let _ = assessments;
     crate::tools::is_read_only_call(call)
+}
+
+fn shell_call_is_read_only_for_mode(
+    call: &crate::tools::ToolCall,
+    assessments: &crate::tools::ShellAssessmentCache,
+    mode: crate::laya::LayaMode,
+) -> bool {
+    if mode == crate::laya::LayaMode::Off {
+        return crate::network::is_read_only_tool(&call.name)
+            || loop_detect::is_read_only_call(&call.name, &call.arguments);
+    }
+    shell_call_is_read_only(call, assessments)
+}
+
+fn apply_batch_policy_floor(
+    calls: &[crate::tools::ToolCall],
+    assessments: &mut crate::tools::ShellAssessmentCache,
+) {
+    let mixed = calls
+        .iter()
+        .any(|call| !crate::tools::is_read_only_call(call));
+    if !mixed {
+        return;
+    }
+    for call in calls {
+        if let Some(assessment) =
+            assessments.get_mut(&crate::tools::shell_assessment_cache_key(call))
+            && assessment.local_authorization
+                == crate::tools::AuthorizationDecision::RequireConfirmation
+            && assessment.effective_authorization == crate::tools::AuthorizationDecision::Allow
+        {
+            assessment.effective_authorization =
+                crate::tools::AuthorizationDecision::RequireConfirmation;
+        }
+    }
 }
 
 fn repetition_batch_is_eligible(
     calls: &[crate::tools::ToolCall],
     assessments: &crate::tools::ShellAssessmentCache,
+    mode: crate::laya::LayaMode,
 ) -> bool {
     !calls.is_empty()
         && calls.iter().all(|call| {
@@ -154,10 +185,10 @@ fn repetition_batch_is_eligible(
             // Laya shell assessment may relax an unknown command for shell
             // policy, but it may not make that command eligible for repetition
             // recovery.
-            if !crate::tools::is_read_only_call(call) {
+            if !shell_call_is_read_only_for_mode(call, assessments, mode) {
                 return false;
             }
-            if call.name == "run_command" {
+            if mode != crate::laya::LayaMode::Off && call.name == "run_command" {
                 return crate::tools::shell_assessment_for_call(assessments, call).is_some_and(
                     |assessment| {
                         assessment.facts.classification
@@ -174,8 +205,9 @@ fn repetition_batch_is_eligible(
 fn credited_recovery_batch_is_read_only(
     calls: &[crate::tools::ToolCall],
     assessments: &crate::tools::ShellAssessmentCache,
+    mode: crate::laya::LayaMode,
 ) -> bool {
-    repetition_batch_is_eligible(calls, assessments)
+    repetition_batch_is_eligible(calls, assessments, mode)
 }
 
 fn repetition_advisory_input(
@@ -244,7 +276,7 @@ fn repetition_advisory_event_fields(
         "decision_kind": "repetition",
         "mode": mode.to_string(),
         "request_hash": format!("{:016x}", loop_detect::stable_hash(&input.to_string())),
-        "local_classification": if repetition_batch_is_eligible(calls, assessments) {
+        "local_classification": if repetition_batch_is_eligible(calls, assessments, mode) {
             "read_only"
         } else {
             "not_read_only"
@@ -286,7 +318,7 @@ async fn request_repetition_advisory(
     local_recovery_would_force_final: bool,
     max_extra_recoveries: usize,
 ) -> Option<(crate::laya::AdvisoryDecision, loop_detect::RecoveryAdvisory)> {
-    if !repetition_batch_is_eligible(calls, assessments) {
+    if !repetition_batch_is_eligible(calls, assessments, laya.config().mode) {
         return None;
     }
     if matches!(laya.config().mode, crate::laya::LayaMode::Off) {
@@ -345,17 +377,19 @@ fn laya_can_extend_recovery(
     max_extra_recoveries: usize,
     decision: Option<&crate::laya::AdvisoryDecision>,
     eligible_read_only_batch: bool,
+    hard_cap_reached: bool,
 ) -> bool {
-    decision.is_some_and(|decision| {
-        loop_detect::laya_recovery_credit_available(
-            mode,
-            decision,
-            min_confidence,
-            ctx.recovery.laya_read_only_recoveries_used,
-            max_extra_recoveries,
-            eligible_read_only_batch,
-        )
-    })
+    !hard_cap_reached
+        && decision.is_some_and(|decision| {
+            loop_detect::laya_recovery_credit_available(
+                mode,
+                decision,
+                min_confidence,
+                ctx.recovery.laya_read_only_recoveries_used,
+                max_extra_recoveries,
+                eligible_read_only_batch,
+            )
+        })
 }
 
 fn selected_tool_call_indices(
@@ -376,6 +410,22 @@ fn selected_tool_call_indices_with_assessments(
     validation_errors: &[Option<String>],
     policy: crate::config::ToolSchedulingPolicy,
     assessments: &crate::tools::ShellAssessmentCache,
+) -> Vec<usize> {
+    selected_tool_call_indices_with_mode(
+        calls,
+        validation_errors,
+        policy,
+        assessments,
+        crate::laya::LayaMode::Off,
+    )
+}
+
+fn selected_tool_call_indices_with_mode(
+    calls: &[crate::tools::ToolCall],
+    validation_errors: &[Option<String>],
+    policy: crate::config::ToolSchedulingPolicy,
+    assessments: &crate::tools::ShellAssessmentCache,
+    mode: crate::laya::LayaMode,
 ) -> Vec<usize> {
     let first_control = calls.iter().enumerate().find(|(index, call)| {
         validation_errors[*index].is_none()
@@ -402,7 +452,7 @@ fn selected_tool_call_indices_with_assessments(
                     crate::tools::ToolSafety::ControlPlane
                 )
                 || !seen.insert(crate::tools::duplicate_tool_call_key(call))
-                || !shell_call_is_read_only(call, assessments)
+                || !shell_call_is_read_only_for_mode(call, assessments, mode)
             {
                 continue;
             }
@@ -449,7 +499,7 @@ fn selected_tool_call_indices_with_assessments(
         if !seen.insert(crate::tools::duplicate_tool_call_key(call)) {
             continue;
         }
-        if !shell_call_is_read_only(call, assessments) {
+        if !shell_call_is_read_only_for_mode(call, assessments, mode) {
             if mutating >= mutation_cap {
                 continue;
             }
@@ -688,7 +738,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     // this response closed and persist the complete assistant/call + result
     // transaction so the next request can safely re-issue a smaller call.
     if response_was_output_truncated && !parsed_tool_calls.is_empty() {
-        ctx.recovery.laya_pending_recovery_advisory = None;
         let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
         let mut s = state.lock().await;
         let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
@@ -726,16 +775,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             .map(|profile| profile.tool_scheduling_policy())
             .unwrap_or_default()
     };
+    let laya_mode_for_scheduling = { state.lock().await.laya.config().mode };
     populate_shell_assessments(state, ctx, &parsed_tool_calls).await;
     // Preserve control-plane priority (for example, load a requested skill
     // before acting). The default policy selects one valid call; explicitly
     // trusted profiles may select a bounded read/mutation batch. Invalid or
     // over-budget calls remain in the transcript as non-executed results.
-    let selected_call_indices = selected_tool_call_indices_with_assessments(
+    let selected_call_indices = selected_tool_call_indices_with_mode(
         &parsed_tool_calls,
         &validation_errors,
         scheduling_policy,
         &ctx.shell_assessments,
+        laya_mode_for_scheduling,
     );
     let selected_call_index = selected_call_indices.first().copied();
     let executable_tool_calls = selected_call_indices
@@ -743,7 +794,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         .map(|index| parsed_tool_calls[*index].clone())
         .collect::<Vec<_>>();
     if let Some(reason) = selected_call_index.and_then(|index| validation_errors[index].clone()) {
-        ctx.recovery.laya_pending_recovery_advisory = None;
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -797,14 +847,23 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     let unexecuted_call_count = deferred_call_count;
     let read_only_batch = !selected_call_indices.is_empty()
         && selected_call_indices.iter().all(|index| {
-            tool_calls
-                .get(*index)
-                .is_some_and(|call| shell_call_is_read_only(call, &ctx.shell_assessments))
+            tool_calls.get(*index).is_some_and(|call| {
+                shell_call_is_read_only_for_mode(
+                    call,
+                    &ctx.shell_assessments,
+                    laya_mode_for_scheduling,
+                )
+            })
         });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
+    let mut pending_laya_read_only_batch = false;
     if ctx.recovery.laya_pending_recovery_advisory.is_some() {
         if !executable_tool_calls.is_empty()
-            && !credited_recovery_batch_is_read_only(&executable_tool_calls, &ctx.shell_assessments)
+            && !credited_recovery_batch_is_read_only(
+                &executable_tool_calls,
+                &ctx.shell_assessments,
+                laya_mode_for_scheduling,
+            )
         {
             let reason = "Laya credited recovery permits only read-only inspection calls; the mutation, process, network, or mixed batch was rejected.";
             ctx.recovery.laya_pending_recovery_advisory = None;
@@ -838,9 +897,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             ctx.budget.tool_rounds += 1;
             return ToolHandlingOutcome::Continue;
         }
-        // The pending marker is intentionally consumed only after this batch
-        // has been classified. It cannot leak into a later turn or segment.
-        ctx.recovery.laya_pending_recovery_advisory = None;
+        // Keep the marker through execution. A malformed correction has no
+        // executable batch and therefore must not consume the restriction.
+        pending_laya_read_only_batch = true;
     }
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -906,24 +965,31 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     let max_extra_recoveries = config.max_extra_read_only_recoveries;
                     (laya, mode, min_confidence, max_extra_recoveries)
                 };
-                let laya_eligible =
-                    repetition_batch_is_eligible(&executable_tool_calls, &ctx.shell_assessments);
-                let laya_advisory =
-                    if local_recovery_action == LoopRecoveryAction::ForceFinal && laya_eligible {
-                        request_repetition_advisory(
-                            &laya,
-                            ctx,
-                            &executable_tool_calls,
-                            &ctx.shell_assessments,
-                            loop_detect::ProgressReason::NoNewInformation,
-                            loop_offender.as_deref().unwrap_or("repeated tool output"),
-                            local_recovery_action == LoopRecoveryAction::ForceFinal,
-                            laya_max_extra_recoveries,
-                        )
-                        .await
-                    } else {
-                        None
-                    };
+                let laya_eligible = repetition_batch_is_eligible(
+                    &executable_tool_calls,
+                    &ctx.shell_assessments,
+                    laya_mode,
+                );
+                let laya_hard_cap_reached = ctx.recovery.loop_recovery_attempts
+                    >= crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS;
+                let laya_advisory = if local_recovery_action == LoopRecoveryAction::ForceFinal
+                    && laya_eligible
+                    && !laya_hard_cap_reached
+                {
+                    request_repetition_advisory(
+                        &laya,
+                        ctx,
+                        &executable_tool_calls,
+                        &ctx.shell_assessments,
+                        loop_detect::ProgressReason::NoNewInformation,
+                        loop_offender.as_deref().unwrap_or("repeated tool output"),
+                        local_recovery_action == LoopRecoveryAction::ForceFinal,
+                        laya_max_extra_recoveries,
+                    )
+                    .await
+                } else {
+                    None
+                };
                 let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
                     laya_can_extend_recovery(
                         ctx,
@@ -932,6 +998,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         laya_max_extra_recoveries,
                         Some(decision),
                         laya_eligible,
+                        laya_hard_cap_reached,
                     )
                 });
                 let recovery_action = if use_laya_credit {
@@ -1446,7 +1513,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         loop_detect::stable_hash(loop_detect::stagnation_key(&content))
                     });
                 let call_is_read_only = call
-                    .map(crate::tools::is_read_only_call)
+                    .map(|call| {
+                        shell_call_is_read_only_for_mode(
+                            call,
+                            &ctx.shell_assessments,
+                            laya_mode_for_scheduling,
+                        )
+                    })
                     .unwrap_or_else(|| loop_detect::is_read_only(&name));
                 let action = call
                     .map(|call| {
@@ -1726,6 +1799,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
 
+            if pending_laya_read_only_batch {
+                ctx.recovery.laya_pending_recovery_advisory = None;
+            }
+
             for (index, call_ref) in call_refs.iter().enumerate() {
                 if selected_call_indices.contains(&index) {
                     continue;
@@ -1928,24 +2005,32 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let laya_mode = laya_config.mode;
                 let laya_min_confidence = laya_config.min_confidence;
                 let laya_max_extra_recoveries = laya_config.max_extra_read_only_recoveries;
-                let laya_eligible =
-                    repetition_batch_is_eligible(&executable_tool_calls, &ctx.shell_assessments);
-                let laya_advisory =
-                    if local_recovery_action == LoopRecoveryAction::ForceFinal && laya_eligible {
-                        request_repetition_advisory(
-                            &laya,
-                            ctx,
-                            &executable_tool_calls,
-                            &ctx.shell_assessments,
-                            reason,
-                            &action,
-                            local_recovery_action == LoopRecoveryAction::ForceFinal,
-                            laya_max_extra_recoveries,
-                        )
-                        .await
-                    } else {
-                        None
-                    };
+                let laya_eligible = repetition_batch_is_eligible(
+                    &executable_tool_calls,
+                    &ctx.shell_assessments,
+                    laya_mode,
+                );
+                let laya_hard_cap_reached = targeted_recovery_exhausted
+                    || ctx.recovery.loop_recovery_attempts
+                        >= crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS;
+                let laya_advisory = if local_recovery_action == LoopRecoveryAction::ForceFinal
+                    && laya_eligible
+                    && !laya_hard_cap_reached
+                {
+                    request_repetition_advisory(
+                        &laya,
+                        ctx,
+                        &executable_tool_calls,
+                        &ctx.shell_assessments,
+                        reason,
+                        &action,
+                        local_recovery_action == LoopRecoveryAction::ForceFinal,
+                        laya_max_extra_recoveries,
+                    )
+                    .await
+                } else {
+                    None
+                };
                 let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
                     laya_can_extend_recovery(
                         ctx,
@@ -1954,6 +2039,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         laya_max_extra_recoveries,
                         Some(decision),
                         laya_eligible,
+                        laya_hard_cap_reached,
                     )
                 });
                 let recovery_action = if use_laya_credit {
@@ -2323,15 +2409,17 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 mod tests {
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
-        apply_round_stagnation, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
-        bounded_malformed_tool_history, content_bearing_inspection_status,
-        credited_recovery_batch_is_read_only, grounded_artifact_recovery_message,
-        incomplete_tool_result, mutation_batch_guidance, repetition_advisory_event_fields,
-        repetition_advisory_input, selected_tool_call_indices,
-        selected_tool_call_indices_with_assessments, should_apply_loop_recovery,
+        apply_batch_policy_floor, apply_round_stagnation, batch_invalidates_read_recovery,
+        benign_shell_wrapper_failure, bounded_malformed_tool_history,
+        content_bearing_inspection_status, credited_recovery_batch_is_read_only,
+        grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
+        repetition_advisory_event_fields, repetition_advisory_input, selected_tool_call_indices,
+        selected_tool_call_indices_with_assessments, selected_tool_call_indices_with_mode,
+        shell_call_is_read_only_for_mode, should_apply_loop_recovery,
         targeted_no_progress_guidance,
     };
     use crate::network::events::ToolResultMetadata;
+    use crate::network::loop_detect;
     use crate::tools::ToolCall;
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
 
@@ -2454,14 +2542,39 @@ mod tests {
         assert!(credited_recovery_batch_is_read_only(
             std::slice::from_ref(&read),
             &assessments,
+            crate::laya::LayaMode::Off,
         ));
         assert!(!credited_recovery_batch_is_read_only(
             std::slice::from_ref(&mutation),
             &assessments,
+            crate::laya::LayaMode::Off,
         ));
         assert!(!credited_recovery_batch_is_read_only(
             &[read, mutation],
             &assessments,
+            crate::laya::LayaMode::Off,
+        ));
+    }
+
+    #[test]
+    fn laya_credit_cannot_cross_the_read_only_recovery_hard_cap() {
+        let mut ctx = TurnContext::new();
+        ctx.recovery.loop_recovery_attempts = crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS;
+        let decision = crate::laya::AdvisoryDecision {
+            label: "novel_evidence".to_string(),
+            confidence: 0.999,
+            effects: Vec::new(),
+            rationale_code: None,
+        };
+
+        assert!(!super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            true,
         ));
     }
 
@@ -2578,7 +2691,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_uses_a_cached_relaxed_shell_assessment_as_read_only() {
+    fn scheduler_does_not_use_a_cached_relaxed_shell_assessment_as_read_only() {
         let calls = vec![read_call("python --version"), read_call("python --help")];
         let errors = vec![None, None];
         let mut assessments = crate::tools::ShellAssessmentCache::new();
@@ -2604,7 +2717,118 @@ mod tests {
             crate::config::ToolSchedulingPolicy::default(),
             &assessments,
         );
+        assert_eq!(selected, vec![0]);
+    }
+
+    #[test]
+    fn off_scheduler_uses_the_legacy_shell_read_only_classifier() {
+        let call = read_call("python --version");
+        let assessments = crate::tools::ShellAssessmentCache::default();
+        let expected = crate::network::is_read_only_tool(&call.name)
+            || loop_detect::is_read_only_call(&call.name, &call.arguments);
+
+        assert_eq!(
+            shell_call_is_read_only_for_mode(&call, &assessments, crate::laya::LayaMode::Off),
+            expected
+        );
+    }
+
+    #[test]
+    fn shadow_authorization_never_reclassifies_a_mutation_as_read_only() {
+        let calls = vec![
+            ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({"command": "rm -f scratch.txt"}),
+                call_id: Some("shadow-mutation-1".to_string()),
+            },
+            ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({"command": "rm -f other.txt"}),
+                call_id: Some("shadow-mutation-2".to_string()),
+            },
+        ];
+        let mut assessments = crate::tools::ShellAssessmentCache::new();
+        for call in &calls {
+            let facts =
+                crate::tools::shell_policy_facts(call.arguments["command"].as_str().unwrap());
+            assessments.insert(
+                crate::tools::shell_assessment_cache_key(call),
+                crate::tools::ShellAssessment {
+                    cache_key: crate::tools::shell_assessment_cache_key(call),
+                    call_signature: crate::tools::shell_call_signature(call),
+                    classification: facts.classification,
+                    facts,
+                    local_authorization: crate::tools::AuthorizationDecision::Allow,
+                    advisory: Some(crate::laya::AdvisoryDecision {
+                        label: "read_only".to_string(),
+                        confidence: 0.999,
+                        effects: vec!["read_only".to_string()],
+                        rationale_code: None,
+                    }),
+                    effective_authorization: crate::tools::AuthorizationDecision::Allow,
+                },
+            );
+        }
+
+        let selected = selected_tool_call_indices_with_mode(
+            &calls,
+            &[None, None],
+            crate::config::ToolSchedulingPolicy::default(),
+            &assessments,
+            crate::laya::LayaMode::Shadow,
+        );
+        assert_eq!(selected, vec![0], "shadow must preserve the mutation cap");
+    }
+
+    #[test]
+    fn mixed_batches_keep_the_stricter_call_in_the_confirmation_floor() {
+        let calls = vec![
+            read_call("python --version"),
+            ToolCall {
+                name: "write_to_file".to_string(),
+                arguments: serde_json::json!({"path": "src/a", "content": "x"}),
+                call_id: None,
+            },
+        ];
+        let facts = crate::tools::shell_policy_facts("python --version");
+        let mut assessments = crate::tools::ShellAssessmentCache::new();
+        assessments.insert(
+            crate::tools::shell_assessment_cache_key(&calls[0]),
+            crate::tools::ShellAssessment {
+                cache_key: crate::tools::shell_assessment_cache_key(&calls[0]),
+                call_signature: crate::tools::shell_call_signature(&calls[0]),
+                classification: facts.classification,
+                facts,
+                local_authorization: crate::tools::AuthorizationDecision::RequireConfirmation,
+                advisory: Some(crate::laya::AdvisoryDecision {
+                    label: "read_only".to_string(),
+                    confidence: 0.999,
+                    effects: vec!["read_only".to_string()],
+                    rationale_code: None,
+                }),
+                effective_authorization: crate::tools::AuthorizationDecision::Allow,
+            },
+        );
+
+        apply_batch_policy_floor(&calls, &mut assessments);
+        let selected = selected_tool_call_indices_with_assessments(
+            &calls,
+            &[None, None],
+            crate::config::ToolSchedulingPolicy {
+                allow_batching: true,
+                max_mutating_calls: 2,
+                ..Default::default()
+            },
+            &assessments,
+        );
         assert_eq!(selected, vec![0, 1]);
+        assert_eq!(
+            crate::tools::shell_assessment_for_call(&assessments, &calls[0])
+                .unwrap()
+                .effective_authorization,
+            crate::tools::AuthorizationDecision::RequireConfirmation,
+            "the final batch floor must be reused by approval and execution"
+        );
     }
 
     #[test]

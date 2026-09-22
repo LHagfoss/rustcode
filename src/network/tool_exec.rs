@@ -871,7 +871,13 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                 arguments: args_clone.clone(),
                 call_id: call_id_owned.clone(),
             };
-            let is_read_only = crate::tools::is_read_only_call(&call_for_policy);
+            let laya_mode = { state_clone.lock().await.laya.config().mode };
+            let is_read_only = if laya_mode == crate::laya::LayaMode::Off {
+                crate::network::is_read_only_tool(&name_clone)
+                    || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone)
+            } else {
+                crate::tools::is_read_only_call(&call_for_policy)
+            };
             let mut replay_artifact = None;
 
             let mut is_repeat = false;

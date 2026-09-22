@@ -40,8 +40,6 @@ pub(crate) fn laya_recovery_credit_available(
         && used == 0
         && decision.confidence.is_finite()
         && decision.confidence >= min_confidence
-        && decision.effects.iter().all(|effect| effect == "read_only")
-        && !decision.effects.is_empty()
         && matches!(
             recovery_advisory(decision, min_confidence),
             RecoveryAdvisory::NovelEvidence | RecoveryAdvisory::ConfirmatoryEvidence

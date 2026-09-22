@@ -149,7 +149,7 @@ def _answer_value(result: Any) -> Any:
     return answers["decision"]
 
 
-def _normalize_effects(answer: Any, label: str) -> list[str]:
+def _normalize_effects(answer: Any, label: str, kind: str) -> list[str]:
     raw_effects: Any = None
     if isinstance(answer, dict):
         raw_effects = answer.get("effects", answer.get("effect"))
@@ -174,6 +174,8 @@ def _normalize_effects(answer: Any, label: str) -> list[str]:
 
     if effects:
         return effects[:16]
+    if not saw_raw_effect and kind == "repetition":
+        return []
     return ["unknown"] if saw_raw_effect else (["read_only"] if label == "read_only" else ["unknown"])
 
 
@@ -196,7 +198,7 @@ def _normalize_decision(result: Any, kind: str, input_data: dict[str, Any]) -> d
     # Candidate effects are local hints only. Never copy them into the
     # decision: the model result (or its normalized label) is authoritative
     # for the advisory effect, and Rust still applies its local policy floor.
-    effects = _normalize_effects(answer, label)
+    effects = _normalize_effects(answer, label, kind)
     return {
         "label": label,
         "confidence": confidence,

@@ -84,14 +84,24 @@ impl Default for LayaConfig {
 }
 
 impl LayaConfig {
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if self.timeout_ms == 0 {
+            Some("timeout_ms must be greater than zero")
+        } else if self.startup_timeout_ms == 0 {
+            Some("startup_timeout_ms must be greater than zero")
+        } else if !self.min_confidence.is_finite() {
+            Some("min_confidence must be finite")
+        } else if !(0.0..=1.0).contains(&self.min_confidence) {
+            Some("min_confidence must be between 0 and 1")
+        } else {
+            None
+        }
+    }
+
     /// Disable advisory evaluation when a persisted value cannot be used
     /// safely. The remaining values are retained for status diagnostics.
     pub fn fail_closed(mut self) -> Self {
-        if self.timeout_ms == 0
-            || self.startup_timeout_ms == 0
-            || !self.min_confidence.is_finite()
-            || !(0.0..=1.0).contains(&self.min_confidence)
-        {
+        if self.validation_error().is_some() {
             self.mode = LayaMode::Off;
         }
         self
@@ -156,7 +166,7 @@ impl std::error::Error for AdvisoryError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
     Disabled,
-    Ready,
+    PathsAvailable,
     UnsupportedProtocol,
     UnsupportedArchitecture,
     MissingPython,
@@ -168,7 +178,7 @@ impl fmt::Display for Availability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Disabled => "disabled",
-            Self::Ready => "ready",
+            Self::PathsAvailable => "paths_available",
             Self::UnsupportedProtocol => "unsupported_protocol",
             Self::UnsupportedArchitecture => "unsupported_architecture",
             Self::MissingPython => "missing_python",
@@ -190,6 +200,9 @@ pub struct LayaStatus {
     pub adapter_available: bool,
     pub model_configured: bool,
     pub model_available: bool,
+    pub paths_available: bool,
+    pub runtime_ready: bool,
+    pub failure_category: Option<String>,
     pub availability: Availability,
 }
 
@@ -214,7 +227,7 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
     } else if !model_available {
         Availability::MissingModel
     } else {
-        Availability::Ready
+        Availability::PathsAvailable
     };
 
     LayaStatus {
@@ -228,6 +241,9 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
         adapter_available,
         model_configured,
         model_available,
+        paths_available: python_available && adapter_available && model_available,
+        runtime_ready: false,
+        failure_category: None,
         availability,
     }
 }
@@ -235,7 +251,7 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
 pub fn format_status(config: &LayaConfig) -> String {
     let status = diagnose(config);
     format!(
-        "Laya mode: {}\nPlatform: {}\nProtocol: {} ({})\nPython executable: {} ({})\nAdapter: {}\nModel: {}\nAvailability: {}",
+        "Laya mode: {}\nPlatform: {}\nProtocol: {} ({})\nPython executable: {} ({})\nAdapter: {}\nModel: {}\nPaths available: {}\nRuntime ready: {}\nFailure category: {}\nAvailability: {}",
         status.mode,
         status.platform,
         status.protocol_version,
@@ -264,6 +280,9 @@ pub fn format_status(config: &LayaConfig) -> String {
         } else {
             "not configured"
         },
+        if status.paths_available { "yes" } else { "no" },
+        if status.runtime_ready { "yes" } else { "no" },
+        status.failure_category.as_deref().unwrap_or("none"),
         status.availability,
     )
 }
@@ -341,6 +360,7 @@ struct RuntimeState {
     restart_available: bool,
     restart_used: bool,
     seen_ids: HashSet<String>,
+    last_failure: Option<AdvisoryError>,
 }
 
 #[derive(Debug)]
@@ -399,6 +419,7 @@ impl SidecarProcess {
         request_id: &str,
         timeout: Duration,
         min_confidence: f32,
+        kind: AdvisoryKind,
     ) -> Result<AdvisoryDecision, AdvisoryError> {
         self.stdin
             .write_all(request_line)
@@ -437,7 +458,14 @@ impl SidecarProcess {
         let confidence = decision
             .confidence
             .ok_or(AdvisoryError::MalformedResponse)?;
-        let effects = normalize_effects(decision.effects.ok_or(AdvisoryError::MalformedResponse)?);
+        let effects = match decision.effects {
+            Some(effects) if kind == AdvisoryKind::Repetition => {
+                normalize_repetition_effects(effects)
+            }
+            Some(effects) => normalize_effects(effects),
+            None if kind == AdvisoryKind::Repetition => Vec::new(),
+            None => return Err(AdvisoryError::MalformedResponse),
+        };
         if !confidence.is_finite()
             || !(0.0..=1.0).contains(&confidence)
             || !supported_label(&decision.label)
@@ -486,7 +514,12 @@ impl LayaRuntime {
     }
 
     pub fn status(&self) -> LayaStatus {
-        diagnose(&self.config)
+        let mut status = diagnose(&self.config);
+        if let Ok(state) = self.state.try_lock() {
+            status.runtime_ready = state.process.is_some();
+            status.failure_category = state.last_failure.as_ref().map(advisory_error_category);
+        }
+        status
     }
 
     /// Evaluate through the process-lived advisory runtime. Off mode returns
@@ -508,6 +541,7 @@ impl LayaRuntime {
         if state.process.is_none() {
             let retrying = state.started;
             if retrying && !state.restart_available {
+                state.last_failure = Some(AdvisoryError::Unavailable);
                 return Err(AdvisoryError::Unavailable);
             }
             state.started = true;
@@ -518,6 +552,7 @@ impl LayaRuntime {
             match self.spawn_sidecar().await {
                 Ok(process) => state.process = Some(process),
                 Err(error) => {
+                    state.last_failure = Some(error.clone());
                     state.restart_available = !retrying;
                     return Err(error);
                 }
@@ -534,9 +569,13 @@ impl LayaRuntime {
                 &request.id,
                 self.timeout(),
                 self.config.min_confidence,
+                request.kind,
             )
             .await;
-        if result.is_err() {
+        if let Err(error) = &result {
+            state.last_failure = Some(error.clone());
+        }
+        if result.as_ref().err().is_some_and(requires_restart) {
             if let Some(process) = state.process.take() {
                 process.terminate().await;
             }
@@ -644,6 +683,26 @@ impl LayaRuntime {
     }
 }
 
+fn requires_restart(error: &AdvisoryError) -> bool {
+    matches!(
+        error,
+        AdvisoryError::Timeout | AdvisoryError::MalformedResponse | AdvisoryError::ProcessExit
+    )
+}
+
+fn advisory_error_category(error: &AdvisoryError) -> String {
+    match error {
+        AdvisoryError::Disabled => "disabled",
+        AdvisoryError::Unavailable => "unavailable",
+        AdvisoryError::InvalidRequest => "invalid_request",
+        AdvisoryError::Timeout => "timeout",
+        AdvisoryError::MalformedResponse => "malformed_response",
+        AdvisoryError::ModelError => "model_error",
+        AdvisoryError::ProcessExit => "process_exit",
+    }
+    .to_owned()
+}
+
 fn serialize_request(request: &AdvisoryRequest) -> Result<Vec<u8>, AdvisoryError> {
     if request.id.is_empty() || request.id.len() > MAX_REQUEST_ID_BYTES {
         return Err(AdvisoryError::InvalidRequest);
@@ -693,6 +752,14 @@ fn normalize_effects(effects: Vec<String>) -> Vec<String> {
         normalized.push("unknown".to_owned());
     }
     normalized
+}
+
+fn normalize_repetition_effects(effects: Vec<String>) -> Vec<String> {
+    if effects.is_empty() {
+        Vec::new()
+    } else {
+        normalize_effects(effects)
+    }
 }
 
 async fn read_bounded_line<R>(reader: &mut R) -> Result<Vec<u8>, AdvisoryError>
@@ -784,6 +851,17 @@ while IFS= read -r request; do
             ;;
         repetition)
             printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"novel_evidence","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        repetition-no-effects)
+            printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"novel_evidence","confidence":0.999,"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        semantic-then-success)
+            if [ ! -e "$marker" ]; then
+                : > "$marker"
+                printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"unknown","confidence":0.999,"effects":["unknown"],"rationale_code":"fixture"}}\n' "$id"
+            else
+                printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
+            fi
             ;;
         low-confidence)
             printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.5,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
@@ -930,6 +1008,19 @@ done
     }
 
     #[tokio::test]
+    async fn package_shaped_repetition_response_without_effects_is_valid() {
+        let (_dir, runtime) = fake_runtime("repetition-no-effects");
+
+        let decision = runtime
+            .evaluate(request("repeat-no-effects", AdvisoryKind::Repetition))
+            .await
+            .unwrap();
+
+        assert_eq!(decision.label, "novel_evidence");
+        assert!(decision.effects.is_empty());
+    }
+
+    #[tokio::test]
     async fn malformed_json_is_not_an_allow_result() {
         let (_dir, runtime) = fake_runtime("malformed");
 
@@ -971,6 +1062,26 @@ done
             .await;
 
         assert_eq!(result, Err(AdvisoryError::ModelError));
+    }
+
+    #[tokio::test]
+    async fn semantic_fallback_keeps_a_healthy_sidecar_for_the_next_request() {
+        let (_dir, runtime) = fake_runtime("semantic-then-success");
+
+        assert_eq!(
+            runtime
+                .evaluate(request("semantic-first", AdvisoryKind::ShellPolicy))
+                .await,
+            Err(AdvisoryError::ModelError)
+        );
+        assert_eq!(
+            runtime
+                .evaluate(request("semantic-second", AdvisoryKind::ShellPolicy))
+                .await
+                .unwrap()
+                .label,
+            "read_only"
+        );
     }
 
     #[tokio::test]
@@ -1193,6 +1304,21 @@ done
         assert!(status.contains("Python executable: /missing/python (missing)"));
         assert!(status.contains("Adapter: configured, missing"));
         assert!(status.contains("Model: configured, missing"));
+    }
+
+    #[test]
+    fn status_distinguishes_available_paths_from_an_unstarted_runtime() {
+        let status = format_status(&LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some(std::env::current_exe().unwrap().display().to_string()),
+            adapter: Some("/missing/adapter.py".to_owned()),
+            model: Some("/missing/checkpoint".to_owned()),
+            ..LayaConfig::default()
+        });
+
+        assert!(status.contains("Paths available:"));
+        assert!(status.contains("Runtime ready: no"));
+        assert!(status.contains("Failure category:"));
     }
 
     #[test]

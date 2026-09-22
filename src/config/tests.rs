@@ -50,6 +50,21 @@ fn old_toml_without_laya_uses_laya_defaults() {
 }
 
 #[test]
+fn invalid_project_laya_mode_forces_off_instead_of_inheriting_relaxed() {
+    let root = TempDir::new().unwrap();
+    let project_dir = root.path().join(PROJECT_CONFIG_DIR);
+    fs::create_dir_all(&project_dir).unwrap();
+    let path = project_dir.join(PROJECT_CONFIG_FILE);
+    fs::write(&path, "version = 1\n[laya]\nmode = \"not-a-mode\"\n").unwrap();
+
+    let mut effective = AppConfig::default();
+    effective.laya.mode = crate::laya::LayaMode::Relaxed;
+    apply_project_toml_config(&mut effective, read_toml_config(&path).unwrap());
+
+    assert_eq!(effective.laya.mode, crate::laya::LayaMode::Off);
+}
+
+#[test]
 fn test_config_save_load() {
     let dir = temp_dir("config");
     let config = AppConfig {

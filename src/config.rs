@@ -1557,8 +1557,26 @@ fn save_toml_config(path: &Path, file: &TomlConfig) -> Result<(), String> {
 fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
-    let file = toml::from_str::<TomlConfig>(&contents)
+    let mut document = toml::from_str::<toml::Value>(&contents)
         .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    let raw_laya = document
+        .as_table_mut()
+        .and_then(|table| table.remove("laya"));
+    let mut file = document
+        .try_into::<TomlConfig>()
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    if let Some(raw_laya) = raw_laya {
+        match raw_laya.try_into::<crate::laya::LayaConfig>() {
+            Ok(laya) => file.laya = Some(laya),
+            Err(error) => {
+                eprintln!(
+                    "[rustcode] WARNING: invalid [laya] configuration in {}; disabling Laya for this scope: {error}",
+                    path.display()
+                );
+                file.laya = Some(crate::laya::LayaConfig::default());
+            }
+        }
+    }
     if let Some(version) = file.version
         && version > CONFIG_FORMAT_VERSION
     {
@@ -1607,6 +1625,11 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
         config.discord_rpc_enabled = enabled;
     }
     if let Some(laya) = file.laya {
+        if let Some(reason) = laya.validation_error() {
+            eprintln!(
+                "[rustcode] WARNING: invalid [laya] configuration; disabling Laya for this scope: {reason}"
+            );
+        }
         config.laya = laya.fail_closed();
     }
     if let Some(agent_mode) = file.agent_mode {
