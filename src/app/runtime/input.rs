@@ -105,15 +105,7 @@ pub(super) async fn handle_app_event(
             *needs_redraw = true;
         }
         AppEvent::CancelActiveTurn => {
-            current_cancel_token.cancel();
-            *current_cancel_token = CancellationToken::new();
-            let mut state = app_state.lock().await;
-            state.invalidate_orchestrator();
-            state.pending_queue.clear();
-            state.background_turn_context = None;
-            state.clear_active_turn_projection();
-            state.enter_idle();
-            state.request_redraw();
+            crate::app::handle_escape(&app_state, current_cancel_token).await;
             *needs_redraw = true;
         }
         AppEvent::Tui(ev) => match ev {

@@ -14,6 +14,7 @@ pub struct TurnContext {
     pub response: ResponseState,
     pub metrics: MetricsState,
     pub lifecycle: LifecycleState,
+    pub(crate) shell_assessments: crate::tools::ShellAssessmentCache,
     pub(crate) request_prefix_cache: RequestPrefixCache,
 }
 
@@ -46,6 +47,10 @@ pub struct RecoveryState {
     /// turn-scoped continuation. Keeping this separate from transport retries
     /// prevents a failed recovery from opening an unbounded loop.
     pub stream_recovery_attempts: u8,
+    /// One optional, turn-local Laya credit. This state is intentionally not
+    /// part of `SegmentCheckpoint`, so it cannot cross a turn segment.
+    pub laya_read_only_recoveries_used: usize,
+    pub laya_pending_recovery_advisory: Option<loop_detect::RecoveryAdvisory>,
     pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub completion_blocks: u8,
@@ -204,6 +209,8 @@ impl TurnContext {
                 reasoning_recovery_pending: false,
                 empty_response_recovery_attempts: 0,
                 stream_recovery_attempts: 0,
+                laya_read_only_recoveries_used: 0,
+                laya_pending_recovery_advisory: None,
                 reasoning_loops_detected: 0,
                 force_final: false,
                 completion_blocks: 0,
@@ -264,6 +271,7 @@ impl TurnContext {
                 user_wait_duration: Duration::ZERO,
                 stop_reason: None,
             },
+            shell_assessments: std::collections::HashMap::new(),
             request_prefix_cache: RequestPrefixCache::default(),
         }
     }
@@ -342,6 +350,8 @@ impl TurnContext {
         self.budget.continuation_pending = false;
         self.budget.round_budget_notice_sent = false;
         self.lifecycle.stop_reason = None;
+        self.recovery.laya_read_only_recoveries_used = 0;
+        self.recovery.laya_pending_recovery_advisory = None;
     }
 
     /// Add one provider response to the logical turn total. Provider usage is

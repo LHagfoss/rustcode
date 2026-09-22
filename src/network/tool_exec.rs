@@ -6,8 +6,8 @@ use super::compiler::{append_compiler_diagnostics, cached_compiler_check, run_co
 use super::events::{ToolResult, ToolResultMetadata};
 use super::subagents::handle_agent_tool;
 use super::{
-    REPLAYABLE_READ_LIMIT, is_mutating_tool, is_read_only_tool, mutation_made_progress, path_mtime,
-    tool_signature, view_file_unchanged_since_last_read,
+    REPLAYABLE_READ_LIMIT, is_mutating_tool, mutation_made_progress, path_mtime, tool_signature,
+    view_file_unchanged_since_last_read,
 };
 
 #[cfg(test)]
@@ -340,7 +340,40 @@ pub(crate) async fn confirm_and_execute_for_call(
     Option<String>,
     std::time::Duration,
 ) {
-    let (agent_mode, auto_confirm, task_working_directory) = {
+    confirm_and_execute_for_call_with_assessment(
+        client,
+        state,
+        cancel_token,
+        name,
+        args,
+        display_name,
+        bypass_confirm,
+        workspace_root,
+        live_key,
+        call_id,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn confirm_and_execute_for_call_with_assessment(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &serde_json::Value,
+    display_name: &str,
+    bypass_confirm: bool,
+    workspace_root: Option<std::path::PathBuf>,
+    live_key: Option<&str>,
+    call_id: Option<&str>,
+    assessment: Option<crate::tools::ShellAssessment>,
+) -> (
+    crate::tools::ToolExecutionOutput,
+    Option<String>,
+    std::time::Duration,
+) {
+    let (agent_mode, auto_confirm, task_working_directory, laya_active) = {
         let s = state.lock().await;
         (
             s.agent_mode,
@@ -348,11 +381,20 @@ pub(crate) async fn confirm_and_execute_for_call(
             s.task_working_directory
                 .clone()
                 .or_else(|| s.workspace_root.clone()),
+            s.laya.config().mode != crate::laya::LayaMode::Off,
         )
     };
-    if let crate::tools::AuthorizationDecision::Deny(reason) =
-        crate::tools::authorize_tool_with_args(name, args, agent_mode, auto_confirm, bypass_confirm)
-    {
+    let authorization = crate::tools::execution_authorization(
+        name,
+        args,
+        call_id,
+        agent_mode,
+        auto_confirm,
+        bypass_confirm,
+        laya_active,
+        assessment.as_ref(),
+    );
+    if let crate::tools::AuthorizationDecision::Deny(reason) = authorization.clone() {
         return (
             crate::tools::ToolExecutionOutput::failure_with_kind(
                 format!("error: {reason}"),
@@ -384,13 +426,7 @@ pub(crate) async fn confirm_and_execute_for_call(
     let diff_opt = get_diff_preview(name, args);
 
     let needs_confirm = matches!(
-        crate::tools::authorize_tool_with_args(
-            name,
-            args,
-            agent_mode,
-            auto_confirm,
-            bypass_confirm,
-        ),
+        authorization,
         crate::tools::AuthorizationDecision::RequireConfirmation
     );
     let mut user_wait_dur = std::time::Duration::ZERO;
@@ -731,6 +767,35 @@ pub(crate) async fn execute_tool_batch(
     user_wait_duration: &mut std::time::Duration,
     deferred_notice: Option<String>,
 ) -> Vec<ToolResult> {
+    execute_tool_batch_with_assessments(
+        client,
+        state,
+        cancel_token,
+        tool_calls,
+        approved,
+        edit_root,
+        compile_dirty,
+        compile_cache,
+        user_wait_duration,
+        deferred_notice,
+        &Default::default(),
+    )
+    .await
+}
+
+pub(crate) async fn execute_tool_batch_with_assessments(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    tool_calls: &[crate::tools::ToolCall],
+    approved: bool,
+    edit_root: &Option<std::path::PathBuf>,
+    compile_dirty: &mut bool,
+    compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    user_wait_duration: &mut std::time::Duration,
+    deferred_notice: Option<String>,
+    assessment_cache: &crate::tools::ShellAssessmentCache,
+) -> Vec<ToolResult> {
     if !approved {
         return tool_calls
             .iter()
@@ -757,7 +822,7 @@ pub(crate) async fn execute_tool_batch(
         let mut results = Vec::with_capacity(tool_calls.len());
         for call in tool_calls {
             results.extend(
-                Box::pin(execute_tool_batch(
+                Box::pin(execute_tool_batch_with_assessments(
                     client,
                     state,
                     cancel_token,
@@ -768,6 +833,7 @@ pub(crate) async fn execute_tool_batch(
                     compile_cache,
                     user_wait_duration,
                     deferred_notice.clone(),
+                    assessment_cache,
                 ))
                 .await,
             );
@@ -807,8 +873,18 @@ pub(crate) async fn execute_tool_batch(
         };
         let execution_live_key = live_key.clone();
         let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
-            let is_read_only = is_read_only_tool(&name_clone)
-                || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone);
+            let call_for_policy = crate::tools::ToolCall {
+                name: name_clone.clone(),
+                arguments: args_clone.clone(),
+                call_id: call_id_owned.clone(),
+            };
+            let laya_mode = { state_clone.lock().await.laya.config().mode };
+            let is_read_only = if laya_mode == crate::laya::LayaMode::Off {
+                crate::network::is_read_only_tool(&name_clone)
+                    || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone)
+            } else {
+                crate::tools::is_read_only_call(&call_for_policy)
+            };
             let mut replay_artifact = None;
 
             let mut is_repeat = false;
@@ -1012,7 +1088,7 @@ pub(crate) async fn execute_tool_batch(
                 )
             } else {
                 let workspace_root = { state_clone.lock().await.workspace_root.clone() };
-                confirm_and_execute_for_call(
+                confirm_and_execute_for_call_with_assessment(
                     &client_clone,
                     &state_clone,
                     &cancel_token_clone,
@@ -1023,6 +1099,8 @@ pub(crate) async fn execute_tool_batch(
                     workspace_root,
                     Some(&execution_live_key),
                     call_id_owned.as_deref(),
+                    crate::tools::shell_assessment_for_call(assessment_cache, call)
+                        .cloned(),
                 )
                 .await
             };
@@ -1170,7 +1248,7 @@ pub(crate) async fn execute_tool_batch(
             finalized.metadata.inspection = Some(inspection);
         }
         *result = finalized;
-        if is_read_only_tool(&call.name) {
+        if crate::tools::is_read_only_call(call) {
             let sig = tool_signature(&call.name, &call.arguments);
             if let Some(cached) = state.lock().await.recent_read_outputs.get_mut(&sig) {
                 cached.success = result.metadata.success;
