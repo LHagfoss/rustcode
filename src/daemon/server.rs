@@ -372,10 +372,13 @@ mod tests {
     }
     impl Running {
         fn new() -> Self {
+            Self::with_timeout(Duration::from_secs(2))
+        }
+        fn with_timeout(request_timeout: Duration) -> Self {
             let directory = tempfile::tempdir_in("/tmp").unwrap();
             let lifecycle = DaemonLifecycle::new(directory.path());
             let mut server = lifecycle.bind().unwrap();
-            server.request_timeout = Duration::from_millis(150);
+            server.request_timeout = request_timeout;
             Self {
                 shutdown: server.shutdown_handle(),
                 task: tokio::spawn(server.run()),
@@ -573,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn partial_request_times_out_and_next_client_succeeds() {
-        let running = Running::new();
+        let running = Running::with_timeout(Duration::from_millis(150));
         let mut stream = UnixStream::connect(running.lifecycle.socket_path())
             .await
             .unwrap();
