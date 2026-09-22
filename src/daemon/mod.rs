@@ -1,5 +1,12 @@
+#[cfg(unix)]
+pub mod client;
+#[cfg(unix)]
+pub mod lifecycle;
 pub mod model;
+pub mod protocol;
 pub mod schedule;
+#[cfg(unix)]
+pub mod server;
 pub mod store;
 
 use std::fmt;
