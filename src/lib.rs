@@ -11,6 +11,8 @@ mod context;
 mod discord_rpc;
 mod doctor;
 mod inline_terminal;
+#[path = "laya.rs"]
+pub(crate) mod laya;
 mod mcp;
 mod memory;
 mod network;
@@ -300,6 +302,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             if let Some(path) = crate::config::get_config_dir() {
                 println!("Config directory: {}", path.display());
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(cli::Commands::Laya { command }) = cli_args.command.as_ref() {
+        let workspace = std::env::current_dir()?;
+        let (_, _, mut config) = crate::config::load_config_for_workspace(&workspace);
+        match command {
+            cli::LayaCommand::Status => {
+                println!("{}", crate::laya::format_status(&config.laya));
+            }
+            cli::LayaCommand::Enable { mode } => {
+                config.laya.mode = *mode;
+                crate::config::save_entire_config(&config);
+                println!("Laya mode set to {mode}.");
+            }
+            cli::LayaCommand::Disable => {
+                config.laya.mode = crate::laya::LayaMode::Off;
+                crate::config::save_entire_config(&config);
+                println!("Laya disabled.");
             }
         }
         return Ok(());

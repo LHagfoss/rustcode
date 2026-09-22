@@ -32,6 +32,24 @@ fn test_config_directory_is_unique_to_the_test_thread() {
 }
 
 #[test]
+fn laya_defaults_are_disabled_with_specified_limits() {
+    let laya = AppConfig::default().laya;
+    assert_eq!(laya.mode, crate::laya::LayaMode::Off);
+    assert_eq!(laya.timeout_ms, 150);
+    assert_eq!(laya.min_confidence, 0.98);
+    assert_eq!(laya.max_extra_read_only_recoveries, 1);
+}
+
+#[test]
+fn old_toml_without_laya_uses_laya_defaults() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join(CONFIG_TOML_FILE), "version = 1\n").unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert_eq!(config.laya, crate::laya::LayaConfig::default());
+}
+
+#[test]
 fn test_config_save_load() {
     let dir = temp_dir("config");
     let config = AppConfig {

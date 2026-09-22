@@ -1,3 +1,4 @@
+use crate::laya::LayaMode;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -89,6 +90,12 @@ pub enum Commands {
         disable: bool,
     },
 
+    /// Inspect or configure optional local Laya advisory policy assistance
+    Laya {
+        #[command(subcommand)]
+        command: LayaCommand,
+    },
+
     /// Check environment prerequisites (config, binaries, skills)
     Doctor {
         /// Create missing config/skill directories where possible
@@ -111,6 +118,19 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         completed: bool,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum LayaCommand {
+    /// Show Laya configuration and local prerequisite diagnostics
+    Status,
+    /// Enable Laya in shadow or narrowly relaxed mode
+    Enable {
+        #[arg(long, value_enum)]
+        mode: LayaMode,
+    },
+    /// Disable Laya advisory evaluation
+    Disable,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -285,6 +305,51 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["rustcode", "discord", "--enable"]).is_ok());
         assert!(Cli::try_parse_from(["rustcode", "discord", "--disable"]).is_ok());
+    }
+
+    #[test]
+    fn parses_laya_status_enable_and_disable_commands() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "laya", "status"])
+                .unwrap()
+                .command,
+            Some(Commands::Laya {
+                command: LayaCommand::Status
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "laya", "enable", "--mode", "shadow"])
+                .unwrap()
+                .command,
+            Some(Commands::Laya {
+                command: LayaCommand::Enable {
+                    mode: crate::laya::LayaMode::Shadow
+                }
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "laya", "enable", "--mode", "relaxed"])
+                .unwrap()
+                .command,
+            Some(Commands::Laya {
+                command: LayaCommand::Enable {
+                    mode: crate::laya::LayaMode::Relaxed
+                }
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "laya", "disable"])
+                .unwrap()
+                .command,
+            Some(Commands::Laya {
+                command: LayaCommand::Disable
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_laya_modes() {
+        assert!(Cli::try_parse_from(["rustcode", "laya", "enable", "--mode", "unsafe"]).is_err());
     }
 
     #[test]

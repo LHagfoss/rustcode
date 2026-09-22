@@ -943,6 +943,10 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub discord_rpc_enabled: bool,
 
+    /// Optional local Laya advisory policy assistance. Disabled by default.
+    #[serde(default)]
+    pub laya: crate::laya::LayaConfig,
+
     #[serde(default)]
     pub agent_mode: AgentMode,
     #[serde(default)]
@@ -1033,6 +1037,8 @@ struct TomlConfig {
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discord_rpc_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    laya: Option<crate::laya::LayaConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1172,6 +1178,7 @@ impl Default for AppConfig {
             }],
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
+            laya: crate::laya::LayaConfig::default(),
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1482,6 +1489,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         mcp_servers: Some(config.mcp_servers.clone()),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
+        laya: Some(config.laya.clone()),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
@@ -1550,6 +1558,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(enabled) = file.discord_rpc_enabled {
         config.discord_rpc_enabled = enabled;
+    }
+    if let Some(laya) = file.laya {
+        config.laya = laya.fail_closed();
     }
     if let Some(agent_mode) = file.agent_mode {
         config.agent_mode = agent_mode;
@@ -1621,6 +1632,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.discord_rpc_enabled.is_some() {
         persisted.discord_rpc_enabled = global.discord_rpc_enabled;
     }
+    if file.laya.is_some() {
+        persisted.laya = global.laya.clone();
+    }
     if file.agent_mode.is_some() {
         persisted.agent_mode = global.agent_mode;
     }
@@ -1665,6 +1679,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         mcp_servers: None,
         audio: None,
         discord_rpc_enabled: None,
+        laya: None,
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,
