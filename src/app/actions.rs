@@ -49,7 +49,7 @@ pub async fn handle_escape(
     *cancel_token = tokio_util::sync::CancellationToken::new();
     s.clear_active_turn_projection();
 
-    if s.status == AppStatus::Streaming {
+    if s.status == AppStatus::Streaming || s.orchestrator_running {
         s.enter_idle();
         // Let the current orchestrator unwind and release its lease at the
         // cancellation boundary. User prompts already accepted while the
