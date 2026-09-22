@@ -732,13 +732,17 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .collect::<Vec<_>>();
 
             ctx.metrics.tool_calls += results.len();
+            ctx.metrics.mutating_tool_calls += selected_call_indices
+                .iter()
+                .filter(|index| {
+                    tool_calls
+                        .get(**index)
+                        .is_some_and(|call| !crate::tools::is_read_only_call(call))
+                })
+                .count();
             let mutation_batch = results
                 .iter()
                 .any(|result| is_mutating_tool(&result.tool_name));
-            ctx.metrics.mutating_tool_calls += results
-                .iter()
-                .filter(|result| is_mutating_tool(&result.tool_name))
-                .count();
             if mutation_batch {
                 let diagnostics = results
                     .iter()
