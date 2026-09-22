@@ -166,7 +166,168 @@ fn hydrate_shell_provider_keys() {
     crate::shell_env::hydrate_provider_keys(&configured);
 }
 
+#[cfg(unix)]
+async fn run_daemon_or_cron_command(
+    cli_args: &cli::Cli,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::daemon::{
+        client::DaemonClient,
+        command::{create_job, format_response},
+        lifecycle::DaemonLifecycle,
+        protocol::{DaemonRequest, DaemonResponse},
+    };
+
+    let Some(command) = cli_args.command.as_ref() else {
+        return Ok(false);
+    };
+    if !matches!(
+        command,
+        cli::Commands::Daemon { .. } | cli::Commands::Cron { .. }
+    ) {
+        return Ok(false);
+    }
+    let config_dir = crate::config::get_config_dir().ok_or("config directory unavailable")?;
+    let lifecycle = DaemonLifecycle::new(&config_dir);
+
+    match command {
+        cli::Commands::Daemon { command } => match command {
+            cli::DaemonCommands::Run { json: _ } => lifecycle.run().await?,
+            cli::DaemonCommands::Start { json } => {
+                let mut child = tokio::process::Command::new(std::env::current_exe()?);
+                child
+                    .args(["daemon", "run"])
+                    .env("RUSTCODE_CONFIG_DIR", &config_dir);
+                let status = lifecycle.start(child).await?;
+                println!(
+                    "{}",
+                    format_response("status", &DaemonResponse::Status { status }, *json)?
+                );
+            }
+            cli::DaemonCommands::Stop { json } => match lifecycle.stop().await? {
+                Some(status) if *json => println!(
+                    "{}",
+                    serde_json::json!({"status":"stopped","pid":status.pid,"instance_id":status.instance_id})
+                ),
+                Some(status) => println!("Daemon stopped (pid {}).", status.pid),
+                None if *json => println!("{}", serde_json::json!({"status":"stopped"})),
+                None => println!("Daemon is not running."),
+            },
+            cli::DaemonCommands::Status { json } => match lifecycle.status().await? {
+                Some(status) => println!(
+                    "{}",
+                    format_response("status", &DaemonResponse::Status { status }, *json)?
+                ),
+                None if *json => println!("{}", serde_json::json!({"status":"stopped"})),
+                None => println!("Daemon: stopped"),
+            },
+            cli::DaemonCommands::Logs { lines, json } => {
+                let output = lifecycle.read_log_tail(*lines)?;
+                if *json {
+                    println!("{}", serde_json::json!({"lines":lines,"log":output}));
+                } else {
+                    print!("{output}");
+                }
+            }
+        },
+        cli::Commands::Cron { command } => {
+            let (operation, request, json) = match command {
+                cli::CronCommands::Add {
+                    id,
+                    name,
+                    workspace,
+                    schedule,
+                    action,
+                    target_session,
+                    retry_policy,
+                    json,
+                } => (
+                    "add",
+                    DaemonRequest::Create {
+                        job: create_job(
+                            id,
+                            name,
+                            workspace,
+                            schedule,
+                            action,
+                            target_session.as_deref(),
+                            retry_policy.as_deref(),
+                        )?,
+                    },
+                    *json,
+                ),
+                cli::CronCommands::List { json } => ("list", DaemonRequest::List, *json),
+                cli::CronCommands::Pause { job_id, json } => (
+                    "pause",
+                    DaemonRequest::SetPaused {
+                        job_id: job_id.clone(),
+                        paused: true,
+                    },
+                    *json,
+                ),
+                cli::CronCommands::Resume { job_id, json } => (
+                    "resume",
+                    DaemonRequest::SetPaused {
+                        job_id: job_id.clone(),
+                        paused: false,
+                    },
+                    *json,
+                ),
+                cli::CronCommands::Run { job_id, json } => (
+                    "run",
+                    DaemonRequest::RunNow {
+                        job_id: job_id.clone(),
+                    },
+                    *json,
+                ),
+                cli::CronCommands::History {
+                    job_id,
+                    limit,
+                    json,
+                } => (
+                    "history",
+                    DaemonRequest::History {
+                        job_id: job_id.clone(),
+                        limit: *limit,
+                    },
+                    *json,
+                ),
+                cli::CronCommands::Delete { job_id, json } => (
+                    "delete",
+                    DaemonRequest::Delete {
+                        job_id: job_id.clone(),
+                    },
+                    *json,
+                ),
+            };
+            let response = DaemonClient::new(lifecycle.socket_path())
+                .request(request)
+                .await
+                .map_err(|error| format!("daemon unavailable: {error}"))?;
+            println!("{}", format_response(operation, &response, json)?);
+        }
+        _ => unreachable!(),
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+async fn run_daemon_or_cron_command(
+    cli_args: &cli::Cli,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if matches!(
+        cli_args.command,
+        Some(cli::Commands::Daemon { .. } | cli::Commands::Cron { .. })
+    ) {
+        return Err("daemon commands are supported on macOS and Linux".into());
+    }
+    Ok(false)
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let cli_args = cli::Cli::parse();
+    if run_daemon_or_cron_command(&cli_args).await? {
+        return Ok(());
+    }
     // Cheap, once-per-process check: rotate debug.log out of the way if a
     // prior session let it grow past the size cap, instead of letting every
     // subsequent write add to an already-huge file.
@@ -181,7 +342,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // all see the same values the user's terminal sees.
     hydrate_shell_provider_keys();
 
-    let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
 
     if cli_args.init || matches!(cli_args.command.as_ref(), Some(cli::Commands::Init)) {

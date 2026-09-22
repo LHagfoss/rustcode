@@ -1,11 +1,10 @@
-use chrono::Utc;
 use serde_json::Value;
 
 use super::{Tool, ToolCapability, ToolSafety};
 use crate::daemon::{
     client::DaemonClient,
+    command,
     lifecycle::DaemonLifecycle,
-    model::{JobAction, JobRecord, RetryPolicy, ScheduleSpec},
     protocol::{DaemonRequest, DaemonResponse},
 };
 
@@ -110,73 +109,29 @@ fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("missing '{field}'"))
 }
 
-fn create_job(args: &Value) -> Result<JobRecord, String> {
-    let now = Utc::now();
-    let id = required_string(args, "id")?.to_owned();
-    let name = required_string(args, "name")?.to_owned();
-    let workspace = required_string(args, "workspace")?.to_owned();
-    let schedule: ScheduleSpec =
-        serde_json::from_value(args.get("schedule").cloned().ok_or("missing 'schedule'")?)
-            .map_err(|error| format!("invalid schedule: {error}"))?;
-    schedule
-        .validate()
+fn create_job(args: &Value) -> Result<crate::daemon::model::JobRecord, String> {
+    let id = required_string(args, "id")?;
+    let name = required_string(args, "name")?;
+    let workspace = required_string(args, "workspace")?;
+    let schedule = serde_json::to_string(args.get("schedule").ok_or("missing 'schedule'")?)
         .map_err(|error| format!("invalid schedule: {error}"))?;
-    let mut action: JobAction = serde_json::from_value(
-        args.get("action").cloned().ok_or("missing 'action'")?,
-    )
+    let action = serde_json::to_string(args.get("action").ok_or("missing 'action'")?)
         .map_err(|error| format!("invalid action: {error}"))?;
-    if let JobAction::McpCall {
-        server,
-        workspace: action_workspace,
-        server_config,
-        ..
-    } = &mut action
-        && server_config.is_none()
-    {
-        let workspace_path = std::path::Path::new(action_workspace);
-        let (_, _, config) = crate::config::load_config_for_workspace(workspace_path);
-        let snapshot = config
-            .mcp_servers
-            .iter()
-            .find(|candidate| candidate.name == *server)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "MCP server '{server}' is not configured for workspace {action_workspace}"
-                )
-            })?;
-        *server_config = Some(snapshot);
-    }
-    let next_due_at = match schedule {
-        ScheduleSpec::Once { at } => at,
-        _ => schedule
-            .next_after(now)
-            .map_err(|error| format!("invalid schedule: {error}"))?,
-    };
-    let job = JobRecord {
+    let retry_policy = args
+        .get("retry_policy")
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| format!("invalid retry_policy: {error}"))?;
+    command::create_job(
         id,
         name,
-        paused: false,
-        schedule,
-        action,
         workspace,
-        target_session: args
-            .get("target_session")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        retry_policy: match args.get("retry_policy") {
-            Some(value) => serde_json::from_value(value.clone())
-                .map_err(|error| format!("invalid retry_policy: {error}"))?,
-            None => RetryPolicy::default(),
-        },
-        next_due_at,
-        schedule_revision: 1,
-        created_at: now,
-        updated_at: now,
-    };
-    job.validate()
-        .map_err(|error| format!("invalid job: {error}"))?;
-    Ok(job)
+        &schedule,
+        &action,
+        args.get("target_session").and_then(Value::as_str),
+        retry_policy.as_deref(),
+    )
+    .map_err(|error| error.message)
 }
 
 fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<String, String> {

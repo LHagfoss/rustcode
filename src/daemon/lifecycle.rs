@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::AsRawFd,
         unix::{
@@ -156,6 +156,25 @@ impl DaemonLifecycle {
     pub fn database_path(&self) -> PathBuf {
         self.directory.join("jobs.sqlite")
     }
+    pub fn log_path(&self) -> PathBuf {
+        self.directory.join("daemon.log")
+    }
+
+    pub fn read_log_tail(&self, lines: usize) -> Result<String> {
+        const MAX_LOG_BYTES: u64 = 64 * 1024;
+        let mut file = File::open(self.log_path())?;
+        let length = file.metadata()?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(MAX_LOG_BYTES)))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let mut contents = String::from_utf8_lossy(&bytes).into_owned();
+        if length > MAX_LOG_BYTES
+            && let Some(newline) = contents.find('\n')
+        {
+            contents.drain(..=newline);
+        }
+        Ok(super::command::tail_lines(&contents, lines))
+    }
 
     fn lock(&self, name: &str) -> Result<File> {
         fs::DirBuilder::new()
@@ -294,7 +313,7 @@ impl DaemonLifecycle {
             .create(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(self.directory.join("daemon.log"))?;
+            .open(self.log_path())?;
         command
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)

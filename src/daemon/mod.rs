@@ -1,6 +1,8 @@
 #[cfg(unix)]
 pub mod client;
 #[cfg(unix)]
+pub(crate) mod command;
+#[cfg(unix)]
 pub mod lifecycle;
 pub mod model;
 pub mod protocol;
