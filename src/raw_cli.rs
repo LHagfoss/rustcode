@@ -434,9 +434,7 @@ pub(crate) async fn run_headless_turn_cancellable(
     }
 
     if let Some(reason) = headless_failure(&ctx) {
-        if ctx.metrics.mutating_tool_calls == 0
-            && ctx.metrics.provider_errors > 0
-        {
+        if ctx.metrics.mutating_tool_calls == 0 && ctx.metrics.provider_errors > 0 {
             return Err(Box::new(PreEffectTurnFailure(format!(
                 "headless startup failed ({reason})"
             ))));

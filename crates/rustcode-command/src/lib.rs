@@ -144,7 +144,10 @@ fn build_command(request: &CommandRequest) -> Command {
     build_command_with_environment(request, None)
 }
 
-fn build_command_with_environment(request: &CommandRequest, allowlist: Option<&[String]>) -> Command {
+fn build_command_with_environment(
+    request: &CommandRequest,
+    allowlist: Option<&[String]>,
+) -> Command {
     let mut command = shell_command(&request.command);
     if let Some(allowlist) = allowlist {
         command.env_clear();
@@ -197,8 +200,14 @@ pub fn run_with_timeout_cancellable_env(
     cancellation: Option<CancellationCallback>,
     allowlist: &[String],
 ) -> Result<CommandOutput, String> {
-    run_command_internal(request, Some(request.timeout), progress, None, cancellation,
-        build_command_with_environment(request, Some(allowlist)))
+    run_command_internal(
+        request,
+        Some(request.timeout),
+        progress,
+        None,
+        cancellation,
+        build_command_with_environment(request, Some(allowlist)),
+    )
 }
 
 /// Run a resolved command until it exits. This is retained for the root
@@ -218,7 +227,14 @@ fn run_internal(
     started: Option<StartedCallback>,
     cancellation: Option<CancellationCallback>,
 ) -> Result<CommandOutput, String> {
-    run_command_internal(request, timeout, progress, started, cancellation, build_command(request))
+    run_command_internal(
+        request,
+        timeout,
+        progress,
+        started,
+        cancellation,
+        build_command(request),
+    )
 }
 
 fn run_command_internal(
@@ -280,7 +296,10 @@ fn run_command_internal(
         if let Some(timeout) = timeout {
             if start.elapsed() >= timeout {
                 terminate_process_tree(&mut child, request.process_group);
-                return Err(format!("command timed out after {} ms and was killed", timeout.as_millis()));
+                return Err(format!(
+                    "command timed out after {} ms and was killed",
+                    timeout.as_millis()
+                ));
             }
         }
         thread::sleep(Duration::from_millis(20));

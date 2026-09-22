@@ -125,20 +125,26 @@ mod tests {
     fn daily_schedule_uses_iana_timezone() {
         let schedule = ScheduleSpec::daily(8, 0, "Europe/Oslo", MisfirePolicy::SkipMissed)
             .expect("valid daily schedule");
-        assert_eq!(schedule.next_after(utc(2026, 1, 15, 6, 59)).unwrap(), utc(2026, 1, 15, 7, 0));
+        assert_eq!(
+            schedule.next_after(utc(2026, 1, 15, 6, 59)).unwrap(),
+            utc(2026, 1, 15, 7, 0)
+        );
     }
 
     #[test]
     fn monthly_schedule_advances_to_next_valid_month() {
         let schedule = ScheduleSpec::monthly(31, 9, 15, "Europe/Oslo", MisfirePolicy::RunOnce)
             .expect("valid monthly schedule");
-        assert_eq!(schedule.next_after(utc(2026, 4, 1, 0, 0)).unwrap(), utc(2026, 5, 31, 7, 15));
+        assert_eq!(
+            schedule.next_after(utc(2026, 4, 1, 0, 0)).unwrap(),
+            utc(2026, 5, 31, 7, 15)
+        );
     }
 
     #[test]
     fn invalid_cron_expression_is_rejected() {
-        let error = ScheduleSpec::cron("not a cron", "Europe/Oslo", MisfirePolicy::SkipMissed)
-            .unwrap_err();
+        let error =
+            ScheduleSpec::cron("not a cron", "Europe/Oslo", MisfirePolicy::SkipMissed).unwrap_err();
         assert!(error.to_string().contains("cron"));
     }
 
@@ -146,7 +152,10 @@ mod tests {
     fn spring_forward_moves_nonexistent_time_to_next_valid_instant() {
         let schedule = ScheduleSpec::daily(2, 30, "Europe/Oslo", MisfirePolicy::SkipMissed)
             .expect("valid daily schedule");
-        assert_eq!(schedule.next_after(utc(2026, 3, 28, 23, 0)).unwrap(), utc(2026, 3, 29, 1, 0));
+        assert_eq!(
+            schedule.next_after(utc(2026, 3, 28, 23, 0)).unwrap(),
+            utc(2026, 3, 29, 1, 0)
+        );
     }
 
     #[test]
@@ -155,7 +164,10 @@ mod tests {
             .expect("valid daily schedule");
         let first = schedule.next_after(utc(2026, 10, 24, 23, 0)).unwrap();
         assert_eq!(first, utc(2026, 10, 25, 0, 30));
-        assert_eq!(schedule.next_after(first).unwrap(), utc(2026, 10, 26, 1, 30));
+        assert_eq!(
+            schedule.next_after(first).unwrap(),
+            utc(2026, 10, 26, 1, 30)
+        );
     }
 
     #[test]

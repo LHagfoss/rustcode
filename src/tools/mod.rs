@@ -14,7 +14,7 @@ mod git;
 mod misc;
 mod openapi;
 mod parser;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod scheduled_jobs_tests;
 mod schema;
 mod search;
@@ -1382,6 +1382,7 @@ pub const TOOLS: &[Tool] = &[
     misc::LIST_MCP_TOOLS,
     misc::WAIT_AGENT,
     misc::CANCEL_AGENT,
+    #[cfg(unix)]
     misc::MANAGE_SCHEDULED_JOBS,
     search::GREP,
     search::GLOB,

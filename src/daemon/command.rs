@@ -86,9 +86,8 @@ fn hydrate_mcp_actions(action: &mut JobAction) -> Result<(), CommandError> {
         } if server_config.is_none() => {
             let server_name = server.clone();
             let action_workspace = workspace.clone();
-            let (_, _, config) = crate::config::load_config_for_workspace(
-                std::path::Path::new(&action_workspace),
-            );
+            let (_, _, config) =
+                crate::config::load_config_for_workspace(std::path::Path::new(&action_workspace));
             *server_config = Some(
                 config
                     .mcp_servers

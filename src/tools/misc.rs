@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use super::{Tool, ToolCapability, ToolSafety};
+#[cfg(unix)]
 use crate::daemon::{
     client::DaemonClient,
     command,
@@ -8,10 +9,14 @@ use crate::daemon::{
     protocol::{DaemonRequest, DaemonResponse},
 };
 
+#[cfg(unix)]
 const MAX_SCHEDULED_JOBS_OUTPUT_BYTES: usize = 16_384;
+#[cfg(unix)]
 const MAX_LIST_JOBS: usize = 100;
+#[cfg(unix)]
 const MAX_HISTORY_RUNS: usize = 50;
 
+#[cfg(unix)]
 fn manage_scheduled_jobs_schema() -> Value {
     let misfire = serde_json::json!({"type":"string","enum":["skip_missed","run_once"],"default":"skip_missed"});
     serde_json::json!({
@@ -43,6 +48,7 @@ fn manage_scheduled_jobs_schema() -> Value {
     })
 }
 
+#[cfg(unix)]
 pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     name: "manage_scheduled_jobs",
     description: "Create and manage durable scheduled jobs through the RustCode daemon. Supports create, list, pause, resume, run, history, and delete. The daemon must already be running.",
@@ -54,6 +60,7 @@ pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     safety: ToolSafety::ControlPlane,
 };
 
+#[cfg(unix)]
 fn manage_scheduled_jobs(args: &Value) -> Result<String, String> {
     let config_dir =
         crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
@@ -61,6 +68,7 @@ fn manage_scheduled_jobs(args: &Value) -> Result<String, String> {
     manage_scheduled_jobs_with_client(args, &client)
 }
 
+#[cfg(unix)]
 pub(crate) fn manage_scheduled_jobs_with_client(
     args: &Value,
     client: &DaemonClient,
@@ -102,6 +110,7 @@ pub(crate) fn manage_scheduled_jobs_with_client(
     format_daemon_response(operation, response)
 }
 
+#[cfg(unix)]
 fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> {
     args.get(field)
         .and_then(Value::as_str)
@@ -109,6 +118,7 @@ fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("missing '{field}'"))
 }
 
+#[cfg(unix)]
 fn create_job(args: &Value) -> Result<crate::daemon::model::JobRecord, String> {
     let id = required_string(args, "id")?;
     let name = required_string(args, "name")?;
@@ -134,6 +144,7 @@ fn create_job(args: &Value) -> Result<crate::daemon::model::JobRecord, String> {
     .map_err(|error| error.message)
 }
 
+#[cfg(unix)]
 fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<String, String> {
     match response {
         DaemonResponse::Error { message, .. } => Err(format!("error: {message}")),
@@ -173,6 +184,7 @@ fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<S
     }
 }
 
+#[cfg(unix)]
 fn bounded_rows(key: &str, mut rows: Vec<Value>, total: usize) -> Result<String, String> {
     loop {
         let included = rows.len();
