@@ -380,6 +380,8 @@ fn laya_can_extend_recovery(
     hard_cap_reached: bool,
 ) -> bool {
     !hard_cap_reached
+        && !ctx.recovery.force_final
+        && crate::network::turn_budget_exceeded(ctx).is_none()
         && decision.is_some_and(|decision| {
             loop_detect::laya_recovery_credit_available(
                 mode,
@@ -390,6 +392,12 @@ fn laya_can_extend_recovery(
                 eligible_read_only_batch,
             )
         })
+}
+
+fn laya_recovery_boundary_reached(attempts: u8, read_only_batch: bool) -> bool {
+    read_only_batch
+        && attempts >= crate::network::MAX_LOOP_RECOVERY_ROUNDS
+        && attempts < crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS
 }
 
 fn selected_tool_call_indices(
@@ -972,24 +980,26 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
                 let laya_hard_cap_reached = ctx.recovery.loop_recovery_attempts
                     >= crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS;
-                let laya_advisory = if local_recovery_action == LoopRecoveryAction::ForceFinal
-                    && laya_eligible
-                    && !laya_hard_cap_reached
-                {
-                    request_repetition_advisory(
-                        &laya,
-                        ctx,
-                        &executable_tool_calls,
-                        &ctx.shell_assessments,
-                        loop_detect::ProgressReason::NoNewInformation,
-                        loop_offender.as_deref().unwrap_or("repeated tool output"),
-                        local_recovery_action == LoopRecoveryAction::ForceFinal,
-                        laya_max_extra_recoveries,
-                    )
-                    .await
-                } else {
-                    None
-                };
+                let laya_boundary_reached = laya_recovery_boundary_reached(
+                    ctx.recovery.loop_recovery_attempts,
+                    read_only_batch,
+                );
+                let laya_advisory =
+                    if laya_boundary_reached && laya_eligible && !laya_hard_cap_reached {
+                        request_repetition_advisory(
+                            &laya,
+                            ctx,
+                            &executable_tool_calls,
+                            &ctx.shell_assessments,
+                            loop_detect::ProgressReason::NoNewInformation,
+                            loop_offender.as_deref().unwrap_or("repeated tool output"),
+                            laya_boundary_reached,
+                            laya_max_extra_recoveries,
+                        )
+                        .await
+                    } else {
+                        None
+                    };
                 let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
                     laya_can_extend_recovery(
                         ctx,
@@ -2013,24 +2023,26 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let laya_hard_cap_reached = targeted_recovery_exhausted
                     || ctx.recovery.loop_recovery_attempts
                         >= crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS;
-                let laya_advisory = if local_recovery_action == LoopRecoveryAction::ForceFinal
-                    && laya_eligible
-                    && !laya_hard_cap_reached
-                {
-                    request_repetition_advisory(
-                        &laya,
-                        ctx,
-                        &executable_tool_calls,
-                        &ctx.shell_assessments,
-                        reason,
-                        &action,
-                        local_recovery_action == LoopRecoveryAction::ForceFinal,
-                        laya_max_extra_recoveries,
-                    )
-                    .await
-                } else {
-                    None
-                };
+                let laya_boundary_reached = laya_recovery_boundary_reached(
+                    ctx.recovery.loop_recovery_attempts,
+                    read_only_batch,
+                );
+                let laya_advisory =
+                    if laya_boundary_reached && laya_eligible && !laya_hard_cap_reached {
+                        request_repetition_advisory(
+                            &laya,
+                            ctx,
+                            &executable_tool_calls,
+                            &ctx.shell_assessments,
+                            reason,
+                            &action,
+                            laya_boundary_reached,
+                            laya_max_extra_recoveries,
+                        )
+                        .await
+                    } else {
+                        None
+                    };
                 let use_laya_credit = laya_advisory.as_ref().is_some_and(|(decision, _)| {
                     laya_can_extend_recovery(
                         ctx,
@@ -2567,6 +2579,99 @@ mod tests {
             rationale_code: None,
         };
 
+        assert!(!super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn laya_credit_is_available_at_the_boundary_but_not_twice_or_after_terminal_gates() {
+        let mut ctx = TurnContext::new();
+        ctx.recovery.loop_recovery_attempts =
+            crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS - 1;
+        let decision = crate::laya::AdvisoryDecision {
+            label: "novel_evidence".to_string(),
+            confidence: 0.999,
+            effects: Vec::new(),
+            rationale_code: None,
+        };
+
+        assert!(super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            false,
+        ));
+        ctx.recovery.laya_read_only_recoveries_used = 1;
+        assert!(!super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            false,
+        ));
+
+        ctx.recovery.laya_read_only_recoveries_used = 0;
+        ctx.budget.tokens_used = crate::network::MAX_TURN_TOKEN_BUDGET;
+        assert!(!super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            false,
+        ));
+        assert!(!super::laya_can_extend_recovery(
+            &ctx,
+            crate::laya::LayaMode::Relaxed,
+            0.98,
+            1,
+            Some(&decision),
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn laya_repetition_boundary_is_before_the_existing_read_only_cap() {
+        assert!(!super::laya_recovery_boundary_reached(
+            crate::network::MAX_LOOP_RECOVERY_ROUNDS - 1,
+            true,
+        ));
+        assert!(super::laya_recovery_boundary_reached(
+            crate::network::MAX_LOOP_RECOVERY_ROUNDS,
+            true,
+        ));
+        assert!(!super::laya_recovery_boundary_reached(
+            crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS,
+            true,
+        ));
+    }
+
+    #[test]
+    fn laya_credit_is_rejected_after_targeted_recovery_exhaustion() {
+        let ctx = TurnContext::new();
+        let decision = crate::laya::AdvisoryDecision {
+            label: "confirmatory_evidence".to_string(),
+            confidence: 0.999,
+            effects: Vec::new(),
+            rationale_code: None,
+        };
+
+        // The caller maps targeted recovery exhaustion to the terminal gate;
+        // Laya cannot turn that gate back into a recovery.
         assert!(!super::laya_can_extend_recovery(
             &ctx,
             crate::laya::LayaMode::Relaxed,

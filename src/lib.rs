@@ -312,7 +312,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let (_, _, config) = crate::config::load_config_for_workspace(&workspace);
         match command {
             cli::LayaCommand::Status => {
-                println!("{}", crate::laya::format_status(&config.laya));
+                let runtime = crate::laya::LayaRuntime::new(config.laya.clone());
+                println!("{}", crate::laya::format_runtime_status(&runtime));
             }
             cli::LayaCommand::Enable { mode } => {
                 if let Err(error) = crate::config::save_laya_mode_for_workspace(&workspace, *mode) {

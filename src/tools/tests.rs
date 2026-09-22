@@ -2418,6 +2418,45 @@ fn authorize_relaxed_mode_falls_back_on_advisory_disagreement_or_failure() {
 }
 
 #[test]
+fn off_mode_preserves_legacy_allow_for_a_hazard_bearing_read_command() {
+    let args = serde_json::json!({
+        "command": "lscpu 2>/dev/null | head -20",
+    });
+
+    // The legacy command-confirmation parser treats null sinks and a
+    // read-only pipeline as allowed. Laya-off must not promote that result
+    // merely because the richer advisory facts call the syntax hazardous.
+    assert_eq!(
+        authorize_tool_with_args(
+            "run_command",
+            &args,
+            crate::config::AgentMode::Build,
+            false,
+            false,
+        ),
+        AuthorizationDecision::Allow
+    );
+    assert_eq!(
+        execution_authorization(
+            "run_command",
+            &args,
+            Some("off-hazard"),
+            crate::config::AgentMode::Build,
+            false,
+            false,
+            false,
+            None,
+        ),
+        AuthorizationDecision::Allow
+    );
+    assert!(crate::tools::is_read_only_call(&ToolCall {
+        name: "run_command".to_string(),
+        arguments: args,
+        call_id: Some("off-hazard".to_string()),
+    }));
+}
+
+#[test]
 fn relaxed_mode_does_not_downgrade_path_qualified_or_wrapped_interpreters() {
     use crate::laya::{AdvisoryDecision, LayaMode};
     use crate::tools::{ShellClassification, shell_policy_facts};

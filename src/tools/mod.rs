@@ -1231,6 +1231,13 @@ pub(crate) fn effective_shell_authorization(
     mode: crate::laya::LayaMode,
     min_confidence: f32,
 ) -> EffectiveAuthorization {
+    if mode == crate::laya::LayaMode::Relaxed
+        && facts.has_hazard()
+        && advisory.is_some()
+        && matches!(local, AuthorizationDecision::Allow)
+    {
+        return AuthorizationDecision::RequireConfirmation;
+    }
     if mode != crate::laya::LayaMode::Relaxed
         || !facts.eligible_for_relaxed_advisory()
         || !matches!(local, AuthorizationDecision::RequireConfirmation)
@@ -1310,9 +1317,11 @@ pub fn authorize_tool_with_args(
                 .to_string(),
         );
     }
-    let command_is_destructive = name == "run_command"
-        && (command_requires_confirmation(args)
-            || shell_policy_facts_for_call(args).is_some_and(|facts| facts.has_hazard()));
+    // Keep the baseline authorization exactly as it was before Laya. Rich
+    // shell facts are advisory eligibility inputs, not an unconditional
+    // off-mode policy tightening; enabled modes compose them through the
+    // cached assessment path below.
+    let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
     let requires_confirmation = if name == "run_command" {
         command_is_destructive
     } else {

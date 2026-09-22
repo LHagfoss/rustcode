@@ -249,7 +249,17 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
 }
 
 pub fn format_status(config: &LayaConfig) -> String {
-    let status = diagnose(config);
+    format_status_report(&diagnose(config))
+}
+
+/// Render the pure prerequisite diagnostics together with the current state
+/// of a lazy runtime. Reading this status never starts the sidecar or invokes
+/// the configured model.
+pub fn format_runtime_status(runtime: &LayaRuntime) -> String {
+    format_status_report(&runtime.status())
+}
+
+fn format_status_report(status: &LayaStatus) -> String {
     format!(
         "Laya mode: {}\nPlatform: {}\nProtocol: {} ({})\nPython executable: {} ({})\nAdapter: {}\nModel: {}\nPaths available: {}\nRuntime ready: {}\nFailure category: {}\nAvailability: {}",
         status.mode,
@@ -1308,17 +1318,48 @@ done
 
     #[test]
     fn status_distinguishes_available_paths_from_an_unstarted_runtime() {
-        let status = format_status(&LayaConfig {
+        let runtime = LayaRuntime::new(LayaConfig {
             mode: LayaMode::Shadow,
             python: Some(std::env::current_exe().unwrap().display().to_string()),
             adapter: Some("/missing/adapter.py".to_owned()),
             model: Some("/missing/checkpoint".to_owned()),
             ..LayaConfig::default()
         });
+        let status = format_runtime_status(&runtime);
 
         assert!(status.contains("Paths available:"));
         assert!(status.contains("Runtime ready: no"));
         assert!(status.contains("Failure category:"));
+    }
+
+    #[test]
+    fn runtime_status_reports_known_unavailable_malformed_and_semantic_failures_without_starting() {
+        let runtime = LayaRuntime::new(LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some("/missing/python".to_owned()),
+            adapter: Some("/missing/adapter.py".to_owned()),
+            model: Some("/missing/checkpoint".to_owned()),
+            ..LayaConfig::default()
+        });
+
+        assert!(format_runtime_status(&runtime).contains("Availability: missing_python"));
+        assert!(format_runtime_status(&runtime).contains("Runtime ready: no"));
+
+        for (failure, category) in [
+            (AdvisoryError::Unavailable, "unavailable"),
+            (AdvisoryError::MalformedResponse, "malformed_response"),
+            (AdvisoryError::ModelError, "model_error"),
+        ] {
+            runtime
+                .state
+                .try_lock()
+                .expect("status test owns runtime state")
+                .last_failure = Some(failure);
+            let status = format_runtime_status(&runtime);
+            assert!(status.contains(&format!("Failure category: {category}")));
+            assert!(status.contains("Paths available: no"));
+            assert!(status.contains("Runtime ready: no"));
+        }
     }
 
     #[test]
