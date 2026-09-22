@@ -94,15 +94,8 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::CancelActiveTurn => {
-                self.current_cancel_token.cancel();
-                self.current_cancel_token = CancellationToken::new();
-                let mut state = self.app_state.lock().await;
-                state.invalidate_orchestrator();
-                state.pending_queue.clear();
-                state.background_turn_context = None;
-                state.clear_active_turn_projection();
-                state.enter_idle();
-                state.request_redraw();
+                crate::app::handle_escape(&self.app_state, &mut self.current_cancel_token).await;
+                self.app_state.lock().await.request_redraw();
                 Ok(AppRunControl::Continue)
             }
             AppEvent::Exit => {

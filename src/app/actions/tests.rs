@@ -46,6 +46,31 @@ async fn escape_preserves_fifo_prompts_until_the_orchestrator_releases() {
     );
 }
 
+#[tokio::test]
+async fn escape_preserves_queued_prompt_during_orchestrator_boundary() {
+    use crate::app::{AppState, AppStatus};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    // The orchestrator still owns the active turn, but its status may already
+    // have been moved away from Streaming while cancellation is unwinding.
+    app.status = AppStatus::Queued;
+    app.pending_queue = vec!["follow-up prompt".to_owned()];
+    let _lease = app
+        .claim_orchestrator()
+        .expect("the active turn owns the orchestrator");
+    let state = Arc::new(Mutex::new(app));
+    let mut cancel_token = CancellationToken::new();
+
+    super::handle_escape(&state, &mut cancel_token).await;
+
+    let state = state.lock().await;
+    assert_eq!(state.pending_queue, ["follow-up prompt"]);
+    assert!(state.orchestrator_running);
+}
+
 #[test]
 fn idle_summary_removes_headings_and_bullets() {
     assert_eq!(
