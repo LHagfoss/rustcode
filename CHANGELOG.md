@@ -1,3 +1,9 @@
+## [v0.55.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.7) - 2026-09-22
+
+### Fixes
+- Fixed context usage overlay spacing, close affordance, and bottom padding.
+- Made Shift+Tab reliably switch Build/Plan mode while preserving Tab completion.
+- Normalized Shift+Tab auto-confirm handling in approval prompts with visible YOLO feedback.
 ## [v0.55.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.6) - 2026-09-21
 
 ### Fixes
