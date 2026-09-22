@@ -662,6 +662,16 @@ struct PromptCacheKey {
 /// selected per request from the current conversation and explicit schema policy.
 /// MCP names selected during a request remain sticky so explicitly requested
 /// schemas survive later tool rounds of the same session.
+#[derive(Clone, Debug)]
+pub(crate) struct NativeToolSchemaSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) policy: crate::tools::ToolSchemaPolicy,
+    pub(crate) session_id: String,
+    pub(crate) user_message_count: usize,
+    pub(crate) selection_revision: u64,
+    pub(crate) sticky_names: Vec<String>,
+}
+
 #[derive(Default)]
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
@@ -675,6 +685,9 @@ pub struct PromptCache {
     /// which keeps explicit user-requested MCP tools available across rounds
     /// even when a later round has a full relevance-ranked menu.
     mcp_selected_names: Vec<String>,
+    /// Invalidates schema computations that started from an older cache
+    /// snapshot, including concurrent requests with the same session inputs.
+    mcp_selection_revision: u64,
 }
 
 impl PromptCache {
@@ -713,6 +726,62 @@ impl PromptCache {
             .skill_metadata
             .get_or_insert_with(|| Arc::new(crate::skills::discover_skills()));
         Arc::clone(metadata)
+    }
+
+    pub(crate) fn native_tool_schema_snapshot(
+        &mut self,
+        policy: crate::tools::ToolSchemaPolicy,
+        messages: &[serde_json::Value],
+        session_id: &str,
+    ) -> NativeToolSchemaSnapshot {
+        let generation = crate::mcp::mcp_generation();
+        let user_message_count = messages
+            .iter()
+            .filter(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+            })
+            .count();
+        if self.mcp_selection_generation != generation
+            || self.mcp_selection_policy != Some(policy)
+            || self.mcp_selection_session_id.as_deref() != Some(session_id)
+            || self
+                .mcp_selection_user_count
+                .is_some_and(|previous| user_message_count > previous)
+        {
+            self.mcp_selected_names.clear();
+            self.mcp_selection_generation = generation;
+            self.mcp_selection_policy = Some(policy);
+            self.mcp_selection_session_id = Some(session_id.to_string());
+        }
+        self.mcp_selection_user_count = Some(user_message_count);
+        self.mcp_selection_revision = self.mcp_selection_revision.wrapping_add(1);
+
+        NativeToolSchemaSnapshot {
+            generation,
+            policy,
+            session_id: session_id.to_string(),
+            user_message_count,
+            selection_revision: self.mcp_selection_revision,
+            sticky_names: self.mcp_selected_names.clone(),
+        }
+    }
+
+    pub(crate) fn commit_native_tool_schema_selection(
+        &mut self,
+        snapshot: &NativeToolSchemaSnapshot,
+        selected_names: &[String],
+    ) -> bool {
+        if crate::mcp::mcp_generation() != snapshot.generation
+            || self.mcp_selection_generation != snapshot.generation
+            || self.mcp_selection_policy != Some(snapshot.policy)
+            || self.mcp_selection_session_id.as_deref() != Some(snapshot.session_id.as_str())
+            || self.mcp_selection_user_count != Some(snapshot.user_message_count)
+            || self.mcp_selection_revision != snapshot.selection_revision
+        {
+            return false;
+        }
+        self.mcp_selected_names = selected_names.to_vec();
+        true
     }
 
     pub(crate) fn native_tool_schemas(
@@ -792,6 +861,42 @@ pub struct LiveToolCall {
     pub output: std::collections::VecDeque<LiveToolOutputChunk>,
     pub omitted_output_bytes: usize,
     pub started_at: std::time::Instant,
+}
+
+#[cfg(test)]
+mod prompt_cache_snapshot_tests {
+    use super::PromptCache;
+    use crate::tools::ToolSchemaPolicy;
+    use serde_json::json;
+
+    fn messages(user_count: usize) -> Vec<serde_json::Value> {
+        (0..user_count)
+            .map(|index| json!({"role": "user", "content": format!("prompt {index}")}))
+            .collect()
+    }
+
+    #[test]
+    fn stale_session_snapshot_cannot_overwrite_newer_selection() {
+        let mut cache = PromptCache::default();
+        let policy = ToolSchemaPolicy::root(false);
+        let old = cache.native_tool_schema_snapshot(policy, &messages(1), "old-session");
+        let new = cache.native_tool_schema_snapshot(policy, &messages(1), "new-session");
+
+        assert!(!cache.commit_native_tool_schema_selection(&old, &["old-tool".to_string()]));
+        assert!(cache.commit_native_tool_schema_selection(&new, &["new-tool".to_string()]));
+        assert_eq!(cache.mcp_selected_names, ["new-tool"]);
+    }
+
+    #[test]
+    fn stale_generation_snapshot_cannot_overwrite_selection() {
+        let mut cache = PromptCache::default();
+        let policy = ToolSchemaPolicy::root(false);
+        let snapshot = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
+        crate::mcp::bump_mcp_generation();
+
+        assert!(!cache.commit_native_tool_schema_selection(&snapshot, &["stale-tool".to_string()]));
+        assert!(cache.mcp_selected_names.is_empty());
+    }
 }
 
 pub(super) const MAX_LIVE_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
