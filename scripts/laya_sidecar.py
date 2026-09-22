@@ -24,6 +24,41 @@ SUPPORTED_LABELS = {
     "no_new_information",
     "unknown",
 }
+DIAGNOSTIC_CATEGORIES = {
+    "unsupported_python",
+    "unsupported_architecture",
+    "startup_error",
+    "readiness_error",
+    "oversized_request",
+    "unterminated_request",
+    "invalid_request",
+    "model_error",
+    "response_error",
+}
+
+
+def _diagnostic_line(category: str) -> str:
+    if category not in DIAGNOSTIC_CATEGORIES:
+        category = "internal_error"
+    return f"Laya sidecar error: {category}"
+
+
+def _diagnostic(category: str) -> None:
+    print(_diagnostic_line(category), file=sys.stderr)
+
+
+def _bounded_lines(stream: Any):
+    """Yield complete bounded lines without buffering an arbitrary physical line."""
+    while True:
+        chunk = stream.readline(MAX_LINE_BYTES + 1)
+        if not chunk:
+            return
+        if len(chunk) > MAX_LINE_BYTES:
+            while chunk and not chunk.endswith(b"\n"):
+                chunk = stream.readline(MAX_LINE_BYTES + 1)
+            yield None
+        else:
+            yield chunk
 
 
 def _write_json(message: dict[str, Any]) -> None:
@@ -147,17 +182,17 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     if sys.version_info < (3, 11):
-        print("Laya sidecar requires Python >= 3.11", file=sys.stderr)
+        _diagnostic("unsupported_python")
         return 2
     if sys.platform != "darwin" or platform.machine() != "arm64":
-        print("Laya sidecar requires Apple Silicon macOS", file=sys.stderr)
+        _diagnostic("unsupported_architecture")
         return 2
 
     args = _parse_args()
     try:
         agent = _load_agent(args.model)
-    except Exception as exc:  # startup failures must be visible and nonzero
-        print(f"Laya sidecar startup failed: {exc}", file=sys.stderr)
+    except Exception:  # startup failures must be visible and nonzero
+        _diagnostic("startup_error")
         return 2
 
     try:
@@ -169,26 +204,29 @@ def main() -> int:
                 "kinds": list(SUPPORTED_KINDS),
             }
         )
-    except Exception as exc:
-        print(f"Laya sidecar readiness failed: {exc}", file=sys.stderr)
+    except Exception:
+        _diagnostic("readiness_error")
         return 2
 
-    for raw_line in sys.stdin.buffer:
-        if len(raw_line) > MAX_LINE_BYTES or not raw_line.endswith(b"\n"):
-            print("Laya sidecar rejected an oversized or unterminated request", file=sys.stderr)
+    for raw_line in _bounded_lines(sys.stdin.buffer):
+        if raw_line is None:
+            _diagnostic("oversized_request")
+            continue
+        if not raw_line.endswith(b"\n"):
+            _diagnostic("unterminated_request")
             continue
         request = None
         try:
             request = json.loads(raw_line)
             request_id, kind, input_data = _validate_request(request)
         except Exception:
-            print("Laya sidecar rejected an invalid request", file=sys.stderr)
+            _diagnostic("invalid_request")
             request_id = request.get("id") if isinstance(request, dict) else None
             if isinstance(request_id, str) and request_id:
                 try:
                     _write_json(_error_response(request_id, "invalid_request"))
-                except Exception as exc:
-                    print(f"Laya sidecar response failed: {exc}", file=sys.stderr)
+                except Exception:
+                    _diagnostic("response_error")
                     return 2
             continue
 
@@ -203,13 +241,13 @@ def main() -> int:
                 "decision": decision,
                 "latency_ms": round((time.monotonic() - started) * 1000),
             }
-        except Exception as exc:  # diagnostics stay off the protocol stream
-            print(f"Laya sidecar inference failed: {exc}", file=sys.stderr)
+        except Exception:  # diagnostics stay off the protocol stream
+            _diagnostic("model_error")
             response = _error_response(request_id, "model_error")
         try:
             _write_json(response)
-        except Exception as exc:
-            print(f"Laya sidecar response failed: {exc}", file=sys.stderr)
+        except Exception:
+            _diagnostic("response_error")
             return 2
     return 0
 

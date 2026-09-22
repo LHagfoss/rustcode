@@ -30,6 +30,7 @@ python = "/Users/me/.venvs/rustcode-laya/bin/python"
 adapter = "/Users/me/rustcode/scripts/laya_sidecar.py"
 model = "/Users/me/models/aac6fef-laya-mlx"
 timeout_ms = 150
+startup_timeout_ms = 5000
 min_confidence = 0.98
 max_extra_read_only_recoveries = 1
 ```
@@ -46,7 +47,9 @@ readiness:
 
 Rust requires protocol `1`, a backend and model identity, and both supported
 decision kinds before sending requests. Any other readiness message makes the
-sidecar unavailable for the current turn.
+sidecar unavailable for the current turn. Readiness uses the separate
+`startup_timeout_ms` bound (default 5 seconds); inference uses `timeout_ms`
+(default 150 ms).
 
 ## Request
 
@@ -91,9 +94,11 @@ text, environment data, or command output.
 
 Allowed labels are `read_only`, `novel_evidence`, `confirmatory_evidence`,
 `no_new_information`, and `unknown`. Confidence must be finite and in the
-inclusive range `0.0..=1.0`. Rust rejects missing fields, unknown labels,
-unknown protocol versions, mismatched or duplicate IDs, non-finite confidence,
-and oversized lines. A transport or validation error is never an allow result.
+inclusive range `0.0..=1.0`, and must meet the configured `min_confidence`.
+`unknown` and below-threshold decisions become model errors, never successful
+advisory results. Rust rejects missing fields, unknown labels, unknown protocol
+versions, mismatched or duplicate IDs, non-finite confidence, and oversized
+lines. A transport or validation error is never an allow result.
 
 ## Error response
 

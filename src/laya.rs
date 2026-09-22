@@ -8,7 +8,11 @@ use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 const DEFAULT_TIMEOUT_MS: u64 = 150;
+const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MIN_CONFIDENCE: f32 = 0.98;
 const DEFAULT_MAX_EXTRA_READ_ONLY_RECOVERIES: usize = 1;
 const DEFAULT_PYTHON: &str = "python3";
@@ -52,6 +56,8 @@ pub struct LayaConfig {
     pub model: Option<String>,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+    #[serde(default = "default_startup_timeout_ms")]
+    pub startup_timeout_ms: u64,
     #[serde(default = "default_min_confidence")]
     pub min_confidence: f32,
     #[serde(default = "default_max_extra_read_only_recoveries")]
@@ -66,6 +72,7 @@ impl Default for LayaConfig {
             adapter: None,
             model: None,
             timeout_ms: DEFAULT_TIMEOUT_MS,
+            startup_timeout_ms: DEFAULT_STARTUP_TIMEOUT_MS,
             min_confidence: DEFAULT_MIN_CONFIDENCE,
             max_extra_read_only_recoveries: DEFAULT_MAX_EXTRA_READ_ONLY_RECOVERIES,
         }
@@ -77,6 +84,7 @@ impl LayaConfig {
     /// safely. The remaining values are retained for status diagnostics.
     pub fn fail_closed(mut self) -> Self {
         if self.timeout_ms == 0
+            || self.startup_timeout_ms == 0
             || !self.min_confidence.is_finite()
             || !(0.0..=1.0).contains(&self.min_confidence)
         {
@@ -280,13 +288,28 @@ fn readable_path(value: Option<&str>) -> bool {
 fn executable_available(executable: &str) -> bool {
     let path = Path::new(executable);
     if path.components().count() > 1 {
-        return path.is_file();
+        return is_executable_file(path);
     }
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
         .map(|directory| directory.join(executable))
-        .any(|candidate| candidate.is_file())
+        .any(|candidate| is_executable_file(&candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        path.metadata()
+            .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn supported_platform() -> bool {
@@ -312,6 +335,7 @@ struct RuntimeState {
     process: Option<SidecarProcess>,
     started: bool,
     restart_available: bool,
+    restart_used: bool,
     seen_ids: HashSet<String>,
 }
 
@@ -370,6 +394,7 @@ impl SidecarProcess {
         request_line: &[u8],
         request_id: &str,
         timeout: Duration,
+        min_confidence: f32,
     ) -> Result<AdvisoryDecision, AdvisoryError> {
         self.stdin
             .write_all(request_line)
@@ -414,6 +439,9 @@ impl SidecarProcess {
             || !supported_label(&decision.label)
         {
             return Err(AdvisoryError::MalformedResponse);
+        }
+        if decision.label == "unknown" || confidence < min_confidence {
+            return Err(AdvisoryError::ModelError);
         }
 
         Ok(AdvisoryDecision {
@@ -474,7 +502,10 @@ impl LayaRuntime {
                 return Err(AdvisoryError::Unavailable);
             }
             state.started = true;
-            state.restart_available = false;
+            if retrying {
+                state.restart_available = false;
+                state.restart_used = true;
+            }
             match self.spawn_sidecar().await {
                 Ok(process) => state.process = Some(process),
                 Err(error) => {
@@ -489,19 +520,28 @@ impl LayaRuntime {
             .process
             .as_mut()
             .expect("sidecar process is initialized")
-            .evaluate(&request_line, &request.id, self.timeout())
+            .evaluate(
+                &request_line,
+                &request.id,
+                self.timeout(),
+                self.config.min_confidence,
+            )
             .await;
         if result.is_err() {
             if let Some(process) = state.process.take() {
                 process.terminate().await;
             }
-            state.restart_available = true;
+            state.restart_available = !state.restart_used;
         }
         result
     }
 
     fn timeout(&self) -> Duration {
         Duration::from_millis(self.config.timeout_ms.max(1))
+    }
+
+    fn startup_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.startup_timeout_ms.max(1))
     }
 
     async fn spawn_sidecar(&self) -> Result<SidecarProcess, AdvisoryError> {
@@ -558,7 +598,7 @@ impl LayaRuntime {
             stdout: BufReader::new(stdout),
         };
         let readiness = match tokio::time::timeout(
-            self.timeout(),
+            self.startup_timeout(),
             read_bounded_line(&mut process.stdout),
         )
         .await
@@ -658,6 +698,10 @@ fn default_timeout_ms() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
+fn default_startup_timeout_ms() -> u64 {
+    DEFAULT_STARTUP_TIMEOUT_MS
+}
+
 fn default_min_confidence() -> f32 {
     DEFAULT_MIN_CONFIDENCE
 }
@@ -675,8 +719,10 @@ mod tests {
 model_path="$2"
 mode=$(basename "$model_path")
 marker="$model_path.marker"
+if [ "$mode" = "slow-readiness" ]; then
+    sleep 0.2
+fi
 printf '%s\n' '{"protocol":1,"backend":"fake","model":"fixture","kinds":["shell_policy","repetition"]}'
-
 if [ "$mode" = "exit" ]; then
     exit 17
 fi
@@ -684,15 +730,40 @@ if [ "$mode" = "recover" ] && [ ! -e "$marker" ]; then
     : > "$marker"
     exit 23
 fi
+if [ "$mode" = "fail-twice" ]; then
+    if [ ! -e "$marker.1" ]; then
+        : > "$marker.1"
+        exit 23
+    elif [ ! -e "$marker.2" ]; then
+        : > "$marker.2"
+        exit 23
+    fi
+fi
 
 while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
     case "$mode" in
-        success|recover)
+        success|recover|slow-readiness)
+            printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        fail-twice)
             printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
             ;;
         repetition)
             printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"novel_evidence","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        low-confidence)
+            printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.5,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        unknown)
+            printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"unknown","confidence":0.999,"effects":["unknown"],"rationale_code":"fixture"}}\n' "$id"
+            ;;
+        wrong-id)
+            printf '%s\n' '{"protocol":1,"id":"wrong-id","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"]}}'
+            ;;
+        serialize)
+            sleep 0.1
+            printf '{"protocol":1,"id":"%s","ok":true,"decision":{"label":"read_only","confidence":0.999,"effects":["read_only"],"rationale_code":"fixture"}}\n' "$id"
             ;;
         malformed)
             printf '%s\n' 'not-json'
@@ -733,19 +804,22 @@ done
     }
 
     fn fake_runtime(mode: &str) -> (TempDir, LayaRuntime) {
+        fake_runtime_with_config(mode, LayaConfig::default())
+    }
+
+    fn fake_runtime_with_config(mode: &str, mut config: LayaConfig) -> (TempDir, LayaRuntime) {
         let dir = TempDir::new().unwrap();
         let adapter = dir.path().join("fake-sidecar.sh");
         let model = dir.path().join(mode);
         std::fs::write(&adapter, FAKE_SIDECAR).unwrap();
         std::fs::write(&model, b"fixture").unwrap();
-        let config = LayaConfig {
-            mode: LayaMode::Shadow,
-            python: Some("sh".to_owned()),
-            adapter: Some(adapter.display().to_string()),
-            model: Some(model.display().to_string()),
-            timeout_ms: 50,
-            ..LayaConfig::default()
-        };
+        config.mode = LayaMode::Shadow;
+        config.python = Some("sh".to_owned());
+        config.adapter = Some(adapter.display().to_string());
+        config.model = Some(model.display().to_string());
+        if config.timeout_ms == DEFAULT_TIMEOUT_MS {
+            config.timeout_ms = 50;
+        }
         (dir, LayaRuntime::new(config))
     }
 
@@ -856,6 +930,28 @@ done
     }
 
     #[tokio::test]
+    async fn low_confidence_is_a_model_fallback_error() {
+        let (_dir, runtime) = fake_runtime("low-confidence");
+
+        let result = runtime
+            .evaluate(request("low-confidence", AdvisoryKind::ShellPolicy))
+            .await;
+
+        assert_eq!(result, Err(AdvisoryError::ModelError));
+    }
+
+    #[tokio::test]
+    async fn unknown_label_is_a_model_fallback_error() {
+        let (_dir, runtime) = fake_runtime("unknown");
+
+        let result = runtime
+            .evaluate(request("unknown", AdvisoryKind::ShellPolicy))
+            .await;
+
+        assert_eq!(result, Err(AdvisoryError::ModelError));
+    }
+
+    #[tokio::test]
     async fn unsupported_label_is_not_an_allow_result() {
         let (_dir, runtime) = fake_runtime("unsupported-label");
 
@@ -951,6 +1047,76 @@ done
         assert_eq!(second.unwrap().label, "read_only");
     }
 
+    #[tokio::test]
+    async fn restart_allowance_is_exhausted_after_two_process_failures() {
+        let (_dir, runtime) = fake_runtime("fail-twice");
+
+        let first = runtime
+            .evaluate(request("first-failure", AdvisoryKind::ShellPolicy))
+            .await;
+        let second = runtime
+            .evaluate(request("second-failure", AdvisoryKind::ShellPolicy))
+            .await;
+        let third = runtime
+            .evaluate(request("after-exhaustion", AdvisoryKind::ShellPolicy))
+            .await;
+
+        assert_eq!(first, Err(AdvisoryError::ProcessExit));
+        assert_eq!(second, Err(AdvisoryError::ProcessExit));
+        assert_eq!(third, Err(AdvisoryError::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn readiness_uses_the_startup_timeout_not_the_inference_timeout() {
+        let (_dir, runtime) = fake_runtime_with_config(
+            "slow-readiness",
+            LayaConfig {
+                timeout_ms: 20,
+                startup_timeout_ms: 500,
+                ..LayaConfig::default()
+            },
+        );
+
+        let decision = runtime
+            .evaluate(request("slow-start", AdvisoryKind::ShellPolicy))
+            .await
+            .unwrap();
+
+        assert_eq!(decision.label, "read_only");
+    }
+
+    #[tokio::test]
+    async fn wrong_response_id_is_malformed() {
+        let (_dir, runtime) = fake_runtime("wrong-id");
+
+        let result = runtime
+            .evaluate(request("expected-id", AdvisoryKind::ShellPolicy))
+            .await;
+
+        assert_eq!(result, Err(AdvisoryError::MalformedResponse));
+    }
+
+    #[tokio::test]
+    async fn concurrent_evaluations_are_serialized() {
+        let (_dir, runtime) = fake_runtime_with_config(
+            "serialize",
+            LayaConfig {
+                timeout_ms: 500,
+                ..LayaConfig::default()
+            },
+        );
+        let started = std::time::Instant::now();
+
+        let (first, second) = tokio::join!(
+            runtime.evaluate(request("concurrent-1", AdvisoryKind::ShellPolicy)),
+            runtime.evaluate(request("concurrent-2", AdvisoryKind::ShellPolicy)),
+        );
+
+        assert_eq!(first.unwrap().label, "read_only");
+        assert_eq!(second.unwrap().label, "read_only");
+        assert!(started.elapsed() >= Duration::from_millis(180));
+    }
+
     #[test]
     fn runtime_status_is_pure_and_reports_protocol() {
         let config = LayaConfig::default();
@@ -979,6 +1145,26 @@ done
 
         assert!(status.adapter_available);
         assert!(status.model_available);
+    }
+
+    #[test]
+    fn status_rejects_a_non_executable_python_file() {
+        let dir = TempDir::new().unwrap();
+        let python = dir.path().join("python");
+        let adapter = dir.path().join("adapter.py");
+        let model = dir.path().join("model");
+        std::fs::write(&python, b"not executable").unwrap();
+        std::fs::write(&adapter, b"sidecar").unwrap();
+        std::fs::create_dir(&model).unwrap();
+        let status = diagnose(&LayaConfig {
+            mode: LayaMode::Shadow,
+            python: Some(python.display().to_string()),
+            adapter: Some(adapter.display().to_string()),
+            model: Some(model.display().to_string()),
+            ..LayaConfig::default()
+        });
+
+        assert!(!status.python_available);
     }
 
     #[test]
