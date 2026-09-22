@@ -511,6 +511,10 @@ mod tests {
         tokio::task::yield_now().await;
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
+        // The executor-backed server drops its scheduler handle as the
+        // cancelled task is torn down; give Tokio one turn to finish that
+        // destructor before reacquiring the ownership lock.
+        tokio::task::yield_now().await;
         assert!(!lifecycle.socket_path().exists());
         assert!(!lifecycle.registration_path().exists());
         drop(lifecycle.bind().unwrap());
