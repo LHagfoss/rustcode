@@ -249,6 +249,13 @@ fn permanent(error: impl Into<String>) -> RunOutcome {
     })
 }
 
+fn transient(error: impl Into<String>) -> RunOutcome {
+    bounded(RunOutcome::Transient {
+        error: error.into(),
+        output: None,
+    })
+}
+
 fn ambiguous(error: impl Into<String>, output: Option<String>) -> RunOutcome {
     bounded(RunOutcome::Ambiguous {
         error: error.into(),
@@ -275,17 +282,27 @@ impl ActionBackend for ProductionActions {
                     tool,
                     arguments,
                     workspace,
+                    server_config,
                 } => {
+                    let Some(config) = server_config else {
+                        return permanent(
+                            "scheduled MCP action requires a recorded server configuration",
+                        );
+                    };
+                    if config.name != server || !config.enabled {
+                        return permanent("recorded MCP server is mismatched or disabled");
+                    }
                     let client = match crate::mcp::start_owned_server(
-                        &server,
+                        &config,
                         std::path::Path::new(&workspace),
                     )
                     .await
                     {
                         Ok(client) => client,
-                        Err(error) => return permanent(error),
+                        Err(error) => return transient(error),
                     };
                     if cancellation.is_cancelled() {
+                        client.shutdown().await;
                         return RunOutcome::Cancelled { output: None };
                     }
                     let result = client.call_tool(&tool, arguments).await;
@@ -310,17 +327,35 @@ impl ActionBackend for ProductionActions {
                     prompt,
                     workspace,
                     model_profile,
+                    settings,
                     ..
                 } => {
-                    let state = match crate::raw_cli::build_scheduled_state(
+                    let mut state = match crate::raw_cli::build_scheduled_state(
                         &prompt,
                         std::path::Path::new(&workspace),
                         model_profile.as_deref(),
                         &session,
+                        settings.as_ref(),
                     ) {
                         Ok(state) => state,
+                        Err(error)
+                            if error.starts_with("unknown model profile:")
+                                || error.starts_with("recorded MCP credential unavailable:") =>
+                        {
+                            return transient(error);
+                        }
                         Err(error) => return permanent(error),
                     };
+                    // The recorded session is an input. Persist daemon output in
+                    // a separate session, never over the interactive transcript.
+                    static NEXT_SESSION: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    state.active_session_id = format!(
+                        "daemon-{}-{}-{}",
+                        std::process::id(),
+                        chrono::Utc::now().timestamp_micros(),
+                        NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    );
                     match crate::raw_cli::run_scheduled_turn(
                         state,
                         std::path::Path::new(&workspace),
@@ -332,7 +367,12 @@ impl ActionBackend for ProductionActions {
                             summary: "Headless turn completed".into(),
                             output: Some(output),
                         },
-                        Err(error) => ambiguous(error, None),
+                        Err(crate::raw_cli::ScheduledTurnError::Transient(error)) => {
+                            transient(error)
+                        }
+                        Err(crate::raw_cli::ScheduledTurnError::Ambiguous(error)) => {
+                            ambiguous(error, None)
+                        }
                     }
                 }
                 JobAction::ShellCommand {
@@ -340,12 +380,20 @@ impl ActionBackend for ProductionActions {
                     working_directory,
                     environment_allowlist,
                     timeout_seconds,
+                    authorized,
                 } => {
                     if timeout_seconds == 0 {
                         return permanent("shell timeout must be positive");
                     }
-                    if crate::tools::exec::command_requires_confirmation(
-                        &serde_json::json!({"command": command}),
+                    if !matches!(
+                        crate::tools::authorize_tool_with_args(
+                            "run_command",
+                            &serde_json::json!({"command": command}),
+                            crate::config::AgentMode::Build,
+                            false,
+                            authorized,
+                        ),
+                        crate::tools::AuthorizationDecision::Allow
                     ) {
                         return permanent(
                             "scheduled command requires confirmation; no stored command authorization is available",
@@ -410,7 +458,7 @@ impl ActionBackend for ProductionActions {
                             RunOutcome::Cancelled { output }
                         }
                         Ok(Err(error)) if error.starts_with("failed to spawn process:") => {
-                            permanent(error)
+                            transient(error)
                         }
                         Ok(Err(error)) => ambiguous(error, output),
                         Err(error) => ambiguous(error.to_string(), output),

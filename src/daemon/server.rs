@@ -347,6 +347,7 @@ mod tests {
             paused: false,
             schedule: ScheduleSpec::Once { at: now },
             action: JobAction::McpCall {
+                server_config: None,
                 server: "teams".into(),
                 tool: "read".into(),
                 arguments: serde_json::json!({}),

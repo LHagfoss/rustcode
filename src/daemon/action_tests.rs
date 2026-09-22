@@ -36,11 +36,215 @@ fn success(value: serde_json::Value) -> RunOutcome {
 }
 fn mcp() -> JobAction {
     JobAction::McpCall {
+        server_config: None,
         server: "teams".into(),
         tool: "send_chat_message".into(),
         arguments: json!({"chat_id":"123", "content":"Good morning!"}),
         workspace: "/recorded/project".into(),
     }
+}
+
+fn recorded_settings() -> crate::config::SessionSettingsSnapshot {
+    let mut config = crate::config::AppConfig::default();
+    config.models = vec![crate::config::ModelProfile {
+        name: "recorded".into(),
+        url: "http://127.0.0.1:1/v1".into(),
+        model: "recorded-model".into(),
+        temperature: Some(0.17),
+        reasoning_effort: Some("high".into()),
+        ..Default::default()
+    }];
+    config.default = crate::config::DefaultConfig::Simple("recorded".into());
+    config.mcp_servers.clear();
+    config.agent_mode = crate::config::AgentMode::Plan;
+    config.max_total_tool_rounds = 7;
+    crate::config::SessionSettingsSnapshot {
+        captured_at_ms: 1,
+        active_profile: "recorded".into(),
+        config: serde_json::to_value(config).unwrap(),
+    }
+}
+
+#[test]
+fn legacy_actions_deserialize_with_safe_defaults() {
+    let mcp: JobAction = serde_json::from_value(json!({
+        "type":"mcp_call", "server":"legacy", "tool":"send", "workspace":"/tmp"
+    }))
+    .unwrap();
+    assert!(matches!(
+        mcp,
+        JobAction::McpCall {
+            server_config: None,
+            ..
+        }
+    ));
+    let prompt: JobAction = serde_json::from_value(json!({
+        "type":"prompt", "prompt":"inspect", "workspace":"/tmp"
+    }))
+    .unwrap();
+    assert!(matches!(prompt, JobAction::Prompt { settings: None, .. }));
+    let shell: JobAction = serde_json::from_value(json!({
+        "type":"shell_command", "command":"touch denied", "working_directory":"/tmp", "timeout_seconds":1
+    })).unwrap();
+    assert!(matches!(
+        shell,
+        JobAction::ShellCommand {
+            authorized: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn scheduled_prompt_restores_recorded_settings_without_override() {
+    let workspace = tempfile::tempdir().unwrap();
+    let snapshot = recorded_settings();
+    let state = crate::raw_cli::build_scheduled_state(
+        "inspect",
+        workspace.path(),
+        None,
+        "task4-recorded-settings",
+        Some(&snapshot),
+    )
+    .unwrap();
+    assert_eq!(state.model_name, "recorded-model");
+    assert_eq!(state.api_base_url, "http://127.0.0.1:1/v1");
+    assert_eq!(state.config.default.big(), "recorded");
+    assert_eq!(state.config.models[0].temperature, Some(0.17));
+    assert_eq!(
+        state.config.models[0].reasoning_effort.as_deref(),
+        Some("high")
+    );
+    assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
+    assert_eq!(state.config.max_total_tool_rounds, 7);
+    assert!(
+        crate::raw_cli::build_scheduled_state(
+            "inspect",
+            workspace.path(),
+            None,
+            "task4-no-recorded-settings",
+            None
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn authorized_shell_mutation_runs_through_policy() {
+    let workspace = tempfile::tempdir().unwrap();
+    let action = JobAction::ShellCommand {
+        command: "touch confirmed".into(),
+        authorized: true,
+        working_directory: workspace.path().to_string_lossy().into_owned(),
+        environment_allowlist: vec![],
+        timeout_seconds: 2,
+    };
+    let action = serde_json::from_str(&serde_json::to_string(&action).unwrap()).unwrap();
+    assert!(matches!(
+        ActionExecutor::default().execute(context(action)).await,
+        RunOutcome::Succeeded { .. }
+    ));
+    assert!(workspace.path().join("confirmed").exists());
+}
+
+#[tokio::test]
+async fn production_startup_failures_are_retryable_but_missing_snapshots_are_not() {
+    let workspace = tempfile::tempdir().unwrap();
+    let config = crate::config::McpServerConfig {
+        name: "teams".into(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), "exit 1".into()],
+        env: Default::default(),
+        enabled: true,
+    };
+    let action = JobAction::McpCall {
+        server: "teams".into(),
+        server_config: Some(config.clone()),
+        tool: "send".into(),
+        arguments: json!({}),
+        workspace: workspace.path().to_string_lossy().into_owned(),
+    };
+    assert!(matches!(
+        ActionExecutor::default().execute(context(action)).await,
+        RunOutcome::Transient { .. }
+    ));
+    assert!(matches!(
+        ActionExecutor::default().execute(context(mcp())).await,
+        RunOutcome::Permanent { .. }
+    ));
+    let mut settings = recorded_settings();
+    settings.config["mcp_servers"] = json!([config]);
+    let action = JobAction::Prompt {
+        prompt: "inspect".into(),
+        workspace: workspace.path().to_string_lossy().into_owned(),
+        model_profile: None,
+        session_id: None,
+        settings: Some(settings),
+    };
+    assert!(matches!(
+        ActionExecutor::default().execute(context(action)).await,
+        RunOutcome::Transient { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scheduled_mcp_registry_is_isolated_and_reaches_blocking_tools() {
+    let script = r#"
+read -r line
+printf '%s\n' '{"id":1,"result":{"capabilities":{}}}'
+read -r line
+read -r line
+printf '%s\n' '{"id":2,"result":{"tools":[{"name":"private_probe","inputSchema":{}}]}}'
+read -r line
+printf '%s\n' '{"id":3,"result":{"content":[{"type":"text","text":"private-result"}]}}'
+read -r line
+"#;
+    let config = crate::config::McpServerConfig {
+        name: "task4-collision".into(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), script.into()],
+        env: Default::default(),
+        enabled: true,
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let interactive = crate::mcp::start_owned_server(&config, workspace.path())
+        .await
+        .unwrap();
+    let private = crate::mcp::start_owned_server(&config, workspace.path())
+        .await
+        .unwrap();
+    let global = crate::mcp::get_mcp_registry();
+    global
+        .lock()
+        .unwrap()
+        .insert(config.name.clone(), interactive.clone());
+    let mut owned = crate::mcp::ScheduledServers::new();
+    owned.insert(private.clone()).unwrap();
+    crate::mcp::DIRECT_MCP_REGISTRY
+        .scope(owned.0.clone(), async {
+            let registry = crate::mcp::get_mcp_registry();
+            assert!(Arc::ptr_eq(
+                registry.lock().unwrap().get(&config.name).unwrap(),
+                &private
+            ));
+            let output = tokio::task::spawn_blocking(move || {
+                crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(registry, || {
+                    crate::tools::execute_with_metadata("private_probe", &json!({}))
+                })
+            })
+            .await
+            .unwrap();
+            assert!(output.success);
+            assert!(output.content.contains("private-result"));
+        })
+        .await;
+    drop(owned);
+    assert!(Arc::ptr_eq(
+        global.lock().unwrap().get(&config.name).unwrap(),
+        &interactive
+    ));
+    global.lock().unwrap().remove(&config.name);
+    interactive.shutdown().await;
 }
 fn context(action: JobAction) -> JobRunContext {
     let now = Utc::now();
@@ -101,6 +305,7 @@ async fn direct_mcp_keeps_teams_payload_and_workspace() {
 #[tokio::test]
 async fn prompt_propagates_workspace_model_and_explicit_session() {
     let action = JobAction::Prompt {
+        settings: None,
         prompt: "inspect".into(),
         workspace: "/recorded/project".into(),
         model_profile: Some("review".into()),
@@ -177,6 +382,7 @@ async fn cancellation_before_dispatch_is_safe_but_inflight_timeout_is_ambiguous(
 #[tokio::test]
 async fn shell_policy_rejects_unapproved_mutation() {
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "touch forbidden".into(),
         working_directory: "/tmp".into(),
         environment_allowlist: vec![],
@@ -190,6 +396,7 @@ async fn shell_policy_rejects_unapproved_mutation() {
 #[tokio::test]
 async fn shell_timeout_retains_partial_output() {
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "printf partial; tail -f /dev/null".into(),
         working_directory: "/tmp".into(),
         environment_allowlist: vec![],
@@ -208,6 +415,7 @@ fn recorded_headless_state_does_not_use_process_workspace() {
         workspace.path(),
         None,
         "daemon-test-session",
+        Some(&recorded_settings()),
     )
     .unwrap();
     assert_eq!(state.workspace_root.as_deref(), Some(workspace.path()));
@@ -241,11 +449,20 @@ read -r line
     .unwrap();
     let mut action = mcp();
     if let JobAction::McpCall {
-        workspace: path, ..
+        workspace: path,
+        server_config,
+        ..
     } = &mut action
     {
         *path = workspace.path().to_string_lossy().into_owned();
+        *server_config = Some(serde_json::from_value(config["mcp_servers"][0].clone()).unwrap());
     }
+    // Changes to mutable workspace configuration must not affect the job.
+    std::fs::write(
+        workspace.path().join(".rustcode/config.toml"),
+        "mcp_servers = []",
+    )
+    .unwrap();
     let result = ActionExecutor::default().execute(context(action)).await;
     let RunOutcome::Succeeded {
         output: Some(output),
@@ -291,6 +508,7 @@ async fn shell_uses_recorded_directory_and_only_allowlisted_environment() {
         ),
     ] {
         let action = JobAction::ShellCommand {
+            authorized: false,
             command: command.into(),
             working_directory: workspace.path().to_string_lossy().into_owned(),
             environment_allowlist: allowlist,
@@ -400,6 +618,7 @@ async fn every_outcome_bounds_unicode_output_and_diagnostics() {
 #[tokio::test]
 async fn executor_deadline_retains_shell_partial_output() {
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "printf partial; tail -f /dev/null".into(),
         working_directory: "/tmp".into(),
         environment_allowlist: vec![],
@@ -470,6 +689,7 @@ async fn poll_hashes_changes_beyond_the_retained_output_limit() {
 #[tokio::test]
 async fn interactive_sudo_and_missing_prompt_workspace_are_permanent_failures() {
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "sudo cat /dev/null".into(),
         working_directory: "/tmp".into(),
         environment_allowlist: vec![],
@@ -480,6 +700,7 @@ async fn interactive_sudo_and_missing_prompt_workspace_are_permanent_failures() 
         RunOutcome::Permanent { .. }
     ));
     let action = JobAction::Prompt {
+        settings: None,
         prompt: "inspect".into(),
         workspace: "/nonexistent-task4-workspace".into(),
         model_profile: None,
@@ -511,6 +732,7 @@ exit 1
     )
     .unwrap();
     let action = JobAction::McpCall {
+        server_config: Some(serde_json::from_value(config["mcp_servers"][0].clone()).unwrap()),
         server: "teams".into(),
         tool: "send_chat_message".into(),
         arguments: json!({}),
@@ -525,6 +747,7 @@ exit 1
 #[tokio::test]
 async fn shell_timeout_covers_descendants_holding_output_pipes() {
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "printf partial; tail -f /dev/null &".into(),
         working_directory: "/tmp".into(),
         environment_allowlist: vec![],
@@ -545,6 +768,7 @@ async fn shell_output_capture_overflow_is_bounded_and_not_polled_again() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("large.txt"), "x".repeat(300_000)).unwrap();
     let action = JobAction::ShellCommand {
+        authorized: false,
         command: "cat large.txt".into(),
         working_directory: workspace.path().to_string_lossy().into_owned(),
         environment_allowlist: vec![],

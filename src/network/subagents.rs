@@ -703,11 +703,17 @@ fn launch_subagent_turn(
     let client = client.clone();
     let child_state = Arc::clone(state);
     let completion_state = Arc::downgrade(state);
+    let mcp_registry = crate::mcp::get_mcp_registry();
     supervisor.spawn_with_token_and_completion(
         crate::app::SubagentId::from_raw(agent_id),
         parent_cancel.clone(),
         move |child_cancel| async move {
-            run_subagent(&client, &child_state, &child_cancel, agent_id).await
+            crate::mcp::DIRECT_MCP_REGISTRY
+                .scope(
+                    mcp_registry,
+                    run_subagent(&client, &child_state, &child_cancel, agent_id),
+                )
+                .await
         },
         move |completion| async move {
             if let Some(state) = completion_state.upgrade() {

@@ -73,24 +73,90 @@ pub fn build_scheduled_state(
     workspace: &std::path::Path,
     model_profile: Option<&str>,
     session_id: &str,
+    settings: Option<&crate::config::SessionSettingsSnapshot>,
 ) -> Result<AppState, String> {
     if !workspace.is_absolute() || !workspace.is_dir() {
         return Err("scheduled workspace must be an existing absolute directory".into());
     }
-    if session_id.is_empty() || !session_id.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c)) {
+    if session_id.is_empty()
+        || !session_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
+    {
         return Err("invalid scheduled session id".into());
     }
     let mut state = AppState::new_with_workspace_session(workspace, Some(session_id));
-    if let Some(name) = model_profile {
-        let profile = state.config.models.iter().find(|profile| profile.name == name)
-            .ok_or_else(|| format!("unknown model profile: {name}"))?;
-        state.api_base_url = profile.url.clone();
-        state.model_name = profile.model.clone();
+    let saved = settings
+        .cloned()
+        .or_else(|| crate::config::load_session_settings(session_id));
+    if let Some(snapshot) = &saved {
+        let mut recorded: crate::config::AppConfig =
+            serde_json::from_value(snapshot.config.clone())
+                .map_err(|error| format!("invalid recorded prompt settings: {error}"))?;
+        // Session logs redact secrets. Resolve only those credentials, never
+        // model parameters or endpoints, from matching current configuration.
+        for model in &mut recorded.models {
+            if model.api_key.is_none() {
+                model.api_key = state
+                    .config
+                    .models
+                    .iter()
+                    .find(|current| current.name == model.name && current.url == model.url)
+                    .and_then(|current| current.api_key.clone());
+            }
+        }
+        for server in &mut recorded.mcp_servers {
+            for (key, value) in &mut server.env {
+                if value == "<redacted>" {
+                    *value = state
+                        .config
+                        .mcp_servers
+                        .iter()
+                        .find(|current| {
+                            current.name == server.name
+                                && current.command == server.command
+                                && current.args == server.args
+                        })
+                        .and_then(|current| current.env.get(key))
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "recorded MCP credential unavailable: {} / {key}",
+                                server.name
+                            )
+                        })?;
+                }
+            }
+        }
+        state.config = recorded;
     }
+    let name = model_profile
+        .or_else(|| {
+            saved
+                .as_ref()
+                .map(|snapshot| snapshot.active_profile.as_str())
+        })
+        .ok_or("scheduled prompt requires recorded settings or an explicit model profile")?;
+    let profile = state
+        .config
+        .models
+        .iter()
+        .find(|profile| profile.name == name)
+        .ok_or_else(|| format!("unknown model profile: {name}"))?;
+    state.api_base_url = profile.url.clone();
+    state.model_name = profile.model.clone();
+    state.config.default = crate::config::DefaultConfig::Table {
+        big: name.to_owned(),
+        small: state.config.default.small().to_owned(),
+    };
+    state.agent_mode = state.config.agent_mode;
+    state.verbosity = state.config.verbosity.clone();
     state.workspace_root = Some(workspace.to_path_buf());
     state.task_working_directory = Some(workspace.to_path_buf());
     state.history = crate::config::load_session_history_direct(session_id).into();
-    state.history.push(ChatMessage::new("user", prompt.to_owned()));
+    state
+        .history
+        .push(ChatMessage::new("user", prompt.to_owned()));
     state.session_title_tool_available = state.history.len() == 1;
     Ok(state)
 }
@@ -99,24 +165,54 @@ pub(crate) async fn run_scheduled_turn(
     state: AppState,
     workspace: &std::path::Path,
     cancellation: tokio_util::sync::CancellationToken,
-) -> Result<String, String> {
-    static PROMPT_LOCK: Mutex<()> = Mutex::const_new(());
-    let _guard = tokio::select! {
-        _ = cancellation.cancelled() => return Err("scheduled turn cancelled before startup".into()),
-        guard = PROMPT_LOCK.lock() => guard,
-    };
+) -> Result<String, ScheduledTurnError> {
     let mut owned = crate::mcp::ScheduledServers::new();
-    for server in state.config.mcp_servers.iter().filter(|server| server.enabled) {
-        match crate::mcp::start_owned_server(&server.name, workspace).await {
-            Ok(client) => owned.insert(client)?,
-            Err(error) => crate::dbg_log!("[daemon] MCP startup: {error}"),
-        }
+    for server in state
+        .config
+        .mcp_servers
+        .iter()
+        .filter(|server| server.enabled)
+    {
+        let client = tokio::select! {
+            _ = cancellation.cancelled() => return Err(ScheduledTurnError::Transient("cancelled before prompt dispatch".into())),
+            result = crate::mcp::start_owned_server(server, workspace) => result.map_err(ScheduledTurnError::Transient)?,
+        };
+        owned
+            .insert(client)
+            .map_err(ScheduledTurnError::Transient)?;
     }
-    let client = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10))
-        .build().map_err(|error| error.to_string())?;
-    run_headless_turn_cancellable(&client, Arc::new(Mutex::new(state)), cancellation)
-        .await.map_err(|error| error.to_string())
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|error| ScheduledTurnError::Transient(error.to_string()))?;
+    crate::mcp::DIRECT_MCP_REGISTRY
+        .scope(owned.0.clone(), async {
+            run_headless_turn_cancellable(&client, Arc::new(Mutex::new(state)), cancellation)
+                .await
+                .map_err(|error| {
+                    if error.downcast_ref::<PreEffectTurnFailure>().is_some() {
+                        ScheduledTurnError::Transient(error.to_string())
+                    } else {
+                        ScheduledTurnError::Ambiguous(error.to_string())
+                    }
+                })
+        })
+        .await
 }
+
+pub(crate) enum ScheduledTurnError {
+    Transient(String),
+    Ambiguous(String),
+}
+
+#[derive(Debug)]
+struct PreEffectTurnFailure(String);
+impl std::fmt::Display for PreEffectTurnFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for PreEffectTurnFailure {}
 
 /// Non-interactive turn policy for `--prompt` execution. Auto-approves tool
 /// calls (printing each to stdout) but still enforces plan-mode safety and runs
@@ -331,6 +427,14 @@ pub(crate) async fn run_headless_turn_cancellable(
     }
 
     if let Some(reason) = headless_failure(&ctx) {
+        if ctx.metrics.tool_calls == 0
+            && ctx.budget.tool_rounds == 0
+            && ctx.metrics.provider_errors > 0
+        {
+            return Err(Box::new(PreEffectTurnFailure(format!(
+                "headless startup failed ({reason})"
+            ))));
+        }
         return Err(std::io::Error::other(format!(
             "headless turn incomplete ({reason}); task is not complete"
         ))

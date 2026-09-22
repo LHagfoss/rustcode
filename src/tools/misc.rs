@@ -409,7 +409,8 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
     }
 
     let mut clients = {
-        let registry = crate::mcp::get_mcp_registry()
+        let registry_handle = crate::mcp::get_mcp_registry();
+        let registry = registry_handle
             .lock()
             .map_err(|error| format!("MCP registry unavailable: {error}"))?;
         registry.values().cloned().collect::<Vec<_>>()

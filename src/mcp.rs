@@ -21,9 +21,21 @@ pub struct McpClient {
     stderr_finished: Arc<Notify>,
 }
 
-pub fn get_mcp_registry() -> &'static StdMutex<HashMap<String, Arc<McpClient>>> {
-    static REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<McpClient>>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()))
+pub(crate) type McpRegistry = Arc<StdMutex<HashMap<String, Arc<McpClient>>>>;
+
+tokio::task_local! {
+    pub(crate) static DIRECT_MCP_REGISTRY: McpRegistry;
+}
+
+pub fn get_mcp_registry() -> McpRegistry {
+    static REGISTRY: OnceLock<McpRegistry> = OnceLock::new();
+    DIRECT_MCP_REGISTRY
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| {
+            REGISTRY
+                .get_or_init(|| Arc::new(StdMutex::new(HashMap::new())))
+                .clone()
+        })
 }
 
 /// Monotonic counter bumped whenever the MCP tool set changes (a server is
@@ -108,7 +120,8 @@ impl McpClient {
         if let Some(workspace) = workspace {
             process.current_dir(workspace);
         }
-        let mut child = process.args(&args)
+        let mut child = process
+            .args(&args)
             .envs(&env)
             .kill_on_drop(true)
             .stdin(Stdio::piped())
@@ -314,8 +327,13 @@ impl McpClient {
 
     /// Return only the tool result; JSON-RPC request IDs must not affect polling hashes.
     pub async fn call_tool(&self, tool: &str, arguments: Value) -> Result<Value, String> {
-        let response = self.call("tools/call", json!({"name": tool, "arguments": arguments})).await?;
-        response.get("result").cloned().ok_or_else(|| "MCP response missing result".into())
+        let response = self
+            .call("tools/call", json!({"name": tool, "arguments": arguments}))
+            .await?;
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| "MCP response missing result".into())
     }
 
     pub fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -350,51 +368,72 @@ pub async fn start_server_by_name(name: &str) -> Result<(), String> {
 }
 
 /// A job owns this client; it is never shared across workspace configurations.
-pub(crate) async fn start_owned_server(name: &str, workspace: &std::path::Path) -> Result<Arc<McpClient>, String> {
+pub(crate) async fn start_owned_server(
+    server: &crate::config::McpServerConfig,
+    workspace: &std::path::Path,
+) -> Result<Arc<McpClient>, String> {
     if !workspace.is_absolute() || !workspace.is_dir() {
         return Err("MCP workspace must be an existing absolute directory".into());
     }
-    let config = crate::config::load_config_for_workspace(workspace).2;
-    let server = config.mcp_servers.into_iter().find(|server| server.name == name && server.enabled)
-        .ok_or_else(|| format!("MCP server '{name}' is missing or disabled"))?;
-    tokio::time::timeout(Duration::from_secs(10), McpClient::start_in_workspace(
-        server.name, server.command, server.args, server.env, Some(workspace),
-    )).await.map_err(|_| format!("MCP server '{name}' startup timed out"))?
+    let name = &server.name;
+    if !server.enabled {
+        return Err(format!("MCP server '{name}' is disabled"));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        McpClient::start_in_workspace(
+            server.name.clone(),
+            server.command.clone(),
+            server.args.clone(),
+            server.env.clone(),
+            Some(workspace),
+        ),
+    )
+    .await
+    .map_err(|_| format!("MCP server '{name}' startup timed out"))?
 }
 
-/// The headless runner currently consumes the global registry. Serialize daemon
-/// prompt turns and remove only their own registrations, including on timeout.
-pub(crate) struct ScheduledServers(Vec<Arc<McpClient>>);
+/// Owns an isolated registry and reaps clients even when a turn is dropped.
+pub(crate) struct ScheduledServers(pub(crate) McpRegistry);
 
 impl ScheduledServers {
-    pub(crate) fn new() -> Self { Self(Vec::new()) }
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(StdMutex::new(HashMap::new())))
+    }
 
     pub(crate) fn insert(&mut self, client: Arc<McpClient>) -> Result<(), String> {
-        let mut registry = get_mcp_registry().lock().map_err(|e| e.to_string())?;
+        let mut registry = self.0.lock().map_err(|e| e.to_string())?;
         if registry.contains_key(&client.name) {
-            return Err(format!("MCP server '{}' is already owned by another turn", client.name));
+            return Err(format!(
+                "MCP server '{}' is already owned by another turn",
+                client.name
+            ));
         }
         registry.insert(client.name.clone(), client.clone());
-        self.0.push(client);
-        bump_mcp_generation();
         Ok(())
     }
 }
 
 impl Drop for ScheduledServers {
     fn drop(&mut self) {
-        if let Ok(mut registry) = get_mcp_registry().lock() {
-            for client in &self.0 {
-                if registry.get(&client.name).is_some_and(|entry| Arc::ptr_eq(entry, client)) {
-                    registry.remove(&client.name);
+        if let Ok(mut registry) = self.0.lock() {
+            for (_, client) in registry.drain() {
+                // The client may also be retained by a cancelled blocking tool.
+                // Explicitly terminate it instead of relying on the last Arc.
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        client.shutdown().await;
+                    });
                 }
             }
-            bump_mcp_generation();
         }
     }
 }
 
-pub async fn start_server_by_name_in_workspace(name: &str, workspace: &std::path::Path) -> Result<(), String> {
+pub async fn start_server_by_name_in_workspace(
+    name: &str,
+    workspace: &std::path::Path,
+) -> Result<(), String> {
     let config = {
         let cfg = crate::config::load_config_for_workspace(&workspace).2;
         cfg.mcp_servers.iter().find(|s| s.name == name).cloned()

@@ -484,6 +484,7 @@ mod tests {
         let lifecycle = DaemonLifecycle::new(dir.path());
         let server = lifecycle.bind().unwrap();
         let task = tokio::spawn(server.run());
+        tokio::task::yield_now().await;
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         assert!(!lifecycle.socket_path().exists());

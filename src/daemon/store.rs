@@ -398,6 +398,7 @@ mod tests {
             paused: false,
             schedule: ScheduleSpec::daily(due.hour() as u8, due.minute() as u8, "UTC", MisfirePolicy::SkipMissed).unwrap(),
             action: JobAction::McpCall {
+                server_config: None,
                 server: "teams".into(),
                 tool: "send_chat_message".into(),
                 arguments: serde_json::json!({"message": "hello"}),

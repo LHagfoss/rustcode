@@ -370,6 +370,7 @@ mod tests {
             )
             .unwrap(),
             action: JobAction::McpCall {
+                server_config: None,
                 server: "test".into(),
                 tool: "call".into(),
                 arguments: serde_json::json!({}),

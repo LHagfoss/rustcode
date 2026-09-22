@@ -141,6 +141,12 @@ pub struct SessionSettingsLog {
     pub snapshots: Vec<SessionSettingsSnapshot>,
 }
 
+pub fn load_session_settings(session_id: &str) -> Option<SessionSettingsSnapshot> {
+    let path = store()?.session_dir(session_id).join(SESSION_SETTINGS_FILE);
+    let log: SessionSettingsLog = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    log.snapshots.last().cloned()
+}
+
 fn session_settings_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

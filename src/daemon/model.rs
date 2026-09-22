@@ -42,12 +42,17 @@ pub enum JobAction {
         #[serde(default)]
         arguments: Value,
         workspace: String,
+        /// Durable execution context. Legacy jobs must be hydrated before execution.
+        #[serde(default)]
+        server_config: Option<crate::config::McpServerConfig>,
     },
     Prompt {
         prompt: String,
         workspace: String,
         model_profile: Option<String>,
         session_id: Option<String>,
+        #[serde(default)]
+        settings: Option<crate::config::SessionSettingsSnapshot>,
     },
     ShellCommand {
         command: String,
@@ -55,6 +60,8 @@ pub enum JobAction {
         #[serde(default)]
         environment_allowlist: Vec<String>,
         timeout_seconds: u64,
+        #[serde(default)]
+        authorized: bool,
     },
     Poll {
         action: Box<JobAction>,
