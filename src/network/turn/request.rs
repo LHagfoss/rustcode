@@ -32,7 +32,6 @@ fn is_recovery_request(ctx: &TurnContext) -> bool {
         || ctx.recovery.completion_blocks > 0
         || ctx.recovery.consecutive_malformed_calls > 0
         || ctx.recovery.oversized_batch_rejections > 0
-        || ctx.recovery.laya_pending_recovery_advisory.is_some()
 }
 
 fn prepare_request_steerability(state: &mut AppState, ctx: &TurnContext, turn_session_id: &str) {
