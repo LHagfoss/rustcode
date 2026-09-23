@@ -26,6 +26,19 @@ pub(crate) struct OrchestratorLease {
 /// means our own machinery died, not the provider.
 pub(crate) const STALL_WATCHDOG_TIMEOUT_SECS: u64 = 5 * 60;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingSteer {
+    pub(crate) session_id: String,
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DraftSubmitMode {
+    #[default]
+    Steer,
+    Queue,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     /// Deadline through which a second Ctrl+C confirms application exit.
@@ -45,6 +58,16 @@ pub struct AppState {
     pub current_thought_started_at: Option<std::time::Instant>,
     pub model_quota_remaining: Option<f32>,
     pub pending_queue: Vec<String>,
+    /// User instructions submitted during an explicitly steerable active turn.
+    /// These remain separate from ordinary follow-up prompts until applied.
+    pub(crate) pending_steers: Vec<PendingSteer>,
+    /// Number of promoted steering prompts at the head of `pending_queue`.
+    /// This prefix survives FIFO edits so its segment wakeup can retain context.
+    pub(crate) promoted_steer_prefix_count: usize,
+    /// Session ID of the regular interactive turn currently allowed to accept
+    /// steering input. Other kinds of active work leave this unset.
+    pub(crate) active_turn_steerable_session: Option<String>,
+    pub(crate) draft_submit_mode: DraftSubmitMode,
     /// Background task IDs whose terminal completion has already been queued.
     /// This makes completion notifications idempotent across callback races.
     pub background_wakeup_ids: std::collections::BTreeSet<String>,
@@ -991,6 +1014,10 @@ impl AppState {
             current_thought_started_at: None,
             model_quota_remaining: None,
             pending_queue: Vec::new(),
+            pending_steers: Vec::new(),
+            promoted_steer_prefix_count: 0,
+            active_turn_steerable_session: None,
+            draft_submit_mode: DraftSubmitMode::Steer,
             background_wakeup_ids: std::collections::BTreeSet::new(),
             pending_background_outputs: Vec::new(),
             background_turn_context: None,
@@ -1509,6 +1536,105 @@ impl AppState {
         changed
     }
 
+    /// Whether the current streaming turn is the regular interactive turn
+    /// explicitly marked as accepting steering, with no blocking interaction
+    /// awaiting the user's decision.
+    pub(crate) fn can_accept_steer(&self) -> bool {
+        self.active_turn_steerable_session.as_deref() == Some(self.active_session_id.as_str())
+            && self.status == AppStatus::Streaming
+            && self.pending_tool_confirmation.is_none()
+            && self.pending_question.is_none()
+            && self.pending_question_queue.is_empty()
+    }
+
+    /// Queue one distinct steer for the active session. Whitespace-only text
+    /// is ignored; valid text is preserved byte-for-byte.
+    pub(crate) fn queue_steer(&mut self, text: String) -> bool {
+        if text.trim().is_empty() || !self.can_accept_steer() {
+            return false;
+        }
+        self.pending_steers.push(PendingSteer {
+            session_id: self.active_session_id.clone(),
+            text,
+        });
+        true
+    }
+
+    /// Atomically remove the complete steer batch for `session_id` so callers
+    /// can append it to history under the same state lock.
+    pub(crate) fn take_steers_for_history(&mut self, session_id: &str) -> Vec<String> {
+        if self.active_turn_steerable_session.as_deref() != Some(session_id)
+            || self
+                .pending_steers
+                .iter()
+                .any(|steer| steer.session_id != session_id)
+        {
+            return Vec::new();
+        }
+        self.pending_steers
+            .drain(..)
+            .map(|steer| steer.text)
+            .collect()
+    }
+
+    /// Move this session's still-pending steers ahead of existing follow-ups.
+    /// Finalization may already have cleared the active marker; the active
+    /// session and every captured item must still match before promotion.
+    pub(crate) fn promote_pending_steers_to_queue(&mut self, session_id: &str) {
+        if self.active_session_id != session_id
+            || self.pending_steers.is_empty()
+            || self
+                .pending_steers
+                .iter()
+                .any(|steer| steer.session_id != session_id)
+        {
+            return;
+        }
+        let prompts = self
+            .pending_steers
+            .drain(..)
+            .map(|steer| steer.text)
+            .collect::<Vec<_>>();
+        let promoted_count = prompts.len();
+        let insertion_position = self
+            .promoted_steer_prefix_count
+            .min(self.pending_queue.len());
+        self.pending_queue
+            .splice(insertion_position..insertion_position, prompts);
+        self.promoted_steer_prefix_count = self
+            .promoted_steer_prefix_count
+            .saturating_add(promoted_count);
+        if self.active_turn_steerable_session.as_deref() == Some(session_id) {
+            self.active_turn_steerable_session = None;
+        }
+    }
+
+    /// Drop steering state when the active session is replaced.
+    pub(crate) fn clear_session_steering(&mut self) {
+        self.pending_steers.clear();
+        self.promoted_steer_prefix_count = 0;
+        self.active_turn_steerable_session = None;
+        self.draft_submit_mode = DraftSubmitMode::Steer;
+    }
+
+    /// Mark a popped FIFO head as a promoted steer when it belongs to the
+    /// tracked queue prefix.
+    pub(crate) fn take_promoted_steer_prefix_prompt(&mut self) -> bool {
+        if self.promoted_steer_prefix_count == 0 {
+            return false;
+        }
+        self.promoted_steer_prefix_count -= 1;
+        true
+    }
+
+    /// Keep the promoted-steer prefix count aligned when an item is removed
+    /// from the pending queue for editing or cancellation.
+    pub(crate) fn note_pending_prompt_removed(&mut self, position: usize) {
+        if position < self.promoted_steer_prefix_count {
+            self.promoted_steer_prefix_count -= 1;
+        }
+    }
+
     /// Remove background wakeups whose results are already part of the history
     /// snapshot being sent to the model. User prompts remain queued in order.
     pub(crate) fn consume_observed_background_wakeups(&mut self) -> usize {
@@ -1702,3 +1828,6 @@ mod queue_pull_back_tests;
 #[cfg(test)]
 #[path = "state/stall_watchdog_tests.rs"]
 mod stall_watchdog_tests;
+#[cfg(test)]
+#[path = "state/steering_tests.rs"]
+mod steering_tests;

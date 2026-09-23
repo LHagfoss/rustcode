@@ -1,4 +1,4 @@
-use crate::app::{AppState, AppStatus, ChatMessage, SessionAction};
+use crate::app::{AppState, ChatMessage, SessionAction};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,8 +226,29 @@ fn validate_session_id(id: &str) -> Result<(), SessionError> {
 #[cfg(test)]
 mod tests {
     use super::{SessionController, SessionError, SessionTransition};
-    use crate::app::{AppState, ChatMessage, SessionAction, StreamTracker, SubagentController};
+    use crate::app::{
+        AppState, AppStatus, ChatMessage, SessionAction, StreamTracker, SubagentController,
+    };
     use std::collections::HashSet;
+
+    fn add_pending_steer(state: &mut AppState) {
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.draft_submit_mode = crate::app::DraftSubmitMode::Queue;
+        assert!(state.queue_steer("session-local steer".to_owned()));
+    }
+
+    fn assert_steering_cleared(state: &AppState) {
+        assert!(state.pending_steers.is_empty());
+        assert_eq!(state.active_turn_steerable_session, None);
+        assert_eq!(state.draft_submit_mode, crate::app::DraftSubmitMode::Steer);
+        assert!(
+            !state
+                .pending_queue
+                .iter()
+                .any(|item| item == "session-local steer")
+        );
+    }
 
     #[test]
     fn clear_preserves_history_but_hides_the_current_transcript() {
@@ -259,6 +280,7 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "old answer"));
+        add_pending_steer(&mut state);
 
         let transition = SessionController::default()
             .fork(&mut state, SessionAction::Latest)
@@ -276,6 +298,7 @@ mod tests {
                 .iter()
                 .any(|message| { message.role == "user" && message.content == "old task" })
         );
+        assert_steering_cleared(&state);
         assert!(
             state
                 .history
@@ -292,11 +315,14 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "saved answer"));
+        add_pending_steer(&mut state);
 
         SessionController::default()
             .start_fresh(&mut state)
             .expect("new session should succeed");
         assert_ne!(state.active_session_id, saved_id);
+        assert_steering_cleared(&state);
+        add_pending_steer(&mut state);
 
         let transition = SessionController::default()
             .resume(&mut state, SessionAction::Id(saved_id.clone()))
@@ -314,6 +340,7 @@ mod tests {
                 .iter()
                 .any(|message| message.content == "saved task")
         );
+        assert_steering_cleared(&state);
     }
 
     #[test]
@@ -380,12 +407,14 @@ mod tests {
         state.is_scroll_locked_to_bottom = false;
         state.history_display_start = 1;
         state.clear_screen_requested = false;
+        add_pending_steer(&mut state);
 
         SessionController::default()
             .resume(&mut state, SessionAction::Id(saved_id.clone()))
             .expect("saved session should resume");
 
         assert_eq!(state.active_session_id, saved_id);
+        assert_steering_cleared(&state);
         assert_eq!(state.history_display_start, 0);
         assert!(state.clear_screen_requested);
         assert!(state.subagents.is_empty());
@@ -497,5 +526,23 @@ mod tests {
             .expect_err("path-like ids must be rejected");
 
         assert!(matches!(error, SessionError::InvalidSessionId(_)));
+    }
+
+    #[test]
+    fn deleting_the_active_session_clears_its_steering_state() {
+        let mut state = AppState::new();
+        let previous_session_id = state.active_session_id.clone();
+        state
+            .history
+            .push(ChatMessage::new("user", "session to delete"));
+        crate::config::save_session_history(&previous_session_id, &state.history);
+        add_pending_steer(&mut state);
+
+        SessionController::default()
+            .delete(&mut state, SessionAction::Latest)
+            .expect("active session should be deleted");
+
+        assert_ne!(state.active_session_id, previous_session_id);
+        assert_steering_cleared(&state);
     }
 }

@@ -232,6 +232,7 @@ pub(super) async fn handle_response_recovery(
     thought_tokens: Option<u32>,
     final_answer_boundary: super::super::stream::FinalAnswerBoundary,
     provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
+    turn_session_id: &str,
 ) -> ResponseRecoveryOutcome {
     use super::super::lifecycle;
     use super::super::loop_detect;
@@ -256,6 +257,7 @@ pub(super) async fn handle_response_recovery(
                 }),
             );
             let mut s = state.lock().await;
+            super::clear_turn_steerability_for_session(&mut s, turn_session_id);
             s.history
                 .push(ChatMessage::new("system", EMPTY_RESPONSE_RECOVERY_PROMPT));
             s.current_token_usage = None;
@@ -289,6 +291,7 @@ pub(super) async fn handle_response_recovery(
                 "Reasoning loop followed complete read-only inspection; preserving final synthesis"
             );
             let mut s = state.lock().await;
+            super::clear_turn_steerability_for_session(&mut s, turn_session_id);
             let mut message = ChatMessage::new("assistant", &summary);
             message.response_time_ms = Some(turn_response_time_ms);
             message.token_usage = turn_token_usage;
@@ -330,6 +333,7 @@ pub(super) async fn handle_response_recovery(
                     }),
                 );
                 let mut s = state.lock().await;
+                super::clear_turn_steerability_for_session(&mut s, turn_session_id);
                 let mut msg = ChatMessage::new("assistant", &ctx.response.final_content);
                 msg.response_time_ms = Some(turn_response_time_ms);
                 msg.token_usage = turn_token_usage.clone();
@@ -430,14 +434,117 @@ pub(super) async fn handle_response_recovery(
 #[cfg(test)]
 mod tests {
     use super::{
-        CLIENT_BUDGET_CONTINUATION_PROMPT, completed_inspection_synthesis, loop_recovery_prompt,
-        reasoning_loop_final_response, reasoning_loop_recovery_prompt,
+        CLIENT_BUDGET_CONTINUATION_PROMPT, ResponseRecoveryOutcome, completed_inspection_synthesis,
+        handle_response_recovery, loop_recovery_prompt, reasoning_loop_final_response,
+        reasoning_loop_recovery_prompt,
     };
     use crate::app::ChatMessage;
     use crate::app::ToolResultRecord;
     use crate::network::TurnContext;
     use crate::network::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
     use crate::network::{LOOP_RECOVERY_PROMPT, REASONING_LOOP_RECOVERY_PROMPT};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn entering_empty_response_recovery_clears_steerability() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = {
+            let mut state = state.lock().await;
+            state.status = crate::app::AppStatus::Streaming;
+            state.active_turn_steerable_session = Some(state.active_session_id.clone());
+            assert!(state.can_accept_steer());
+            state.active_session_id.clone()
+        };
+        let mut ctx = TurnContext::new();
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            None,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
+        let state = state.lock().await;
+        assert_eq!(state.active_turn_steerable_session, None);
+        assert!(!state.can_accept_steer());
+    }
+
+    #[tokio::test]
+    async fn stale_response_recovery_cannot_clear_a_replacement_session_marker() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let replacement_session_id = {
+            let mut state = state.lock().await;
+            state.status = crate::app::AppStatus::Streaming;
+            state.active_turn_steerable_session = Some(state.active_session_id.clone());
+            state.active_session_id.clone()
+        };
+        let mut ctx = TurnContext::new();
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            None,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            "old-turn-session",
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
+        let state = state.lock().await;
+        assert_eq!(
+            state.active_turn_steerable_session.as_deref(),
+            Some(replacement_session_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_inspection_synthesis_clears_the_turn_marker() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = {
+            let mut state = state.lock().await;
+            state.status = crate::app::AppStatus::Streaming;
+            state.active_turn_steerable_session = Some(state.active_session_id.clone());
+            state.active_session_id.clone()
+        };
+        let mut ctx = completed_inspection_context(
+            "<think>Reviewed all relevant files.</think>Findings: the input path is validated before use.",
+        );
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            Some("reasoning_loop"),
+            12,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Stop);
+        assert!(ctx.response.final_content_persisted);
+        assert_eq!(state.lock().await.active_turn_steerable_session, None);
+    }
 
     fn completed_inspection_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();

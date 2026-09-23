@@ -40,6 +40,8 @@ pub async fn handle_escape(
     cancel_token: &mut tokio_util::sync::CancellationToken,
 ) {
     let mut s = state.lock().await;
+    let active_session_id = s.active_session_id.clone();
+    s.promote_pending_steers_to_queue(&active_session_id);
     s.clear_ctrl_c_exit_arming();
     s.reset_suggestion_cycle();
     s.input_buffer.clear();
@@ -59,6 +61,7 @@ pub async fn handle_escape(
         s.consume_observed_background_wakeups();
     } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
+        s.note_pending_prompt_removed(0);
         if s.pending_queue.is_empty() {
             s.enter_idle();
         }

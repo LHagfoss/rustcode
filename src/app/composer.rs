@@ -1,4 +1,4 @@
-use crate::app::state::AppState;
+use crate::app::state::{AppState, DraftSubmitMode};
 use crate::app::suggestion::SuggestionCycle;
 
 pub(crate) struct ComposerState<'a> {
@@ -6,10 +6,12 @@ pub(crate) struct ComposerState<'a> {
     cursor_position: &'a mut usize,
     input_history: &'a mut Vec<String>,
     pending_queue: &'a mut Vec<String>,
+    promoted_steer_prefix_count: &'a mut usize,
     history_index: &'a mut Option<usize>,
     temp_input: &'a mut String,
     suggestion_cycle: &'a mut SuggestionCycle,
     render_revision: &'a mut u64,
+    draft_submit_mode: &'a mut DraftSubmitMode,
 }
 
 impl<'a> ComposerState<'a> {
@@ -19,10 +21,12 @@ impl<'a> ComposerState<'a> {
             cursor_position: &mut state.cursor_position,
             input_history: &mut state.input_history,
             pending_queue: &mut state.pending_queue,
+            promoted_steer_prefix_count: &mut state.promoted_steer_prefix_count,
             history_index: &mut state.history_index,
             temp_input: &mut state.temp_input,
             suggestion_cycle: &mut state.suggestion_cycle,
             render_revision: &mut state.render_revision,
+            draft_submit_mode: &mut state.draft_submit_mode,
         }
     }
 
@@ -49,8 +53,12 @@ impl<'a> ComposerState<'a> {
         else {
             return false;
         };
+        if pos < *self.promoted_steer_prefix_count {
+            *self.promoted_steer_prefix_count -= 1;
+        }
         *self.input_buffer = self.pending_queue.remove(pos);
         *self.cursor_position = self.input_buffer.len();
+        *self.draft_submit_mode = DraftSubmitMode::Queue;
         *self.render_revision = self.render_revision.wrapping_add(1);
         true
     }

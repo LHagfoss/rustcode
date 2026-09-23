@@ -34,6 +34,9 @@ pub async fn handle_enter(
     }
 
     if raw_input.starts_with('/') {
+        // Commands are dispatched independently of the draft submission mode;
+        // the next text draft starts in the default mode.
+        s.draft_submit_mode = crate::app::state::DraftSubmitMode::Steer;
         let tokens: Vec<&str> = raw_input.split_whitespace().collect();
         if tokens.is_empty() {
             s.input_buffer.clear();
@@ -1042,11 +1045,27 @@ pub async fn handle_enter(
         return false;
     }
 
+    if s.can_accept_steer()
+        && s.draft_submit_mode == crate::app::state::DraftSubmitMode::Steer
+        && s.queue_steer(raw_input.clone())
+    {
+        s.input_buffer.clear();
+        s.cursor_position = 0;
+        s.draft_submit_mode = crate::app::state::DraftSubmitMode::Steer;
+        s.request_redraw();
+        return false;
+    }
+
     s.delegation_active = s.delegation_armed;
     s.delegation_armed = false;
     s.pending_queue.push(raw_input);
     s.input_buffer.clear();
     s.cursor_position = 0;
+    // Every submitted draft is complete. A new draft defaults back to
+    // steering when the current turn accepts it; otherwise Enter still uses
+    // the ordinary FIFO path.
+    s.draft_submit_mode = crate::app::state::DraftSubmitMode::Steer;
+    s.request_redraw();
 
     if let Some(orchestrator_lease) = s.claim_orchestrator() {
         s.status = AppStatus::Queued;

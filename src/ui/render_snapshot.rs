@@ -20,6 +20,10 @@ pub(crate) struct RenderSnapshot {
     current_thought_started_at: Option<std::time::Instant>,
     model_quota_remaining: Option<f32>,
     pending_queue: Vec<String>,
+    pending_steers: Vec<String>,
+    draft_submit_mode: crate::app::state::DraftSubmitMode,
+    steering_interruptible: bool,
+    steering_escape_will_interrupt: bool,
     status: AppStatus,
     active_suggestion_index: Option<usize>,
     dismissed_completion: Option<String>,
@@ -177,6 +181,18 @@ impl RenderSnapshot {
             current_thought_started_at: state.current_thought_started_at,
             model_quota_remaining: state.model_quota_remaining,
             pending_queue: state.pending_queue.clone(),
+            pending_steers: state
+                .pending_steers
+                .iter()
+                .map(|steer| steer.text.clone())
+                .collect(),
+            draft_submit_mode: state.draft_submit_mode,
+            steering_interruptible: state.can_accept_steer(),
+            steering_escape_will_interrupt: state.can_accept_steer()
+                && !state.modal_open()
+                && state.completion_identity().is_none()
+                && state.sel_start.is_none()
+                && state.sel_end.is_none(),
             status: state.status.clone(),
             active_suggestion_index: state.active_suggestion_index,
             dismissed_completion: state.dismissed_completion.clone(),
@@ -266,6 +282,23 @@ impl RenderSnapshot {
     }
     pub(crate) fn pending_queue(&self) -> &[String] {
         &self.pending_queue
+    }
+    pub(crate) fn pending_steers(&self) -> &[String] {
+        &self.pending_steers
+    }
+    pub(crate) fn draft_submit_mode(&self) -> crate::app::state::DraftSubmitMode {
+        self.draft_submit_mode
+    }
+    pub(crate) fn steering_interruptible(&self) -> bool {
+        self.steering_interruptible
+    }
+    pub(crate) fn steering_escape_will_interrupt(&self) -> bool {
+        self.steering_escape_will_interrupt
+    }
+    pub(crate) fn show_steer_mode_hint(&self) -> bool {
+        self.steering_interruptible
+            && !self.input_buffer.trim().is_empty()
+            && crate::app::get_completion_len(&self.input_buffer, self.cursor_position) == 0
     }
     pub(crate) fn status(&self) -> &AppStatus {
         &self.status
@@ -657,6 +690,19 @@ mod tests {
     fn render_snapshot_captures_live_and_modal_render_data() {
         let mut state = AppState::new();
         state.pending_queue = vec!["queued prompt".to_owned()];
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.pending_steers = vec![
+            crate::app::state::PendingSteer {
+                session_id: state.active_session_id.clone(),
+                text: "first steer".to_owned(),
+            },
+            crate::app::state::PendingSteer {
+                session_id: state.active_session_id.clone(),
+                text: "second steer".to_owned(),
+            },
+        ];
+        state.draft_submit_mode = crate::app::state::DraftSubmitMode::Queue;
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
         std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
@@ -683,6 +729,12 @@ mod tests {
         let snapshot = state.render_snapshot();
 
         assert_eq!(snapshot.pending_queue(), ["queued prompt"]);
+        assert_eq!(snapshot.pending_steers(), ["first steer", "second steer"]);
+        assert_eq!(
+            snapshot.draft_submit_mode(),
+            crate::app::state::DraftSubmitMode::Queue
+        );
+        assert!(!snapshot.steering_interruptible());
         assert_eq!(snapshot.dismissed_completion(), Some("command:/help"));
         assert_eq!(snapshot.running_tools(), ["run_command"]);
         assert_eq!(snapshot.live_tool_calls()[0].target, "cargo test");
@@ -693,6 +745,15 @@ mod tests {
             "run_command"
         );
         assert_eq!(snapshot.pending_question().unwrap().question, "Proceed?");
+    }
+
+    #[test]
+    fn render_snapshot_marks_an_active_steerable_turn_interruptible() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+
+        assert!(state.render_snapshot().steering_interruptible());
     }
 
     #[test]

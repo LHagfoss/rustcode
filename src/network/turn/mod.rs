@@ -8,6 +8,7 @@ pub(crate) mod tools;
 pub use context::{GroundedArtifactEvidence, SegmentCheckpoint, TurnContext};
 pub use finish::run_agent_turn;
 pub(crate) use finish::run_agent_turn_with_context;
+pub(crate) use finish::run_agent_turn_with_context_for_session;
 pub(crate) use queue::process_queue_orchestrator;
 pub(crate) use queue::process_queue_orchestrator_with_ui_events;
 use recovery::reasoning_loop_final_response;
@@ -17,6 +18,12 @@ use request::messages_for_response_continuation;
 use crate::app::{AppState, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+pub(super) fn clear_turn_steerability_for_session(state: &mut AppState, session_id: &str) {
+    if state.active_turn_steerable_session.as_deref() == Some(session_id) {
+        state.active_turn_steerable_session = None;
+    }
+}
 
 use super::events::ToolResult;
 use super::lifecycle;
@@ -184,6 +191,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     policy: &Arc<P>,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     ctx: &mut TurnContext,
+    turn_session_id: &str,
 ) -> bool {
     dbg_log!("Starting agent loop round {}", ctx.budget.tool_rounds);
 
@@ -208,7 +216,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         ctx.lifecycle.stop_reason = None;
     }
 
-    let round = match request::collect_round(client, state, cancel_token, stream_buffer, ctx).await
+    let round = match request::collect_round(
+        client,
+        state,
+        cancel_token,
+        stream_buffer,
+        ctx,
+        turn_session_id,
+    )
+    .await
     {
         Ok(round) => round,
         Err(request::RoundCollectionError::Stop) => return false,
@@ -244,6 +260,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         thought_tokens,
         final_answer_boundary,
         provider_final_answer_state,
+        turn_session_id,
     )
     .await
     {
@@ -264,6 +281,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         thought_time_ms,
         thought_tokens,
         native_tool_calls,
+        &turn_session_id,
     )
     .await
     {
@@ -272,7 +290,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         tools::ToolHandlingOutcome::NotHandled => {}
     }
 
-    match finish::handle_plain_response_finish(
+    match finish::handle_plain_response_finish_for_session(
         state,
         cancel_token,
         policy,
@@ -284,6 +302,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         thought_tokens,
         final_answer_boundary,
         provider_final_answer_state,
+        turn_session_id,
     )
     .await
     {

@@ -20,6 +20,12 @@ pub(crate) trait TurnPolicy: Send + Sync {
     }
     fn should_verify_completion(&self) -> bool;
 
+    /// Whether this policy represents a regular interactive turn that may
+    /// accept live steering. Non-interactive callers must opt in explicitly.
+    fn supports_live_turn_steering(&self) -> bool {
+        false
+    }
+
     fn is_headless(&self) -> bool {
         false
     }
@@ -190,5 +196,39 @@ impl TurnPolicy for InteractivePolicy {
 
     fn should_verify_completion(&self) -> bool {
         self.verify_completion()
+    }
+
+    fn supports_live_turn_steering(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InteractivePolicy, TurnPolicy};
+    use crate::tools::ToolCall;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct DefaultPolicy;
+
+    impl TurnPolicy for DefaultPolicy {
+        fn should_approve(
+            &self,
+            _state: &Arc<Mutex<crate::app::AppState>>,
+            _tool_calls: &[ToolCall],
+        ) -> impl std::future::Future<Output = bool> + Send {
+            async { true }
+        }
+
+        fn should_verify_completion(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn only_interactive_policy_opts_into_live_turn_steering() {
+        assert!(InteractivePolicy.supports_live_turn_steering());
+        assert!(!DefaultPolicy.supports_live_turn_steering());
     }
 }

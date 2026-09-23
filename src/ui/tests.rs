@@ -829,12 +829,100 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(rendered.contains("queued (4) · ↑ edit last"));
+    assert!(rendered.contains("queued follow-ups (4) · ↑ edit last"));
     assert!(rendered.contains("second prompt"));
     assert!(rendered.contains("third prompt"));
     assert!(rendered.contains("fourth prompt"));
     assert!(!rendered.contains("first prompt"));
     assert!(!rendered.contains("__task_wakeup__"));
+}
+
+#[test]
+fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
+    use crate::app::state::PendingSteer;
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.status = crate::app::AppStatus::Streaming;
+    state.active_turn_steerable_session = Some(state.active_session_id.clone());
+    state.pending_steers = vec![
+        PendingSteer {
+            session_id: state.active_session_id.clone(),
+            text: "first steer".to_owned(),
+        },
+        PendingSteer {
+            session_id: state.active_session_id.clone(),
+            text: "second steer".to_owned(),
+        },
+    ];
+    state.pending_queue = vec!["follow-up one".to_owned(), "follow-up two".to_owned()];
+    state.input_buffer = "draft text".to_owned();
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(
+        rendered.contains("pending steers · apply after next tool result or when the turn ends")
+    );
+    assert!(rendered.find("first steer").unwrap() < rendered.find("second steer").unwrap());
+    assert!(rendered.contains("queued follow-ups (2) · ↑ edit last"));
+    assert!(rendered.contains("follow-up one"));
+    assert!(rendered.contains("follow-up two"));
+    assert!(rendered.contains("esc interrupt and apply now"));
+    assert!(rendered.contains("Steer · Tab switches to Queue"));
+}
+
+#[test]
+fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection() {
+    use crate::app::state::PendingSteer;
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    for blocker in ["completion", "selection"] {
+        let mut state = AppState::new();
+        state.status = crate::app::AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.pending_steers.push(PendingSteer {
+            session_id: state.active_session_id.clone(),
+            text: "apply this steer".to_owned(),
+        });
+        match blocker {
+            "completion" => state.input_buffer = "/mo".to_owned(),
+            "selection" => {
+                state.input_buffer = "draft text".to_owned();
+                state.sel_start = Some((0, 0));
+                state.sel_end = Some((5, 0));
+            }
+            _ => unreachable!(),
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(
+            !rendered.contains("esc interrupt and apply now"),
+            "Escape should first handle the {blocker}"
+        );
+        assert!(
+            !rendered.contains("esc interrupt"),
+            "do not imply Escape will interrupt while it handles the {blocker}"
+        );
+    }
 }
 
 // Regression: the tool-result cache used to `clear()` the whole map at the

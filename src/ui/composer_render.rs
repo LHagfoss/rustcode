@@ -440,10 +440,27 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     ) {
         // Esc only interrupts the model stream; background terminals survive
         // it (issue #1223). Say so when a background job is actually running.
-        let hint = if state.background_tasks().is_empty() {
+        let hint = if state.steering_escape_will_interrupt() && !state.pending_steers().is_empty() {
+            " · esc interrupt and apply now"
+        } else if !state.pending_steers().is_empty() {
+            ""
+        } else if state.background_tasks().is_empty() {
             " · esc interrupt"
         } else {
             " · esc interrupts stream only"
+        };
+        if !hint.is_empty() {
+            spans.push(Span::styled(
+                hint,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
+    }
+
+    if state.show_steer_mode_hint() {
+        let hint = match state.draft_submit_mode() {
+            crate::app::state::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
+            crate::app::state::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
         };
         spans.push(Span::styled(
             hint,
@@ -457,6 +474,19 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
 
 /// Maximum queued user prompts previewed above the composer.
 pub(super) const MAX_QUEUE_PREVIEW_ROWS: usize = 3;
+
+pub(super) fn pending_steer_prompts(state: &RenderSnapshot) -> Vec<&str> {
+    state
+        .pending_steers()
+        .iter()
+        .rev()
+        .take(MAX_QUEUE_PREVIEW_ROWS)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
 
 pub(super) fn queued_user_prompts(state: &RenderSnapshot) -> Vec<&str> {
     state
@@ -473,8 +503,19 @@ pub(super) fn queued_user_prompts(state: &RenderSnapshot) -> Vec<&str> {
 }
 
 pub(super) fn queue_preview_height(state: &RenderSnapshot) -> u16 {
-    let rows = queued_user_prompts(state).len();
-    if rows == 0 { 0 } else { rows as u16 + 1 }
+    let steer_rows = pending_steer_prompts(state).len();
+    let queue_rows = queued_user_prompts(state).len();
+    let steer_height = if steer_rows == 0 {
+        0
+    } else {
+        steer_rows as u16 + 1
+    };
+    let queue_height = if queue_rows == 0 {
+        0
+    } else {
+        queue_rows as u16 + 1
+    };
+    steer_height + queue_height
 }
 
 pub(super) fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
@@ -496,16 +537,17 @@ pub(super) fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
     text
 }
 
-/// Shows the most recent queued user prompts directly above the input box.
-/// Internal wakeups stay queued but never consume composer space or leak into
-/// this transcript-like preview.
+/// Shows pending steers and the most recent queued user prompts directly
+/// above the input box. Internal wakeups stay queued but never consume
+/// composer space or leak into this transcript-like preview.
 pub(super) fn render_queue_line(
     f: &mut Frame,
     chunks: &[ratatui::layout::Rect],
     state: &RenderSnapshot,
 ) {
+    let steers = pending_steer_prompts(state);
     let prompts = queued_user_prompts(state);
-    if prompts.is_empty() {
+    if steers.is_empty() && prompts.is_empty() {
         return;
     }
     let block = chunks[1];
@@ -513,41 +555,69 @@ pub(super) fn render_queue_line(
         return;
     }
     let show_picker = state.modal_open();
+    let mut row_offset = 0u16;
+    if !steers.is_empty() {
+        let header = Line::from(Span::styled(
+            "pending steers · apply after next tool result or when the turn ends",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+        f.render_widget(
+            Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
+            ratatui::layout::Rect::new(block.x, block.y, block.width, 1),
+        );
+        for (row, steer) in steers.into_iter().enumerate() {
+            render_preview_prompt(f, block, row_offset + row as u16 + 1, steer, show_picker);
+        }
+        row_offset += pending_steer_prompts(state).len() as u16 + 1;
+    }
+    if prompts.is_empty() {
+        return;
+    }
     let queued_count = state
         .pending_queue()
         .iter()
         .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
         .count();
     let header = Line::from(Span::styled(
-        format!("queued ({queued_count}) · ↑ edit last"),
+        format!("queued follow-ups ({queued_count}) · ↑ edit last"),
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     ));
     f.render_widget(
         Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
-        ratatui::layout::Rect::new(block.x, block.y, block.width, 1),
+        ratatui::layout::Rect::new(block.x, block.y + row_offset, block.width, 1),
     );
 
     for (row, prompt) in prompts.into_iter().enumerate() {
-        let prefix = "  › ";
-        let preview = truncate_queue_prompt(
-            prompt,
-            (block.width as usize).saturating_sub(prefix.width()),
-        );
-        let line = Line::from(vec![
-            Span::styled(
-                prefix,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                preview,
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ]);
-        f.render_widget(
-            Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
-            ratatui::layout::Rect::new(block.x, block.y + row as u16 + 1, block.width, 1),
-        );
+        render_preview_prompt(f, block, row_offset + row as u16 + 1, prompt, show_picker);
     }
+}
+
+fn render_preview_prompt(
+    f: &mut Frame,
+    block: ratatui::layout::Rect,
+    row: u16,
+    prompt: &str,
+    show_picker: bool,
+) {
+    let prefix = "  › ";
+    let preview = truncate_queue_prompt(
+        prompt,
+        (block.width as usize).saturating_sub(prefix.width()),
+    );
+    let line = Line::from(vec![
+        Span::styled(
+            prefix,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+        Span::styled(
+            preview,
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
+        ratatui::layout::Rect::new(block.x, block.y + row, block.width, 1),
+    );
 }
 
 pub(super) fn render_input(

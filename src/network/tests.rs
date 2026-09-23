@@ -1312,6 +1312,7 @@ async fn output_truncated_native_response_never_executes_salvaged_call() {
                 "content": "this response was truncated"
             }),
         }],
+        "",
     )
     .await;
 
@@ -1370,6 +1371,7 @@ async fn output_truncated_text_response_never_executes_salvaged_call() {
         None,
         None,
         Vec::new(),
+        "",
     )
     .await;
 
@@ -1445,6 +1447,7 @@ async fn grounded_recovery_targets_failed_repair_after_complete_malformed_write_
             "write_to_file",
             serde_json::json!({"path": target, "content": content}),
         ),
+        "",
     )
     .await;
 
@@ -1462,6 +1465,7 @@ async fn grounded_recovery_targets_failed_repair_after_complete_malformed_write_
         None,
         None,
         native_call("read-1", "view_file", serde_json::json!({"path": target})),
+        "",
     )
     .await;
 
@@ -1486,6 +1490,7 @@ async fn grounded_recovery_targets_failed_repair_after_complete_malformed_write_
                 "new_string": "the malformed suffix"
             }),
         ),
+        "",
     )
     .await;
 
@@ -1564,6 +1569,7 @@ async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
                 arguments: serde_json::json!({"pattern": "TODO"}),
             },
         ],
+        "",
     )
     .await;
 
@@ -1627,6 +1633,7 @@ async fn multi_call_response_executes_all_valid_reads() {
                 arguments: serde_json::json!({"pattern": "Cargo.toml"}),
             },
         ],
+        "",
     )
     .await;
 
@@ -1718,6 +1725,7 @@ async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
                     "ignore_case": round % 2 == 0,
                 }),
             }],
+            "",
         )
         .await;
         ctx.response.final_content = "Searching for references.".to_string();

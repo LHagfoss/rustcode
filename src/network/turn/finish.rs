@@ -42,12 +42,43 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     cancel_token: &tokio_util::sync::CancellationToken,
     policy: &Arc<P>,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
-    mut ctx: TurnContext,
+    ctx: TurnContext,
 ) -> TurnContext {
     let turn_session_id = state.lock().await.active_session_id.clone();
+    run_agent_turn_with_context_for_session(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        ctx,
+        turn_session_id,
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<StreamBuffer>>,
+    mut ctx: TurnContext,
+    turn_session_id: String,
+) -> TurnContext {
     let prompt_start_time = std::time::Instant::now();
     let mut turn_lifecycle = lifecycle::TurnLifecycle::new();
-    while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
+    while run_single_turn(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        &mut ctx,
+        &turn_session_id,
+    )
+    .await
+    {}
 
     if ctx.lifecycle.stop_reason.is_none() {
         ctx.lifecycle.stop_reason = Some(if ctx.lifecycle.task_completed {
@@ -117,8 +148,12 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     // session. Its final response belongs to the old session and must not be
     // appended to the newly selected conversation.
     if s.active_session_id != turn_session_id {
+        super::clear_turn_steerability_for_session(&mut s, &turn_session_id);
         return ctx;
     }
+    // Completed, cancelled, and failed turns all share this finalization
+    // boundary and must stop accepting new steers.
+    super::clear_turn_steerability_for_session(&mut s, &turn_session_id);
     let usage = s
         .current_token_usage
         .clone()
@@ -329,8 +364,45 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
     final_answer_boundary: FinalAnswerBoundary,
     provider_final_answer_state: ProviderFinalAnswerState,
 ) -> FinishGateOutcome {
+    let turn_session_id = state.lock().await.active_session_id.clone();
+    handle_plain_response_finish_for_session(
+        state,
+        cancel_token,
+        policy,
+        ctx,
+        response_finish_reason,
+        turn_response_time_ms,
+        turn_token_usage,
+        thought_time_ms,
+        thought_tokens,
+        final_answer_boundary,
+        provider_final_answer_state,
+        &turn_session_id,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPolicy + 'static>(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    policy: &Arc<P>,
+    ctx: &mut TurnContext,
+    response_finish_reason: FinishReason,
+    turn_response_time_ms: u64,
+    turn_token_usage: Option<crate::app::TokenUsage>,
+    thought_time_ms: Option<u64>,
+    thought_tokens: Option<u32>,
+    final_answer_boundary: FinalAnswerBoundary,
+    provider_final_answer_state: ProviderFinalAnswerState,
+    turn_session_id: &str,
+) -> FinishGateOutcome {
     const MAX_FINISH_GATE_RETRIES: u32 = 2;
     use super::super::cached_compiler_check;
+    {
+        let mut s = state.lock().await;
+        super::clear_turn_steerability_for_session(&mut s, turn_session_id);
+    }
     let is_continuous = { state.lock().await.continuous_mode };
     if is_continuous && ctx.budget.tool_rounds > 0 {
         dbg_log!(
@@ -525,6 +597,24 @@ mod tests {
     }
 
     #[test]
+    fn finalization_clears_only_the_marker_for_its_turn_session() {
+        let mut state = AppState::new();
+        let turn_session_id = state.active_session_id.clone();
+        state.active_turn_steerable_session = Some(turn_session_id.clone());
+
+        super::super::clear_turn_steerability_for_session(&mut state, &turn_session_id);
+
+        assert_eq!(state.active_turn_steerable_session, None);
+
+        state.active_turn_steerable_session = Some("replacement-session".to_owned());
+        super::super::clear_turn_steerability_for_session(&mut state, &turn_session_id);
+        assert_eq!(
+            state.active_turn_steerable_session.as_deref(),
+            Some("replacement-session")
+        );
+    }
+
+    #[test]
     fn fresh_verification_and_substantive_final_prose_can_complete_implicitly() {
         let ctx = verified_edit_context("Implemented the CLI and all tests pass.");
         assert!(has_verified_implicit_completion(&ctx));
@@ -688,6 +778,11 @@ mod tests {
     #[tokio::test]
     async fn ordinary_interactive_prose_completes_and_is_persisted_once() {
         let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.status = AppStatus::Streaming;
+            state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        }
         let policy = Arc::new(policy::InteractivePolicy);
         let mut ctx = interactive_plain_context("Your current progress is 38%.");
 
@@ -713,6 +808,7 @@ mod tests {
             Some(lifecycle::StopReason::Completed)
         );
         assert!(ctx.response.final_content_persisted);
+        assert_eq!(state.lock().await.active_turn_steerable_session, None);
 
         let _ = handle_plain_response_finish(
             &state,
@@ -737,6 +833,40 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].content, "Your current progress is 38%.");
+    }
+
+    #[tokio::test]
+    async fn stale_final_response_cannot_clear_a_replacement_session_marker() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let replacement_session_id = {
+            let mut state = state.lock().await;
+            state.status = AppStatus::Streaming;
+            state.active_turn_steerable_session = Some(state.active_session_id.clone());
+            state.active_session_id.clone()
+        };
+        let policy = Arc::new(policy::InteractivePolicy);
+        let mut ctx = interactive_plain_context("The answer is ready.");
+
+        let _ = handle_plain_response_finish_for_session(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            12,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            "old-turn-session",
+        )
+        .await;
+
+        assert_eq!(
+            state.lock().await.active_turn_steerable_session.as_deref(),
+            Some(replacement_session_id.as_str())
+        );
     }
 
     #[tokio::test]
