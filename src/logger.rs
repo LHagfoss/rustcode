@@ -21,6 +21,8 @@ const SESSION_LOG_PRUNE_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
 const DEBUG_LOG_LOCK_NAME: &str = "debug.log.lock";
 const ACTIVE_LOG_MARKERS_DIR: &str = ".active-log-locks";
+/// Keep cleanup bounded so one prune pass cannot monopolize the logger lock.
+const MAX_STALE_ACTIVE_MARKERS_PER_PRUNE: usize = 32;
 const ROTATION_STAGE_NAME: &str = "debug.log.rotate.tmp";
 const ROTATION_BACKUP_NAME: &str = "debug.log.1.rotate.bak";
 
@@ -610,6 +612,7 @@ fn active_session_ids(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(protected),
         Err(_) => return None,
     };
+    let mut stale_markers_removed = 0;
     for entry in entries {
         let Ok(entry) = entry else {
             return None;
@@ -630,8 +633,16 @@ fn active_session_ids(
             return None;
         };
         if file.try_lock().is_ok() {
-            // No process holds a compatible active-session lock. Stable
-            // marker files are intentionally left in place for reuse.
+            // Marker registration and pruning both happen under the global
+            // logger lock, so no cooperating process can start using this
+            // marker between the lock probe and removal. Bound deletions per
+            // pass to keep the global critical section short.
+            drop(file);
+            if stale_markers_removed < MAX_STALE_ACTIVE_MARKERS_PER_PRUNE
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                stale_markers_removed += 1;
+            }
             continue;
         }
 
@@ -1587,6 +1598,35 @@ mod tests {
 
         assert!(active_logs.join("debug.log").exists());
         assert!(!active_logs.join("debug.log.1").exists());
+    }
+
+    #[test]
+    fn stale_active_marker_cleanup_is_bounded_and_preserves_live_markers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let live_marker =
+            acquire_active_session_marker(dir.path(), 9001, "active").expect("live active marker");
+        for process_id in 10_000..(10_000 + MAX_STALE_ACTIVE_MARKERS_PER_PRUNE as u32 + 3) {
+            let stale_marker = acquire_active_session_marker(dir.path(), process_id, "stale")
+                .expect("stale marker");
+            drop(stale_marker);
+        }
+
+        // Production pruning calls this while holding the cross-process
+        // logger lock, which serializes marker registration with cleanup.
+        prune_session_logs(dir.path(), None, 0);
+
+        let marker_dir = active_log_markers_dir(dir.path());
+        let remaining = std::fs::read_dir(&marker_dir)
+            .expect("marker directory")
+            .map(|entry| entry.expect("marker entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining.len(),
+            4,
+            "cleanup removes at most the configured batch and keeps the live marker"
+        );
+        assert!(active_log_marker_path(dir.path(), 9001).exists());
+        drop(live_marker);
     }
 
     #[test]
