@@ -1,6 +1,7 @@
 mod assistant_render;
 mod composer;
 mod composer_render;
+mod context_usage;
 mod conversation_render;
 mod events;
 mod frame_requester;
