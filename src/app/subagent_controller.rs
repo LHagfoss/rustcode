@@ -28,6 +28,7 @@ impl SubagentId {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(test)]
 pub(crate) struct SubagentContext {
     pub(crate) id: SubagentId,
     pub(crate) name: String,
@@ -94,6 +95,7 @@ impl SubagentSupervisor {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn spawn<F>(
         &self,
         id: SubagentId,
@@ -251,6 +253,7 @@ impl SubagentSupervisor {
         self.inner.activity.notify_waiters();
     }
 
+    #[cfg(test)]
     pub(crate) fn is_active(&self, id: SubagentId) -> bool {
         self.inner
             .state
@@ -457,6 +460,7 @@ impl SubagentController {
         state.request_redraw();
     }
 
+    #[cfg(test)]
     pub(crate) fn list(&self, state: &AppState) -> Vec<SubagentContext> {
         state
             .subagents

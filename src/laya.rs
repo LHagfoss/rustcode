@@ -250,6 +250,7 @@ pub fn diagnose(config: &LayaConfig) -> LayaStatus {
     }
 }
 
+#[cfg(test)]
 pub fn format_status(config: &LayaConfig) -> String {
     format_status_report(&diagnose(config))
 }

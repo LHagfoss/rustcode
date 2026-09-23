@@ -30,7 +30,7 @@ pub(crate) use terminal_runtime::TerminalRuntime;
 use assistant_render::*;
 use composer_render::*;
 pub(crate) use conversation_render::*;
-pub use render::*;
+pub(crate) use render::*;
 pub(crate) use status_render::*;
 pub(crate) use tool_transcript::*;
 
@@ -58,8 +58,10 @@ use modals::{
 };
 use tool_result::render_tool_result;
 
+#[cfg(test)]
+use crate::app::AppState;
 use crate::app::activity::{ActivityKind, classify_activity, classify_live_tools};
-use crate::app::{AppState, AppStatus, ChatMessage};
+use crate::app::{AppStatus, ChatMessage};
 use crate::inline_terminal::Frame;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
@@ -99,6 +101,7 @@ pub fn COLOR_PANEL() -> Color {
 }
 #[allow(non_snake_case)]
 #[inline]
+#[cfg(test)]
 pub fn COLOR_ELEMENT() -> Color {
     theme::color_element()
 }

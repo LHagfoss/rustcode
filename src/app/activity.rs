@@ -18,6 +18,7 @@ pub struct ActivitySnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum AnimationCell {
     Empty,
     Tail,
@@ -30,6 +31,7 @@ pub enum TerminalProgress {
     Hidden,
     Indeterminate,
     Paused,
+    #[cfg(test)]
     Error,
 }
 
@@ -41,6 +43,7 @@ impl TerminalProgress {
             Self::Hidden => "\x1b]9;4;0;0\x07",
             Self::Indeterminate => "\x1b]9;4;3;0\x07",
             Self::Paused => "\x1b]9;4;4;100\x07",
+            #[cfg(test)]
             Self::Error => "\x1b]9;4;2;100\x07",
         }
     }
@@ -546,6 +549,7 @@ pub fn sanitize_session_name(raw: &str, max_chars: usize) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn animation_trail(frame: u64, width: usize) -> Vec<AnimationCell> {
     if width == 0 {
         return Vec::new();

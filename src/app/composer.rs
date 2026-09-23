@@ -30,10 +30,12 @@ impl<'a> ComposerState<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn input(&self) -> &str {
         self.input_buffer
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_input(&mut self, input: impl Into<String>) {
         *self.input_buffer = input.into();
         *self.cursor_position = self.input_buffer.len();

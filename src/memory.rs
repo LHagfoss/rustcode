@@ -109,6 +109,7 @@ pub fn load(root: Option<&Path>) -> Result<ProjectMemory, String> {
     Ok(memory)
 }
 
+#[cfg(test)]
 pub fn save(root: Option<&Path>, memory: &ProjectMemory) -> Result<(), String> {
     let _guard = memory_write_lock()
         .lock()
@@ -510,9 +511,12 @@ pub async fn render_relevant_async(
 
 /// Tentative facts (low confidence) older than 7 days are garbage-collected;
 /// confirmed facts persist. Returns the number of removed facts.
+#[cfg(test)]
 pub const TENTATIVE_CONFIDENCE_MAX: u8 = 30;
+#[cfg(test)]
 pub const TENTATIVE_GC_AFTER_SECONDS: u64 = 7 * 24 * 60 * 60;
 
+#[cfg(test)]
 pub fn gc_tentative_facts(memory: &mut ProjectMemory) -> usize {
     let before = memory.facts.len();
     let cutoff = now().saturating_sub(TENTATIVE_GC_AFTER_SECONDS);
@@ -522,26 +526,9 @@ pub fn gc_tentative_facts(memory: &mut ProjectMemory) -> usize {
     before.saturating_sub(memory.facts.len())
 }
 
-/// Collect project + global facts for GC without touching the filesystem.
-pub fn gc(root: Option<&Path>) -> Result<usize, String> {
-    let mut removed = 0;
-    let mut memory = load(root)?;
-    removed += gc_tentative_facts(&mut memory);
-    save(root, &memory)?;
-    // Global memory shares the same record shape; GC it too.
-    let mut global = load_global()?;
-    let global_before = global.facts.len();
-    let cutoff = now().saturating_sub(TENTATIVE_GC_AFTER_SECONDS);
-    global
-        .facts
-        .retain(|fact| !(fact.confidence <= TENTATIVE_CONFIDENCE_MAX && fact.updated_at < cutoff));
-    removed += global_before.saturating_sub(global.facts.len());
-    save_global(&global)?;
-    Ok(removed)
-}
-
 /// Render facts within a byte budget, highest confidence + most recent first.
 /// Returns the rendered text and the number of facts dropped by the budget.
+#[cfg(test)]
 pub fn to_system_message_with_budget(
     facts: &[MemoryFact],
     max_bytes: usize,

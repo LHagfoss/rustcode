@@ -266,6 +266,7 @@ pub struct AppState {
     pub sel_in_input: bool,
     /// Screen rows carrying a code-block `[Copy]` badge, mapped to the block's
     /// text, for click-to-copy hit-testing.
+    #[cfg(test)]
     pub code_copy_rows: Vec<(u16, String)>,
 
     /// Timestamp of the last escape key press (for double-esc detection)
@@ -305,15 +306,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// The transcript currently shown by the interactive context surface.
-    /// The root history remains untouched while a child context is selected.
-    pub(crate) fn active_history(&self) -> &[ChatMessage] {
-        self.selected_subagent_id
-            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
-            .map(|agent| agent.history.as_slice())
-            .unwrap_or(self.history.as_slice())
-    }
-
     #[allow(dead_code)]
     pub(crate) fn active_history_display_start(&self) -> usize {
         if self.selected_subagent_id.is_some() {
@@ -321,11 +313,6 @@ impl AppState {
         } else {
             self.history_display_start
         }
-    }
-
-    pub(crate) fn selected_subagent(&self) -> Option<&SubAgent> {
-        self.selected_subagent_id
-            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
     }
 
     /// Return the cached custom title for the active session without touching
@@ -948,6 +935,7 @@ impl AppState {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
         self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
         self.request_redraw();
@@ -1123,6 +1111,7 @@ impl AppState {
             sel_end: None,
             selecting: false,
             sel_in_input: false,
+            #[cfg(test)]
             code_copy_rows: Vec::new(),
 
             last_escape_time: None,
@@ -1137,6 +1126,7 @@ impl AppState {
         app
     }
 
+    #[cfg(test)]
     pub fn record_warning(&mut self, warning: impl Into<String>) {
         self.exit_warnings.push(warning.into());
     }
@@ -1170,11 +1160,6 @@ impl AppState {
         } else {
             AppStatus::Idle
         };
-    }
-
-    /// Returns the auto-confirm status label for the UI footer.
-    pub fn auto_confirm_status_text(&self) -> &'static str {
-        if self.auto_confirm { "ON" } else { "OFF" }
     }
 
     /// Context window of the active profile, in tokens.
@@ -1681,6 +1666,7 @@ impl AppState {
     /// Which clickable element sits under a screen cell. Hit-tested against the
     /// rects and rows the last render recorded, so it is only meaningful for
     /// coordinates from the current frame.
+    #[cfg(test)]
     pub fn hover_target_at(&self, column: u16, row: u16) -> HoverTarget {
         if let Some(rect) = self.scroll_to_bottom_btn
             && rect.contains(ratatui::layout::Position::new(column, row))

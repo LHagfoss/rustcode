@@ -6,10 +6,9 @@ use ratatui::{
 };
 use std::path::Path;
 
-use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_block, highlight_code_line,
-    render_unified_diff, wrap_code_spans,
-};
+use super::{COLOR_BG, COLOR_MUTED, get_themed_style, highlight_code_line, render_unified_diff};
+#[cfg(test)]
+use super::{COLOR_TEXT, highlight_code_block, wrap_code_spans};
 
 fn language_for_path(path: &str) -> &str {
     Path::new(path)
@@ -18,6 +17,7 @@ fn language_for_path(path: &str) -> &str {
         .unwrap_or("text")
 }
 
+#[cfg(test)]
 pub(super) fn render_file_preview<'a>(
     path: &str,
     content: &str,

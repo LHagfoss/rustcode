@@ -44,6 +44,7 @@ impl<'a> OverlayState<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn any_open(&self) -> bool {
         *self.show_model_picker
             || *self.show_theme_picker
@@ -121,6 +122,7 @@ impl<'a> OverlayState<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn approval_selected(&self) -> usize {
         *self.tool_confirmation_selected
     }

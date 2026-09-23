@@ -70,12 +70,13 @@ pub(crate) fn format_read_file_context_entry(
     format!("{path} ({status})")
 }
 
+#[cfg(test)]
 pub(crate) fn build_dynamic_context_tail(
     context_section: String,
     read_files: &[String],
     todos: &[crate::app::TodoItem],
 ) -> String {
-    build_dynamic_context_tail_with_memory(context_section, read_files, todos, None)
+    build_dynamic_context_tail_internal(context_section, read_files, todos, None, None, None)
 }
 
 pub(crate) fn prepend_skill_routing_hint(context: &mut String, hint: Option<&str>) {
@@ -92,22 +93,6 @@ pub(crate) fn prepend_skill_routing_hint(context: &mut String, hint: Option<&str
     prefixed.push_str("\n\n");
     prefixed.push_str(context);
     *context = prefixed;
-}
-
-pub(crate) fn build_dynamic_context_tail_with_memory(
-    context_section: String,
-    read_files: &[String],
-    todos: &[crate::app::TodoItem],
-    project_memory: Option<String>,
-) -> String {
-    build_dynamic_context_tail_internal(
-        context_section,
-        read_files,
-        todos,
-        project_memory,
-        None,
-        None,
-    )
 }
 
 pub(crate) fn build_dynamic_context_tail_with_checkpoint(

@@ -20,9 +20,11 @@ mod policy;
 
 pub(crate) use policy::{
     ShellClassification, ShellPolicyFacts, command_confirmation_preview,
-    command_confirmation_scope, command_requires_confirmation, pull_request_base,
-    reject_broad_git_stage, shell_policy_facts, shell_policy_facts_for_call,
+    command_requires_confirmation, pull_request_base, reject_broad_git_stage,
+    shell_policy_facts_for_call,
 };
+#[cfg(test)]
+pub(crate) use policy::{command_confirmation_scope, shell_policy_facts};
 use policy::{has_interactive_sudo, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -407,6 +409,7 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
     run_command_output_inner(args, None, None, None)
 }
 
+#[cfg(test)]
 pub(crate) fn run_command_output_cancellable(
     args: &Value,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
@@ -444,19 +447,12 @@ pub(crate) fn run_command_output_with_call_id(
 
 pub(crate) type CommandProgressCallback = rustcode_command::ProgressCallback;
 
+#[cfg(test)]
 pub(crate) fn run_command_output_with_progress(
     args: &Value,
     progress: CommandProgressCallback,
 ) -> Result<super::ToolExecutionOutput, String> {
     run_command_output_inner(args, Some(progress), None, None)
-}
-
-pub(crate) fn run_command_output_with_progress_cancellable(
-    args: &Value,
-    progress: CommandProgressCallback,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
-) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_with_progress_cancellable_for_call(args, progress, cancel_token, None)
 }
 
 pub(crate) fn run_command_output_with_progress_cancellable_for_call(

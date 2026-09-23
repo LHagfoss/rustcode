@@ -640,6 +640,7 @@ pub(crate) fn grep_execution_output(args: &Value) -> Result<super::ToolExecution
     grep_output(args).map(execution_output)
 }
 
+#[cfg(test)]
 fn grep_one_file(
     path_str: &str,
     path: &std::path::Path,

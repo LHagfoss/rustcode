@@ -100,6 +100,7 @@ where
 }
 
 impl McpClient {
+    #[cfg(test)]
     pub async fn start(
         name: String,
         command: String,

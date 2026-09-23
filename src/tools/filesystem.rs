@@ -180,10 +180,6 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
     rustcode_tools::filesystem::write_file_chunk_with_context(args, &context())
 }
 
-pub fn generate_unified_diff(before: &str, after: &str) -> String {
-    rustcode_tools::filesystem::generate_unified_diff(before, after)
-}
-
 #[allow(dead_code)]
 pub(crate) fn normalise_unicode_punctuation(s: &str) -> String {
     rustcode_tools::filesystem::normalise_unicode_punctuation(s)

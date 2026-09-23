@@ -13,9 +13,11 @@ use syntect::highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+#[cfg(test)]
+use super::COLOR_ELEMENT;
 use super::{
-    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED,
-    COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
+    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY,
+    COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
 };
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();

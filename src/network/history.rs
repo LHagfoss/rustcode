@@ -38,6 +38,7 @@ pub(crate) enum HistoryEntry<'a> {
     Lifecycle(&'a str),
 }
 
+#[cfg(test)]
 pub(crate) fn normalize_history(history: &[ChatMessage]) -> impl Iterator<Item = HistoryEntry<'_>> {
     history.iter().map(normalize_message)
 }
@@ -277,6 +278,7 @@ pub(crate) fn render_context_fragments(fragments: &[ContextFragment]) -> String 
 /// Tool outputs are represented as user-context messages and user messages
 /// retain multimodal content. Keeping this conversion in one place prevents
 /// the raw CLI and TUI from drifting as the context manager evolves.
+#[cfg(test)]
 pub(crate) fn to_messages(
     history: &[ChatMessage],
     system_prompt: impl Into<String>,
@@ -285,6 +287,7 @@ pub(crate) fn to_messages(
     to_messages_with_instructions(history, RequestInstructions::new(&system_prompt, None))
 }
 
+#[cfg(test)]
 pub(crate) fn to_messages_with_instructions(
     history: &[ChatMessage],
     instructions: RequestInstructions<'_>,
@@ -369,6 +372,7 @@ pub(crate) fn validate_native_tool_messages(messages: &[serde_json::Value]) -> R
 
 #[derive(Clone, Copy)]
 enum HistoryRenderScope {
+    #[cfg(test)]
     Full,
     RecentTurns,
 }
@@ -602,19 +606,22 @@ fn should_include_request_message(
     if message.conversation_recap {
         return false;
     }
-    let HistoryRenderScope::RecentTurns = scope else {
-        return true;
-    };
-    let Some((active_start, previous_start)) = turn_starts else {
-        return true;
-    };
-    if index >= active_start {
-        return true;
+    match scope {
+        #[cfg(test)]
+        HistoryRenderScope::Full => true,
+        HistoryRenderScope::RecentTurns => {
+            let Some((active_start, previous_start)) = turn_starts else {
+                return true;
+            };
+            if index >= active_start {
+                return true;
+            }
+            if previous_start.is_some_and(|start| index >= start) {
+                return !is_lifecycle_notice(message);
+            }
+            is_durable_older_message(message)
+        }
     }
-    if previous_start.is_some_and(|start| index >= start) {
-        return !is_lifecycle_notice(message);
-    }
-    is_durable_older_message(message)
 }
 
 fn runtime_notice(kind: &str, content: &str) -> serde_json::Value {

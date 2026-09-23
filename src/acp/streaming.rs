@@ -138,6 +138,7 @@ impl AcpEventStream {
                 )));
                 updates
             }
+            #[cfg(test)]
             crate::network::AgentUiEvent::TurnRecovered { message } => {
                 let mut updates = self.flush();
                 updates.push(Self::thought_update(message));
@@ -160,8 +161,9 @@ impl AcpEventStream {
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
-            | crate::network::AgentUiEvent::Cancelled { .. }
-            | crate::network::AgentUiEvent::Error { .. } => Vec::new(),
+            | crate::network::AgentUiEvent::Cancelled { .. } => Vec::new(),
+            #[cfg(test)]
+            crate::network::AgentUiEvent::Error { .. } => Vec::new(),
         }
     }
 }
