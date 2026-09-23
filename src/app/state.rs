@@ -12,6 +12,13 @@ pub(crate) struct StallRecovery {
     pub queue_preserved: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolConfirmationResponse {
+    Approve,
+    ApproveAndRemember(String),
+    Deny,
+}
+
 /// A single-flight claim for the queue orchestrator.  The session and
 /// generation are both part of the claim so a task that is unwinding after a
 /// cancellation or session switch cannot release a newer orchestrator.
@@ -183,7 +190,7 @@ pub struct AppState {
     /// Selected approval row: 0 = approve, 1 = deny. UI-only state.
     pub tool_confirmation_selected: usize,
 
-    pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<ToolConfirmationResponse>>,
 
     /// Active interactive `ask_question` prompt and the channel that delivers the
     /// user's selection back to the awaiting tool call.
@@ -937,7 +944,17 @@ impl AppState {
 
     #[cfg(test)]
     pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
-        self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
+        let max = self
+            .pending_tool_confirmation
+            .as_ref()
+            .filter(|items| items.len() == 1 && items[0].rememberable_prefix.is_some())
+            .and_then(|items| items[0].rememberable_prefix.clone())
+            .map_or(1, |_| 2);
+        self.tool_confirmation_selected = if direction < 0 {
+            self.tool_confirmation_selected.saturating_sub(1)
+        } else {
+            (self.tool_confirmation_selected + 1).min(max)
+        };
         self.request_redraw();
     }
 

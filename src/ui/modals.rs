@@ -48,16 +48,25 @@ pub(in crate::ui) use navigation::{
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
 
-pub(crate) fn approval_event_for_key(key: KeyEvent, selected: usize) -> Option<AppEvent> {
+pub(crate) fn approval_event_for_key(
+    key: KeyEvent,
+    selected: usize,
+    rememberable_prefix: Option<&str>,
+) -> Option<AppEvent> {
     let decision = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => ApprovalDecision::Approve,
         KeyCode::Char('a') | KeyCode::Char('A') => ApprovalDecision::ApproveAll,
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            ApprovalDecision::ApproveAndRemember(rememberable_prefix?.to_owned())
+        }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => ApprovalDecision::Deny,
         KeyCode::Enter => {
             if selected == 0 {
                 ApprovalDecision::Approve
-            } else {
+            } else if selected == 1 {
                 ApprovalDecision::Deny
+            } else {
+                ApprovalDecision::ApproveAndRemember(rememberable_prefix?.to_owned())
             }
         }
         _ => return None,

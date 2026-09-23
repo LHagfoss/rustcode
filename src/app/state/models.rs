@@ -26,6 +26,7 @@ pub struct ToolConfirmation {
     pub path: String,
     pub content_preview: String,
     pub content_bytes: usize,
+    pub rememberable_prefix: Option<String>,
 }
 
 /// An interactive `ask_question` prompt awaiting the user's choice. Rendered as

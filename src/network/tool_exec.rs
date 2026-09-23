@@ -386,7 +386,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             s.laya.config().mode != crate::laya::LayaMode::Off,
         )
     };
-    let authorization = crate::tools::execution_authorization(
+    let mut authorization = crate::tools::execution_authorization(
         name,
         args,
         call_id,
@@ -396,6 +396,24 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         laya_active,
         assessment.as_ref(),
     );
+    // Subagent tool calls use this per-call confirmation path instead of the
+    // parent turn's batch policy. Honor the same explicit user-approved
+    // command rule here, while keeping Plan-mode denial and every other Deny
+    // decision intact. The helper rejects environment/background variants
+    // and only returns prefixes for the vetted command/action pairs.
+    let saved_prefix_covers_call = if name == "run_command" {
+        let prefixes = state.lock().await.config.approved_command_prefixes.clone();
+        crate::tools::approved_command_prefix_covers_call(name, args, &prefixes)
+    } else {
+        false
+    };
+    if matches!(
+        &authorization,
+        crate::tools::AuthorizationDecision::RequireConfirmation
+    ) && saved_prefix_covers_call
+    {
+        authorization = crate::tools::AuthorizationDecision::Allow;
+    }
     if let crate::tools::AuthorizationDecision::Deny(reason) = authorization.clone() {
         return (
             crate::tools::ToolExecutionOutput::failure_with_kind(
@@ -599,7 +617,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 (preview, content.len())
             }
         };
-        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ToolConfirmationResponse>();
         {
             let mut s = state.lock().await;
             s.modal_scroll_row = 0;
@@ -609,6 +627,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 path,
                 content_preview: preview,
                 content_bytes,
+                rememberable_prefix: (name == "run_command")
+                    .then(|| crate::tools::rememberable_command_prefix_for_call(args))
+                    .flatten(),
             }]);
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
@@ -620,8 +641,23 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let rx_res = rx.await;
         user_wait_dur = start_wait.elapsed();
 
+        if let Ok(crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)) = &rx_res
+            && name == "run_command"
+            && crate::tools::rememberable_command_prefix_for_call(args).as_deref()
+                == Some(prefix.as_str())
+        {
+            let mut state = state.lock().await;
+            if !state.config.approved_command_prefixes.contains(prefix) {
+                state.config.approved_command_prefixes.push(prefix.clone());
+                crate::config::save_entire_config(&state.config);
+            }
+        }
+
         let res = match rx_res {
-            Ok(true) => {
+            Ok(
+                crate::app::ToolConfirmationResponse::Approve
+                | crate::app::ToolConfirmationResponse::ApproveAndRemember(_),
+            ) => {
                 dbg_log!("User approved tool call '{}', executing...", name);
                 let tool_name = name.to_string();
                 {
@@ -720,7 +756,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     }
                 }
             }
-            Ok(false) => {
+            Ok(crate::app::ToolConfirmationResponse::Deny) => {
                 dbg_log!("User denied tool call '{}'", name);
                 let _ = crate::notifications::notify_finished(
                     crate::notifications::FinishedStatus::Denied,

@@ -19,9 +19,9 @@ use super::{Tool, ToolCapability, ToolSafety};
 mod policy;
 
 pub(crate) use policy::{
-    ShellClassification, ShellPolicyFacts, command_confirmation_preview,
-    command_requires_confirmation, pull_request_base, reject_broad_git_stage,
-    shell_policy_facts_for_call,
+    ShellClassification, ShellPolicyFacts, approved_command_prefix_covers_call,
+    command_confirmation_preview, command_requires_confirmation, pull_request_base,
+    reject_broad_git_stage, rememberable_command_prefix_for_call, shell_policy_facts_for_call,
 };
 #[cfg(test)]
 pub(crate) use policy::{command_confirmation_scope, shell_policy_facts};

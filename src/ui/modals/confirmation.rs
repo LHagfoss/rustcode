@@ -19,7 +19,11 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     let mut lines = Vec::new();
     let single = confirmations.len() == 1;
     let first = &confirmations[0];
-    let is_command = single && first.tool_name == "run_command";
+    let is_command =
+        single && (first.tool_name == "run_command" || first.rememberable_prefix.is_some());
+    let rememberable_prefix = is_command
+        .then_some(first.rememberable_prefix.as_deref())
+        .flatten();
     let heading = if is_command {
         "Would you like to run the following command?".to_owned()
     } else if single {
@@ -90,7 +94,8 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                 ),
                 Span::raw(" "),
             ];
-            if confirmation.tool_name == "run_command" {
+            if confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some()
+            {
                 spans.push(Span::styled(
                     "$ ",
                     Style::default().fg(COLOR_TEXT()).bg(panel),
@@ -151,35 +156,67 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     ]));
     lines.push(Line::from(vec![
         Span::styled(
-            if approve_selected { "  " } else { "› " },
+            if state.tool_confirmation_selected() == 1 {
+                "› "
+            } else {
+                "  "
+            },
             Style::default()
-                .fg(if approve_selected {
-                    COLOR_MUTED()
-                } else {
+                .fg(if state.tool_confirmation_selected() == 1 {
                     COLOR_PRIMARY()
-                })
-                .add_modifier(if approve_selected {
-                    Modifier::empty()
                 } else {
+                    COLOR_MUTED()
+                })
+                .add_modifier(if state.tool_confirmation_selected() == 1 {
                     Modifier::BOLD
+                } else {
+                    Modifier::empty()
                 }),
         ),
         Span::styled(
             "2. No, cancel this tool call ",
-            Style::default()
-                .fg(COLOR_TEXT())
-                .add_modifier(if approve_selected {
-                    Modifier::empty()
-                } else {
+            Style::default().fg(COLOR_TEXT()).add_modifier(
+                if state.tool_confirmation_selected() == 1 {
                     Modifier::BOLD
-                }),
+                } else {
+                    Modifier::empty()
+                },
+            ),
         ),
         Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
     ]));
+    if let Some(prefix) = rememberable_prefix.as_deref() {
+        let selected = state.tool_confirmation_selected() == 2;
+        lines.push(Line::from(vec![
+            Span::styled(
+                if selected { "› " } else { "  " },
+                Style::default()
+                    .fg(if selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_MUTED()
+                    })
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+            Span::styled(
+                format!("3. Always allow `{prefix}…`"),
+                Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(" (r)", Style::default().fg(COLOR_MUTED())),
+        ]));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!(
-            "  Press enter to confirm · tab to {} auto-confirm",
+            "  Press enter to confirm · r allows prefix · tab to {} auto-confirm",
             if state.auto_confirm() {
                 "disable"
             } else {
@@ -201,6 +238,10 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             .find(|line| line.to_string().contains("2. No, cancel"))
             .cloned()
             .unwrap_or_default();
+        let remember = lines
+            .iter()
+            .find(|line| line.to_string().contains("3. Always allow"))
+            .cloned();
         let target = lines
             .iter()
             .skip(1)
@@ -221,6 +262,11 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
         }
         compact.push(approve);
         compact.push(cancel);
+        if content_area.height >= 5
+            && let Some(remember) = remember
+        {
+            compact.push(remember);
+        }
         if content_area.height >= 5
             && let Some(footer) = footer
         {
@@ -331,7 +377,14 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             "run_command" => "Run command",
             _ => "Execute tool",
         };
-        let header_text = if confirmation.tool_name == "run_command" {
+        let is_command =
+            confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some();
+        let action_label = if is_command {
+            "Run command"
+        } else {
+            action_label
+        };
+        let header_text = if is_command {
             "⚠ Would you like to run the following command?".to_owned()
         } else {
             format!("⚠ {action_label}?")
@@ -352,14 +405,13 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             confirmation.path.clone()
         };
 
-        let size_str = if confirmation.tool_name != "run_command" && confirmation.content_bytes > 0
-        {
+        let size_str = if !is_command && confirmation.content_bytes > 0 {
             format!(" ({} bytes)", confirmation.content_bytes)
         } else {
             String::new()
         };
 
-        let command_prefix = (confirmation.tool_name == "run_command").then_some("$ ");
+        let command_prefix = is_command.then_some("$ ");
         let tool_line = Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
@@ -584,7 +636,8 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             };
 
             let marker = if i == 0 { "›" } else { " " };
-            let command_prefix = (c.tool_name == "run_command").then_some("$ ");
+            let command_prefix =
+                (c.tool_name == "run_command" || c.rememberable_prefix.is_some()).then_some("$ ");
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} {}. ", marker, i + 1),
