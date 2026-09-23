@@ -158,8 +158,12 @@ pub(crate) async fn run_subagent(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     agent_id: u32,
+    owner_session_id: &str,
 ) -> Result<String, String> {
-    crate::logger::operational_event("subagent.start", serde_json::json!({"agent_id": agent_id}));
+    crate::logger::operational_event(
+        "subagent.start",
+        serde_json::json!({"agent_id": agent_id, "session_id": owner_session_id}),
+    );
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
     let mut loop_detector = loop_detect::LoopDetector::new(6);
@@ -167,7 +171,7 @@ pub(crate) async fn run_subagent(
         if cancel_token.is_cancelled() {
             crate::logger::operational_event(
                 "subagent.finish",
-                serde_json::json!({"agent_id": agent_id, "status": "cancelled"}),
+                serde_json::json!({"agent_id": agent_id, "status": "cancelled", "session_id": owner_session_id}),
             );
             return Err("error: cancelled".to_string());
         }
@@ -274,7 +278,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         trim_msgs_to_budget(&mut msgs, budget_token_limit);
 
         stream_buffer.lock().await.reset();
-        dbg_log!(
+        crate::dbg_log_for_session!(
+            owner_session_id,
             "subagent {} round {}: requesting {}",
             agent_id,
             rounds,
@@ -326,7 +331,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         true,
                         super::stream_request::ThinkingMode::Normal,
                         crate::tools::ToolSchemaPolicy::subagent(),
-                        None,
+                        Some(owner_session_id),
                         request.output_token_limit,
                     )
                     .await
@@ -369,6 +374,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     "subagent.batch_truncated",
                     serde_json::json!({
                         "agent_id": agent_id,
+                        "session_id": owner_session_id,
                         "requested": requested_calls,
                         "kept": kept_calls,
                         "dropped": dropped_calls,
@@ -605,7 +611,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         }
         crate::logger::operational_event(
             "subagent.finish",
-            serde_json::json!({"agent_id": agent_id, "status": "completed", "rounds": rounds}),
+            serde_json::json!({"agent_id": agent_id, "status": "completed", "rounds": rounds, "session_id": owner_session_id}),
         );
         return Ok(strip_leading_think(&content).to_string());
     }
@@ -683,6 +689,7 @@ fn launch_subagent_turn(
     parent_cancel: &tokio_util::sync::CancellationToken,
     supervisor: &crate::app::SubagentSupervisor,
     agent_id: u32,
+    owner_session_id: String,
 ) -> Result<(), crate::app::SubagentError> {
     let workspace_path = state.try_lock().ok().and_then(|state| {
         state
@@ -711,7 +718,13 @@ fn launch_subagent_turn(
             crate::mcp::DIRECT_MCP_REGISTRY
                 .scope(
                     mcp_registry,
-                    run_subagent(&client, &child_state, &child_cancel, agent_id),
+                    run_subagent(
+                        &client,
+                        &child_state,
+                        &child_cancel,
+                        agent_id,
+                        &owner_session_id,
+                    ),
                 )
                 .await
         },
@@ -803,8 +816,9 @@ pub(crate) async fn handle_agent_tool(
                 .as_deref()
                 .unwrap_or("none")
                 .to_string();
-            let (agent_id, supervisor) = {
+            let (agent_id, supervisor, owner_session_id) = {
                 let mut s = state.lock().await;
+                let owner_session_id = s.active_session_id.clone();
                 let id = s.next_subagent_id;
                 let workspace_root = if workspace_mode == "isolated" {
                     let Some(base_sha) = args
@@ -894,11 +908,16 @@ pub(crate) async fn handle_agent_tool(
                         verification_label
                     ),
                 );
-                (id, s.subagent_supervisor.clone())
+                (id, s.subagent_supervisor.clone(), owner_session_id)
             };
-            if let Err(error) =
-                launch_subagent_turn(client, state, cancel_token, &supervisor, agent_id)
-            {
+            if let Err(error) = launch_subagent_turn(
+                client,
+                state,
+                cancel_token,
+                &supervisor,
+                agent_id,
+                owner_session_id,
+            ) {
                 set_subagent_status(state, agent_id, crate::app::SubAgentStatus::Failed).await;
                 return crate::tools::ToolExecutionOutput::failure(format!(
                     "error: unable to start subagent {agent_id}: {error}"
@@ -928,7 +947,7 @@ pub(crate) async fn handle_agent_tool(
                     "error: missing 'message' argument".to_string(),
                 );
             };
-            let supervisor = {
+            let (supervisor, owner_session_id) = {
                 let mut s = state.lock().await;
                 let Some(task) = s
                     .subagents
@@ -954,9 +973,16 @@ pub(crate) async fn handle_agent_tool(
                     return crate::tools::ToolExecutionOutput::failure(format!("error: {error}"));
                 }
                 push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
-                s.subagent_supervisor.clone()
+                (s.subagent_supervisor.clone(), s.active_session_id.clone())
             };
-            if let Err(error) = launch_subagent_turn(client, state, cancel_token, &supervisor, id) {
+            if let Err(error) = launch_subagent_turn(
+                client,
+                state,
+                cancel_token,
+                &supervisor,
+                id,
+                owner_session_id,
+            ) {
                 set_subagent_status(state, id, crate::app::SubAgentStatus::Failed).await;
                 return crate::tools::ToolExecutionOutput::failure(format!(
                     "error: unable to start subagent {id} follow-up: {error}"
