@@ -34,3 +34,27 @@ fn observed_background_wakeups_coalesce_without_removing_user_prompts() {
     assert_eq!(s.consume_observed_background_wakeups(), 2);
     assert_eq!(s.pending_queue, ["queued user prompt"]);
 }
+
+#[test]
+fn pulling_back_promoted_steers_updates_the_tracked_prefix() {
+    let mut s = AppState::new();
+    s.pending_queue = vec![
+        "first correction".to_string(),
+        "second correction".to_string(),
+        "__task_wakeup__:productive_segment".to_string(),
+        "follow-up".to_string(),
+    ];
+    s.promoted_steer_prefix_count = 2;
+
+    assert!(s.pop_queued_prompt());
+    assert_eq!(s.input_buffer, "follow-up");
+    assert_eq!(s.promoted_steer_prefix_count, 2);
+
+    assert!(s.pop_queued_prompt());
+    assert_eq!(s.input_buffer, "second correction");
+    assert_eq!(s.promoted_steer_prefix_count, 1);
+    assert_eq!(
+        s.pending_queue,
+        ["first correction", "__task_wakeup__:productive_segment"]
+    );
+}

@@ -47,6 +47,46 @@ async fn escape_preserves_fifo_prompts_until_the_orchestrator_releases() {
 }
 
 #[tokio::test]
+async fn escape_promotes_pending_steers_ahead_of_followups_before_cancelling() {
+    use crate::app::{AppState, AppStatus};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    let session_id = app.active_session_id.clone();
+    app.active_turn_steerable_session = Some(session_id.clone());
+    assert!(app.queue_steer("First correction".to_owned()));
+    assert!(app.queue_steer("Second correction".to_owned()));
+    app.pending_queue = vec![
+        "first follow-up".to_owned(),
+        "__task_wakeup__:finished".to_owned(),
+        "second follow-up".to_owned(),
+    ];
+    app.orchestrator_running = true;
+    let state = Arc::new(Mutex::new(app));
+    let mut cancel_token = CancellationToken::new();
+    let cancelled_token = cancel_token.clone();
+
+    super::handle_escape(&state, &mut cancel_token).await;
+
+    assert!(cancelled_token.is_cancelled());
+    let state = state.lock().await;
+    assert_eq!(
+        state.pending_queue,
+        [
+            "First correction",
+            "Second correction",
+            "first follow-up",
+            "second follow-up"
+        ]
+    );
+    assert!(state.pending_steers.is_empty());
+    assert_eq!(state.active_turn_steerable_session, None);
+}
+
+#[tokio::test]
 async fn escape_preserves_queued_prompt_during_orchestrator_boundary() {
     use crate::app::{AppState, AppStatus};
     use std::sync::Arc;
@@ -391,6 +431,217 @@ async fn enter_accepts_file_completion_without_submitting_the_prompt() {
     assert!(state.input_buffer.contains("Cargo"));
     assert!(state.input_buffer.ends_with(' '));
     assert!(state.history.is_empty());
+}
+
+#[tokio::test]
+async fn enter_routes_steer_mode_input_to_pending_steers() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.active_turn_steerable_session = Some(app.active_session_id.clone());
+    app.input_buffer = "Use Teams".to_owned();
+    app.cursor_position = app.input_buffer.len();
+    app.draft_submit_mode = DraftSubmitMode::Steer;
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let state = state.lock().await;
+    assert!(state.input_buffer.is_empty());
+    assert_eq!(state.pending_steers.len(), 1);
+    assert_eq!(state.pending_steers[0].text, "Use Teams");
+    assert!(state.pending_queue.is_empty());
+}
+
+#[tokio::test]
+async fn enter_routes_queue_mode_input_to_fifo_queue() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.active_turn_steerable_session = Some(app.active_session_id.clone());
+    app.orchestrator_running = true;
+    app.input_buffer = "Follow-up".to_owned();
+    app.cursor_position = app.input_buffer.len();
+    app.draft_submit_mode = DraftSubmitMode::Queue;
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let state = state.lock().await;
+    assert!(state.input_buffer.is_empty());
+    assert!(state.pending_steers.is_empty());
+    assert_eq!(state.pending_queue, ["Follow-up"]);
+    assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
+}
+
+#[tokio::test]
+async fn pulled_back_queued_prompt_stays_in_fifo_during_a_steerable_turn() {
+    use crate::app::{AppState, AppStatus};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.active_turn_steerable_session = Some(app.active_session_id.clone());
+    app.orchestrator_running = true;
+    app.pending_queue = vec!["existing follow-up".to_owned()];
+    let state = Arc::new(Mutex::new(app));
+
+    assert!(state.lock().await.pop_queued_prompt());
+
+    let mut cancel = CancellationToken::new();
+    let client = reqwest::Client::new();
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let state = state.lock().await;
+    assert!(state.pending_steers.is_empty());
+    assert_eq!(state.pending_queue, ["existing follow-up"]);
+}
+
+#[tokio::test]
+async fn enter_queues_input_when_the_streaming_turn_is_not_steerable() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.orchestrator_running = true;
+    app.input_buffer = "Ordinary follow-up".to_owned();
+    app.cursor_position = app.input_buffer.len();
+    app.draft_submit_mode = DraftSubmitMode::Steer;
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let state = state.lock().await;
+    assert!(state.pending_steers.is_empty());
+    assert_eq!(state.pending_queue, ["Ordinary follow-up"]);
+}
+
+#[tokio::test]
+async fn enter_queues_input_for_each_blocked_steer_state() {
+    use crate::app::{AppState, AppStatus, ToolConfirmation, state::PendingQuestion};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.active_turn_steerable_session = Some(app.active_session_id.clone());
+    app.orchestrator_running = true;
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    for (index, status) in [
+        AppStatus::Idle,
+        AppStatus::Queued,
+        AppStatus::AwaitingToolConfirmation,
+        AppStatus::AwaitingQuestion,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        {
+            let mut app = state.lock().await;
+            app.status = status;
+            app.pending_tool_confirmation = None;
+            app.pending_question = None;
+            app.pending_question_queue.clear();
+            app.input_buffer = format!("blocked state {index}");
+            app.cursor_position = app.input_buffer.len();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    }
+
+    {
+        let mut app = state.lock().await;
+        app.status = AppStatus::Streaming;
+        app.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "write_file".to_owned(),
+            path: "file.txt".to_owned(),
+            content_preview: String::new(),
+            content_bytes: 0,
+        }]);
+        app.input_buffer = "pending confirmation".to_owned();
+        app.cursor_position = app.input_buffer.len();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    {
+        let mut app = state.lock().await;
+        app.pending_tool_confirmation = None;
+        app.pending_question = Some(PendingQuestion::new(
+            "Choose".to_owned(),
+            vec!["A".to_owned()],
+            false,
+        ));
+        app.input_buffer = "pending question".to_owned();
+        app.cursor_position = app.input_buffer.len();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    {
+        let mut app = state.lock().await;
+        app.pending_question = None;
+        app.pending_question_queue.push(PendingQuestion::new(
+            "Next".to_owned(),
+            vec!["B".to_owned()],
+            false,
+        ));
+        app.input_buffer = "queued question".to_owned();
+        app.cursor_position = app.input_buffer.len();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let app = state.lock().await;
+    assert!(app.pending_steers.is_empty());
+    assert_eq!(app.pending_queue.len(), 7);
+}
+
+#[tokio::test]
+async fn slash_command_during_steerable_turn_uses_existing_dispatch() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = AppState::new();
+    app.status = AppStatus::Streaming;
+    app.active_turn_steerable_session = Some(app.active_session_id.clone());
+    app.input_buffer = "/stats".to_owned();
+    app.draft_submit_mode = DraftSubmitMode::Queue;
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+
+    let state = state.lock().await;
+    assert!(state.pending_steers.is_empty());
+    assert!(state.pending_queue.is_empty());
+    assert_eq!(
+        state.input_history.last().map(String::as_str),
+        Some("/stats")
+    );
+    assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
 }
 
 #[test]

@@ -103,7 +103,23 @@ impl Composer {
                 ComposerAction::Handled
             }
             KeyAction::Complete => {
-                self.complete(state);
+                if state.can_accept_steer()
+                    && !state.input_buffer.trim().is_empty()
+                    && crate::app::get_completion_len(&state.input_buffer, state.cursor_position)
+                        == 0
+                {
+                    state.draft_submit_mode = match state.draft_submit_mode {
+                        crate::app::state::DraftSubmitMode::Steer => {
+                            crate::app::state::DraftSubmitMode::Queue
+                        }
+                        crate::app::state::DraftSubmitMode::Queue => {
+                            crate::app::state::DraftSubmitMode::Steer
+                        }
+                    };
+                    state.request_redraw();
+                } else {
+                    self.complete(state);
+                }
                 ComposerAction::Handled
             }
             KeyAction::CommandPaletteOrPreviousSuggestion => {
@@ -350,5 +366,86 @@ mod tests {
             ComposerAction::Handled
         );
         assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
+    }
+
+    #[test]
+    fn tab_toggles_draft_mode_without_an_available_completion() {
+        use crate::app::{AppStatus, state::DraftSubmitMode};
+
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.input_buffer = "Keep the same channel".to_owned();
+        state.cursor_position = state.input_buffer.len();
+
+        assert_eq!(
+            composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            ComposerAction::Handled
+        );
+        assert_eq!(state.draft_submit_mode, DraftSubmitMode::Queue);
+        assert_eq!(state.input_buffer, "Keep the same channel");
+
+        composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
+    }
+
+    #[test]
+    fn tab_does_not_toggle_draft_mode_for_empty_or_unsteerable_drafts() {
+        use crate::app::{AppStatus, state::DraftSubmitMode};
+
+        let composer = Composer::default();
+        let mut empty = AppState::new();
+        empty.status = AppStatus::Streaming;
+        empty.active_turn_steerable_session = Some(empty.active_session_id.clone());
+        composer.handle_key(&mut empty, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(empty.draft_submit_mode, DraftSubmitMode::Steer);
+
+        let mut unsteerable = AppState::new();
+        unsteerable.status = AppStatus::Streaming;
+        unsteerable.input_buffer = "ordinary draft".to_owned();
+        unsteerable.cursor_position = unsteerable.input_buffer.len();
+        composer.handle_key(
+            &mut unsteerable,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        );
+        assert_eq!(unsteerable.draft_submit_mode, DraftSubmitMode::Steer);
+    }
+
+    #[test]
+    fn tab_keeps_completion_acceptance_ahead_of_draft_mode_toggle() {
+        use crate::app::{AppStatus, state::DraftSubmitMode};
+
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.input_buffer = "inspect @Cargo".to_owned();
+        state.cursor_position = state.input_buffer.len();
+        state.active_suggestion_index = Some(0);
+
+        composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
+        assert!(state.input_buffer.contains("Cargo"));
+        assert!(state.input_buffer.ends_with(' '));
+    }
+
+    #[test]
+    fn tab_keeps_command_completion_ahead_of_draft_mode_toggle() {
+        use crate::app::{AppStatus, state::DraftSubmitMode};
+
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        state.input_buffer = "/mo".to_owned();
+        state.cursor_position = state.input_buffer.len();
+        state.active_suggestion_index = Some(0);
+
+        composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
+        assert_eq!(state.input_buffer, "/model");
     }
 }
