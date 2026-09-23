@@ -78,6 +78,30 @@ fn batch_invalidates_read_recovery(
             .is_some_and(|(reason, _, _)| *reason == loop_detect::ProgressReason::NoNewInformation)
 }
 
+/// Append a completed tool batch and atomically follow it with any steering
+/// text accepted for the same turn session. Callers hold the AppState mutex so
+/// the result/steer ordering cannot interleave with queue or session changes.
+fn append_finalized_tool_batch(
+    state: &mut AppState,
+    turn_session_id: &str,
+    result_messages: Vec<ChatMessage>,
+) {
+    state.history.extend(result_messages);
+    append_pending_steers(state, turn_session_id);
+}
+
+/// Consume only steers that still belong to the captured turn and active
+/// session. A session replacement or an Esc promotion wins by making this a
+/// no-op, so no accepted text can leak into another session or appear twice.
+fn append_pending_steers(state: &mut AppState, turn_session_id: &str) {
+    if state.active_session_id != turn_session_id {
+        return;
+    }
+    for text in state.take_steers_for_history(turn_session_id) {
+        state.history.push(ChatMessage::new("user", text));
+    }
+}
+
 /// Fold one model round's stagnation signals into the consecutive counter.
 /// A batched round contributes at most one step no matter how many of its
 /// calls stagnated, and any meaningful result clears the streak.
@@ -717,6 +741,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
     native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
+    turn_session_id: &str,
 ) -> ToolHandlingOutcome {
     // Phase 3: normalize provider output into protocol-independent events.
     let protocol = {
@@ -1284,6 +1309,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ));
                     }
                 }
+                append_pending_steers(&mut s, turn_session_id);
                 if call_refs.is_empty() {
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
@@ -1886,9 +1912,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
             result_messages.sort_by_key(|(index, _)| *index);
-            for (_, message) in result_messages {
-                s.history.push(message);
-            }
+            append_finalized_tool_batch(
+                &mut s,
+                turn_session_id,
+                result_messages
+                    .into_iter()
+                    .map(|(_, message)| message)
+                    .collect(),
+            );
             if deferred_call_count > 0 {
                 let deferred = tool_calls
                     .iter()
@@ -2506,20 +2537,45 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 mod tests {
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
-        apply_batch_policy_floor, apply_round_stagnation, batch_invalidates_read_recovery,
-        benign_shell_wrapper_failure, bounded_malformed_tool_history,
-        content_bearing_inspection_status, credited_recovery_batch_is_read_only,
-        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
-        mutation_batch_guidance, repetition_advisory_event_fields, repetition_advisory_input,
-        selected_tool_call_indices, selected_tool_call_indices_with_assessments,
-        selected_tool_call_indices_with_mode, shell_call_is_read_only_for_mode,
-        should_apply_loop_recovery, targeted_no_progress_guidance,
+        append_finalized_tool_batch, apply_batch_policy_floor, apply_round_stagnation,
+        batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        bounded_malformed_tool_history, content_bearing_inspection_status,
+        credited_recovery_batch_is_read_only, grounded_artifact_recovery_message,
+        incomplete_tool_result, loop_signal_event, mutation_batch_guidance,
+        repetition_advisory_event_fields, repetition_advisory_input, selected_tool_call_indices,
+        selected_tool_call_indices_with_assessments, selected_tool_call_indices_with_mode,
+        shell_call_is_read_only_for_mode, should_apply_loop_recovery,
+        targeted_no_progress_guidance,
     };
+    use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
     use crate::network::loop_detect;
+    use crate::network::policy::TurnPolicy;
     use crate::network::{call_refs_for, unanswered_call_results_with_kind};
     use crate::tools::ToolCall;
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct CancelAfterApproval(tokio_util::sync::CancellationToken);
+
+    impl TurnPolicy for CancelAfterApproval {
+        fn should_approve(
+            &self,
+            _state: &Arc<Mutex<AppState>>,
+            _tool_calls: &[ToolCall],
+        ) -> impl std::future::Future<Output = bool> + Send {
+            let cancel_token = self.0.clone();
+            async move {
+                cancel_token.cancel();
+                true
+            }
+        }
+
+        fn should_verify_completion(&self) -> bool {
+            false
+        }
+    }
 
     fn inspection_metadata(complete: bool) -> InspectionResultMetadata {
         InspectionResultMetadata {
@@ -2545,6 +2601,368 @@ mod tests {
             arguments: serde_json::json!({"command": command}),
             call_id: None,
         }
+    }
+
+    fn steerable_state() -> (AppState, String) {
+        let mut state = AppState::new();
+        let session_id = state.active_session_id.clone();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(session_id.clone());
+        assert!(state.queue_steer("Use Teams".to_owned()));
+        assert!(state.queue_steer("Keep the same channel".to_owned()));
+        (state, session_id)
+    }
+
+    fn paired_tool_result(call_id: &str, error_kind: Option<&str>) -> ChatMessage {
+        ChatMessage::new("tool", format!("result for {call_id}"))
+            .answering(Some(call_id.to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "get_time".to_owned(),
+                success: error_kind.is_none(),
+                error_kind: error_kind.map(str::to_owned),
+                ..Default::default()
+            })
+    }
+
+    #[test]
+    fn finalized_batch_appends_steers_after_all_ordered_tool_results() {
+        let (mut state, session_id) = steerable_state();
+        state.history.push(
+            ChatMessage::new("assistant", "checking channels").with_tool_calls(
+                ["call-completed", "call-cancelled", "call-deferred"]
+                    .into_iter()
+                    .map(|id| ToolCallRef {
+                        id: id.to_owned(),
+                        name: "get_time".to_owned(),
+                        arguments: "{}".to_owned(),
+                    })
+                    .collect(),
+            ),
+        );
+        let results = vec![
+            paired_tool_result("call-completed", None),
+            paired_tool_result("call-cancelled", Some("cancelled")),
+            paired_tool_result("call-deferred", Some("deferred")),
+        ];
+
+        append_finalized_tool_batch(&mut state, &session_id, results);
+
+        let history = state.history.as_slice();
+        let call_ids = history
+            .iter()
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            call_ids,
+            ["call-completed", "call-cancelled", "call-deferred"]
+        );
+        for call_id in ["call-completed", "call-cancelled", "call-deferred"] {
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|message| message.tool_call_id.as_deref() == Some(call_id))
+                    .count(),
+                1,
+                "each native call must have exactly one result: {call_id}"
+            );
+        }
+        let result_positions = history
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.tool_result.is_some())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let steer_positions = history
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == "user"
+                    && ["Use Teams", "Keep the same channel"].contains(&message.content.as_str())
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(steer_positions.len(), 2);
+        assert!(result_positions.iter().max().unwrap() < &steer_positions[0]);
+        assert!(steer_positions[0] < steer_positions[1]);
+        assert!(state.pending_steers.is_empty());
+    }
+
+    #[test]
+    fn batch_handoff_and_queue_promotion_are_single_winner_transitions() {
+        let (mut esc_first, session_id) = steerable_state();
+        esc_first.promote_pending_steers_to_queue(&session_id);
+        append_finalized_tool_batch(
+            &mut esc_first,
+            &session_id,
+            vec![paired_tool_result("call-1", None)],
+        );
+        assert_eq!(
+            esc_first.pending_queue,
+            ["Use Teams", "Keep the same channel"]
+        );
+        assert!(!esc_first.history.iter().any(|message| {
+            message.role == "user"
+                && ["Use Teams", "Keep the same channel"].contains(&message.content.as_str())
+        }));
+
+        let (mut batch_first, session_id) = steerable_state();
+        append_finalized_tool_batch(
+            &mut batch_first,
+            &session_id,
+            vec![paired_tool_result("call-1", None)],
+        );
+        batch_first.promote_pending_steers_to_queue(&session_id);
+        assert_eq!(batch_first.pending_queue.len(), 0);
+        assert_eq!(
+            batch_first
+                .history
+                .iter()
+                .filter(|message| {
+                    message.role == "user"
+                        && ["Use Teams", "Keep the same channel"]
+                            .contains(&message.content.as_str())
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_and_finalized_batch_race_through_the_state_mutex_exactly_once() {
+        async fn run_race(esc_first: bool) {
+            let (mut app_state, session_id) = steerable_state();
+            app_state.pending_queue = vec!["existing follow-up".to_owned()];
+            let state = Arc::new(Mutex::new(app_state));
+
+            // Hold the state lock while enqueueing both contenders. Tokio's
+            // mutex is FIFO, so the first task is guaranteed to own the next
+            // transition once this guard is released.
+            let guard = state.lock().await;
+            let (esc_started_tx, esc_started_rx) = tokio::sync::oneshot::channel();
+            let (batch_started_tx, batch_started_rx) = tokio::sync::oneshot::channel();
+            let (esc_go_tx, esc_go_rx) = tokio::sync::oneshot::channel();
+            let (batch_go_tx, batch_go_rx) = tokio::sync::oneshot::channel();
+            let esc_state = state.clone();
+            let esc_task = tokio::spawn(async move {
+                let mut cancel_token = tokio_util::sync::CancellationToken::new();
+                let cancelled_token = cancel_token.clone();
+                let _ = esc_go_rx.await;
+                let _ = esc_started_tx.send(());
+                crate::app::actions::handle_escape(&esc_state, &mut cancel_token).await;
+                cancelled_token
+            });
+            let batch_state = state.clone();
+            let batch_task = tokio::spawn(async move {
+                let _ = batch_go_rx.await;
+                let _ = batch_started_tx.send(());
+                let mut app_state = batch_state.lock().await;
+                append_finalized_tool_batch(
+                    &mut app_state,
+                    &session_id,
+                    vec![paired_tool_result("call-race", None)],
+                );
+            });
+
+            if esc_first {
+                let _ = esc_go_tx.send(());
+                esc_started_rx.await.expect("Esc task starts");
+                tokio::task::yield_now().await;
+                let _ = batch_go_tx.send(());
+                batch_started_rx.await.expect("batch task starts");
+                tokio::task::yield_now().await;
+            } else {
+                let _ = batch_go_tx.send(());
+                batch_started_rx.await.expect("batch task starts");
+                tokio::task::yield_now().await;
+                let _ = esc_go_tx.send(());
+                esc_started_rx.await.expect("Esc task starts");
+                tokio::task::yield_now().await;
+            }
+            drop(guard);
+            let cancel_token = esc_task.await.expect("Esc task completes");
+            batch_task.await.expect("batch task completes");
+            assert!(cancel_token.is_cancelled());
+
+            let state = state.lock().await;
+            let queued_steers = state
+                .pending_queue
+                .iter()
+                .filter(|text| ["Use Teams", "Keep the same channel"].contains(&text.as_str()))
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let historical_steers = state
+                .history
+                .iter()
+                .filter(|message| {
+                    message.role == "user"
+                        && ["Use Teams", "Keep the same channel"]
+                            .contains(&message.content.as_str())
+                })
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>();
+            assert!(state.pending_steers.is_empty());
+            assert_eq!(
+                [queued_steers.as_slice(), historical_steers.as_slice()].concat(),
+                ["Use Teams", "Keep the same channel"]
+            );
+            assert_eq!(
+                queued_steers.len() + historical_steers.len(),
+                2,
+                "each accepted steer must be owned by exactly one transition"
+            );
+            assert_eq!(
+                state
+                    .pending_queue
+                    .iter()
+                    .filter(|text| text.as_str() == "existing follow-up")
+                    .count(),
+                1
+            );
+            if esc_first {
+                assert_eq!(queued_steers, ["Use Teams", "Keep the same channel"]);
+                assert!(historical_steers.is_empty());
+            } else {
+                assert!(queued_steers.is_empty());
+                assert_eq!(historical_steers, ["Use Teams", "Keep the same channel"]);
+                let last_result = state
+                    .history
+                    .iter()
+                    .rposition(|message| message.tool_result.is_some())
+                    .expect("the finalized tool result appears");
+                let first_steer = state
+                    .history
+                    .iter()
+                    .position(|message| message.content == "Use Teams")
+                    .expect("first steer appears");
+                assert!(
+                    last_result < first_steer,
+                    "the finalized result must precede the handed-off steers"
+                );
+            }
+        }
+
+        run_race(true).await;
+        run_race(false).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_native_batch_closes_calls_before_steers_and_persists_them() {
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let mut app_state = AppState::new();
+        let session_id = app_state.active_session_id.clone();
+        app_state
+            .history
+            .push(ChatMessage::new("user", "Start the task"));
+        app_state.status = AppStatus::Streaming;
+        app_state.active_turn_steerable_session = Some(session_id.clone());
+        assert!(app_state.queue_steer("Use Teams".to_owned()));
+        assert!(app_state.queue_steer("Keep the same channel".to_owned()));
+        app_state.auto_confirm = true;
+        let api_base_url = app_state.api_base_url.clone();
+        app_state.record_function_calling_support(&api_base_url, true);
+
+        let state = Arc::new(Mutex::new(app_state));
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let policy = Arc::new(CancelAfterApproval(cancel_token.clone()));
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "I will make a bounded update.".to_owned();
+        let calls = ["call-first", "call-second", "call-third"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, call_id)| crate::tools::ToolCallEnvelope {
+                call_id: call_id.to_owned(),
+                tool_name: "write_to_file".to_owned(),
+                arguments: serde_json::json!({
+                    "path": temp.path().join(format!("output-{index}.txt")),
+                    "content": "must not be written after cancellation",
+                }),
+            })
+            .collect();
+
+        let outcome = super::handle_tool_response(
+            &reqwest::Client::new(),
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            calls,
+            &session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, super::ToolHandlingOutcome::Stop);
+        let history = state.lock().await.history.as_slice().to_vec();
+        assert!(cancel_token.is_cancelled());
+        let tool_results = history
+            .iter()
+            .filter(|message| message.tool_result.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(tool_results.len(), 3, "all requested calls are closed");
+        assert_eq!(
+            tool_results
+                .iter()
+                .map(|message| message.tool_call_id.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["call-first", "call-second", "call-third"]
+        );
+        assert!(tool_results.iter().all(|message| {
+            message
+                .tool_result
+                .as_ref()
+                .is_some_and(|result| result.error_kind.as_deref() == Some("Cancelled"))
+        }));
+        let last_result = history
+            .iter()
+            .rposition(|message| message.tool_result.is_some())
+            .expect("cancelled and unselected results");
+        let steer_positions = history
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == "user"
+                    && ["Use Teams", "Keep the same channel"].contains(&message.content.as_str())
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(steer_positions.len(), 2);
+        assert!(last_result < steer_positions[0]);
+        assert!(steer_positions[0] < steer_positions[1]);
+        assert!(state.lock().await.pending_steers.is_empty());
+
+        crate::config::flush_history();
+        let persisted = crate::config::load_session_history_direct(&session_id);
+        let persisted_result_ids = persisted
+            .iter()
+            .filter(|message| message.tool_result.is_some())
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            persisted_result_ids,
+            ["call-first", "call-second", "call-third"],
+            "saved history closes every native call"
+        );
+        let persisted_last_result = persisted
+            .iter()
+            .rposition(|message| message.tool_result.is_some())
+            .expect("persisted results");
+        let persisted_steer_positions = persisted
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == "user"
+                    && ["Use Teams", "Keep the same channel"].contains(&message.content.as_str())
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(persisted_steer_positions.len(), 2);
+        assert!(persisted_last_result < persisted_steer_positions[0]);
+        assert!(persisted_steer_positions[0] < persisted_steer_positions[1]);
+        assert!(temp.path().read_dir().unwrap().next().is_none());
     }
 
     #[test]

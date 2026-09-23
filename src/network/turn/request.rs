@@ -23,6 +23,24 @@ const MAX_STREAM_RECOVERY_CHECKPOINT_BYTES: usize = 16 * 1024;
 const MAX_STREAM_RECOVERY_ERROR_BYTES: usize = 512;
 const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
 
+fn is_recovery_request(ctx: &TurnContext) -> bool {
+    ctx.recovery.force_final
+        || ctx.recovery.reasoning_recovery_pending
+        || ctx.recovery.loop_recovery_attempts > 0
+        || ctx.recovery.reasoning_recovery_attempts > 0
+        || ctx.recovery.empty_response_recovery_attempts > 0
+        || ctx.recovery.completion_blocks > 0
+        || ctx.recovery.consecutive_malformed_calls > 0
+        || ctx.recovery.oversized_batch_rejections > 0
+        || ctx.recovery.laya_pending_recovery_advisory.is_some()
+}
+
+fn prepare_request_steerability(state: &mut AppState, ctx: &TurnContext, turn_session_id: &str) {
+    if is_recovery_request(ctx) {
+        super::clear_turn_steerability_for_session(state, turn_session_id);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RoundCollectionError {
     Stop,
@@ -274,7 +292,13 @@ pub(super) async fn collect_round(
     cancel_token: &tokio_util::sync::CancellationToken,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     ctx: &mut TurnContext,
+    turn_session_id: &str,
 ) -> Result<RoundResponse, RoundCollectionError> {
+    {
+        let mut s = state.lock().await;
+        prepare_request_steerability(&mut s, ctx, turn_session_id);
+    }
+
     let unprobed = {
         let s = state.lock().await;
         let url = s.api_base_url.clone();
@@ -745,10 +769,44 @@ pub(super) async fn collect_round(
 #[cfg(test)]
 mod tests {
     use super::{
-        StreamOutputPhase, native_stream_checkpoint_content, recoverable_textual_stream_failure,
-        retryable_stream_failure, should_retry_stream_transport, stream_interruption_notice,
-        stream_output_phase,
+        StreamOutputPhase, TurnContext, native_stream_checkpoint_content,
+        prepare_request_steerability, recoverable_textual_stream_failure, retryable_stream_failure,
+        should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
     };
+
+    #[test]
+    fn recovery_request_entry_clears_the_marker_but_regular_rounds_retain_it() {
+        let mut state = crate::app::AppState::new();
+        state.status = crate::app::AppStatus::Streaming;
+        let turn_session_id = state.active_session_id.clone();
+        state.active_turn_steerable_session = Some(turn_session_id.clone());
+        let mut ctx = TurnContext::new();
+
+        prepare_request_steerability(&mut state, &ctx, &turn_session_id);
+        assert!(state.can_accept_steer());
+
+        ctx.recovery.loop_recovery_attempts = 1;
+        prepare_request_steerability(&mut state, &ctx, &turn_session_id);
+        assert_eq!(state.active_turn_steerable_session, None);
+        assert!(!state.can_accept_steer());
+    }
+
+    #[test]
+    fn stale_recovery_request_cannot_clear_a_replacement_session_marker() {
+        let mut state = crate::app::AppState::new();
+        state.status = crate::app::AppStatus::Streaming;
+        let replacement_session_id = state.active_session_id.clone();
+        state.active_turn_steerable_session = Some(replacement_session_id.clone());
+        let mut ctx = TurnContext::new();
+        ctx.recovery.loop_recovery_attempts = 1;
+
+        prepare_request_steerability(&mut state, &ctx, "old-turn-session");
+
+        assert_eq!(
+            state.active_turn_steerable_session.as_deref(),
+            Some(replacement_session_id.as_str())
+        );
+    }
 
     #[test]
     fn textual_tool_call_stream_failures_are_checkpointed_before_dispatch() {

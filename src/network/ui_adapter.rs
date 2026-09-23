@@ -338,6 +338,32 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
     sender: AgentUiEventSender,
     context: super::TurnContext,
 ) -> super::TurnContext {
+    let turn_session_id = state.lock().await.active_session_id.clone();
+    run_agent_turn_with_events_and_context_for_session(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        prompt,
+        sender,
+        context,
+        turn_session_id,
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_events_and_context_for_session<P: TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
+    prompt: String,
+    sender: AgentUiEventSender,
+    context: super::TurnContext,
+    turn_session_id: String,
+) -> super::TurnContext {
     run_agent_turn_with_events_and_context_mode(
         client,
         state,
@@ -347,6 +373,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
         prompt,
         sender,
         context,
+        turn_session_id,
         false,
     )
     .await
@@ -374,6 +401,7 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
         prompt,
         sender,
         super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
+        state.lock().await.active_session_id.clone(),
         true,
     )
     .await
@@ -398,6 +426,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy
         prompt,
         sender,
         context,
+        state.lock().await.active_session_id.clone(),
         true,
     )
     .await
@@ -412,16 +441,18 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     prompt: String,
     sender: AgentUiEventSender,
     context: super::TurnContext,
+    turn_session_id: String,
     suppress_synthetic_background_completion: bool,
 ) -> super::TurnContext {
     sender.send(AgentUiEvent::PromptStarted { prompt });
-    let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context(
+    let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context_for_session(
         client,
         state,
         cancel_token,
         policy,
         stream_buffer,
         context,
+        turn_session_id,
     ));
     let mut previous_response = ResponseDeltaTracker::default();
     let mut previous_history_len = 0;
