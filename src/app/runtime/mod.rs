@@ -16,7 +16,9 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, MutexGuard, mpsc};
+#[cfg(test)]
+use tokio::sync::MutexGuard;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 mod events;
@@ -155,6 +157,7 @@ impl AppRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn app_state(&self) -> MutexGuard<'_, AppState> {
         self.app_state.lock().await
     }

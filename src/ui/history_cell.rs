@@ -74,6 +74,7 @@ impl TranscriptState {
         &self.model
     }
 
+    #[cfg(test)]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -110,6 +111,7 @@ impl TranscriptState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_tools(&mut self, calls: &[LiveToolCall]) {
         let changed = self.tools.as_ref().is_none_or(|cell| cell.calls != calls);
         if changed {
@@ -151,6 +153,7 @@ impl TranscriptState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         if self.assistant.is_some() || self.tools.is_some() {
             self.revision = self.revision.saturating_add(1);
@@ -324,6 +327,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 /// The cell deliberately contains only a bounded invocation summary. Tool
 /// output belongs to the finalized semantic result and is rendered by the
 /// existing verbosity-aware result cells once execution completes.
+#[cfg(test)]
 pub(super) fn render_live_tool_cell(
     calls: &[LiveToolCall],
     width: u16,

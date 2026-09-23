@@ -192,10 +192,6 @@ pub fn environment_context_at(root: &Path) -> String {
     environment_context_for_scope(root, root)
 }
 
-pub(crate) fn environment_context_without_instructions_at(root: &Path) -> String {
-    environment_context_without_instructions_for_scope(root, root)
-}
-
 pub(crate) fn environment_context_without_instructions_for_scope(
     workspace_root: &Path,
     task_working_directory: &Path,

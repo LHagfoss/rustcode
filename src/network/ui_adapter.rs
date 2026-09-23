@@ -1,4 +1,6 @@
-use super::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
+#[cfg(test)]
+use super::events::{AgentEvent, FinishReason};
+use super::events::{ToolResult, ToolResultMetadata};
 use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
 use crate::tools::{ToolCall, resolve_tool_calls};
@@ -32,6 +34,7 @@ pub(crate) enum AgentUiEvent {
         id: String,
         result: ToolResult,
     },
+    #[cfg(test)]
     TurnRecovered {
         message: String,
     },
@@ -42,6 +45,7 @@ pub(crate) enum AgentUiEvent {
     Cancelled {
         completed_tool_ids: Vec<String>,
     },
+    #[cfg(test)]
     Error {
         message: String,
         retryable: bool,
@@ -74,6 +78,7 @@ impl AgentUiEventSender {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
     match event {
         AgentEvent::TextDelta(text) => Some(AgentUiEvent::TextDelta { text }),
@@ -160,6 +165,7 @@ fn history_tool_result_event(
     Some(AgentUiEvent::ToolFinished { id, result })
 }
 
+#[cfg(test)]
 async fn publish_snapshot(
     state: &Arc<Mutex<AppState>>,
     sender: &AgentUiEventSender,
@@ -300,57 +306,6 @@ async fn publish_snapshot_with_mode(
         }
     }
     *previous_history_len = history_len;
-}
-
-pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<AppState>>,
-    cancel_token: &CancellationToken,
-    policy: &Arc<P>,
-    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
-    prompt: String,
-    sender: AgentUiEventSender,
-) -> super::TurnContext {
-    let (max_tool_rounds, max_total_tool_rounds) = {
-        let s = state.lock().await;
-        (s.config.max_tool_rounds, s.config.max_total_tool_rounds)
-    };
-    run_agent_turn_with_events_and_context(
-        client,
-        state,
-        cancel_token,
-        policy,
-        stream_buffer,
-        prompt,
-        sender,
-        super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
-    )
-    .await
-}
-
-pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'static>(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<AppState>>,
-    cancel_token: &CancellationToken,
-    policy: &Arc<P>,
-    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
-    prompt: String,
-    sender: AgentUiEventSender,
-    context: super::TurnContext,
-) -> super::TurnContext {
-    let turn_session_id = state.lock().await.active_session_id.clone();
-    run_agent_turn_with_events_and_context_for_session(
-        client,
-        state,
-        cancel_token,
-        policy,
-        stream_buffer,
-        prompt,
-        sender,
-        context,
-        turn_session_id,
-    )
-    .await
 }
 
 pub(crate) async fn run_agent_turn_with_events_and_context_for_session<P: TurnPolicy + 'static>(

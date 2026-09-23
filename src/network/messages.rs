@@ -258,6 +258,7 @@ impl RequestPrefixCache {
 }
 
 /// Append `text` to the content of the last message in `msgs`.
+#[cfg(test)]
 pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str) {
     if text.is_empty() {
         return;

@@ -4,16 +4,15 @@ mod memory;
 mod prune;
 mod tokens;
 
+#[cfg(test)]
+pub use budget::calculate_preflight_budget;
 #[allow(unused_imports)]
-pub use budget::{
-    PreflightBudget, calculate_preflight_budget, calculate_preflight_budget_for_projection,
-};
+pub use budget::{PreflightBudget, calculate_preflight_budget_for_projection};
 pub(crate) use compact::valid_compaction_boundary;
 pub(crate) use compact::{SUMMARY_MARKER, durable_compaction_record_message};
-pub use compact::{
-    force_compact, force_compact_with_budget, maybe_compact, maybe_compact_with_local_policy,
-    maybe_compact_with_local_policy_and_usage,
-};
+#[cfg(test)]
+pub use compact::{force_compact, maybe_compact, maybe_compact_with_local_policy};
+pub use compact::{force_compact_with_budget, maybe_compact_with_local_policy_and_usage};
 #[allow(unused_imports)]
 pub use memory::{
     STRUCTURED_MEMORY_MARKER, StructuredSessionMemory, compact_with_structured_memory,
@@ -272,7 +271,7 @@ mod tests {
         let stub =
             "run_command: [Tool output truncated: 2000 tokens pruned to maintain context window]";
         let recent = "grep: recent match";
-        let mut history = vec![tool_msg(stub), tool_msg(recent)];
+        let history = vec![tool_msg(stub), tool_msg(recent)];
         let threshold = estimate_message_tokens(&history[1]) + 1;
 
         let pruned = prune_old_tool_outputs(&history, threshold);

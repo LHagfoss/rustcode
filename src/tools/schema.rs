@@ -863,6 +863,7 @@ fn mcp_schema_bytes(name: &str, description: &str, schema: &Value) -> usize {
     serde_json::to_vec(&mcp_schema_value(name, description, schema)).map_or(0, |bytes| bytes.len())
 }
 
+#[cfg(test)]
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
         build_builtin_native_tools_schema(
@@ -1301,6 +1302,7 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
     (selected, stats)
 }
 
+#[cfg(test)]
 pub(super) fn select_mcp_tools_for_context(
     tools: &[(String, String, Value)],
     messages: &[Value],
@@ -1381,6 +1383,7 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
     (selected, stats)
 }
 
+#[cfg(test)]
 pub(super) fn select_mcp_tools_for_context_with_sticky(
     tools: &[(String, String, Value)],
     messages: &[Value],
@@ -1394,6 +1397,7 @@ pub(super) fn select_mcp_tools_for_context_with_sticky(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn native_tools_schema_for_context(
     policy: ToolSchemaPolicy,
     messages: &[Value],
@@ -1401,6 +1405,7 @@ pub(crate) fn native_tools_schema_for_context(
     native_tools_schema_for_context_with_sticky(policy, messages, &[])
 }
 
+#[cfg(test)]
 pub(crate) fn native_tools_schema_for_context_with_sticky(
     policy: ToolSchemaPolicy,
     messages: &[Value],
@@ -1461,6 +1466,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     (tools, stats)
 }
 
+#[cfg(test)]
 pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = builtin_native_tools_schema(include_agent_tools);
     // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
@@ -1506,7 +1512,9 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 
 /// Regression budget for the invariant prompt prefix. Tool schemas are sent
 /// separately for ApiNative requests and are intentionally not counted here.
+#[cfg(test)]
 pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 4_700;
+#[cfg(test)]
 pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
 
 /// Append the resolved execution policy after the cached, profile-independent

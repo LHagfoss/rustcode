@@ -81,6 +81,7 @@ impl FrameRequester {
 }
 
 impl FrameStream {
+    #[cfg(test)]
     pub(crate) async fn next(&mut self) -> Option<TuiEvent> {
         self.draws.recv().await
     }

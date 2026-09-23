@@ -134,7 +134,6 @@ pub struct ContextBreakdown {
     pub system_tools_tokens: usize,
     pub skills_tokens: usize,
     pub subagent_tokens: usize,
-    pub total_used: usize,
     pub free_tokens: usize,
 }
 
@@ -229,7 +228,6 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         system_tools_tokens,
         skills_tokens,
         subagent_tokens,
-        total_used,
         free_tokens,
     }
 }

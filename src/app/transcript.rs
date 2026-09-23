@@ -1,4 +1,6 @@
-use crate::app::state::{AppState, History, TokenUsage};
+#[cfg(test)]
+use crate::app::state::AppState;
+use crate::app::state::{History, TokenUsage};
 use ratatui::layout::Rect;
 use std::sync::Arc;
 
@@ -19,6 +21,7 @@ pub(crate) struct TranscriptState<'a> {
 }
 
 impl<'a> TranscriptState<'a> {
+    #[cfg(test)]
     pub(crate) fn new(state: &'a mut AppState) -> Self {
         Self {
             history: &mut state.history,
@@ -36,14 +39,12 @@ impl<'a> TranscriptState<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn live_response(&self) -> &str {
         self.current_response.as_ref()
     }
 
-    pub(crate) fn history_len(&self) -> usize {
-        self.history.len()
-    }
-
+    #[cfg(test)]
     pub(crate) fn request_replay(&mut self) {
         *self.history_display_start = 0;
         *self.redraw_requested = true;
@@ -65,12 +66,6 @@ impl<'a> TranscriptState<'a> {
             *self.last_max_scroll,
             *self.is_scroll_locked_to_bottom,
         )
-    }
-}
-
-impl AppState {
-    pub(crate) fn transcript(&mut self) -> TranscriptState<'_> {
-        TranscriptState::new(self)
     }
 }
 

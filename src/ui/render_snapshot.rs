@@ -158,6 +158,7 @@ impl RenderSnapshot {
         let selected_subagent = state.selected_subagent_id.and_then(|id| {
             let agent = state.subagents.iter().find(|agent| agent.id == id)?;
             Some(SelectedSubagentSnapshot {
+                #[cfg(test)]
                 id: agent.id,
                 name: agent.name.clone(),
                 history: Arc::clone(&agent.history),
@@ -546,6 +547,7 @@ impl SubAgentSnapshot {
 
 /// The selected child context rendered in place of the root conversation.
 pub(crate) struct SelectedSubagentSnapshot {
+    #[cfg(test)]
     id: u32,
     name: String,
     history: Arc<Vec<ChatMessage>>,
@@ -555,6 +557,7 @@ pub(crate) struct SelectedSubagentSnapshot {
 }
 
 impl SelectedSubagentSnapshot {
+    #[cfg(test)]
     pub(crate) fn id(&self) -> u32 {
         self.id
     }

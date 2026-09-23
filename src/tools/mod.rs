@@ -26,7 +26,9 @@ pub use parser::{
     diagnose_failed_tool_call, has_incomplete_actionable_tool_call, is_code_editing_tool,
     is_tool_call_start, parse_tool_call, parse_tool_calls,
 };
-pub use schema::{native_tools_schema, tool_system_prompt};
+#[cfg(test)]
+pub use schema::native_tools_schema;
+pub use schema::tool_system_prompt;
 
 #[allow(unused_imports)]
 pub(crate) use dispatch::{
@@ -34,16 +36,17 @@ pub(crate) use dispatch::{
     execute_with_metadata_cancellable_for_call,
 };
 pub(crate) use parser::find_closing_tool_fence;
+#[cfg(test)]
+pub(crate) use schema::native_tools_schema_for_context;
 pub(crate) use schema::{
     MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
     ToolSurface, agent_tool_count, append_tool_response_limit, append_tool_response_policy,
-    mcp_tool_display_name, mcp_tool_read_only_hint, native_tools_schema_for_context,
-    native_tools_schema_for_context_with_sticky_at, textual_tool_surface, tool_schema_phase,
-    tool_system_prompt_for_policy,
+    mcp_tool_display_name, mcp_tool_read_only_hint, native_tools_schema_for_context_with_sticky_at,
+    textual_tool_surface, tool_schema_phase, tool_system_prompt_for_policy,
 };
 
 #[cfg(test)]
-pub(crate) use schema::{NativeSchemaTestGate, install_native_schema_test_gate};
+pub(crate) use schema::install_native_schema_test_gate;
 
 use schema::{AGENT_TOOL_SPECS, collect_mcp_tools, schema_for_agent_tool, schema_for_tool};
 
@@ -65,11 +68,12 @@ mod tests;
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
+#[cfg(test)]
+pub(crate) use exec::shell_policy_facts;
 pub(crate) use exec::{
     CommandProgressCallback, ShellClassification, ShellPolicyFacts, abort_background_starts,
     background_task_manager, command_confirmation_preview, command_requires_confirmation,
-    release_background_start, run_command_output_with_progress_cancellable,
-    run_command_output_with_progress_cancellable_for_call, shell_policy_facts,
+    release_background_start, run_command_output_with_progress_cancellable_for_call,
     shell_policy_facts_for_call, stop_background_tasks, task_event_to_tool_output,
 };
 
@@ -232,6 +236,7 @@ pub fn fuzzy_match_tool_name(query: &str) -> Option<&'static str> {
 /// Progressive tool discovery: rank built-ins for a free-text query so the
 /// agent can `list` a small subset instead of dumping every schema.
 /// Exact/prefix/substring outrank fuzzy matches; ties break by name.
+#[cfg(test)]
 pub fn filter_tools_by_query(query: &str, limit: usize) -> Vec<&'static str> {
     let normalized = normalize_tool_query(query);
     if normalized.is_empty() || limit == 0 {
@@ -334,6 +339,7 @@ impl ToolExecutionOutput {
 /// operator because they are one call.
 /// Backwards-compatible name for the safe default. Runtime orchestration
 /// resolves the active profile's limit and passes it to policy functions.
+#[cfg(test)]
 pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
     crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE;
 
@@ -379,6 +385,7 @@ pub fn partition_tool_batch(
 }
 
 /// Backwards-compatible count-only view of [`partition_tool_batch`].
+#[cfg(test)]
 pub fn truncate_tool_batch(
     calls: Vec<ToolCall>,
     max_mutating_calls: usize,
@@ -866,6 +873,7 @@ pub fn get_active_session_id() -> Option<String> {
     ACTIVE_SESSION_ID.with(|f| f.borrow().clone())
 }
 
+#[cfg(test)]
 pub fn set_active_workspace_root(root: Option<PathBuf>) {
     ACTIVE_WORKSPACE_ROOT.with(|current| {
         *current.borrow_mut() = root.clone();
@@ -1300,6 +1308,7 @@ pub(crate) fn execution_authorization(
 /// Single authorization policy used by every execution path. Unknown tools
 /// are never silently treated as safe; registered MCP tools must still opt in
 /// through confirmation unless the caller has explicitly bypassed it.
+#[cfg(test)]
 pub fn authorize_tool(
     name: &str,
     mode: crate::config::AgentMode,
@@ -1489,6 +1498,7 @@ pub fn is_read_only_call(call: &ToolCall) -> bool {
 /// Enforce a control-plane barrier. A control-plane call such as `use_skill`
 /// must execute alone so its result can affect the next model request before
 /// any side-effecting call from the same response is considered.
+#[cfg(test)]
 pub fn isolate_control_plane_call(calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
     let Some(index) = calls
         .iter()

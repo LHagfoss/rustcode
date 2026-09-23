@@ -31,6 +31,7 @@ pub(crate) fn parse_sse_line(line: &str) -> Option<&str> {
 /// "throwaway" (run_command, grep, glob, list_directory, get_time,
 /// find_symbol, get_project_map, search_web) — pruned first; "file"
 /// (view_file contents) — pruned last; and "other".
+#[cfg(test)]
 pub(crate) fn classify_tool_msg(m: &ChatMessage) -> Option<&'static str> {
     if m.role != "tool" {
         return None;

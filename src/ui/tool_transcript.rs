@@ -1450,6 +1450,7 @@ pub(super) fn push_left_aligned_separator<'a>(
     ]));
 }
 
+#[cfg(test)]
 pub(super) fn push_new_chat_separator<'a>(
     lines: &mut Vec<Line<'a>>,
     width: u16,
@@ -1502,10 +1503,12 @@ pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool {
     next_visible_message(history, assistant_index).is_some_and(|message| message.role == "tool")
 }
 
+#[cfg(test)]
 pub(super) fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMessage> {
     history.iter().skip(index + 1).find(|message| {
         !((message.role == "system" || message.role == "assistant")
@@ -1513,6 +1516,7 @@ pub(super) fn next_visible_message(history: &[ChatMessage], index: usize) -> Opt
     })
 }
 
+#[cfg(test)]
 pub(crate) fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
     next_visible_message(history, tool_index).is_some_and(|message| message.role == "assistant")
 }

@@ -11,8 +11,11 @@ pub(crate) use finish::run_agent_turn_with_context;
 pub(crate) use finish::run_agent_turn_with_context_for_session;
 pub(crate) use queue::process_queue_orchestrator;
 pub(crate) use queue::process_queue_orchestrator_with_ui_events;
+#[cfg(test)]
 use recovery::reasoning_loop_final_response;
+#[cfg(test)]
 pub(crate) use recovery::record_malformed_call;
+#[cfg(test)]
 use request::messages_for_response_continuation;
 
 use crate::app::{AppState, ChatMessage};
@@ -33,6 +36,7 @@ use super::tool_exec::tool_result_history_message;
 use super::verification;
 use super::{stop_turn_for_budget, turn_budget_exceeded, unanswered_call_results_with_kind};
 
+#[cfg(test)]
 pub(crate) fn take_turn_context_for_prompt(
     state: &mut AppState,
     is_wakeup: bool,

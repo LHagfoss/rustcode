@@ -7,9 +7,13 @@
 
 use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
-use crate::app::{AppEvent, AppState, ApprovalDecision, PendingQuestion, QuestionAnswer};
+#[cfg(test)]
+use crate::app::AppState;
+use crate::app::{AppEvent, ApprovalDecision, PendingQuestion, QuestionAnswer};
 use crate::inline_terminal::Frame;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+#[cfg(test)]
+use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
@@ -33,6 +37,7 @@ pub(in crate::ui) use advanced_settings::{
     render_update_prompt_modal,
 };
 pub(in crate::ui) use confirmation::{question_height, render_tool_confirmation_modal};
+#[cfg(test)]
 pub(super) use context::calculate_context_breakdown;
 pub(in crate::ui) use context::{render_context_modal, render_theme_picker_modal};
 pub use navigation::{PALETTE_ITEMS, PaletteItem};

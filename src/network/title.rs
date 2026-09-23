@@ -2,60 +2,6 @@ use crate::app::{AppState, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Generate a title from the first user message using the small model.
-/// Returns None if the message starts with '/' (slash command).
-pub async fn generate_title(
-    client: &reqwest::Client,
-    config: &crate::config::AppConfig,
-    first_message: &str,
-) -> Option<String> {
-    if first_message.trim().starts_with('/') {
-        return None;
-    }
-
-    let small_model_name = config.default.small();
-    let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
-
-    let first_line = first_message.lines().next()?;
-    let prompt = format!(
-        "Generate a short, concise title (max 5 words) summarizing this user's coding request/intent. Do not use quotes, punctuation, or any introductory text. Return only the title itself.\n\nIntent: {}",
-        first_line.trim()
-    );
-
-    let messages = vec![serde_json::json!({
-        "role": "user",
-        "content": prompt
-    })];
-
-    let payload = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "max_tokens": 30,
-        "temperature": 0.3,
-    });
-
-    let res = client.post(&url).json(&payload).send().await.ok()?;
-
-    if !res.status().is_success() {
-        return None;
-    }
-
-    let json: serde_json::Value = res.json().await.ok()?;
-    let title = json
-        .get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()?;
-
-    let cleaned_title = title.trim().trim_matches('"').trim().to_string();
-    if cleaned_title.is_empty() {
-        None
-    } else {
-        Some(cleaned_title)
-    }
-}
-
 /// Push an incoming user prompt onto history, then reset per-response scratch
 /// fields. A background wakeup already has a durable tool result in history, so
 /// adding a second system notice would create redundant transcript chatter.

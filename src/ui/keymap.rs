@@ -49,6 +49,7 @@ pub(crate) struct KeyMap {
 }
 
 impl KeyMap {
+    #[cfg(test)]
     pub(crate) fn for_terminal(terminal: TerminalKind) -> Self {
         Self { terminal }
     }

@@ -1,4 +1,5 @@
 use crate::app::{ChatMessage, TokenUsage};
+#[cfg(test)]
 use crate::ui::scrollback::TranscriptCursor;
 use ratatui::text::Line;
 
@@ -49,6 +50,7 @@ impl HistoryCell {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum TranscriptEvent {
     TextDelta(String),
     CommitLive,
@@ -59,11 +61,13 @@ pub(crate) enum TranscriptEvent {
 pub(crate) struct TranscriptModel {
     committed: Vec<HistoryCell>,
     live: Option<HistoryCell>,
+    #[cfg(test)]
     cursor: TranscriptCursor,
     replay_revision: u64,
 }
 
 impl TranscriptModel {
+    #[cfg(test)]
     pub(crate) fn from_history(history: &[ChatMessage]) -> Self {
         Self {
             committed: history.iter().map(HistoryCell::from_message).collect(),
@@ -71,6 +75,7 @@ impl TranscriptModel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn committed(&self) -> &[HistoryCell] {
         &self.committed
     }
@@ -112,6 +117,7 @@ impl TranscriptModel {
         self.live.as_ref().map(HistoryCell::text)
     }
 
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, event: TranscriptEvent) {
         match event {
             TranscriptEvent::TextDelta(text) => self.apply_text_delta(&text),
@@ -136,11 +142,12 @@ impl TranscriptModel {
                 self.commit_live();
             }
             crate::network::ui_adapter::AgentUiEvent::Cancelled { .. }
-            | crate::network::ui_adapter::AgentUiEvent::Error { .. }
-            | crate::network::ui_adapter::AgentUiEvent::TurnRecovered { .. }
             | crate::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
             | crate::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
             | crate::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
+            #[cfg(test)]
+            crate::network::ui_adapter::AgentUiEvent::Error { .. }
+            | crate::network::ui_adapter::AgentUiEvent::TurnRecovered { .. } => {}
         }
     }
 
@@ -174,6 +181,7 @@ impl TranscriptModel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn reset_for_resize(&mut self) {
         self.cursor.reset();
         self.replay_revision = self.replay_revision.saturating_add(1);

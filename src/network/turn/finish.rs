@@ -351,6 +351,7 @@ fn terminalize_exhausted_reasoning_response(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static>(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,

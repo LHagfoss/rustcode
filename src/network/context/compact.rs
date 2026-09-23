@@ -34,6 +34,7 @@ const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
 
 /// Check if history needs compaction and compact if so.
 /// Returns true if compaction was performed.
+#[cfg(test)]
 pub async fn maybe_compact(
     client: &reqwest::Client,
     url: &str,
@@ -59,6 +60,7 @@ pub async fn maybe_compact(
 /// profile. Keeping the wrapper above preserves direct callers and tests while
 /// allowing localhost OpenAI-compatible runtimes to avoid an unnecessary
 /// summarizer prefill even when their URL is not Ollama's default port.
+#[cfg(test)]
 pub async fn maybe_compact_with_local_policy(
     client: &reqwest::Client,
     url: &str,
@@ -319,6 +321,7 @@ fn emit_compaction_metrics(
     );
 }
 
+#[cfg(test)]
 pub async fn force_compact(
     client: &reqwest::Client,
     url: &str,

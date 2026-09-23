@@ -15,12 +15,14 @@ use crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX;
 const RESPONSE_BODY_DECODE_ERROR: &str = "error decoding response body";
 
 /// Tracks streamed tool-fence markers, including markers split across chunks.
+#[cfg(test)]
 #[derive(Default)]
 struct ToolFenceCounter {
     seen: usize,
     tail: String,
 }
 
+#[cfg(test)]
 impl ToolFenceCounter {
     const MARKER: &'static str = "```tool";
 
@@ -2805,6 +2807,7 @@ mod sse_read_error_tests {
 /// Backwards-compatible helper used by focused parser tests.  The streaming
 /// request uses [`read_sse_line_with_state`] so the first meaningful event has
 /// its own deadline.
+#[cfg(test)]
 async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     line_buf: &mut String,
@@ -2893,6 +2896,7 @@ fn sse_progress_deadline(
 /// Metadata-only summary of an outbound chat-completion request: round shape
 /// and size, not content. This is what gets written to debug.log by default
 /// in place of the full serialized payload (see `request_debug_log_line`).
+#[cfg(test)]
 pub(crate) fn request_log_summary(
     model: &str,
     message_count: usize,

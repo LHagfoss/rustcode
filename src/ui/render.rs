@@ -13,6 +13,7 @@ pub(super) fn render_live_conversation(
     );
 }
 
+#[cfg(test)]
 pub fn render(f: &mut Frame, state: &mut AppState) {
     let mut transcript = TranscriptState::default();
     let snapshot = state.render_snapshot();
@@ -124,6 +125,7 @@ pub(crate) fn desired_height_snapshot(
         .max(1)
 }
 
+#[cfg(test)]
 pub(crate) fn desired_height(
     state: &AppState,
     transcript: &mut TranscriptState,
@@ -353,6 +355,7 @@ pub(crate) fn render_with_transcript_snapshot(
     (conversation_content_height, input_box_area)
 }
 
+#[cfg(test)]
 pub fn render_with_transcript(
     f: &mut Frame,
     state: &mut AppState,

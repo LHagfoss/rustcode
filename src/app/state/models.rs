@@ -793,8 +793,10 @@ pub enum HoverTarget {
     #[default]
     None,
     /// The jump-to-latest pill.
+    #[allow(dead_code)]
     ScrollPill,
     /// A code block's `[Copy]` badge, at this screen row.
+    #[allow(dead_code)]
     CopyBadge(u16),
 }
 

@@ -4969,7 +4969,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     let breakdown = modals::calculate_context_breakdown(&state.render_snapshot());
     assert!(breakdown.user_tokens > 0);
     assert!(breakdown.assistant_tokens > 0);
-    assert!(breakdown.total_used > 0);
+    assert!(breakdown.free_tokens < breakdown.context_window);
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
@@ -5053,7 +5053,15 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     );
 
     let breakdown = modals::calculate_context_breakdown(&snapshot);
-    assert!(breakdown.total_used > active_usage.used_tokens as usize);
+    let stored_history_estimate = breakdown
+        .user_tokens
+        .saturating_add(breakdown.assistant_tokens)
+        .saturating_add(breakdown.tool_tokens)
+        .saturating_add(breakdown.system_prompt_tokens)
+        .saturating_add(breakdown.system_tools_tokens)
+        .saturating_add(breakdown.skills_tokens)
+        .saturating_add(breakdown.subagent_tokens);
+    assert!(stored_history_estimate > active_usage.used_tokens as usize);
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(
         rendered.contains("4.0k/100.0k (4.0%) prompt"),
