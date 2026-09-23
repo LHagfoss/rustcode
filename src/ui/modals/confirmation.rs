@@ -661,12 +661,22 @@ pub(in crate::ui) fn question_height(state: &RenderSnapshot, width: u16, availab
     let Some(question) = pending else {
         return 3;
     };
-    let question_rows =
-        textwrap_simple(&question.question, width.saturating_sub(4).max(10) as usize).len() as u16;
-    let option_rows = if question.custom_input.is_some() {
-        1
-    } else {
-        question.options.len().saturating_add(1) as u16
-    };
-    (question_rows + option_rows + 7).min(available.max(3))
+    let chain_len = state.pending_question_chain_len();
+    let header = super::question::question_modal_header(
+        &question,
+        chain_len,
+        state.pending_question_chain_position(),
+        chain_len.saturating_sub(state.pending_question_chain_answered()),
+    );
+    let (body, _, _) = super::question::question_modal_lines(&question, &header, width as usize);
+    let footer_rows = super::question::question_modal_footer_lines(
+        &question,
+        chain_len > 1,
+        width as usize,
+    )
+    .len() as u16;
+    // Two rows are the panel's vertical inset; keep one extra trailing row so
+    // short questions retain the existing breathing room beneath the hint.
+    let height = body.len() as u16 + footer_rows + 3;
+    height.min(available.max(1))
 }

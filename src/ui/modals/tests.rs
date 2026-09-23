@@ -316,6 +316,113 @@ fn chained_question_modal_shows_position_descriptions_and_nav_hint() {
 }
 
 #[test]
+fn question_modal_wraps_long_option_and_description_and_keeps_navigation_visible() {
+    let mut terminal = Terminal::new(TestBackend::new(44, 10)).unwrap();
+    let mut state = AppState::new();
+    state.begin_question_chain(vec![
+        PendingQuestion::new(
+            "Pick one".to_owned(),
+            vec!["A long option label that needs to wrap cleanly".to_owned()],
+            false,
+        )
+        .with_descriptions(vec![
+            "A long description that should wrap beneath its option label".to_owned(),
+        ]),
+        PendingQuestion::new("Next?".to_owned(), vec!["Yes".to_owned()], false),
+    ]);
+
+    terminal
+        .draw(|frame| {
+            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 44, 10))
+        })
+        .unwrap();
+
+    let rows = (0..10)
+        .map(|y| {
+            (0..44)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let option_start = rows
+        .iter()
+        .position(|row| row.contains("› 1. A long option"))
+        .expect("first option row should be rendered");
+    let footer_start = rows
+        .iter()
+        .position(|row| row.contains("enter to submit answer"))
+        .expect("submit hint should remain visible");
+    let option_rows = footer_start.saturating_sub(option_start);
+
+    assert!(
+        option_rows >= 3,
+        "option and description should wrap: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("enter to submit answer"))
+            && rows.iter().any(|row| row.contains("tab next")),
+        "submit and chain navigation hints should remain visible: {rows:?}"
+    );
+}
+
+#[test]
+fn question_height_accounts_for_wrapped_options() {
+    let mut state = AppState::new();
+    state.begin_question_chain(vec![PendingQuestion::new(
+        "Pick one".to_owned(),
+        vec![
+            "A deliberately long option label that wraps across several rows".to_owned(),
+            "x".repeat(50),
+        ],
+        false,
+    )]);
+
+    // Header (1), question (1), gap (1), each wrapped option (3), custom option
+    // (1), gap (1), compact footer (1), panel padding (2), and trailing space (1).
+    assert_eq!(question_height(&state.render_snapshot(), 30, 20), 15);
+}
+
+#[test]
+fn question_modal_keeps_selected_option_and_footer_on_narrow_terminal() {
+    let mut terminal = Terminal::new(TestBackend::new(24, 11)).unwrap();
+    let mut state = AppState::new();
+    state.begin_question_chain(vec![
+        PendingQuestion::new(
+            "Choose an option".to_owned(),
+            vec!["The selected answer has a long label".to_owned()],
+            false,
+        ),
+        PendingQuestion::new("Next?".to_owned(), vec!["Yes".to_owned()], false),
+    ]);
+
+    terminal
+        .draw(|frame| {
+            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 24, 11))
+        })
+        .unwrap();
+
+    let rows = (0..11)
+        .map(|y| {
+            (0..24)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        rows.iter().any(|row| row.contains("› 1.")),
+        "selected option missing: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("submit"))
+            && rows.iter().any(|row| row.contains("tab next"))
+            && rows.iter().any(|row| row.contains("⇧tab"))
+            && rows.iter().any(|row| row.contains("back")),
+        "footer and chain navigation should remain visible: {rows:?}"
+    );
+}
+
+#[test]
 fn settings_picker_uses_unified_modal_picker_style() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = AppState::new();
