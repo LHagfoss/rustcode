@@ -32,36 +32,17 @@ fn test_config_directory_is_unique_to_the_test_thread() {
 }
 
 #[test]
-fn laya_defaults_are_disabled_with_specified_limits() {
-    let laya = AppConfig::default().laya;
-    assert_eq!(laya.mode, crate::laya::LayaMode::Off);
-    assert_eq!(laya.timeout_ms, 150);
-    assert_eq!(laya.min_confidence, 0.98);
-    assert_eq!(laya.max_extra_read_only_recoveries, 1);
-}
-
-#[test]
-fn old_toml_without_laya_uses_laya_defaults() {
+fn legacy_laya_config_is_ignored_without_blocking_config_load() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join(CONFIG_TOML_FILE), "version = 1\n").unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        "version = 1\n[laya]\nmode = \"not-a-mode\"\nunknown = true\n",
+    )
+    .unwrap();
 
     let (_, _, config) = load_config_from(dir.path());
-    assert_eq!(config.laya, crate::laya::LayaConfig::default());
-}
-
-#[test]
-fn invalid_project_laya_mode_forces_off_instead_of_inheriting_relaxed() {
-    let root = TempDir::new().unwrap();
-    let project_dir = root.path().join(PROJECT_CONFIG_DIR);
-    fs::create_dir_all(&project_dir).unwrap();
-    let path = project_dir.join(PROJECT_CONFIG_FILE);
-    fs::write(&path, "version = 1\n[laya]\nmode = \"not-a-mode\"\n").unwrap();
-
-    let mut effective = AppConfig::default();
-    effective.laya.mode = crate::laya::LayaMode::Relaxed;
-    apply_project_toml_config(&mut effective, read_toml_config(&path).unwrap());
-
-    assert_eq!(effective.laya.mode, crate::laya::LayaMode::Off);
+    assert!(config.is_valid);
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
 }
 
 #[test]
@@ -1160,63 +1141,6 @@ fn project_config_overrides_global_defaults_from_near_to_far() {
 
     assert_eq!(config.default.big(), "child");
     assert_eq!(config.default.small(), "parent-small");
-}
-
-#[test]
-fn workspace_laya_mode_update_changes_project_effective_mode_without_clobbering_overrides() {
-    let global_dir = TempDir::new().unwrap();
-    let root = TempDir::new().unwrap();
-    let workspace = root.path().join("nested");
-    let project_dir = workspace.join(PROJECT_CONFIG_DIR);
-    fs::create_dir_all(&project_dir).unwrap();
-
-    let mut global = AppConfig::default();
-    global.laya.mode = crate::laya::LayaMode::Off;
-    save_config_to(global_dir.path(), &global);
-    fs::write(
-        project_dir.join(PROJECT_CONFIG_FILE),
-        "version = 1\n[default]\nbig = \"project-model\"\n[laya]\nmode = \"shadow\"\nadapter = \"adapter.py\"\nmodel = \"model\"\n",
-    )
-    .unwrap();
-
-    save_laya_mode_for_workspace_in(
-        global_dir.path(),
-        &workspace,
-        crate::laya::LayaMode::Relaxed,
-    )
-    .unwrap();
-
-    let (_, _, mut effective) = load_config_from(global_dir.path());
-    for path in project_config_paths(&workspace) {
-        apply_project_toml_config(&mut effective, read_toml_config(&path).unwrap());
-    }
-    assert_eq!(effective.laya.mode, crate::laya::LayaMode::Relaxed);
-    assert_eq!(effective.default.big(), "project-model");
-    assert_eq!(effective.laya.adapter.as_deref(), Some("adapter.py"));
-    assert_eq!(effective.laya.model.as_deref(), Some("model"));
-
-    let (_, _, global_after) = load_config_from(global_dir.path());
-    assert_eq!(global_after.laya.mode, crate::laya::LayaMode::Off);
-}
-
-#[test]
-fn laya_global_mode_update_reports_persistence_failure() {
-    let config_target = TempDir::new().unwrap();
-    let invalid_config_dir = config_target.path().join("not-a-directory");
-    fs::write(&invalid_config_dir, "not a directory").unwrap();
-    let workspace = TempDir::new().unwrap();
-
-    let result = save_laya_mode_for_workspace_in(
-        &invalid_config_dir,
-        workspace.path(),
-        crate::laya::LayaMode::Shadow,
-    );
-
-    let error = result.expect_err("global Laya persistence should report its write failure");
-    assert!(
-        error.contains("not-a-directory"),
-        "unexpected error: {error}"
-    );
 }
 
 #[test]

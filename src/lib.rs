@@ -12,8 +12,6 @@ pub mod daemon;
 mod discord_rpc;
 mod doctor;
 mod inline_terminal;
-#[path = "laya.rs"]
-pub(crate) mod laya;
 mod mcp;
 mod memory;
 mod network;
@@ -463,35 +461,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             if let Some(path) = crate::config::get_config_dir() {
                 println!("Config directory: {}", path.display());
-            }
-        }
-        return Ok(());
-    }
-
-    if let Some(cli::Commands::Laya { command }) = cli_args.command.as_ref() {
-        let workspace = std::env::current_dir()?;
-        let (_, _, config) = crate::config::load_config_for_workspace(&workspace);
-        match command {
-            cli::LayaCommand::Status => {
-                let runtime = crate::laya::LayaRuntime::new(config.laya.clone());
-                println!("{}", crate::laya::format_runtime_status(&runtime));
-            }
-            cli::LayaCommand::Enable { mode } => {
-                if let Err(error) = crate::config::save_laya_mode_for_workspace(&workspace, *mode) {
-                    eprintln!("Laya configuration update failed: {error}");
-                    std::process::exit(1);
-                }
-                println!("Laya mode set to {mode}.");
-            }
-            cli::LayaCommand::Disable => {
-                if let Err(error) = crate::config::save_laya_mode_for_workspace(
-                    &workspace,
-                    crate::laya::LayaMode::Off,
-                ) {
-                    eprintln!("Laya configuration update failed: {error}");
-                    std::process::exit(1);
-                }
-                println!("Laya disabled.");
             }
         }
         return Ok(());
