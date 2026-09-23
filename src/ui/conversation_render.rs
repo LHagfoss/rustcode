@@ -61,10 +61,7 @@ pub(crate) fn render_live_tail_with_transcript(
         .filter(|call| is_live_tool_call_visible(call))
         .cloned()
         .collect::<Vec<_>>();
-    if !visible_live_tool_calls.is_empty() {
-        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity());
-        has_visible_active_cell = true;
-    } else if !tail.is_empty() {
+    if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
         let is_tool_syntax = crate::tools::is_tool_call_start(&tail);
         let should_hide_stream = match parsed_tool {
@@ -74,12 +71,19 @@ pub(crate) fn render_live_tail_with_transcript(
 
         if !should_hide_stream {
             model_live_text = &tail;
-            has_visible_active_cell = true;
-        } else {
-            transcript.clear();
         }
+    }
+
+    if visible_live_tool_calls.is_empty() {
+        transcript.clear_tools();
     } else {
-        transcript.clear();
+        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity());
+        has_visible_active_cell = true;
+    }
+    if model_live_text.is_empty() {
+        transcript.clear_assistant();
+    } else {
+        has_visible_active_cell = true;
     }
 
     transcript.sync_model(&state.history(), model_live_text);
@@ -89,7 +93,7 @@ pub(crate) fn render_live_tail_with_transcript(
         .unwrap_or_default()
         .to_owned();
 
-    if has_visible_active_cell && state.live_tool_calls().is_empty() {
+    if !model_live_text.is_empty() {
         let live_thought_time_ms = if state.current_thought_started_at().is_some()
             || state.current_thought_time_ms() > 0
         {

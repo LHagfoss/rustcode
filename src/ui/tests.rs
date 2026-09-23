@@ -3082,6 +3082,115 @@ fn live_tool_cell_is_a_projection_not_history() {
 }
 
 #[test]
+fn live_tool_projection_does_not_hide_partial_assistant_stream() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.replace_current_response("partial assistant response");
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "view_file",
+        "Read",
+        "src/main.rs",
+    ));
+
+    let text = super::render_live_tail(&state, 80, 24)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(
+        text.contains("partial assistant response"),
+        "rendered: {text:?}"
+    );
+}
+
+#[test]
+fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.replace_current_response(concat!(
+        "The edit is in progress.\n\n```tool\n",
+        r#"{"name":"replace_file_content","arguments":{"path":"src/main.rs","target_content":"old","replacement":"new"}}"#
+    ));
+    assert!(
+        crate::tools::parse_tool_call(&state.current_response, state.active_tool_protocol())
+            .is_some()
+    );
+    assert!(
+        super::scrollback::mutable_stream_text(&state.current_response).contains("target_content")
+    );
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "replace_file_content",
+        "Edit",
+        "src/main.rs",
+    ));
+
+    let text = super::render_live_tail(&state, 100, 24)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(!text.contains("target_content"), "rendered: {text:?}");
+    assert!(!text.contains("replacement"), "rendered: {text:?}");
+}
+
+#[test]
+fn live_tool_and_assistant_cells_update_and_clear_independently() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.replace_current_response("partial response");
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "view_file",
+        "Read",
+        "src/main.rs",
+    ));
+    let mut transcript = super::TranscriptState::default();
+
+    let first =
+        super::render_live_tail_with_transcript(&state.render_snapshot(), 80, 24, &mut transcript)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+    let repeated =
+        super::render_live_tail_with_transcript(&state.render_snapshot(), 80, 24, &mut transcript)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+    assert_eq!(first, repeated, "unchanged projections must not duplicate");
+
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).clear();
+    let assistant_only =
+        super::render_live_tail_with_transcript(&state.render_snapshot(), 80, 24, &mut transcript)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+    assert!(assistant_only.contains("partial response"));
+    assert!(!assistant_only.contains("src/main.rs"));
+
+    state.clear_current_response();
+    let tools_and_assistant_cleared =
+        super::render_live_tail_with_transcript(&state.render_snapshot(), 80, 24, &mut transcript)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+    assert!(!tools_and_assistant_cleared.contains("partial response"));
+    assert!(!tools_and_assistant_cleared.contains("src/main.rs"));
+}
+
+#[test]
 fn live_exploration_batch_uses_explored_for_speculative_and_executing_calls() {
     let mut speculative =
         crate::app::LiveToolCall::new("local:1", None, "grep", "Grep", "src/**/*.rs");
