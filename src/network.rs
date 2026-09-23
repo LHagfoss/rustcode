@@ -1,4 +1,6 @@
-use crate::app::{AppState, AppStatus, ChatMessage};
+#[cfg(test)]
+use crate::app::AppStatus;
+use crate::app::{AppState, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -35,7 +37,9 @@ pub(crate) mod loop_detect;
 
 #[path = "network/helpers.rs"]
 pub(crate) mod helpers;
-pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
+#[cfg(test)]
+pub(crate) use helpers::classify_tool_msg;
+pub(crate) use helpers::{count_tokens, parse_sse_line};
 
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
@@ -56,6 +60,7 @@ pub(crate) use stream::StreamBuffer;
 #[path = "network/stream_request.rs"]
 pub(crate) mod stream_request;
 pub use stream_request::stream_request;
+#[cfg(test)]
 pub(crate) use stream_request::{
     parse_native_tool_arguments, request_debug_log_line, request_log_summary,
 };
@@ -74,10 +79,13 @@ pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSend
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;
 pub(crate) use tool_exec::{
-    bounded_tool_result_history_message, confirm_and_execute, execute_tool_batch,
-    extract_diff_block, final_tool_diff, finalize_tool_result, get_diff_preview,
-    get_tool_project_root, subagent_tool_history_message, tool_result_from_execution,
-    tool_result_history_message, tool_result_precludes_preview_fallback,
+    bounded_tool_result_history_message, confirm_and_execute, final_tool_diff, get_diff_preview,
+    subagent_tool_history_message, tool_result_precludes_preview_fallback,
+};
+#[cfg(test)]
+pub(crate) use tool_exec::{
+    execute_tool_batch, extract_diff_block, finalize_tool_result, get_tool_project_root,
+    tool_result_from_execution, tool_result_history_message,
 };
 
 #[path = "network/turn/mod.rs"]
@@ -111,9 +119,12 @@ pub use payload::{fetch_model_quota, parse_multimodal_content};
 
 #[path = "network/compiler.rs"]
 pub(crate) mod compiler;
+#[cfg(test)]
 pub(crate) use compiler::{
-    append_compiler_diagnostics, cached_compiler_check, compiler_diagnostic_fingerprint,
-    compiler_diagnostics_with_snippets, run_compiler_check, update_compiler_diagnostic_streak,
+    append_compiler_diagnostics, compiler_diagnostics_with_snippets, run_compiler_check,
+};
+pub(crate) use compiler::{
+    cached_compiler_check, compiler_diagnostic_fingerprint, update_compiler_diagnostic_streak,
 };
 
 #[path = "network/subagents.rs"]
@@ -123,15 +134,15 @@ pub(crate) use subagents::{handle_agent_tool, run_subagent, set_subagent_status}
 
 #[path = "network/title.rs"]
 pub(crate) mod title;
-pub use title::generate_title;
 #[allow(unused_imports)]
 pub(crate) use title::record_prompt_to_history;
 
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
+#[cfg(test)]
+pub(crate) use context_tail::build_dynamic_context_tail;
 pub(crate) use context_tail::{
-    ContextCheckpoint, build_dynamic_context_tail, build_dynamic_context_tail_with_checkpoint,
-    build_dynamic_context_tail_with_memory, build_volatile_context_block,
+    ContextCheckpoint, build_dynamic_context_tail_with_checkpoint, build_volatile_context_block,
     format_read_file_context_entry, prepend_skill_routing_hint,
 };
 
@@ -416,6 +427,7 @@ pub(crate) enum LoopRecoveryAction {
     ForceFinal,
 }
 
+#[cfg(test)]
 pub(crate) fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
     if attempts < MAX_LOOP_RECOVERY_ROUNDS {
         LoopRecoveryAction::Recover
@@ -1020,6 +1032,7 @@ fn vision_profile_missing_error(configured: Option<&str>, available: &[String]) 
 /// files-in-context, task plan) appended to the last message. Finally trims to
 /// the context-window budget and injects the system reminder. `tool_rounds` is
 /// only used to decide whether a one-time "context window full" notice is shown.
+#[cfg(test)]
 pub(crate) async fn prepare_turn_request(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -1036,6 +1049,7 @@ pub(crate) async fn prepare_turn_request(
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn prepare_turn_request_with_checkpoint(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -1789,6 +1803,7 @@ pub(crate) fn call_refs_for(
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn unanswered_call_results(
     calls: &[crate::app::ToolCallRef],
     reason: &str,
@@ -1827,6 +1842,7 @@ pub(crate) fn unanswered_call_results_with_kind(
 /// plans a whole session ahead also narrates results for calls that never ran,
 /// and replaying that text lets the next turn treat its own fiction as
 /// observed fact.
+#[cfg(test)]
 pub(crate) fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: usize) -> String {
     let names = kept
         .iter()
@@ -1842,6 +1858,7 @@ pub(crate) fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: 
 /// Replacement transcript text for a response whose batch was selectively
 /// truncated. Unlike the legacy count-only form, this preserves the names of
 /// the calls that did not run without replaying their arguments or prose.
+#[cfg(test)]
 pub(crate) fn truncated_batch_summary_with_dropped(
     kept: &[crate::tools::ToolCall],
     dropped: &[crate::tools::ToolCall],

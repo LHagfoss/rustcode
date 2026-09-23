@@ -7,23 +7,27 @@ mod streaming;
 pub(crate) use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionConfigId,
-    SessionConfigKind, SessionConfigOptionCategory, SessionConfigOptionValue,
-    SessionConfigSelectOptions, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason,
+    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+};
+#[cfg(test)]
+use agent_client_protocol::schema::v1::{
+    SessionConfigId, SessionConfigKind, SessionConfigOptionCategory, SessionConfigOptionValue,
+    SessionConfigSelectOptions, StopReason,
 };
 use agent_client_protocol::{Agent, Client, Stdio};
 use rustcode_tasks::TaskEvent;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
+#[cfg(test)]
 pub(crate) use permissions::{ApprovalRequirement, approval_requirement};
 pub(crate) use prompt::prompt_text;
 pub(crate) use session::{AcpSession, KnownTaskIds, SessionTurnState, Sessions, new_registry};
+#[cfg(test)]
 pub(crate) use streaming::{AcpEventStream, acp_stop_reason};
 
 const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
@@ -504,6 +508,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+    use std::path::PathBuf;
 
     fn task_event(session_id: &str, task_id: &str) -> TaskEvent {
         TaskEvent::Finished {

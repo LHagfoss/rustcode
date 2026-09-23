@@ -388,6 +388,7 @@ pub fn color_bg() -> Color {
 pub fn color_panel() -> Color {
     active_palette().panel
 }
+#[cfg(test)]
 pub fn color_element() -> Color {
     active_palette().element
 }

@@ -89,6 +89,7 @@ pub(super) fn wrap_input_chars(
     (lines, cursor.0, cursor.1)
 }
 
+#[cfg(test)]
 pub(super) fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     if inner_width == 0 {
         return 1;

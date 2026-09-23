@@ -87,6 +87,7 @@ where
         &mut self.backend
     }
 
+    #[cfg(test)]
     pub const fn backend(&self) -> &B {
         &self.backend
     }

@@ -22,6 +22,7 @@ fn ensure_session_dir(session_id: &str) -> Option<PathBuf> {
     store().map(|session_store| session_store.ensure_session(session_id))
 }
 
+#[cfg(test)]
 pub(super) fn next_session_id_value(now: u64, previous: u64) -> u64 {
     rustcode_session::next_session_id_value(now, previous)
 }
@@ -30,6 +31,7 @@ fn next_session_id() -> String {
     rustcode_session::next_session_id()
 }
 
+#[cfg(test)]
 pub(super) fn queue_history_write(
     path: PathBuf,
     history: &[ChatMessage],
@@ -431,12 +433,6 @@ pub fn start_session(config: &mut AppConfig) -> String {
 #[allow(dead_code)]
 pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     store()?.archive_session(history)
-}
-
-pub fn sorted_session_paths() -> Vec<PathBuf> {
-    store().map_or_else(Vec::new, |session_store| {
-        session_store.sorted_session_paths()
-    })
 }
 
 pub fn latest_resumable_session_meta() -> Option<SessionMeta> {

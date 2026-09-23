@@ -70,6 +70,7 @@ pub const PROJECT_CONFIG_DIR: &str = ".rustcode";
 pub const PROJECT_CONFIG_FILE: &str = "config.toml";
 const PROJECT_GITIGNORE_ENTRY: &str = ".rustcode/config.toml";
 const HISTORY_FILE: &str = "history.json";
+#[cfg(test)]
 const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
 const MAX_SESSIONS: usize = 30;
@@ -590,6 +591,7 @@ impl ModelProfile {
     }
 
     /// The context window RustCode may safely use for this profile.
+    #[cfg(test)]
     pub fn effective_context_window(&self) -> u32 {
         self.context_budget().context_window
     }
@@ -1313,6 +1315,7 @@ pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String
 /// Ordered provider fallback chain for a primary profile name: the primary
 /// first, then the configured `default.small` profile, then remaining
 /// profiles in config order. Capped at 3 so retries stay bounded.
+#[cfg(test)]
 pub fn fallback_chain<'a>(config: &'a AppConfig, primary: &str) -> Vec<&'a ModelProfile> {
     let mut chain: Vec<&ModelProfile> = Vec::new();
     if let Some(profile) = config.models.iter().find(|m| m.name == primary) {

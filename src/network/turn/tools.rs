@@ -464,6 +464,7 @@ fn laya_recovery_boundary_reached(attempts: u8, read_only_batch: bool) -> bool {
         && attempts < crate::network::MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS
 }
 
+#[cfg(test)]
 fn selected_tool_call_indices(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
@@ -477,6 +478,7 @@ fn selected_tool_call_indices(
     )
 }
 
+#[cfg(test)]
 fn selected_tool_call_indices_with_assessments(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],

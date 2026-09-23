@@ -20,8 +20,10 @@ mod replay;
 #[path = "tool_exec/result.rs"]
 mod result;
 
+#[cfg(test)]
+pub(crate) use preview::extract_diff_block;
 pub(crate) use preview::{
-    extract_diff_block, final_tool_diff, get_diff_preview, get_tool_project_root,
+    final_tool_diff, get_diff_preview, get_tool_project_root,
     tool_result_precludes_preview_fallback,
 };
 pub(crate) use result::{
@@ -755,6 +757,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) async fn execute_tool_batch(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,

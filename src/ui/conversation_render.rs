@@ -9,6 +9,7 @@ pub(super) fn conversation_area_height(content_height: u16, available_height: u1
 
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
+#[cfg(test)]
 pub(super) fn render_live_tail_snapshot(
     state: &RenderSnapshot,
     width: u16,
@@ -18,6 +19,7 @@ pub(super) fn render_live_tail_snapshot(
     render_live_tail_with_transcript(state, width, height, &mut transcript)
 }
 
+#[cfg(test)]
 pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
     let snapshot = state.render_snapshot();
     render_live_tail_snapshot(&snapshot, width, height)
@@ -374,6 +376,7 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+#[cfg(test)]
 pub(crate) fn render_committed_tool_result_group(
     state: &AppState,
     message_indices: &[usize],
@@ -384,6 +387,7 @@ pub(crate) fn render_committed_tool_result_group(
     render_committed_tool_result_group_snapshot(&snapshot, message_indices, width, show_picker)
 }
 
+#[cfg(test)]
 pub(crate) fn render_work_separator_before_assistant(
     state: &AppState,
     assistant_index: usize,
@@ -393,6 +397,7 @@ pub(crate) fn render_work_separator_before_assistant(
     render_work_separator_before_assistant_snapshot(&snapshot, assistant_index, width)
 }
 
+#[cfg(test)]
 pub(crate) fn build_claude_startup_banner(
     state: &AppState,
     total_width: usize,
@@ -402,6 +407,7 @@ pub(crate) fn build_claude_startup_banner(
     build_claude_startup_banner_snapshot(&snapshot, total_width, max_height)
 }
 
+#[cfg(test)]
 pub(crate) fn render_committed_history_block(
     state: &AppState,
     message_index: usize,
@@ -421,6 +427,7 @@ pub(crate) fn render_committed_assistant_chunk_snapshot(
         .display_lines(width)
 }
 
+#[cfg(test)]
 pub(super) fn render_committed_assistant_text_snapshot(
     _state: &RenderSnapshot,
     content: &str,
@@ -429,6 +436,7 @@ pub(super) fn render_committed_assistant_text_snapshot(
     render_committed_assistant_text_with_metrics(content, width, None, None, None, None)
 }
 
+#[cfg(test)]
 pub(crate) fn render_committed_assistant_chunk(
     _state: &AppState,
     content: &str,
@@ -443,6 +451,7 @@ pub(crate) fn render_committed_assistant_chunk(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn render_committed_assistant_text(
     _state: &AppState,
     content: &str,
@@ -451,6 +460,7 @@ pub(crate) fn render_committed_assistant_text(
     render_committed_assistant_text_snapshot(&RenderSnapshot::new(_state), content, width)
 }
 
+#[cfg(test)]
 pub(super) fn render_committed_assistant_text_with_metrics(
     content: &str,
     width: u16,

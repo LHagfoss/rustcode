@@ -1,4 +1,7 @@
-use super::tokens::{estimate_message_tokens, estimate_tokens, estimate_tool_schema_tokens};
+#[cfg(test)]
+use super::tokens::estimate_message_tokens;
+use super::tokens::{estimate_tokens, estimate_tool_schema_tokens};
+#[cfg(test)]
 use crate::app::ChatMessage;
 use crate::network::messages::estimate_msg_tokens;
 
@@ -40,6 +43,7 @@ impl PreflightBudget {
 }
 
 /// Calculate the comprehensive preflight budget before sending a request to the provider.
+#[cfg(test)]
 pub fn calculate_preflight_budget(
     system_prompt: &str,
     tool_schemas: &[serde_json::Value],

@@ -499,12 +499,14 @@ impl TranscriptCursor {
         self.next_history_index = history_len;
     }
 
+    #[cfg(test)]
     pub(crate) fn take_history_range(&mut self, history_len: usize) -> Range<usize> {
         let range = self.pending_history_range(history_len);
         self.commit_history_through(history_len);
         range
     }
 
+    #[cfg(test)]
     pub(crate) fn pending_stable_stream(&self, stream: &str) -> Vec<String> {
         // Terminal scrollback cannot revise earlier rows. Hold a response that
         // starts with reasoning until it is finalized, so it is emitted once
@@ -563,6 +565,7 @@ impl TranscriptCursor {
         Some(remainder)
     }
 
+    #[cfg(test)]
     pub(crate) fn take_stable_stream(&mut self, stream: &str) -> Vec<String> {
         let committed_len = self.committed_stream.len().min(stream.len());
         if stream.len() < self.committed_stream.len()
@@ -581,6 +584,7 @@ impl TranscriptCursor {
     }
 }
 
+#[cfg(test)]
 fn stable_rows(source: &str) -> Vec<String> {
     let mut rows = split_stable_rows(source).0;
     // Markdown renderers intentionally discard blank rows at the end of a

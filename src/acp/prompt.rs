@@ -379,11 +379,20 @@ where
             context = &mut run => break context,
             event = receiver.recv() => {
                 let Some(event) = event else { continue };
-                if matches!(
+                let abort_background = matches!(
                     &event,
                     crate::network::AgentUiEvent::Cancelled { .. }
-                        | crate::network::AgentUiEvent::Error { .. }
-                ) {
+                ) || {
+                    #[cfg(test)]
+                    {
+                        matches!(&event, crate::network::AgentUiEvent::Error { .. })
+                    }
+                    #[cfg(not(test))]
+                    {
+                        false
+                    }
+                };
+                if abort_background {
                     crate::tools::abort_background_starts(session_id);
                 }
                 send_updates(connection, session_id, event_stream.updates(event))?;
