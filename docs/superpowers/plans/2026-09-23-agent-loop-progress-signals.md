@@ -26,25 +26,25 @@
 
 ---
 
-### Task 1: Open the evidence-linked tracking issue
+### Task 1: Reopen the existing evidence-linked tracking issue
 
 **Files:**
-- Create: GitHub issue linked to this spec and the implementation PR
+- Update: GitHub issue #979, linked to this spec and the implementation PR
 
 **Interfaces:**
 - Consumes: accepted spec, session evidence, and the related closed issue search.
-- Produces: a tracking issue whose problem statement does not claim the inspected session reproduced a loop failure.
+- Produces: a reopened tracking issue whose update distinguishes the remaining output-abort path from the earlier evidence-recovery case.
 
-- [ ] **Step 1: Create the issue before implementation**
+- [ ] **Step 1: Reopen #979 and comment before implementation**
 
-Use the title `fix(agent): suppress output-only loop recovery after round progress` and include this body:
+The closed #979 issue already covers mixed batches with fresh evidence, so do not create a duplicate. Save this focused update as `/tmp/rustcode-issue-979-update.md`:
 
 ```markdown
-## Problem
+Reopening to track a remaining mixed-batch recovery path found during the 2026-09-23 review.
 
-In `src/network/turn/tools.rs`, a model round's meaningful progress clears the no-progress streak and may invalidate provisional no-information recovery. However, an independent output-stagnation abort still triggers recovery by itself. A mixed batch can therefore contain fresh meaningful evidence and repeated output while the output-only signal forces recovery.
+The current batch handler clears a provisional no-information evidence recovery when another result in the same batch makes meaningful progress. A separate output-stagnation abort still flows directly into `should_apply_loop_recovery`, so a mixed batch may still force recovery based only on identical output even after meaningful progress. This is the remaining case for the same mixed-batch problem tracked here; no new issue is needed.
 
-This is a code-reviewed risk, not a reproduced failure in the latest inspected session. Session `01a0cd48510d-7000-99a9-0a21-0a21c8d40034` completed Teams requests and later had one no-progress result during a user-cancelled Discord-versus-Teams routing mistake; it recorded zero reasoning-loop detections and zero evidence recoveries. The issue is related to the completed broad evidence-aware loop work in #603 and mixed-batch evidence work in #979, but tracks this remaining output-abort decision and instrumentation specifically.
+This is a code-reviewed risk, not a reproduced failure in the latest inspected session `01a0cd48510d-7000-99a9-0a21-0a21c8d40034`. That session recorded zero reasoning-loop detections and zero evidence recoveries; its only no-progress result occurred during a user-cancelled Discord-versus-Teams routing mistake.
 
 ## Acceptance criteria
 
@@ -55,13 +55,14 @@ This is a code-reviewed risk, not a reproduced failure in the latest inspected s
 - Add deterministic unit coverage for mixed-progress and all-repeated rounds.
 ```
 
-Save the body above as `/tmp/rustcode-loop-signal-issue.md`, then run:
+Then run:
 
 ```bash
-gh issue create --title "fix(agent): suppress output-only loop recovery after round progress" --body-file /tmp/rustcode-loop-signal-issue.md
+gh issue reopen 979
+gh issue comment 979 --body-file /tmp/rustcode-issue-979-update.md
 ```
 
-Record the created issue number in the PR description.
+Reference #979 in the PR description.
 
 ### Task 2: Define the recovery decision and event payload
 
