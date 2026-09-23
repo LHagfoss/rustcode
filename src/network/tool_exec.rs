@@ -375,7 +375,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     Option<String>,
     std::time::Duration,
 ) {
-    let (agent_mode, auto_confirm, task_working_directory, laya_active) = {
+    let (agent_mode, auto_confirm, task_working_directory) = {
         let s = state.lock().await;
         (
             s.agent_mode,
@@ -383,7 +383,6 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             s.task_working_directory
                 .clone()
                 .or_else(|| s.workspace_root.clone()),
-            s.laya.config().mode != crate::laya::LayaMode::Off,
         )
     };
     let mut authorization = crate::tools::execution_authorization(
@@ -393,7 +392,6 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         agent_mode,
         auto_confirm,
         bypass_confirm,
-        laya_active,
         assessment.as_ref(),
     );
     // Subagent tool calls use this per-call confirmation path instead of the
@@ -918,13 +916,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                 arguments: args_clone.clone(),
                 call_id: call_id_owned.clone(),
             };
-            let laya_mode = { state_clone.lock().await.laya.config().mode };
-            let is_read_only = if laya_mode == crate::laya::LayaMode::Off {
-                crate::network::is_read_only_tool(&name_clone)
-                    || crate::network::loop_detect::is_read_only_call(&name_clone, &args_clone)
-            } else {
-                crate::tools::is_read_only_call(&call_for_policy)
-            };
+            let is_read_only = crate::tools::is_read_only_call(&call_for_policy);
             let mut replay_artifact = None;
 
             let mut is_repeat = false;

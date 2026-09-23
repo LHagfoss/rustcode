@@ -40,7 +40,7 @@ fn authorization_for_interactive_call(
     assessments: &crate::tools::ShellAssessmentCache,
 ) -> tools::AuthorizationDecision {
     crate::tools::shell_assessment_for_call(assessments, call)
-        .map(|assessment| assessment.effective_authorization.clone())
+        .map(|assessment| assessment.local_authorization.clone())
         .unwrap_or_else(|| {
             tools::authorize_tool_with_args(&call.name, &call.arguments, mode, auto_confirm, false)
         })

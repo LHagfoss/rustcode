@@ -2,7 +2,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod audio;
 mod delegate;
@@ -68,14 +68,12 @@ mod tests;
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
-#[cfg(test)]
-pub(crate) use exec::shell_policy_facts;
 pub(crate) use exec::{
-    CommandProgressCallback, ShellClassification, ShellPolicyFacts, abort_background_starts,
-    approved_command_prefix_covers_call, background_task_manager, command_confirmation_preview,
-    command_requires_confirmation, release_background_start, rememberable_command_prefix_for_call,
-    run_command_output_with_progress_cancellable_for_call, shell_policy_facts_for_call,
-    stop_background_tasks, task_event_to_tool_output,
+    CommandProgressCallback, abort_background_starts, approved_command_prefix_covers_call,
+    background_task_manager, command_confirmation_preview, command_requires_confirmation,
+    release_background_start, rememberable_command_prefix_for_call,
+    run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
+    task_event_to_tool_output,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
@@ -1013,17 +1011,11 @@ pub enum AuthorizationDecision {
     Deny(String),
 }
 
-pub(crate) type EffectiveAuthorization = AuthorizationDecision;
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ShellAssessment {
     pub(crate) cache_key: String,
     pub(crate) call_signature: String,
-    pub(crate) classification: ShellClassification,
-    pub(crate) facts: ShellPolicyFacts,
     pub(crate) local_authorization: AuthorizationDecision,
-    pub(crate) advisory: Option<crate::laya::AdvisoryDecision>,
-    pub(crate) effective_authorization: EffectiveAuthorization,
 }
 
 pub(crate) type ShellAssessmentCache = std::collections::HashMap<String, ShellAssessment>;
@@ -1055,211 +1047,21 @@ pub(crate) fn shell_assessment_for_call<'a>(
         .filter(|assessment| shell_assessment_matches_call(assessment, call))
 }
 
-fn shell_classification_label(classification: ShellClassification) -> &'static str {
-    match classification {
-        ShellClassification::ReadOnly => "read_only",
-        ShellClassification::WorkspaceMutation => "workspace_mutation",
-        ShellClassification::ProcessControl => "process_control",
-        ShellClassification::NetworkOrExternal => "network_or_external",
-        ShellClassification::Unclassified => "unclassified",
-        ShellClassification::Unknown => "unknown",
-    }
-}
-
-fn confidence_bucket(advisory: Option<&crate::laya::AdvisoryDecision>) -> &'static str {
-    let Some(confidence) = advisory.map(|decision| decision.confidence) else {
-        return "none";
-    };
-    if confidence >= 0.98 {
-        "high"
-    } else if confidence >= 0.75 {
-        "medium"
-    } else {
-        "low"
-    }
-}
-
-fn latency_bucket(latency: Duration) -> &'static str {
-    match latency.as_millis() {
-        0..=9 => "0_9ms",
-        10..=49 => "10_49ms",
-        50..=149 => "50_149ms",
-        _ => "150ms_plus",
-    }
-}
-
-pub(crate) fn shell_advisory_event_fields(
-    facts: &ShellPolicyFacts,
-    advisory: Option<&crate::laya::AdvisoryDecision>,
-    latency: Duration,
-    failure_category: &str,
-    mode: crate::laya::LayaMode,
-    request_hash: &str,
-    relaxed_would_change_result: bool,
-) -> Value {
-    serde_json::json!({
-        "decision_kind": "shell_policy",
-        "mode": mode.to_string(),
-        "local_classification": shell_classification_label(facts.classification),
-        "local_label": shell_classification_label(facts.classification),
-        "advisory_label": advisory.map(|decision| decision.label.as_str()),
-        "confidence_bucket": confidence_bucket(advisory),
-        "latency_bucket": latency_bucket(latency),
-        "failure_category": failure_category,
-        "request_hash": request_hash,
-        "relaxed_would_change_result": relaxed_would_change_result,
-    })
-}
-
-fn advisory_failure_category(error: &crate::laya::AdvisoryError) -> &'static str {
-    match error {
-        crate::laya::AdvisoryError::Disabled => "disabled",
-        crate::laya::AdvisoryError::Unavailable => "unavailable",
-        crate::laya::AdvisoryError::InvalidRequest => "invalid_request",
-        crate::laya::AdvisoryError::Timeout => "timeout",
-        crate::laya::AdvisoryError::MalformedResponse => "malformed_response",
-        crate::laya::AdvisoryError::ModelError => "model_error",
-        crate::laya::AdvisoryError::ProcessExit => "process_exit",
-    }
-}
-
-pub(crate) async fn assess_shell_call(
+pub(crate) fn assess_shell_call(
     call: &ToolCall,
     mode: crate::config::AgentMode,
     auto_confirm: bool,
-    laya: &crate::laya::LayaRuntime,
 ) -> Option<ShellAssessment> {
     if call.name != "run_command" {
         return None;
     }
-    let command = call.arguments.get("command").and_then(Value::as_str)?;
-    let facts = shell_policy_facts_for_call(&call.arguments)?;
-    let laya_mode = laya.config().mode;
-    if laya_mode == crate::laya::LayaMode::Off {
-        return None;
-    }
     let local_authorization =
         authorize_tool_with_args(&call.name, &call.arguments, mode, auto_confirm, false);
-    let mut advisory = None;
-    let mut failure_category = "not_attempted";
-    let advisory_started = Instant::now();
-    let request_input = serde_json::json!({
-        "command": command.chars().take(512).collect::<String>(),
-        "local_class": shell_classification_label(facts.classification),
-        "candidate_effects": ["unknown"],
-        "facts": {
-            "redirection": facts.has_redirection,
-            "backgrounding": facts.has_backgrounding,
-            "privilege": facts.has_privilege_escalation,
-            "destructive": facts.known_destructive,
-            "network": facts.has_network_effect,
-            "mixed_list": facts.has_mixed_list,
-            "command_substitution": facts.has_command_substitution,
-            "environment_override": facts.has_environment_override,
-            "asynchronous_execution": facts.has_asynchronous_execution,
-        },
-    });
-    let request_fingerprint = request_hash(&request_input);
-    if facts.eligible_for_relaxed_advisory()
-        && matches!(
-            local_authorization,
-            AuthorizationDecision::RequireConfirmation
-        )
-    {
-        let request = crate::laya::AdvisoryRequest {
-            id: laya.next_request_id(crate::laya::AdvisoryKind::ShellPolicy),
-            kind: crate::laya::AdvisoryKind::ShellPolicy,
-            input: request_input,
-            deadline: std::time::Duration::from_millis(laya.config().timeout_ms),
-        };
-        match laya.evaluate(request).await {
-            Ok(result) => {
-                advisory = Some(result);
-                failure_category = "none";
-            }
-            Err(error) => failure_category = advisory_failure_category(&error),
-        }
-    }
-    let effective_authorization = effective_shell_authorization(
-        local_authorization.clone(),
-        &facts,
-        advisory.as_ref(),
-        laya_mode,
-        laya.config().min_confidence,
-    );
-    if laya_mode == crate::laya::LayaMode::Shadow {
-        let relaxed_would_change_result = effective_shell_authorization(
-            local_authorization.clone(),
-            &facts,
-            advisory.as_ref(),
-            crate::laya::LayaMode::Relaxed,
-            laya.config().min_confidence,
-        ) != local_authorization;
-        crate::logger::operational_event(
-            "laya.shell_policy",
-            shell_advisory_event_fields(
-                &facts,
-                advisory.as_ref(),
-                advisory_started.elapsed(),
-                failure_category,
-                laya_mode,
-                &request_fingerprint,
-                relaxed_would_change_result,
-            ),
-        );
-    }
     Some(ShellAssessment {
         cache_key: shell_assessment_cache_key(call),
         call_signature: shell_call_signature(call),
-        classification: facts.classification,
-        facts,
         local_authorization,
-        advisory,
-        effective_authorization,
     })
-}
-
-fn request_hash(input: &Value) -> String {
-    let mut digest = Sha256::new();
-    digest.update(serde_json::to_vec(input).unwrap_or_default());
-    format!("{:x}", digest.finalize())
-}
-
-fn advisory_is_safe_read_only(
-    advisory: &crate::laya::AdvisoryDecision,
-    min_confidence: f32,
-) -> bool {
-    advisory.label == "read_only"
-        && advisory.confidence.is_finite()
-        && advisory.confidence >= min_confidence
-        && advisory
-            .effects
-            .iter()
-            .all(|effect| effect.as_str() == "read_only")
-}
-
-pub(crate) fn effective_shell_authorization(
-    local: AuthorizationDecision,
-    facts: &ShellPolicyFacts,
-    advisory: Option<&crate::laya::AdvisoryDecision>,
-    mode: crate::laya::LayaMode,
-    min_confidence: f32,
-) -> EffectiveAuthorization {
-    if mode == crate::laya::LayaMode::Relaxed
-        && facts.has_hazard()
-        && advisory.is_some()
-        && matches!(local, AuthorizationDecision::Allow)
-    {
-        return AuthorizationDecision::RequireConfirmation;
-    }
-    if mode != crate::laya::LayaMode::Relaxed
-        || !facts.eligible_for_relaxed_advisory()
-        || !matches!(local, AuthorizationDecision::RequireConfirmation)
-        || !advisory.is_some_and(|decision| advisory_is_safe_read_only(decision, min_confidence))
-    {
-        return local;
-    }
-    AuthorizationDecision::Allow
 }
 
 pub(crate) fn execution_authorization(
@@ -1269,7 +1071,6 @@ pub(crate) fn execution_authorization(
     mode: crate::config::AgentMode,
     auto_confirm: bool,
     bypass_confirmation: bool,
-    laya_active: bool,
     assessment: Option<&ShellAssessment>,
 ) -> AuthorizationDecision {
     let existing = authorize_tool_with_args(name, args, mode, auto_confirm, bypass_confirmation);
@@ -1291,17 +1092,13 @@ pub(crate) fn execution_authorization(
         }
         if current_local == assessment.local_authorization {
             if bypass_confirmation
-                && assessment.effective_authorization == AuthorizationDecision::RequireConfirmation
+                && assessment.local_authorization == AuthorizationDecision::RequireConfirmation
             {
                 return AuthorizationDecision::Allow;
             }
-            return assessment.effective_authorization.clone();
+            return assessment.local_authorization.clone();
         }
         return current_local;
-    }
-
-    if laya_active && bypass_confirmation {
-        return authorize_tool_with_args(name, args, mode, auto_confirm, false);
     }
     existing
 }
@@ -1332,10 +1129,6 @@ pub fn authorize_tool_with_args(
                 .to_string(),
         );
     }
-    // Keep the baseline authorization exactly as it was before Laya. Rich
-    // shell facts are advisory eligibility inputs, not an unconditional
-    // off-mode policy tightening; enabled modes compose them through the
-    // cached assessment path below.
     let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
     let requires_confirmation = if name == "run_command" {
         command_is_destructive
