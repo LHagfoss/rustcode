@@ -247,14 +247,14 @@ impl SuggestionCycle {
 
     /// Cycle the match list forward, updating internal state. Returns true if advanced.
     pub fn cycle(&mut self, input_buffer: &str) -> bool {
-        if !input_buffer.starts_with('/') || input_buffer.is_empty() {
+        let Some(command) = command_token(input_buffer) else {
             return false;
-        }
+        };
 
         let prefix = if let Some(ref p) = self.original_prefix {
             p.clone()
         } else {
-            let p = input_buffer.to_string();
+            let p = command.to_owned();
             self.original_prefix = Some(p.clone());
             p
         };
@@ -275,23 +275,16 @@ impl SuggestionCycle {
 
     /// Returns the suffix to render as a completion hint (text after `input_buffer`).
     pub fn get_completion_suffix(&self, input_buffer: &str) -> Option<String> {
-        if !input_buffer.starts_with('/') || input_buffer.is_empty() {
-            return None;
-        }
+        let command = command_token(input_buffer)?;
 
-        let prefix = self.original_prefix.as_deref().unwrap_or(input_buffer);
+        let prefix = self.original_prefix.as_deref().unwrap_or(command);
         let matches = matching_command_names(prefix);
         if matches.is_empty() {
             return None;
         }
 
         let idx = self.suggestion_index?;
-        Some(
-            matches[idx]
-                .strip_prefix(input_buffer)
-                .unwrap_or("")
-                .to_string(),
-        )
+        Some(matches[idx].get(command.len()..).unwrap_or("").to_string())
     }
 
     /// Reset the cycle state (called on any keypress other than Tab).
@@ -384,7 +377,11 @@ mod tests {
     fn suggestion_cycle_matches_case_insensitively() {
         let mut cycle = super::SuggestionCycle::new();
 
-        assert!(cycle.cycle("/MODEL"));
+        assert!(cycle.cycle("/MODEL --fast"));
+        assert_eq!(
+            cycle.get_completion_suffix("/MODEL --fast"),
+            Some(String::new())
+        );
     }
 
     #[test]
