@@ -948,6 +948,11 @@ pub struct AppConfig {
     /// client when available. This never contains Discord credentials.
     #[serde(default = "default_true")]
     pub discord_rpc_enabled: bool,
+    /// Opaque legacy values retained through config rewrites, but never read
+    /// by runtime behavior or written to the JSON compatibility config.
+    #[doc(hidden)]
+    #[serde(skip, default)]
+    pub legacy_laya: Option<toml::Value>,
 
     #[serde(default)]
     pub agent_mode: AgentMode,
@@ -1043,6 +1048,10 @@ struct TomlConfig {
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discord_rpc_enabled: Option<bool>,
+    /// Raw, ignored legacy configuration retained so routine rewrites do not
+    /// delete user data left by the removed Laya sidecar.
+    #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
+    legacy_laya: Option<toml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1183,6 +1192,7 @@ impl Default for AppConfig {
             approved_command_prefixes: Vec::new(),
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
+            legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
             debug_verbose_network_logging: false,
@@ -1500,6 +1510,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
+        legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
@@ -1519,8 +1530,8 @@ fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
     let document = toml::from_str::<toml::Value>(&contents)
         .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
-    // Unknown top-level keys (including the removed legacy `[laya]` table)
-    // are ignored by serde, so existing user config remains loadable.
+    // The removed `[laya]` table is retained as a raw value so rewrites
+    // preserve it, but `apply_toml_config` deliberately ignores it.
     let file = document
         .try_into::<TomlConfig>()
         .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
@@ -1574,6 +1585,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(enabled) = file.discord_rpc_enabled {
         config.discord_rpc_enabled = enabled;
     }
+    if file.legacy_laya.is_some() {
+        config.legacy_laya = file.legacy_laya;
+    }
     if let Some(agent_mode) = file.agent_mode {
         config.agent_mode = agent_mode;
     }
@@ -1613,6 +1627,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Command approvals are user trust decisions and must not be granted by a
     // checked-out project configuration.
     file.approved_command_prefixes = None;
+    // Legacy user data should remain attached to the global config, never a
+    // checked-out project file.
+    file.legacy_laya = None;
     apply_toml_config(config, file);
 }
 
@@ -1692,6 +1709,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         approved_command_prefixes: None,
         audio: None,
         discord_rpc_enabled: None,
+        legacy_laya: None,
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,

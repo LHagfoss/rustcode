@@ -46,6 +46,34 @@ fn legacy_laya_config_is_ignored_without_blocking_config_load() {
 }
 
 #[test]
+fn legacy_laya_config_survives_full_config_save_while_ignored() {
+    let dir = TempDir::new().unwrap();
+    let original = r#"version = 1
+
+[laya]
+mode = "relaxed"
+adapter = "/custom/location/adapter.py"
+model = "/custom/location/model"
+timeout_ms = 173
+extra = { enabled = true, labels = ["kept", "as-is"] }
+"#;
+    let original_laya = toml::from_str::<toml::Value>(original).unwrap()["laya"].clone();
+    fs::write(dir.path().join(CONFIG_TOML_FILE), original).unwrap();
+
+    let (_, _, mut config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert_eq!(config.legacy_laya.as_ref(), Some(&original_laya));
+    config.theme = "future-theme".to_owned();
+    fs::remove_file(dir.path().join(CONFIG_TOML_FILE)).unwrap();
+    save_config_to_result(dir.path(), &config).unwrap();
+
+    let saved = fs::read_to_string(dir.path().join(CONFIG_TOML_FILE)).unwrap();
+    let saved = toml::from_str::<toml::Value>(&saved).unwrap();
+    assert_eq!(saved.get("laya"), Some(&original_laya));
+}
+
+#[test]
 fn test_config_save_load() {
     let dir = temp_dir("config");
     let config = AppConfig {
