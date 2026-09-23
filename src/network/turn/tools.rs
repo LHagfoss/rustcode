@@ -35,9 +35,38 @@ pub(crate) enum ToolHandlingOutcome {
 fn should_apply_loop_recovery(
     completion_requested: bool,
     output_abort: bool,
+    round_had_meaningful: bool,
     has_evidence_recovery: bool,
 ) -> bool {
-    !completion_requested && (output_abort || has_evidence_recovery)
+    !completion_requested && (has_evidence_recovery || (output_abort && !round_had_meaningful))
+}
+
+fn loop_signal_event(
+    output_stagnation: Option<&loop_detect::LoopStatus>,
+    round_had_meaningful: Option<bool>,
+    evidence_recovery: Option<loop_detect::ProgressReason>,
+    recovery_taken: bool,
+    recovery_suppressed_reason: Option<&str>,
+    cancelled: bool,
+) -> serde_json::Value {
+    let (status, repeats) = match output_stagnation {
+        Some(loop_detect::LoopStatus::Ok) => ("ok", serde_json::json!(0)),
+        Some(loop_detect::LoopStatus::Warning(repeats)) => ("warning", serde_json::json!(repeats)),
+        Some(loop_detect::LoopStatus::Abort(repeats)) => ("abort", serde_json::json!(repeats)),
+        None => ("not_evaluated", serde_json::Value::Null),
+    };
+
+    serde_json::json!({
+        "output_stagnation": {
+            "status": status,
+            "repeats": repeats,
+        },
+        "round_had_meaningful": round_had_meaningful,
+        "evidence_recovery": evidence_recovery.map(loop_detect::ProgressReason::label),
+        "recovery_taken": recovery_taken,
+        "recovery_suppressed_reason": recovery_suppressed_reason,
+        "cancelled": cancelled,
+    })
 }
 
 fn batch_invalidates_read_recovery(
@@ -1235,6 +1264,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
             if cancel_token.is_cancelled() {
                 dbg_log!("Orchestrator: Cancelled during tool execution");
+                crate::logger::operational_event(
+                    "turn.loop_signal",
+                    loop_signal_event(None, None, None, false, None, true),
+                );
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
                 let selected_refs = selected_call_indices
@@ -1828,6 +1861,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ctx.recovery.laya_pending_recovery_advisory = None;
             }
 
+            let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
+
             for (index, call_ref) in call_refs.iter().enumerate() {
                 if selected_call_indices.contains(&index) {
                     continue;
@@ -1877,6 +1912,17 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
             if let Some((fingerprint, dependency, streak)) = infrastructure_stop {
                 let stop_reason = fingerprint;
+                crate::logger::operational_event(
+                    "turn.loop_signal",
+                    loop_signal_event(
+                        Some(&stagnation),
+                        Some(round_had_meaningful),
+                        evidence_recovery.as_ref().map(|(reason, _, _)| *reason),
+                        false,
+                        Some("infrastructure_failure"),
+                        false,
+                    ),
+                );
                 s.history.push(ChatMessage::new(
                     "system",
                     format!(
@@ -1901,6 +1947,17 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // the model nothing else to act on. Mixed batches keep going so
             // background work does not block foreground progress.
             if background_pending && !batch_has_completed {
+                crate::logger::operational_event(
+                    "turn.loop_signal",
+                    loop_signal_event(
+                        Some(&stagnation),
+                        Some(round_had_meaningful),
+                        evidence_recovery.as_ref().map(|(reason, _, _)| *reason),
+                        false,
+                        Some("background_pending"),
+                        false,
+                    ),
+                );
                 crate::config::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
@@ -1972,15 +2029,32 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ));
             }
 
-            let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
             // Single-guidance arbiter: at most one model-visible recovery
             // notice per round. The evidence-recovery and failure-replan paths
             // below return early with their own notice, so parked warnings are
             // only pushed when neither of them will fire. The output-stagnation
             // warning wins over the parked call-repetition one; they share one
             // replaceable slot either way.
-            let recovery_will_fire =
-                should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some());
+            let recovery_will_fire = should_apply_loop_recovery(
+                completed,
+                output_abort,
+                round_had_meaningful,
+                evidence_recovery.is_some(),
+            );
+            let recovery_suppressed_reason =
+                (output_abort && round_had_meaningful && !completed && evidence_recovery.is_none())
+                    .then_some("same_round_meaningful_progress");
+            crate::logger::operational_event(
+                "turn.loop_signal",
+                loop_signal_event(
+                    Some(&stagnation),
+                    Some(round_had_meaningful),
+                    evidence_recovery.as_ref().map(|(reason, _, _)| *reason),
+                    recovery_will_fire,
+                    recovery_suppressed_reason,
+                    false,
+                ),
+            );
             if !completed && !recovery_will_fire && failure_replan.is_none() {
                 match stagnation {
                     loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) => {
@@ -1999,7 +2073,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
 
-            if should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some()) {
+            if recovery_will_fire {
                 let (reason, streak, action) = evidence_recovery.unwrap_or((
                     loop_detect::ProgressReason::NoNewInformation,
                     match stagnation {
@@ -2435,11 +2509,11 @@ mod tests {
         apply_batch_policy_floor, apply_round_stagnation, batch_invalidates_read_recovery,
         benign_shell_wrapper_failure, bounded_malformed_tool_history,
         content_bearing_inspection_status, credited_recovery_batch_is_read_only,
-        grounded_artifact_recovery_message, incomplete_tool_result, mutation_batch_guidance,
-        repetition_advisory_event_fields, repetition_advisory_input, selected_tool_call_indices,
-        selected_tool_call_indices_with_assessments, selected_tool_call_indices_with_mode,
-        shell_call_is_read_only_for_mode, should_apply_loop_recovery,
-        targeted_no_progress_guidance,
+        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
+        mutation_batch_guidance, repetition_advisory_event_fields, repetition_advisory_input,
+        selected_tool_call_indices, selected_tool_call_indices_with_assessments,
+        selected_tool_call_indices_with_mode, shell_call_is_read_only_for_mode,
+        should_apply_loop_recovery, targeted_no_progress_guidance,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::network::loop_detect;
@@ -2475,15 +2549,167 @@ mod tests {
 
     #[test]
     fn completion_request_reaches_finish_gates_before_loop_recovery() {
-        assert!(!should_apply_loop_recovery(true, true, true));
-        assert!(!should_apply_loop_recovery(true, false, true));
+        assert!(!should_apply_loop_recovery(true, true, false, true));
+        assert!(!should_apply_loop_recovery(true, false, false, true));
     }
 
     #[test]
     fn ordinary_tool_rounds_still_apply_loop_recovery() {
-        assert!(should_apply_loop_recovery(false, true, false));
-        assert!(should_apply_loop_recovery(false, false, true));
-        assert!(!should_apply_loop_recovery(false, false, false));
+        assert!(should_apply_loop_recovery(false, true, false, false));
+        assert!(should_apply_loop_recovery(false, false, false, true));
+        assert!(!should_apply_loop_recovery(false, false, false, false));
+    }
+
+    #[test]
+    fn output_abort_does_not_recover_after_meaningful_progress() {
+        assert!(!should_apply_loop_recovery(false, true, true, false));
+    }
+
+    #[test]
+    fn independent_recovery_still_fires_after_meaningful_progress() {
+        assert!(should_apply_loop_recovery(false, true, true, true));
+    }
+
+    #[test]
+    fn output_abort_still_recovers_without_meaningful_progress() {
+        assert!(should_apply_loop_recovery(false, true, false, false));
+    }
+
+    #[test]
+    fn mixed_batch_progress_suppresses_output_only_recovery_in_both_orders() {
+        for batch in [
+            [(true, false), (false, true)],
+            [(false, true), (true, false)],
+        ] {
+            let mut output_abort = false;
+            let mut round_had_meaningful = false;
+            for (is_abort, is_meaningful) in batch {
+                output_abort |= is_abort;
+                round_had_meaningful |= is_meaningful;
+            }
+            assert!(!should_apply_loop_recovery(
+                false,
+                output_abort,
+                round_had_meaningful,
+                false,
+            ));
+        }
+    }
+
+    #[test]
+    fn loop_signal_event_preserves_the_raw_abort_and_suppression() {
+        let event = loop_signal_event(
+            Some(&loop_detect::LoopStatus::Abort(4)),
+            Some(true),
+            None,
+            false,
+            Some("same_round_meaningful_progress"),
+            false,
+        );
+        assert_eq!(event["evidence_recovery"], serde_json::Value::Null);
+        assert_eq!(event["output_stagnation"]["status"], "abort");
+        assert_eq!(event["output_stagnation"]["repeats"], 4);
+        assert_eq!(event["round_had_meaningful"], true);
+        assert_eq!(event["recovery_taken"], false);
+        assert_eq!(
+            event["recovery_suppressed_reason"],
+            "same_round_meaningful_progress"
+        );
+    }
+
+    #[test]
+    fn loop_signal_event_records_all_repeated_recovery() {
+        let event = loop_signal_event(
+            Some(&loop_detect::LoopStatus::Abort(4)),
+            Some(false),
+            None,
+            true,
+            None,
+            false,
+        );
+        assert_eq!(event["output_stagnation"]["status"], "abort");
+        assert_eq!(event["output_stagnation"]["repeats"], 4);
+        assert_eq!(event["round_had_meaningful"], false);
+        assert_eq!(event["evidence_recovery"], serde_json::Value::Null);
+        assert_eq!(event["recovery_taken"], true);
+        assert_eq!(event["recovery_suppressed_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn loop_signal_event_reports_cancelled_batch_as_not_evaluated() {
+        let event = loop_signal_event(None, None, None, false, None, true);
+
+        assert_eq!(event["output_stagnation"]["status"], "not_evaluated");
+        assert_eq!(
+            event["output_stagnation"]["repeats"],
+            serde_json::Value::Null
+        );
+        assert_eq!(event["round_had_meaningful"], serde_json::Value::Null);
+        assert_eq!(event["evidence_recovery"], serde_json::Value::Null);
+        assert_eq!(event["recovery_taken"], false);
+        assert_eq!(event["recovery_suppressed_reason"], serde_json::Value::Null);
+        assert_eq!(event["cancelled"], true);
+    }
+
+    #[test]
+    fn loop_signal_event_keeps_independent_churn_recovery_separate() {
+        let event = loop_signal_event(
+            Some(&loop_detect::LoopStatus::Abort(4)),
+            Some(true),
+            Some(loop_detect::ProgressReason::Churn),
+            true,
+            None,
+            false,
+        );
+        assert_eq!(event["output_stagnation"]["status"], "abort");
+        assert_eq!(event["output_stagnation"]["repeats"], 4);
+        assert_eq!(event["round_had_meaningful"], true);
+        assert_eq!(event["evidence_recovery"], "edit_test_revert_churn");
+        assert_eq!(event["recovery_taken"], true);
+        assert_eq!(event["recovery_suppressed_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn mixed_progress_batch_suppresses_and_reports_output_only_recovery() {
+        let stagnation = loop_detect::LoopStatus::Abort(4);
+        let recovery_taken = should_apply_loop_recovery(false, true, true, false);
+        let event = loop_signal_event(
+            Some(&stagnation),
+            Some(true),
+            None,
+            recovery_taken,
+            Some("same_round_meaningful_progress"),
+            false,
+        );
+
+        assert!(!recovery_taken);
+        assert_eq!(event["output_stagnation"]["status"], "abort");
+        assert_eq!(event["round_had_meaningful"], true);
+        assert_eq!(event["recovery_taken"], false);
+        assert_eq!(
+            event["recovery_suppressed_reason"],
+            "same_round_meaningful_progress"
+        );
+    }
+
+    #[test]
+    fn no_progress_batch_keeps_and_reports_output_only_recovery() {
+        let stagnation = loop_detect::LoopStatus::Abort(4);
+        let recovery_taken = should_apply_loop_recovery(false, true, false, false);
+        let event = loop_signal_event(
+            Some(&stagnation),
+            Some(false),
+            None,
+            recovery_taken,
+            None,
+            false,
+        );
+
+        assert!(recovery_taken);
+        assert_eq!(event["output_stagnation"]["status"], "abort");
+        assert_eq!(event["round_had_meaningful"], false);
+        assert_eq!(event["recovery_taken"], true);
+        assert_eq!(event["recovery_suppressed_reason"], serde_json::Value::Null);
     }
 
     #[test]
@@ -3163,7 +3389,12 @@ mod tests {
             made_progress,
             recovery.as_ref()
         ));
-        assert!(should_apply_loop_recovery(false, false, recovery.is_some()));
+        assert!(should_apply_loop_recovery(
+            false,
+            false,
+            false,
+            recovery.is_some()
+        ));
     }
 
     #[test]
