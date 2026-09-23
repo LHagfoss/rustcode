@@ -126,6 +126,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
 pub struct ContextBreakdown {
     pub model_name: String,
     pub context_window: usize,
+    pub current_usage: super::super::context_usage::ContextUsage,
     pub user_tokens: usize,
     pub assistant_tokens: usize,
     pub tool_tokens: usize,
@@ -139,12 +140,13 @@ pub struct ContextBreakdown {
 
 pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let context_window = state.active_context_window() as usize;
+    let current_usage = super::super::context_usage::context_usage(state);
 
     let mut user_tokens = 0;
     let mut assistant_tokens = 0;
     let mut tool_tokens = 0;
 
-    for msg in state.history() {
+    for msg in state.active_history() {
         match msg.role.as_str() {
             "user" => {
                 user_tokens += crate::network::compaction::estimate_tokens(&msg.content);
@@ -196,11 +198,15 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         .saturating_sub(system_tools_tokens)
         .saturating_sub(skills_tokens);
 
-    let subagent_tokens: usize = state
-        .subagents()
-        .iter()
-        .map(crate::ui::render_snapshot::SubAgentSnapshot::history_tokens)
-        .sum();
+    let subagent_tokens: usize = if state.selected_subagent_id().is_none() {
+        state
+            .subagents()
+            .iter()
+            .map(crate::ui::render_snapshot::SubAgentSnapshot::history_tokens)
+            .sum()
+    } else {
+        0
+    };
 
     let total_used = user_tokens
         .saturating_add(assistant_tokens)
@@ -215,6 +221,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     ContextBreakdown {
         model_name: state.model_name().to_owned(),
         context_window,
+        current_usage,
         user_tokens,
         assistant_tokens,
         tool_tokens,
@@ -375,8 +382,8 @@ pub(in crate::ui) fn render_context_modal(
     );
 
     // Right side breakdown stats
-    let total_pct = if breakdown.context_window > 0 {
-        (breakdown.total_used as f64 / breakdown.context_window as f64) * 100.0
+    let current_usage_pct = if breakdown.context_window > 0 {
+        (breakdown.current_usage.used_tokens as f64 / breakdown.context_window as f64) * 100.0
     } else {
         0.0
     };
@@ -408,10 +415,14 @@ pub(in crate::ui) fn render_context_modal(
         ),
         Span::styled(
             format!(
-                "{}/{} tokens ({:.1}%)",
-                format_token_count(breakdown.total_used),
+                "{}/{} ({:.1}%) {}",
+                format_token_count(breakdown.current_usage.used_tokens as usize),
                 format_token_count(breakdown.context_window),
-                total_pct
+                current_usage_pct,
+                match breakdown.current_usage.source {
+                    super::super::context_usage::ContextUsageSource::ProviderPrompt => "prompt",
+                    super::super::context_usage::ContextUsageSource::HistoryEstimate => "estimate",
+                }
             ),
             Style::default()
                 .fg(COLOR_TEXT())
@@ -421,7 +432,7 @@ pub(in crate::ui) fn render_context_modal(
 
     stats_lines.push(Line::default());
     stats_lines.push(Line::from(vec![Span::styled(
-        "Token usage by category",
+        "Stored history estimate by category",
         Style::default().fg(COLOR_MUTED()),
     )]));
 
