@@ -251,14 +251,24 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        if rememberable_prefix.is_some() || forbidden_prefix.is_some() {
+        if rememberable_prefix.is_some() && forbidden_prefix.is_some() {
             format!(
-                "  enter confirms · r allows prefix · f forbids prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · r allows prefix · f forbids prefix · tab to {} auto-confirm",
                 if state.auto_confirm() {
                     "disable"
                 } else {
                     "enable"
                 }
+            )
+        } else if rememberable_prefix.is_some() {
+            format!(
+                "  Press enter to confirm · r allows prefix · tab to {} auto-confirm",
+                if state.auto_confirm() { "disable" } else { "enable" }
+            )
+        } else if forbidden_prefix.is_some() {
+            format!(
+                "  Press enter to confirm · f forbids prefix · tab to {} auto-confirm",
+                if state.auto_confirm() { "disable" } else { "enable" }
             )
         } else {
             format!(
