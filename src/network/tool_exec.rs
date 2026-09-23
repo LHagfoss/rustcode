@@ -394,21 +394,34 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         bypass_confirm,
         assessment.as_ref(),
     );
+    let denied_prefix_covers_call = if name == "run_command" {
+        let prefixes = state.lock().await.config.denied_command_prefixes.clone();
+        crate::tools::denied_command_prefix_covers_call(name, args, &prefixes)
+    } else {
+        false
+    };
+    if denied_prefix_covers_call {
+        authorization = crate::tools::AuthorizationDecision::Deny(
+            "command blocked by a saved user forbid rule".to_string(),
+        );
+    }
     // Subagent tool calls use this per-call confirmation path instead of the
     // parent turn's batch policy. Honor the same explicit user-approved
-    // command rule here, while keeping Plan-mode denial and every other Deny
-    // decision intact. The helper rejects environment/background variants
-    // and only returns prefixes for the vetted command/action pairs.
+    // command rules here, while keeping Plan-mode denial and every other Deny
+    // decision intact. The helpers reject environment/background variants and
+    // unsafe shell composition before allowing a rule to match.
     let saved_prefix_covers_call = if name == "run_command" {
         let prefixes = state.lock().await.config.approved_command_prefixes.clone();
         crate::tools::approved_command_prefix_covers_call(name, args, &prefixes)
     } else {
         false
     };
-    if matches!(
-        &authorization,
-        crate::tools::AuthorizationDecision::RequireConfirmation
-    ) && saved_prefix_covers_call
+    if !denied_prefix_covers_call
+        && matches!(
+            &authorization,
+            crate::tools::AuthorizationDecision::RequireConfirmation
+        )
+        && saved_prefix_covers_call
     {
         authorization = crate::tools::AuthorizationDecision::Allow;
     }
@@ -628,6 +641,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 rememberable_prefix: (name == "run_command")
                     .then(|| crate::tools::rememberable_command_prefix_for_call(args))
                     .flatten(),
+                forbidden_prefix: (name == "run_command")
+                    .then(|| crate::tools::rememberable_command_forbid_prefix_for_call(args))
+                    .flatten(),
             }]);
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
@@ -650,8 +666,31 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 crate::config::save_entire_config(&state.config);
             }
         }
+        if let Ok(crate::app::ToolConfirmationResponse::ForbidAndRemember(prefix)) = &rx_res
+            && name == "run_command"
+            && crate::tools::rememberable_command_forbid_prefix_for_call(args).as_deref()
+                == Some(prefix.as_str())
+        {
+            let mut state = state.lock().await;
+            if !state.config.denied_command_prefixes.contains(prefix) {
+                state.config.denied_command_prefixes.push(prefix.clone());
+                crate::config::save_entire_config(&state.config);
+            }
+        }
 
         let res = match rx_res {
+            Ok(crate::app::ToolConfirmationResponse::ForbidAndRemember(_)) => {
+                let mut s = state.lock().await;
+                s.pending_tool_confirmation = None;
+                s.status = AppStatus::Streaming;
+                s.request_redraw();
+                confirmation_transition_redrawn = true;
+                crate::tools::ToolExecutionOutput::failure_with_kind(
+                    "error: command blocked by a saved user forbid rule".to_string(),
+                    crate::tools::ToolErrorKind::PermissionDenied,
+                    false,
+                )
+            }
             Ok(
                 crate::app::ToolConfirmationResponse::Approve
                 | crate::app::ToolConfirmationResponse::ApproveAndRemember(_),

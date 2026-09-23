@@ -430,10 +430,10 @@ pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
     }
 }
 
-/// Parse a deliberately small shell language for reusable approval rules.
-/// The command still runs through the normal shell, but saved rules only cover
-/// one plain command with no quoting, expansion, globbing, or control syntax.
-fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
+/// Parse the narrow, plain-token subset used by reusable allow and deny rules.
+/// The command still runs through the normal shell, so shell syntax and
+/// commands with obvious external or destructive effects stay one-time only.
+fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     if command.is_empty()
         || command.chars().any(|ch| {
             matches!(
@@ -467,20 +467,15 @@ fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
         .split_whitespace()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if tokens.len() < 2 || tokens.iter().any(|token| token.is_empty()) {
+    if tokens.is_empty()
+        || (allow && tokens.len() < 2)
+        || tokens.iter().any(|token| token.is_empty())
+    {
         return None;
     }
     let binary = tokens[0].rsplit(['/', '\\']).next()?;
-    if matches!(binary, "git" | "find" | "dmesg" | "xargs") {
-        return None;
-    }
-    if tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "clean" | "destroy" | "delete" | "wipe" | "purge" | "prune" | "reset"
-        )
-    }) {
-        return None;
+    if !allow {
+        return Some(tokens);
     }
     if matches!(
         binary,
@@ -493,40 +488,6 @@ fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
             | "bash"
             | "zsh"
             | "fish"
-            | "rm"
-            | "mv"
-            | "cp"
-            | "touch"
-            | "mkdir"
-            | "rmdir"
-            | "install"
-            | "chmod"
-            | "chown"
-            | "truncate"
-            | "tee"
-            | "sed"
-            | "yq"
-            | "dd"
-            | "shred"
-            | "wipefs"
-            | "fdisk"
-            | "sfdisk"
-            | "parted"
-            | "mkfs"
-            | "diskutil"
-            | "mount"
-            | "umount"
-            | "tar"
-            | "unzip"
-            | "7z"
-            | "zip"
-            | "kill"
-            | "pkill"
-            | "killall"
-            | "service"
-            | "systemctl"
-            | "launchctl"
-            | "nohup"
             | "curl"
             | "wget"
             | "ssh"
@@ -549,7 +510,71 @@ fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
             | "podman"
             | "kubectl"
             | "terraform"
+            | "rm"
+            | "mv"
+            | "cp"
+            | "touch"
+            | "mkdir"
+            | "rmdir"
+            | "install"
+            | "chmod"
+            | "chown"
+            | "truncate"
+            | "tee"
+            | "sed"
+            | "yq"
+            | "tar"
+            | "unzip"
+            | "7z"
+            | "zip"
+            | "kill"
+            | "pkill"
+            | "killall"
+            | "service"
+            | "systemctl"
+            | "launchctl"
+            | "nohup"
+            | "dd"
+            | "shred"
+            | "wipefs"
+            | "fdisk"
+            | "sfdisk"
+            | "parted"
+            | "mkfs"
+            | "diskutil"
+            | "mount"
+            | "umount"
     ) {
+        return None;
+    }
+    if tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "clean"
+                | "destroy"
+                | "delete"
+                | "wipe"
+                | "purge"
+                | "prune"
+                | "reset"
+                | "push"
+                | "publish"
+                | "deploy"
+                | "release"
+        )
+    }) {
+        return None;
+    }
+    if matches!(binary, "pip" | "pip3")
+        || matches!(binary, "npm" | "pnpm" | "yarn" | "bun")
+            && tokens
+                .iter()
+                .any(|token| matches!(token.as_str(), "install" | "add" | "publish" | "link"))
+        || binary == "cargo"
+            && tokens
+                .iter()
+                .any(|token| matches!(token.as_str(), "install" | "publish" | "login" | "owner"))
+    {
         return None;
     }
     if tokens[0].contains('=')
@@ -559,36 +584,49 @@ fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
     {
         return None;
     }
-    // Reusable rules are intentionally limited to well-known, non-deploying
-    // test/build actions. The verb must be the first argument: otherwise a
-    // selector or option such as `cargo +stable` could become the saved
-    // prefix and silently cover a different action such as `publish`.
-    let action_tokens = match (binary, tokens.get(1).map(String::as_str)) {
-        ("cargo", Some(action @ ("test" | "check" | "build" | "clippy" | "fmt" | "doc"))) => {
-            vec![action.to_owned()]
+    // Do not turn an interpreter/module prefix into a broad reusable rule.
+    if matches!(binary, "python" | "python3") {
+        if tokens
+            .get(1)
+            .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-e"))
+            || tokens.len() == 1
+        {
+            return None;
         }
-        // A module name is part of the rule. Never persist the broad
-        // `python -m` prefix, and do not remember package installers or
-        // arbitrary modules such as `http.server`.
-        ("python" | "python3", Some("-m")) => {
-            let module = tokens.get(2).map(String::as_str)?;
-            if !matches!(module, "pytest" | "unittest") {
-                return None;
-            }
-            vec!["-m".to_owned(), module.to_owned()]
+        if tokens.get(1).is_some_and(|arg| arg == "-m")
+            && !tokens
+                .get(2)
+                .is_some_and(|module| matches!(module.as_str(), "pytest" | "unittest"))
+        {
+            return None;
         }
-        // Interpreter command strings, package managers, network clients,
-        // and all unreviewed command families remain one-time approvals.
-        _ => return None,
-    };
-    let mut rule_tokens = vec![tokens[0].clone()];
-    rule_tokens.extend(action_tokens);
-    Some(rule_tokens)
+    } else if matches!(binary, "node" | "ruby" | "perl")
+        && (tokens
+            .get(1)
+            .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-m" | "-e"))
+            || tokens.len() == 1)
+    {
+        return None;
+    }
+    // Shell flags that redirect output, affect global state, or force
+    // destructive behavior must always be reviewed again.
+    if tokens.iter().any(|token| {
+        let lower = token.to_ascii_lowercase();
+        matches!(
+            token.as_str(),
+            "-f" | "--force" | "--global" | "-g" | "--output" | "-o"
+        ) || lower.starts_with("--output=")
+            || lower.starts_with("--prefix=")
+            || lower.starts_with("--registry=")
+    }) {
+        return None;
+    }
+    Some(tokens)
 }
 
 /// The short prefix shown to the user for a persistent reusable approval.
 pub(crate) fn rememberable_command_prefix(command: &str) -> Option<String> {
-    let tokens = reusable_rule_tokens(command)?;
+    let tokens = reusable_rule_tokens(command, true)?;
     Some(tokens.join(" "))
 }
 
@@ -628,19 +666,76 @@ pub(crate) fn approved_command_prefix_covers_call(
 /// Match parsed token prefixes, never raw string prefixes. Rules with shell
 /// syntax or a high-risk command family are ignored even if present in config.
 pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
-    let Some(rule_tokens) = reusable_rule_tokens(rule) else {
+    let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
         return false;
     };
-    let Some(command_tokens) = reusable_rule_tokens(command) else {
+    let Some(command_tokens) = reusable_rule_tokens(command, true) else {
         return false;
     };
     command_tokens.starts_with(&rule_tokens)
+}
+
+pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
+    let tokens = reusable_rule_tokens(command, false)?;
+    Some(tokens.join(" "))
+}
+
+pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Option<String> {
+    if args
+        .get("env")
+        .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
+        || ["background", "detached"].iter().any(|name| {
+            args.get(*name)
+                .is_some_and(|value| value.as_bool() != Some(false))
+        })
+    {
+        return None;
+    }
+    rememberable_command_forbid_prefix(args.get("command")?.as_str()?)
+}
+
+/// Match a persistent deny prefix before regular command approval. A deny is
+/// anchored to the first command and also blocks composition appended after
+/// that command, so `cargo test; ...` cannot evade a saved forbid rule.
+pub(crate) fn denied_command_prefix_covers_call(
+    name: &str,
+    args: &Value,
+    prefixes: &[String],
+) -> bool {
+    if name != "run_command"
+        || args
+            .get("env")
+            .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
+        || ["background", "detached"]
+            .iter()
+            .any(|key| args.get(*key).is_some_and(|v| v.as_bool() != Some(false)))
+    {
+        return false;
+    }
+    let Some(command) = args.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    prefixes.iter().any(|prefix| {
+        let Some(tokens) = reusable_rule_tokens(prefix, false) else {
+            return false;
+        };
+        let normalized = tokens.join(" ");
+        let command = command.trim_start();
+        command.strip_prefix(&normalized).is_some_and(|rest| {
+            rest.is_empty()
+                || rest
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_whitespace() || ";|&<>".contains(ch))
+        })
+    })
 }
 
 #[cfg(test)]
 mod command_prefix_tests {
     use super::{
         approved_command_prefix_covers_call, command_prefix_rule_matches,
+        denied_command_prefix_covers_call, rememberable_command_forbid_prefix,
         rememberable_command_prefix, rememberable_command_prefix_for_call,
     };
 
@@ -692,7 +787,10 @@ mod command_prefix_tests {
 
     #[test]
     fn reusable_prefixes_bind_to_vetted_command_actions() {
-        assert!(rememberable_command_prefix("cargo +stable test").is_none());
+        assert_eq!(
+            rememberable_command_prefix("cargo +stable test"),
+            Some("cargo +stable test".to_owned())
+        );
         assert!(!command_prefix_rule_matches(
             "cargo +stable test",
             "cargo +stable publish"
@@ -728,6 +826,17 @@ mod command_prefix_tests {
             "yarn publish",
         ] {
             assert!(rememberable_command_prefix(command).is_none(), "{command}");
+        }
+        for command in [
+            "make test",
+            "git add src/main.rs",
+            "npm test",
+            "go test ./...",
+        ] {
+            assert_eq!(
+                rememberable_command_prefix(command).as_deref(),
+                Some(command)
+            );
         }
     }
 
@@ -767,6 +876,35 @@ mod command_prefix_tests {
             "write_to_file",
             &args("cargo test", serde_json::json!({})),
             &prefixes,
+        ));
+    }
+
+    #[test]
+    fn saved_forbid_precedes_allowed_prefix_and_covers_shell_composition() {
+        let forbidden = vec!["cargo test".to_owned()];
+        assert_eq!(
+            rememberable_command_forbid_prefix("cargo test"),
+            Some("cargo test".to_owned())
+        );
+        assert!(denied_command_prefix_covers_call(
+            "run_command",
+            &serde_json::json!({"command":"cargo test --lib"}),
+            &forbidden,
+        ));
+        assert!(denied_command_prefix_covers_call(
+            "run_command",
+            &serde_json::json!({"command":"cargo test; echo unexpected"}),
+            &forbidden,
+        ));
+        assert!(!denied_command_prefix_covers_call(
+            "run_command",
+            &serde_json::json!({"command":"cargo testing"}),
+            &forbidden,
+        ));
+        assert!(!denied_command_prefix_covers_call(
+            "run_command",
+            &serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
+            &forbidden,
         ));
     }
 }

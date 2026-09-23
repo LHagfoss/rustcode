@@ -187,15 +187,24 @@ pub(super) async fn handle_app_event(
                                 .as_ref()
                                 .filter(|items| {
                                     items.len() == 1 && items[0].rememberable_prefix.is_some()
+                                        || items.len() == 1 && items[0].forbidden_prefix.is_some()
                                 })
                                 .and_then(|items| items[0].rememberable_prefix.clone());
-                            (s.tool_confirmation_selected, prefix)
+                            let forbidden_prefix = s
+                                .pending_tool_confirmation
+                                .as_ref()
+                                .filter(|items| items.len() == 1)
+                                .and_then(|items| items[0].forbidden_prefix.clone());
+                            (s.tool_confirmation_selected, prefix, forbidden_prefix)
                         })
                     };
-                    if let Some((selected, prefix)) = selected {
-                        if let Some(event) =
-                            ui::approval_event_for_key(key, selected, prefix.as_deref())
-                        {
+                    if let Some((selected, prefix, forbidden_prefix)) = selected {
+                        if let Some(event) = ui::approval_event_for_key(
+                            key,
+                            selected,
+                            prefix.as_deref(),
+                            forbidden_prefix.as_deref(),
+                        ) {
                             let _ = app_event_sender.send(event);
                         } else {
                             if is_shift_tab(key) {
