@@ -6,8 +6,9 @@ use std::sync::{Mutex, OnceLock};
 /// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
 const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
-const ROTATION_FAILURE_MARKER: &str = "[logger] prior log truncated because rotation failed";
 const DEBUG_LOG_LOCK_NAME: &str = "debug.log.lock";
+const ROTATION_STAGE_NAME: &str = "debug.log.rotate.tmp";
+const ROTATION_BACKUP_NAME: &str = "debug.log.1.rotate.bak";
 
 pub(crate) fn set_active_session_id(session_id: Option<&str>) {
     let mut active = active_session_lock()
@@ -86,15 +87,15 @@ fn try_acquire_log_file_lock(config_dir: &Path) -> Option<std::fs::File> {
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
     let rotated_path = log_dir.join("debug.log.1");
-    let _ = std::fs::remove_file(log_dir.join("debug.log.rotate.tmp"));
+    if recover_rotation(log_dir).is_err() {
+        return;
+    }
     let _ = bound_log_file(&rotated_path, limit_bytes);
     let Ok(meta) = std::fs::metadata(&log_path) else {
         return;
     };
     if meta.len() > limit_bytes {
-        if bound_log_file(&log_path, limit_bytes).is_ok() {
-            let _ = replace_rotated_log(&log_path, &rotated_path);
-        }
+        let _ = replace_rotated_log(&log_path, &rotated_path, limit_bytes);
     }
 }
 
@@ -145,20 +146,109 @@ fn valid_utf8_tail(bytes: &[u8], max_bytes: usize) -> String {
     decoded[start..].to_owned()
 }
 
-fn replace_rotated_log(log_path: &Path, rotated_path: &Path) -> std::io::Result<()> {
+fn replace_rotated_log(
+    log_path: &Path,
+    rotated_path: &Path,
+    limit_bytes: u64,
+) -> std::io::Result<()> {
     let Some(log_dir) = log_path.parent() else {
         return Err(std::io::Error::other("debug log has no parent directory"));
     };
-    let staged_path = log_dir.join("debug.log.rotate.tmp");
-    let _ = std::fs::remove_file(&staged_path);
-    let staged = (|| {
-        std::fs::copy(log_path, &staged_path)?;
-        std::fs::copy(&staged_path, rotated_path)?;
-        std::fs::remove_file(log_path)?;
-        Ok(())
-    })();
-    let _ = std::fs::remove_file(&staged_path);
-    staged
+    recover_rotation(log_dir)?;
+    replace_rotated_log_with(
+        log_path,
+        rotated_path,
+        &log_dir.join(ROTATION_STAGE_NAME),
+        &log_dir.join(ROTATION_BACKUP_NAME),
+        limit_bytes,
+        |from, to| std::fs::copy(from, to),
+        |from, to| std::fs::rename(from, to),
+        |path| std::fs::remove_file(path),
+    )
+}
+
+fn recover_rotation(log_dir: &Path) -> std::io::Result<()> {
+    let rotated_path = log_dir.join("debug.log.1");
+    let staged_path = log_dir.join(ROTATION_STAGE_NAME);
+    let backup_path = log_dir.join(ROTATION_BACKUP_NAME);
+    if backup_path.exists() {
+        if rotated_path.exists() {
+            let _ = remove_file_if_exists(&backup_path);
+        } else {
+            std::fs::rename(&backup_path, &rotated_path)?;
+        }
+    }
+    let _ = remove_file_if_exists(&staged_path);
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_file_if_exists_with<D>(path: &Path, remove_file: &D) -> std::io::Result<()>
+where
+    D: Fn(&Path) -> std::io::Result<()>,
+{
+    match remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn replace_rotated_log_with<C, R, D>(
+    log_path: &Path,
+    rotated_path: &Path,
+    staged_path: &Path,
+    backup_path: &Path,
+    limit_bytes: u64,
+    copy_file: C,
+    rename_file: R,
+    remove_file: D,
+) -> std::io::Result<()>
+where
+    C: Fn(&Path, &Path) -> std::io::Result<u64>,
+    R: Fn(&Path, &Path) -> std::io::Result<()>,
+    D: Fn(&Path) -> std::io::Result<()>,
+{
+    remove_file_if_exists_with(staged_path, &remove_file)?;
+    if let Err(error) = copy_file(log_path, staged_path) {
+        let _ = remove_file(staged_path);
+        return Err(error);
+    }
+    if let Err(error) = bound_log_file(staged_path, limit_bytes) {
+        let _ = remove_file(staged_path);
+        return Err(error);
+    }
+
+    let had_archive = rotated_path.exists();
+    if had_archive {
+        remove_file_if_exists_with(backup_path, &remove_file)?;
+        // Both renames target absent paths, which works on Windows where
+        // std::fs::rename cannot replace an existing destination.
+        rename_file(rotated_path, backup_path)?;
+    }
+    if let Err(error) = rename_file(staged_path, rotated_path) {
+        if had_archive {
+            let _ = rename_file(backup_path, rotated_path);
+        }
+        let _ = remove_file(staged_path);
+        return Err(error);
+    }
+
+    if let Err(error) = remove_file(log_path) {
+        // Keep the active segment unchanged and retain the old archive backup.
+        return Err(error);
+    }
+    if had_archive {
+        let _ = remove_file(backup_path);
+    }
+    Ok(())
 }
 
 pub(crate) fn append_line(line: &str) {
@@ -275,74 +365,21 @@ fn capped_log_line<'a>(line: &'a str, limit_bytes: u64) -> std::borrow::Cow<'a, 
 fn append_bounded_line(log_dir: &Path, line: &str, append_bytes: u64, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
     let rotated_path = log_dir.join("debug.log.1");
-    let _ = std::fs::remove_file(log_dir.join("debug.log.rotate.tmp"));
+    if recover_rotation(log_dir).is_err() {
+        return;
+    }
     let _ = bound_log_file(&rotated_path, limit_bytes);
     let current_bytes = std::fs::metadata(&log_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     if current_bytes.saturating_add(append_bytes) > limit_bytes {
-        if current_bytes > limit_bytes && bound_log_file(&log_path, limit_bytes).is_err() {
-            return;
-        }
-        if replace_rotated_log(&log_path, &rotated_path).is_err() {
-            // Keep a bounded tail of the old segment alongside the new line.
-            // If even one prior byte cannot fit, leave the existing segment
-            // untouched rather than replacing it with the new line alone.
-            let _ =
-                retain_old_tail_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
+        if replace_rotated_log(&log_path, &rotated_path, limit_bytes).is_err() {
+            // The source is not modified unless a complete archive has been
+            // installed, so a failed rotation leaves the existing segment.
             return;
         }
     }
     append_line_to_path(&log_path, line);
-}
-
-fn retain_old_tail_and_append_bounded_line(
-    path: &Path,
-    line: &str,
-    append_bytes: u64,
-    limit_bytes: u64,
-) -> std::io::Result<()> {
-    use std::io::{Read, Seek, SeekFrom, Write};
-
-    let marker_bytes = ROTATION_FAILURE_MARKER.len().saturating_add(1) as u64;
-    let available_for_old = limit_bytes.saturating_sub(append_bytes);
-    let current_bytes = std::fs::metadata(path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    let separator_bytes = u64::from(current_bytes > 0);
-    let include_marker = available_for_old > marker_bytes.saturating_add(separator_bytes);
-    let retained_bytes = available_for_old
-        .saturating_sub(if include_marker { marker_bytes } else { 0 })
-        .saturating_sub(separator_bytes);
-    if current_bytes > 0 && retained_bytes == 0 {
-        return Ok(());
-    }
-    let mut old_tail = Vec::new();
-    if retained_bytes > 0 {
-        let mut old_file = std::fs::File::open(path)?;
-        old_file.seek(SeekFrom::End(-(retained_bytes as i64)))?;
-        old_file.read_to_end(&mut old_tail)?;
-        if let Some(line_end) = old_tail.iter().position(|byte| *byte == b'\n')
-            && line_end + 1 < old_tail.len()
-        {
-            old_tail.drain(..=line_end);
-        }
-    }
-    let old_tail = valid_utf8_tail(&old_tail, retained_bytes as usize);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
-    if include_marker {
-        writeln!(file, "{ROTATION_FAILURE_MARKER}")?;
-    }
-    file.write_all(old_tail.as_bytes())?;
-    if !old_tail.is_empty() && !old_tail.ends_with('\n') {
-        writeln!(file)?;
-    }
-    writeln!(file, "{line}")?;
-    Ok(())
 }
 
 fn attributed_fields(mut fields: Value) -> (Value, Option<String>) {
@@ -686,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_old_log_tail_when_archive_replacement_fails_for_both_log_files() {
+    fn preserves_active_segments_when_archive_replacement_fails_for_both_log_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let session_id = "2026-09-11T00:00:00Z-test-session";
         let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
@@ -694,8 +731,12 @@ mod tests {
         std::fs::create_dir_all(&session_logs).expect("create session log directory");
         let global_archive = dir.path().join("debug.log.1");
         let session_archive = session_logs.join("debug.log.1");
-        std::fs::create_dir(&global_archive).expect("block global archive path");
-        std::fs::create_dir(&session_archive).expect("block session archive path");
+        std::fs::write(&global_archive, "global prior archive\n").expect("write global archive");
+        std::fs::write(&session_archive, "session prior archive\n").expect("write session archive");
+        std::fs::create_dir(dir.path().join(ROTATION_BACKUP_NAME))
+            .expect("block global backup path");
+        std::fs::create_dir(session_logs.join(ROTATION_BACKUP_NAME))
+            .expect("block session backup path");
         std::fs::write(dir.path().join("debug.log"), vec![b'g'; 75]).expect("write global log");
         std::fs::write(session_logs.join("debug.log"), vec![b's'; 75]).expect("write session log");
 
@@ -703,16 +744,16 @@ mod tests {
 
         let global = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
         let session = std::fs::read_to_string(session_logs.join("debug.log")).expect("session log");
-        assert!(global.starts_with(ROTATION_FAILURE_MARKER));
-        assert!(global.ends_with("latest\n"));
-        assert!(global.contains("gggg"), "old global log tail was lost");
-        assert!(session.starts_with(ROTATION_FAILURE_MARKER));
-        assert!(session.ends_with("latest\n"));
-        assert!(session.contains("ssss"), "old session log tail was lost");
-        assert!(global.len() <= 80);
-        assert!(session.len() <= 80);
-        assert!(global_archive.is_dir());
-        assert!(session_archive.is_dir());
+        assert_eq!(global, "g".repeat(75));
+        assert_eq!(session, "s".repeat(75));
+        assert_eq!(
+            std::fs::read_to_string(global_archive).unwrap(),
+            "global prior archive\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_archive).unwrap(),
+            "session prior archive\n"
+        );
     }
 
     #[test]
@@ -731,10 +772,171 @@ mod tests {
             std::fs::read_to_string(&archive_path).expect("old archive"),
             "previous archive segment\n"
         );
-        let active = std::fs::read_to_string(&log_path).expect("retained active tail");
-        assert!(active.contains('a'), "old active segment was lost");
-        assert!(active.ends_with("latest\n"));
-        assert!(active.len() <= 80);
+        assert_eq!(
+            std::fs::read(&log_path).expect("retained active segment"),
+            vec![b'a'; 75]
+        );
+    }
+
+    #[test]
+    fn staging_failure_leaves_active_and_archive_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let staged_path = dir.path().join(ROTATION_STAGE_NAME);
+        let backup_path = dir.path().join(ROTATION_BACKUP_NAME);
+        std::fs::write(&log_path, "active segment\n").expect("write active");
+        std::fs::write(&archive_path, "prior archive\n").expect("write archive");
+        std::fs::create_dir(&staged_path).expect("block staging path");
+
+        let result = replace_rotated_log_with(
+            &log_path,
+            &archive_path,
+            &staged_path,
+            &backup_path,
+            100,
+            |from, to| std::fs::copy(from, to),
+            |from, to| std::fs::rename(from, to),
+            |path| std::fs::remove_file(path),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap(),
+            "active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(archive_path).unwrap(),
+            "prior archive\n"
+        );
+    }
+
+    #[test]
+    fn staged_copy_failure_leaves_both_segments_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let staged_path = dir.path().join(ROTATION_STAGE_NAME);
+        let backup_path = dir.path().join(ROTATION_BACKUP_NAME);
+        std::fs::write(&log_path, "active segment\n").expect("write active");
+        std::fs::write(&archive_path, "prior archive\n").expect("write archive");
+        let copy = |_: &Path, to: &Path| -> std::io::Result<u64> {
+            std::fs::write(to, "partial staged bytes")?;
+            Err(std::io::Error::other("injected stage copy failure"))
+        };
+
+        let result = replace_rotated_log_with(
+            &log_path,
+            &archive_path,
+            &staged_path,
+            &backup_path,
+            100,
+            copy,
+            |from, to| std::fs::rename(from, to),
+            |path| std::fs::remove_file(path),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap(),
+            "active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(archive_path).unwrap(),
+            "prior archive\n"
+        );
+        assert!(!staged_path.exists(), "partial stage should be removed");
+    }
+
+    #[test]
+    fn archive_replacement_failure_restores_previous_archive() {
+        use std::cell::Cell;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let staged_path = dir.path().join(ROTATION_STAGE_NAME);
+        let backup_path = dir.path().join(ROTATION_BACKUP_NAME);
+        std::fs::write(&log_path, "active segment\n").expect("write active");
+        std::fs::write(&archive_path, "prior archive\n").expect("write archive");
+        let rename_count = Cell::new(0);
+        let rename = |from: &Path, to: &Path| {
+            let count = rename_count.get() + 1;
+            rename_count.set(count);
+            if count == 2 {
+                Err(std::io::Error::other(
+                    "injected archive replacement failure",
+                ))
+            } else {
+                std::fs::rename(from, to)
+            }
+        };
+
+        let result = replace_rotated_log_with(
+            &log_path,
+            &archive_path,
+            &staged_path,
+            &backup_path,
+            100,
+            |from, to| std::fs::copy(from, to),
+            rename,
+            |path| std::fs::remove_file(path),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(rename_count.get(), 3, "backup should be restored");
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap(),
+            "active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(archive_path).unwrap(),
+            "prior archive\n"
+        );
+        assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn active_removal_failure_keeps_a_complete_segment_and_prior_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let staged_path = dir.path().join(ROTATION_STAGE_NAME);
+        let backup_path = dir.path().join(ROTATION_BACKUP_NAME);
+        std::fs::write(&log_path, "active segment\n").expect("write active");
+        std::fs::write(&archive_path, "prior archive\n").expect("write archive");
+        let remove = |path: &Path| {
+            if path == log_path {
+                Err(std::io::Error::other("injected active removal failure"))
+            } else {
+                std::fs::remove_file(path)
+            }
+        };
+
+        let result = replace_rotated_log_with(
+            &log_path,
+            &archive_path,
+            &staged_path,
+            &backup_path,
+            100,
+            |from, to| std::fs::copy(from, to),
+            |from, to| std::fs::rename(from, to),
+            remove,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap(),
+            "active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(archive_path).unwrap(),
+            "active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(backup_path).unwrap(),
+            "prior archive\n"
+        );
     }
 
     #[test]
