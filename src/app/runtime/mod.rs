@@ -432,7 +432,10 @@ mod tests {
             .await
             .expect("approval event should be handled");
 
-        assert!(rx.await.expect("approval response"));
+        assert_eq!(
+            rx.await.expect("approval response"),
+            crate::app::ToolConfirmationResponse::Approve
+        );
         let state = runtime.app_state().await;
         assert!(state.auto_confirm);
         assert!(state.pending_tool_confirmation.is_none());
@@ -453,7 +456,10 @@ mod tests {
             .await
             .expect("approval event should be handled");
 
-        assert!(!rx.await.expect("approval response"));
+        assert_eq!(
+            rx.await.expect("approval response"),
+            crate::app::ToolConfirmationResponse::Deny
+        );
         assert!(previous_token.is_cancelled());
     }
 

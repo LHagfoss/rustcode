@@ -2407,7 +2407,9 @@ async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
         .tool_confirmation_response
         .take()
         .expect("confirmation response channel");
-    response.send(false).expect("confirmation task alive");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("confirmation task alive");
     let _ = task.await.expect("confirmation task should finish");
 
     let s = state.lock().await;
@@ -2467,7 +2469,9 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
         .tool_confirmation_response
         .take()
         .expect("confirmation response channel");
-    response.send(false).expect("confirmation task alive");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("confirmation task alive");
     assert!(!task.await.expect("confirmation task should finish"));
 }
 
@@ -2599,7 +2603,9 @@ async fn off_mode_keeps_local_policy_without_sidecar_or_advisory_event() {
         .tool_confirmation_response
         .take()
         .expect("local confirmation response channel");
-    response.send(false).expect("policy task is still waiting");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("policy task is still waiting");
     assert!(!task.await.expect("policy task should finish"));
 }
 
@@ -2647,7 +2653,9 @@ async fn execution_requires_confirmation_when_relaxed_laya_assessment_is_missing
         .tool_confirmation_response
         .take()
         .expect("confirmation response channel");
-    response.send(false).expect("confirmation task alive");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("confirmation task alive");
     let (result, _, _) = task.await.expect("execution task should finish");
     assert_eq!(
         result.error_kind,

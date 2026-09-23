@@ -46,6 +46,10 @@ fn authorization_for_interactive_call(
         })
 }
 
+fn saved_prefix_covers_call(call: &ToolCall, prefixes: &[String]) -> bool {
+    tools::approved_command_prefix_covers_call(&call.name, &call.arguments, prefixes)
+}
+
 impl InteractivePolicy {
     async fn approve(
         state: &Arc<Mutex<AppState>>,
@@ -63,13 +67,16 @@ impl InteractivePolicy {
                     .or_else(|| state.workspace_root.clone()),
             )
         };
+        let approved_command_prefixes = state.lock().await.config.approved_command_prefixes.clone();
 
         if !auto_confirm {
             for call in tool_calls {
                 let mode = { state.lock().await.agent_mode };
                 let decision = authorization_for_interactive_call(call, mode, false, assessments);
+                let covered_by_prefix = saved_prefix_covers_call(call, &approved_command_prefixes);
                 if matches!(decision, tools::AuthorizationDecision::RequireConfirmation)
                     && !tools::is_agent_tool(&call.name)
+                    && !covered_by_prefix
                 {
                     let path = if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str())
                     {
@@ -123,6 +130,9 @@ impl InteractivePolicy {
                         path,
                         content_preview: preview,
                         content_bytes,
+                        rememberable_prefix: (call.name == "run_command")
+                            .then(|| tools::rememberable_command_prefix_for_call(&call.arguments))
+                            .flatten(),
                     });
                 }
             }
@@ -130,7 +140,7 @@ impl InteractivePolicy {
 
         let mut approved = true;
         if !confirmations.is_empty() {
-            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ToolConfirmationResponse>();
             {
                 let mut s = state.lock().await;
                 s.modal_scroll_row = 0;
@@ -149,11 +159,25 @@ impl InteractivePolicy {
                 tool_calls.len()
             );
             approved = match rx.await {
-                Ok(true) => {
+                Ok(crate::app::ToolConfirmationResponse::Approve) => {
                     crate::dbg_log!("User approved batch tool calls");
                     true
                 }
-                Ok(false) => {
+                Ok(crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)) => {
+                    let mut state = state.lock().await;
+                    if tool_calls.len() == 1
+                        && tool_calls[0].name == "run_command"
+                        && tools::rememberable_command_prefix_for_call(&tool_calls[0].arguments)
+                            .as_deref()
+                            == Some(prefix.as_str())
+                        && !state.config.approved_command_prefixes.contains(&prefix)
+                    {
+                        state.config.approved_command_prefixes.push(prefix);
+                        crate::config::save_entire_config(&state.config);
+                    }
+                    true
+                }
+                Ok(crate::app::ToolConfirmationResponse::Deny) => {
                     crate::dbg_log!("User denied batch tool calls");
                     let _ = crate::notifications::notify_finished(
                         crate::notifications::FinishedStatus::Denied,
@@ -205,7 +229,7 @@ impl TurnPolicy for InteractivePolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::{InteractivePolicy, TurnPolicy};
+    use super::{InteractivePolicy, TurnPolicy, saved_prefix_covers_call};
     use crate::tools::ToolCall;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -230,5 +254,86 @@ mod tests {
     fn only_interactive_policy_opts_into_live_turn_steering() {
         assert!(InteractivePolicy.supports_live_turn_steering());
         assert!(!DefaultPolicy.supports_live_turn_steering());
+    }
+
+    #[test]
+    fn saved_prefix_applies_only_to_plain_run_command_calls() {
+        let prefixes = vec!["cargo test".to_string()];
+        let call = |command: &str, extra: serde_json::Value| ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": command})
+                .as_object()
+                .map(|args| {
+                    let mut args = args.clone();
+                    args.extend(extra.as_object().cloned().unwrap_or_default());
+                    serde_json::Value::Object(args)
+                })
+                .unwrap(),
+            call_id: None,
+        };
+        assert!(saved_prefix_covers_call(
+            &call("cargo test --lib", serde_json::json!({})),
+            &prefixes
+        ));
+        assert!(!saved_prefix_covers_call(
+            &call("cargo testing", serde_json::json!({})),
+            &prefixes
+        ));
+        assert!(!saved_prefix_covers_call(
+            &call("cargo test", serde_json::json!({"background": true})),
+            &prefixes
+        ));
+        assert!(!saved_prefix_covers_call(
+            &call(
+                "cargo test",
+                serde_json::json!({"env": {"RUSTFLAGS": "-C opt-level=3"}})
+            ),
+            &prefixes
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_remember_choice_persists_the_approved_prefix() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let policy_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({"command": "cargo test --lib"}),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the command should await interactive confirmation");
+
+        let response = state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .expect("confirmation response channel");
+        response
+            .send(crate::app::ToolConfirmationResponse::ApproveAndRemember(
+                "cargo test".to_owned(),
+            ))
+            .expect("policy task should be waiting");
+
+        assert!(task.await.expect("policy task should finish"));
+        assert_eq!(
+            state.lock().await.config.approved_command_prefixes,
+            ["cargo test"]
+        );
     }
 }

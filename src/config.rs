@@ -938,6 +938,10 @@ pub struct AppConfig {
     pub last_active_session_id: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// User-approved plain shell command prefixes that may run without a
+    /// repeated confirmation. Values are revalidated before matching.
+    #[serde(default)]
+    pub approved_command_prefixes: Vec<String>,
     #[serde(default)]
     pub audio: AudioConfig,
     /// Publish the active RustCode session to the local Discord desktop IPC
@@ -992,6 +996,8 @@ struct RuntimeConfig {
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
+    approved_command_prefixes: Vec<String>,
+    #[serde(default)]
     audio: AudioConfig,
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
@@ -1035,6 +1041,8 @@ struct TomlConfig {
     last_active_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approved_command_prefixes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1178,6 +1186,7 @@ impl Default for AppConfig {
                 env: std::collections::HashMap::new(),
                 enabled: true,
             }],
+            approved_command_prefixes: Vec::new(),
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             laya: crate::laya::LayaConfig::default(),
@@ -1410,6 +1419,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
                     config.last_active_session_id = runtime.last_active_session_id;
                     config.mcp_servers = runtime.mcp_servers;
+                    config.approved_command_prefixes = runtime.approved_command_prefixes;
                     config.agent_mode = runtime.agent_mode;
                     config.verbosity = runtime.verbosity;
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
@@ -1533,6 +1543,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
+        approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         laya: Some(config.laya.clone()),
@@ -1621,6 +1632,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(mcp_servers) = file.mcp_servers {
         config.mcp_servers = mcp_servers;
     }
+    if let Some(prefixes) = file.approved_command_prefixes {
+        config.approved_command_prefixes = prefixes;
+    }
     if let Some(audio) = file.audio {
         config.audio = audio;
     }
@@ -1671,6 +1685,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Session state belongs to the user config, never to a project checkout.
     file.last_active_session_id = None;
     file.start_time = None;
+    // Command approvals are user trust decisions and must not be granted by a
+    // checked-out project configuration.
+    file.approved_command_prefixes = None;
     apply_toml_config(config, file);
 }
 
@@ -1750,6 +1767,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         subagent_concurrency_limit: None,
         last_active_session_id: None,
         mcp_servers: None,
+        approved_command_prefixes: None,
         audio: None,
         discord_rpc_enabled: None,
         laya: None,

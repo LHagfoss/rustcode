@@ -128,7 +128,17 @@ impl<'a> OverlayState<'a> {
     }
 
     pub(crate) fn move_approval_selection(&mut self, direction: i8) {
-        *self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
+        let max = self
+            .pending_tool_confirmation
+            .as_ref()
+            .filter(|items| items.len() == 1 && items[0].rememberable_prefix.is_some())
+            .and_then(|items| items[0].rememberable_prefix.clone())
+            .map_or(1, |_| 2);
+        *self.tool_confirmation_selected = if direction < 0 {
+            self.tool_confirmation_selected.saturating_sub(1)
+        } else {
+            (*self.tool_confirmation_selected + 1).min(max)
+        };
     }
 
     pub(crate) fn toggle_auto_confirm(&mut self) {
