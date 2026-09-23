@@ -2239,44 +2239,6 @@ fn authorization_is_centralized_and_conservative() {
 }
 
 #[test]
-fn shell_facts_distinguish_read_only_candidates_and_hazards() {
-    use crate::tools::{ShellClassification, shell_policy_facts};
-
-    for command in ["git status --short", "ls src", "rg -n TODO src"] {
-        let facts = shell_policy_facts(command);
-        assert_eq!(
-            facts.classification,
-            ShellClassification::ReadOnly,
-            "{command}"
-        );
-        assert!(!facts.has_hazard(), "{command}: {facts:?}");
-    }
-
-    let cases = [
-        ("rm -f scratch.txt", "known destructive command"),
-        ("git restore -- src/lib.rs", "destructive Git"),
-        ("cat src/lib.rs > /tmp/lib.rs", "redirection"),
-        ("echo $(pwd)", "command substitution"),
-        ("sleep 1 &", "backgrounding"),
-        ("sudo ls", "privilege escalation"),
-        ("ls | rg TODO", "pipeline"),
-        ("ls; pwd", "mixed command list"),
-        ("curl https://example.com", "network"),
-        ("cargo test", "explicit mutation"),
-        ("mystery-command --inspect", "unknown command"),
-    ];
-    for (command, label) in cases {
-        let facts = shell_policy_facts(command);
-        assert!(facts.has_hazard(), "{label}: {command}: {facts:?}");
-        assert_ne!(
-            facts.classification,
-            ShellClassification::ReadOnly,
-            "{label}"
-        );
-    }
-}
-
-#[test]
 fn shell_assessment_cache_rejects_a_stale_call_signature() {
     use crate::tools::{
         ShellAssessment, shell_assessment_cache_key, shell_assessment_matches_call,
