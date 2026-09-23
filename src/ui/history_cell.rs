@@ -366,7 +366,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             .unwrap_or_default();
         let header = vec![
             Span::styled("• ", title_style),
-            Span::styled("Ran", title_style),
+            Span::styled("Running", title_style),
         ];
         let mut invocation = vec![Span::styled(
             "  └ ",
@@ -459,10 +459,15 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         } else {
             truncate_to_width(&call.target, child_width)
         };
+        let title = if call.execution_started {
+            "Running"
+        } else {
+            "Preparing"
+        };
         let mut lines = vec![
             Line::from(vec![
                 Span::styled("• ", title_style),
-                Span::styled("Ran", title_style),
+                Span::styled(title, title_style),
             ]),
             Line::from(vec![
                 Span::styled(
@@ -501,7 +506,14 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
-    let label = if all_exploration { "Explored" } else { "Ran" };
+    let all_speculative = calls.iter().all(|call| !call.execution_started);
+    let label = if all_speculative {
+        "Preparing"
+    } else if all_exploration {
+        "Exploring"
+    } else {
+        "Running"
+    };
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", title_style),

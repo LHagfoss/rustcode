@@ -117,17 +117,28 @@ pub(super) fn render_popup_menu(
 
     f.render_widget(Clear, area);
     let mut popup_lines = Vec::new();
+    let name_width = filtered_cmds
+        .iter()
+        .map(|command| command.name.width())
+        .max()
+        .unwrap_or(0)
+        .min((area.width as usize).saturating_sub(4));
     for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index()
             .map(|i| i == idx)
             .unwrap_or(false);
 
-        // Keep the existing two-column alignment while leaving rows marker-free.
-        let left_text = format!("  {:<10}  ", cmd.name);
-        let desc_text = cmd.desc.to_string();
-        let total_len = left_text.width() + desc_text.width();
-        let padding_len = (area.width as usize).saturating_sub(total_len);
+        // Match the Codex popup's selected-row marker and aligned name/description
+        // columns while keeping every row inside the available terminal width.
+        let marker = if is_selected { "› " } else { "  " };
+        let left_text = truncate_to_width(
+            &format!("{marker}{:<name_width$}  ", cmd.name),
+            area.width as usize,
+        );
+        let description_width = (area.width as usize).saturating_sub(left_text.width());
+        let desc_text = truncate_to_width(cmd.desc, description_width);
+        let padding_len = description_width.saturating_sub(desc_text.width());
         let line = Line::from(vec![
             Span::styled(
                 left_text,
@@ -156,6 +167,29 @@ pub(super) fn render_popup_menu(
         Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
+}
+
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let budget = max_width.saturating_sub(1);
+    let mut output = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let char_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + char_width > budget {
+            break;
+        }
+        used += char_width;
+        output.push(character);
+    }
+    output.push('…');
+    output
 }
 
 pub(super) fn render_at_popup_menu(

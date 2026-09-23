@@ -1502,21 +1502,31 @@ impl AppState {
 
     pub fn cycle_suggestion(&mut self) {
         if self.suggestion_cycle.cycle(&self.input_buffer) {
+            let Some(command) =
+                crate::app::suggestion::command_token(&self.input_buffer).map(str::to_owned)
+            else {
+                return;
+            };
             let prefix = self
                 .suggestion_cycle
                 .original_prefix
                 .as_deref()
                 .unwrap_or(&self.input_buffer);
-            let matches: Vec<&str> = crate::app::suggestion::COMMANDS
+            let matches: Vec<&str> = crate::app::suggestion::filtered_commands(prefix)
                 .iter()
-                .map(|c| c.name)
-                .filter(|c| c.starts_with(prefix))
+                .map(|command| command.name)
                 .collect();
             if let Some(idx) = self.suggestion_cycle.suggestion_index
                 && idx < matches.len()
             {
-                self.input_buffer = matches[idx].to_string();
-                self.cursor_position = self.input_buffer.len();
+                let replacement = matches[idx];
+                let suffix_cursor = self.cursor_position.saturating_sub(command.len());
+                self.input_buffer
+                    .replace_range(0..command.len(), replacement);
+                self.cursor_position = replacement
+                    .len()
+                    .saturating_add(suffix_cursor)
+                    .min(self.input_buffer.len());
             }
         }
         self.request_redraw();
