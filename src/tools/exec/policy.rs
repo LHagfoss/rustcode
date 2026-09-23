@@ -458,6 +458,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
                     | '['
                     | ']'
                     | '!'
+                    | '~'
             )
         })
     {
@@ -663,8 +664,10 @@ pub(crate) fn approved_command_prefix_covers_call(
         })
 }
 
-/// Match parsed token prefixes, never raw string prefixes. Rules with shell
-/// syntax or a high-risk command family are ignored even if present in config.
+/// Match exactly the normalized argv the user reviewed. Without an enforced
+/// OS sandbox, allowing additional operands or flags could widen the effect.
+/// Rules with shell syntax or a high-risk command family are ignored even if
+/// present in config.
 pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
     let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
         return false;
@@ -672,26 +675,81 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
     let Some(command_tokens) = reusable_rule_tokens(command, true) else {
         return false;
     };
-    command_tokens.starts_with(&rule_tokens)
+    command_tokens == rule_tokens
 }
 
 pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
-    let tokens = reusable_rule_tokens(command, false)?;
+    let tokens = plain_deny_rule_tokens(command)?;
     Some(tokens.join(" "))
 }
 
 pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Option<String> {
-    if args
-        .get("env")
-        .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
-        || ["background", "detached"].iter().any(|name| {
-            args.get(*name)
-                .is_some_and(|value| value.as_bool() != Some(false))
+    rememberable_command_forbid_prefix(args.get("command")?.as_str()?)
+}
+
+/// Normalize a plain command for a persistent deny rule. Quoted words are
+/// accepted and normalized because deny rules only block matching calls.
+/// Shell composition and expansion syntax cannot form a stored rule.
+fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
+    if command.is_empty()
+        || command.chars().any(|ch| {
+            matches!(
+                ch,
+                '\n' | '\r'
+                    | ';'
+                    | '|'
+                    | '&'
+                    | '<'
+                    | '>'
+                    | '`'
+                    | '$'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '\\'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '!'
+                    | '~'
+            )
         })
     {
         return None;
     }
-    rememberable_command_forbid_prefix(args.get("command")?.as_str()?)
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    let mut started = false;
+    for character in command.chars() {
+        match (quote, character) {
+            (Some(active), ch) if active == ch => quote = None,
+            (Some(_), ch) => token.push(ch),
+            (None, '\'' | '"') => {
+                quote = Some(character);
+                started = true;
+            }
+            (None, ch) if ch.is_whitespace() => {
+                if started {
+                    tokens.push(std::mem::take(&mut token));
+                    started = false;
+                }
+            }
+            (None, ch) => {
+                token.push(ch);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() || !started && tokens.is_empty() {
+        return None;
+    }
+    if started {
+        tokens.push(token);
+    }
+    (!tokens.is_empty()).then_some(tokens)
 }
 
 /// Match a persistent deny prefix before regular command approval. A deny is
@@ -702,33 +760,83 @@ pub(crate) fn denied_command_prefix_covers_call(
     args: &Value,
     prefixes: &[String],
 ) -> bool {
-    if name != "run_command"
-        || args
-            .get("env")
-            .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
-        || ["background", "detached"]
-            .iter()
-            .any(|key| args.get(*key).is_some_and(|v| v.as_bool() != Some(false)))
-    {
+    if name != "run_command" || prefixes.is_empty() {
         return false;
     }
     let Some(command) = args.get("command").and_then(Value::as_str) else {
         return false;
     };
-    prefixes.iter().any(|prefix| {
-        let Some(tokens) = reusable_rule_tokens(prefix, false) else {
-            return false;
+    let rule_tokens = prefixes
+        .iter()
+        .filter_map(|prefix| plain_deny_rule_tokens(prefix))
+        .collect::<Vec<_>>();
+    if rule_tokens.is_empty() {
+        return false;
+    }
+    denied_command_contains_rule(command, &rule_tokens, 0)
+}
+
+fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usize) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    // This splitter deliberately separates operators even inside quotes. For
+    // deny decisions that is conservative: any segment matching a saved rule
+    // blocks the whole composed command.
+    for segment in split_command_segments(command) {
+        let Some(tokens) = plain_deny_rule_tokens(&segment) else {
+            // We cannot safely understand shell syntax with active deny rules;
+            // fail closed so wrappers/redirections cannot hide a denied argv.
+            if segment.chars().any(|ch| !ch.is_whitespace()) {
+                return true;
+            }
+            continue;
         };
-        let normalized = tokens.join(" ");
-        let command = command.trim_start();
-        command.strip_prefix(&normalized).is_some_and(|rest| {
-            rest.is_empty()
-                || rest
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_whitespace() || ";|&<>".contains(ch))
-        })
-    })
+        if rules.iter().any(|rule| {
+            !rule.is_empty()
+                && tokens
+                    .windows(rule.len())
+                    .any(|candidate| candidate == rule.as_slice())
+        }) {
+            return true;
+        }
+        // `sh -c`, `bash -lc`, and equivalent wrappers store the payload as
+        // one argv token. Inspect it recursively; unparseable payloads fail
+        // closed above.
+        for (index, token) in tokens.iter().enumerate() {
+            let binary = token.rsplit(['/', '\\']).next().unwrap_or(token);
+            if matches!(
+                binary,
+                "sh" | "bash"
+                    | "zsh"
+                    | "fish"
+                    | "dash"
+                    | "ksh"
+                    | "env"
+                    | "sudo"
+                    | "doas"
+                    | "command"
+                    | "exec"
+                    | "time"
+                    | "nice"
+                    | "nohup"
+                    | "setsid"
+                    | "xargs"
+                    | "python"
+                    | "python3"
+                    | "node"
+                    | "ruby"
+                    | "perl"
+            ) {
+                for payload in tokens.iter().skip(index + 1) {
+                    if denied_command_contains_rule(payload, rules, depth + 1) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -736,17 +844,34 @@ mod command_prefix_tests {
     use super::{
         approved_command_prefix_covers_call, command_prefix_rule_matches,
         denied_command_prefix_covers_call, rememberable_command_forbid_prefix,
-        rememberable_command_prefix, rememberable_command_prefix_for_call,
+        rememberable_command_forbid_prefix_for_call, rememberable_command_prefix,
+        rememberable_command_prefix_for_call,
     };
 
     #[test]
-    fn saved_prefix_matches_complete_tokens_not_text_fragments() {
+    fn saved_allow_rules_match_exact_normalized_argv_only() {
         assert!(command_prefix_rule_matches(
+            "cargo test --lib",
+            "cargo   test --lib"
+        ));
+        assert!(!command_prefix_rule_matches(
             "cargo test",
             "cargo test --lib"
         ));
         assert!(!command_prefix_rule_matches("cargo test", "cargo testing"));
         assert!(!command_prefix_rule_matches("cargo test", "cargo check"));
+        assert!(!command_prefix_rule_matches(
+            "git add src/main.rs",
+            "git add src/main.rs ."
+        ));
+        assert!(!command_prefix_rule_matches(
+            "make test",
+            "make test upload-prod"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test --all-features"
+        ));
     }
 
     #[test]
@@ -777,6 +902,16 @@ mod command_prefix_tests {
         assert!(rememberable_command_prefix("rm file").is_none());
         assert!(rememberable_command_prefix("curl https://example.com").is_none());
         assert!(rememberable_command_prefix("git diff --output=report.txt").is_none());
+        for command in [
+            "cargo test $FLAGS",
+            "cargo test ${FLAGS}",
+            "cargo test $(echo --all-features)",
+            "cargo test `echo --all-features`",
+            "cargo test *.rs",
+            "cargo test ~/workspace",
+        ] {
+            assert!(rememberable_command_prefix(command).is_none(), "{command}");
+        }
         assert!(rememberable_command_prefix("make clean").is_none());
         assert!(rememberable_command_prefix("npm run clean").is_none());
         assert!(!command_prefix_rule_matches(
@@ -841,7 +976,7 @@ mod command_prefix_tests {
     }
 
     #[test]
-    fn approved_rules_cover_only_plain_vetted_calls() {
+    fn approved_rules_cover_only_the_exact_plain_call() {
         let prefixes = vec!["cargo test".to_owned()];
         let args = |command: &str, extra: serde_json::Value| {
             let mut args = serde_json::json!({"command": command});
@@ -854,9 +989,14 @@ mod command_prefix_tests {
             );
             args
         };
-        assert!(approved_command_prefix_covers_call(
+        assert!(!approved_command_prefix_covers_call(
             "run_command",
             &args("cargo test --lib", serde_json::json!({})),
+            &prefixes,
+        ));
+        assert!(approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test", serde_json::json!({})),
             &prefixes,
         ));
         assert!(!approved_command_prefix_covers_call(
@@ -880,7 +1020,7 @@ mod command_prefix_tests {
     }
 
     #[test]
-    fn saved_forbid_precedes_allowed_prefix_and_covers_shell_composition() {
+    fn saved_forbid_cannot_be_bypassed_by_modifiers_wrappers_or_composition() {
         let forbidden = vec!["cargo test".to_owned()];
         assert_eq!(
             rememberable_command_forbid_prefix("cargo test"),
@@ -896,16 +1036,42 @@ mod command_prefix_tests {
             &serde_json::json!({"command":"cargo test; echo unexpected"}),
             &forbidden,
         ));
+        for args in [
+            serde_json::json!({"command":"cargo   test"}),
+            serde_json::json!({"command":"cargo 'test'"}),
+            serde_json::json!({"command":"env FOO=1 cargo test"}),
+            serde_json::json!({"command":"sudo cargo test"}),
+            serde_json::json!({"command":"sh -c 'cargo test'"}),
+            serde_json::json!({"command":"echo okay; cargo test"}),
+            serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
+            serde_json::json!({"command":"cargo test", "background":true}),
+            serde_json::json!({"command":"cargo test", "detached":true}),
+        ] {
+            assert!(
+                denied_command_prefix_covers_call("run_command", &args, &forbidden),
+                "deny rule should cover {args}"
+            );
+        }
         assert!(!denied_command_prefix_covers_call(
             "run_command",
             &serde_json::json!({"command":"cargo testing"}),
             &forbidden,
         ));
-        assert!(!denied_command_prefix_covers_call(
-            "run_command",
-            &serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
-            &forbidden,
-        ));
+        assert_eq!(
+            rememberable_command_forbid_prefix("cargo 'test'"),
+            Some("cargo test".to_owned())
+        );
+        for args in [
+            serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
+            serde_json::json!({"command":"cargo test", "background":true}),
+            serde_json::json!({"command":"cargo test", "detached":true}),
+        ] {
+            assert_eq!(
+                rememberable_command_forbid_prefix_for_call(&args),
+                Some("cargo test".to_owned()),
+                "deny option should remain available for {args}"
+            );
+        }
     }
 }
 

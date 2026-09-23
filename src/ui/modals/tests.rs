@@ -181,8 +181,8 @@ fn approval_selection_visibly_moves_to_deny() {
 
     assert!(rendered.contains("› 2. No, cancel this tool call"));
     assert!(!rendered.contains("› 1. Yes, proceed"));
-    assert!(rendered.contains("3. Always allow `cargo test…`"));
-    assert!(rendered.contains("4. Always forbid `cargo test…`"));
+    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("4. Always forbid matching tokens `cargo test…`"));
 }
 
 #[test]
@@ -212,8 +212,8 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
         .collect::<String>();
 
     assert!(rendered.contains("Would you like to run the following command?"));
-    assert!(rendered.contains("3. Always allow `cargo test…`"));
-    assert!(rendered.contains("4. Always forbid `cargo test…`"));
+    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("4. Always forbid matching tokens `cargo test…`"));
     assert!(rendered.contains("$ cargo test --lib"));
 }
 
@@ -241,7 +241,7 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(rendered.contains("3. Always forbid `curl…`"));
+    assert!(rendered.contains("3. Always forbid matching tokens `curl…`"));
     assert!(!rendered.contains("Always allow"));
 
     state.move_tool_confirmation_selection(1);

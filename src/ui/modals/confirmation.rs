@@ -192,7 +192,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
         ),
         Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
     ]));
-    if let Some(prefix) = rememberable_prefix.as_deref() {
+    if rememberable_prefix.is_some() {
         let selected = state.tool_confirmation_selected() == 2;
         lines.push(Line::from(vec![
             Span::styled(
@@ -210,7 +210,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     }),
             ),
             Span::styled(
-                format!("3. Always allow `{prefix}…`"),
+                "3. Always allow this exact command".to_owned(),
                 Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
                     Modifier::BOLD
                 } else {
@@ -239,7 +239,10 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     }),
             ),
             Span::styled(
-                format!("{}. Always forbid `{prefix}…`", row_index + 1),
+                format!(
+                    "{}. Always forbid matching tokens `{prefix}…`",
+                    row_index + 1
+                ),
                 Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
                     Modifier::BOLD
                 } else {
@@ -253,7 +256,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     lines.push(Line::from(Span::styled(
         if rememberable_prefix.is_some() && forbidden_prefix.is_some() {
             format!(
-                "  Press enter to confirm · r allows prefix · f forbids prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · r always allows exact command · f blocks matching prefix · tab to {} auto-confirm",
                 if state.auto_confirm() {
                     "disable"
                 } else {
@@ -262,12 +265,12 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             )
         } else if rememberable_prefix.is_some() {
             format!(
-                "  Press enter to confirm · r allows prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · r always allows exact command · tab to {} auto-confirm",
                 if state.auto_confirm() { "disable" } else { "enable" }
             )
         } else if forbidden_prefix.is_some() {
             format!(
-                "  Press enter to confirm · f forbids prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · f blocks matching prefix · tab to {} auto-confirm",
                 if state.auto_confirm() { "disable" } else { "enable" }
             )
         } else {
@@ -297,7 +300,10 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             .unwrap_or_default();
         let remember = lines
             .iter()
-            .find(|line| line.to_string().contains("3. Always allow"))
+            .find(|line| {
+                line.to_string()
+                    .contains("3. Always allow this exact command")
+            })
             .cloned();
         let forbid = lines
             .iter()
@@ -312,7 +318,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     && !text.contains("1. Yes")
                     && !text.contains("2. No")
                     && !text.contains("3. Always allow")
-                    && !text.contains("4. Always forbid")
+                    && !text.contains("Always forbid")
                     && !text.contains("Press enter")
             })
             .cloned();

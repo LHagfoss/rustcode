@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_prefix_applies_only_to_plain_run_command_calls() {
+    fn saved_allow_applies_only_to_exact_plain_run_command_calls() {
         let prefixes = vec!["cargo test".to_string()];
         let call = |command: &str, extra: serde_json::Value| ToolCall {
             name: "run_command".to_string(),
@@ -300,6 +300,10 @@ mod tests {
             call_id: None,
         };
         assert!(saved_prefix_covers_call(
+            &call("cargo test", serde_json::json!({})),
+            &prefixes
+        ));
+        assert!(!saved_prefix_covers_call(
             &call("cargo test --lib", serde_json::json!({})),
             &prefixes
         ));
