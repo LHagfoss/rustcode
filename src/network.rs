@@ -1646,6 +1646,22 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         return Err(format!("{CONTEXT_PREFLIGHT_STOP_PREFIX}{notice}"));
     }
 
+    if native_schema_policy.is_some()
+        && let Err(diagnostic) = history::validate_native_tool_messages(&msgs)
+    {
+        crate::logger::operational_event(
+            "turn.native_history_validation_failed",
+            serde_json::json!({
+                "round": tool_rounds,
+                "message_count": msgs.len(),
+                "diagnostic": diagnostic,
+            }),
+        );
+        return Err(format!(
+            "Native tool history is incomplete before sending the provider request: {diagnostic}. The request was stopped locally; resume the session after reviewing its recent tool activity."
+        ));
+    }
+
     Ok(msgs)
 }
 
