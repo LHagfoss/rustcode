@@ -6,6 +6,8 @@ use std::sync::{Mutex, OnceLock};
 /// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
 const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
+const ROTATION_FAILURE_MARKER: &str = "[logger] prior log truncated because rotation failed";
+const DEBUG_LOG_LOCK_NAME: &str = "debug.log.lock";
 
 pub(crate) fn set_active_session_id(session_id: Option<&str>) {
     let mut active = active_session_lock()
@@ -34,6 +36,9 @@ pub(crate) fn rotate_if_oversized() {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     if let Some(config_dir) = crate::config::get_config_dir() {
+        let Some(_file_lock) = acquire_log_file_lock(&config_dir) else {
+            return;
+        };
         rotate_log_dir_if_oversized(&config_dir, MAX_DEBUG_LOG_BYTES);
         if let Some(session_id) = active_session_id() {
             let session_dir =
@@ -44,8 +49,24 @@ pub(crate) fn rotate_if_oversized() {
 }
 
 fn log_write_lock() -> &'static Mutex<()> {
+    // The persistent sibling lock file serializes processes; this mutex also
+    // serializes threads before they contend for that OS-level lock.
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn acquire_log_file_lock(config_dir: &Path) -> Option<std::fs::File> {
+    use std::fs::OpenOptions;
+
+    std::fs::create_dir_all(config_dir).ok()?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(config_dir.join(DEBUG_LOG_LOCK_NAME))
+        .ok()?;
+    lock.lock().ok()?;
+    Some(lock)
 }
 
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
@@ -93,6 +114,9 @@ fn append_line_to_logs_with_limit(
     let _guard = log_write_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
+    let Some(_file_lock) = acquire_log_file_lock(config_dir) else {
+        return;
+    };
     let line = capped_log_line(line, limit_bytes);
     let append_bytes = line.len().saturating_add(1) as u64;
     append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
@@ -130,12 +154,36 @@ fn append_bounded_line(log_dir: &Path, line: &str, append_bytes: u64, limit_byte
     if current_bytes.saturating_add(append_bytes) > limit_bytes {
         let rotated_path = log_dir.join("debug.log.1");
         if std::fs::rename(&log_path, &rotated_path).is_err() {
-            // Keep the current file within its cap when permissions or another
-            // filesystem error prevent rotation.
+            // Rotation can fail when the archive path is unavailable. Preserve
+            // the new diagnostic by truncating the active log and writing a
+            // marker plus the line when both fit; otherwise keep just the line.
+            let _ = truncate_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
             return;
         }
     }
     append_line_to_path(&log_path, line);
+}
+
+fn truncate_and_append_bounded_line(
+    path: &Path,
+    line: &str,
+    append_bytes: u64,
+    limit_bytes: u64,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let marker_bytes = ROTATION_FAILURE_MARKER.len().saturating_add(1) as u64;
+    let include_marker = marker_bytes.saturating_add(append_bytes) <= limit_bytes;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    if include_marker {
+        writeln!(file, "{ROTATION_FAILURE_MARKER}")?;
+    }
+    writeln!(file, "{line}")?;
+    Ok(())
 }
 
 fn attributed_fields(mut fields: Value) -> (Value, Option<String>) {
@@ -213,6 +261,17 @@ macro_rules! dbg_log {
     ($($arg:tt)*) => {{
         $crate::logger::append_line(&format!($($arg)*));
     }};
+}
+
+#[macro_export]
+macro_rules! dbg_log_for_session {
+    ($session_id:expr, $($arg:tt)*) => {{
+        $crate::logger::append_line_for_session(&$session_id, &format!($($arg)*));
+    }};
+}
+
+pub(crate) fn append_line_for_session(session_id: &str, line: &str) {
+    append_line_with_session(line, Some(session_id));
 }
 
 #[cfg(test)]
@@ -388,6 +447,34 @@ mod tests {
         assert!(!session.contains(&oversized));
         assert!(global.len() <= 64);
         assert!(session.len() <= 64);
+    }
+
+    #[test]
+    fn keeps_new_line_when_rotation_fails_for_both_log_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "2026-09-11T00:00:00Z-test-session";
+        let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
+        let session_logs = session_dir.join("logs");
+        std::fs::create_dir_all(&session_logs).expect("create session log directory");
+        let global_archive = dir.path().join("debug.log.1");
+        let session_archive = session_logs.join("debug.log.1");
+        std::fs::create_dir(&global_archive).expect("block global archive path");
+        std::fs::create_dir(&session_archive).expect("block session archive path");
+        std::fs::write(dir.path().join("debug.log"), vec![b'g'; 75]).expect("write global log");
+        std::fs::write(session_logs.join("debug.log"), vec![b's'; 75]).expect("write session log");
+
+        append_line_to_logs_with_limit(dir.path(), Some(session_id), "latest", 80);
+
+        let global = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
+        let session = std::fs::read_to_string(session_logs.join("debug.log")).expect("session log");
+        assert!(global.starts_with(ROTATION_FAILURE_MARKER));
+        assert!(global.ends_with("latest\n"));
+        assert!(session.starts_with(ROTATION_FAILURE_MARKER));
+        assert!(session.ends_with("latest\n"));
+        assert!(global.len() <= 80);
+        assert!(session.len() <= 80);
+        assert!(global_archive.is_dir());
+        assert!(session_archive.is_dir());
     }
 
     #[test]

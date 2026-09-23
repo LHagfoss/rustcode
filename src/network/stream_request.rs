@@ -1118,6 +1118,18 @@ fn bound_reasoning_chunk(
 mod tests {
     use super::*;
 
+    #[test]
+    fn request_session_attribution_survives_active_session_switch() {
+        assert_eq!(
+            resolve_request_session_id(Some("request-session"), "new-active-session"),
+            "request-session"
+        );
+        assert_eq!(
+            resolve_request_session_id(None, "active-session"),
+            "active-session"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn silent_sse_stream_returns_after_idle_timeout() {
         let (_writer, reader) = tokio::io::duplex(64);
@@ -3307,6 +3319,16 @@ pub async fn stream_request(
     .await
 }
 
+fn resolve_request_session_id(
+    expected_session_id: Option<&str>,
+    active_session_id: &str,
+) -> String {
+    expected_session_id
+        .filter(|session_id| !session_id.is_empty())
+        .unwrap_or(active_session_id)
+        .to_owned()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn stream_request_with_timeouts(
     client: &reqwest::Client,
@@ -3325,16 +3347,30 @@ async fn stream_request_with_timeouts(
     first_event_timeout: std::time::Duration,
     stream_idle_timeout: std::time::Duration,
 ) -> Result<Option<String>, StreamFailure> {
-    let profile = {
-        state
-            .lock()
-            .await
-            .config
-            .models
-            .iter()
-            .find(|p| p.matches_request(url, model))
-            .cloned()
+    let (profile, active_session_id) = {
+        let app = state.lock().await;
+        (
+            app.config
+                .models
+                .iter()
+                .find(|p| p.matches_request(url, model))
+                .cloned(),
+            app.active_session_id.clone(),
+        )
     };
+    let request_session_id = resolve_request_session_id(expected_session_id, &active_session_id);
+    macro_rules! request_event {
+        ($event:expr, $fields:expr $(,)?) => {{
+            let mut fields = $fields;
+            if let Some(object) = fields.as_object_mut() {
+                object.insert(
+                    "session_id".to_owned(),
+                    serde_json::Value::String(request_session_id.clone()),
+                );
+            }
+            crate::logger::operational_event($event, fields);
+        }};
+    }
     let api_protocol = profile
         .as_ref()
         .map(crate::config::ModelProfile::resolved_api_protocol)
@@ -3362,7 +3398,7 @@ async fn stream_request_with_timeouts(
         && let Err(diagnostic) =
             crate::network::history::validate_native_tool_messages(&aligned_messages)
     {
-        crate::logger::operational_event(
+        request_event!(
             "turn.native_history_validation_failed",
             serde_json::json!({
                 "request_boundary": "stream_request",
@@ -3504,7 +3540,7 @@ async fn stream_request_with_timeouts(
         if estimated_prompt_tokens.saturating_add(budget.completion_reserve)
             > budget.hard_effective_limit
         {
-            crate::logger::operational_event(
+            request_event!(
                 "context.preflight_rejected",
                 serde_json::json!({
                     "model": model,
@@ -3609,7 +3645,7 @@ async fn stream_request_with_timeouts(
         if !responses_api {
             apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
         }
-        crate::logger::operational_event(
+        request_event!(
             "mcp.native_schema_selection",
             serde_json::json!({
                 "available": mcp_selection.available,
@@ -3664,7 +3700,8 @@ async fn stream_request_with_timeouts(
     })?;
     let payload_byte_count = payload_bytes.len();
     let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
-    dbg_log!(
+    crate::dbg_log_for_session!(
+        request_session_id,
         "{}",
         request_debug_log_line(
             verbose_network_logging,
@@ -3711,7 +3748,7 @@ async fn stream_request_with_timeouts(
         .as_ref()
         .and_then(crate::config::ModelProfile::context_window_mismatch)
     {
-        crate::logger::operational_event(
+        request_event!(
             "context.window_mismatch",
             serde_json::json!({
                 "model": model,
@@ -3723,7 +3760,7 @@ async fn stream_request_with_timeouts(
         );
     }
 
-    crate::logger::operational_event(
+    request_event!(
         "context.request_composition",
         serde_json::json!({
             "model": model,
@@ -3785,7 +3822,7 @@ async fn stream_request_with_timeouts(
         }),
     );
 
-    crate::logger::operational_event(
+    request_event!(
         "provider.request_start",
         serde_json::json!({
             "model": model,
@@ -3863,12 +3900,7 @@ async fn stream_request_with_timeouts(
             .filter(|message| message.role == "assistant")
             .count()
             + 1;
-        (
-            expected_session_id
-                .unwrap_or(&s.active_session_id)
-                .to_owned(),
-            assistant_turn,
-        )
+        (request_session_id.clone(), assistant_turn)
     };
     // The trace is deliberately tied to the existing verbose network-debug
     // switch. Its Drop implementation flushes a bounded summary even when a
@@ -3906,7 +3938,8 @@ async fn stream_request_with_timeouts(
             Some(Err(_elapsed)) => {
                 if attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
-                    dbg_log!(
+                    crate::dbg_log_for_session!(
+                        request_session_id,
                         "stream_request: timed out waiting for response headers (attempt {}/{}), backing off {}ms",
                         attempt + 1,
                         retry::MAX_RETRIES,
@@ -3928,11 +3961,12 @@ async fn stream_request_with_timeouts(
         match send_result {
             Ok(resp) if resp.status().is_success() => {
                 stream_trace.response_headers(resp.status().as_u16());
-                dbg_log!(
+                crate::dbg_log_for_session!(
+                    request_session_id,
                     "stream_request: Received response status: {}",
                     resp.status()
                 );
-                crate::logger::operational_event(
+                request_event!(
                     "provider.response_headers",
                     serde_json::json!({
                         "model": model,
@@ -3955,10 +3989,11 @@ async fn stream_request_with_timeouts(
                         parallel_tool_calls_fallback_payload_bytes.as_ref()
                     && is_parallel_tool_calls_rejection(code, &err_body)
                 {
-                    dbg_log!(
+                    crate::dbg_log_for_session!(
+                        request_session_id,
                         "stream_request: provider rejected parallel_tool_calls; retrying without optional field"
                     );
-                    crate::logger::operational_event(
+                    request_event!(
                         "provider.parallel_tool_calls_fallback",
                         serde_json::json!({
                             "model": model,
@@ -3972,7 +4007,8 @@ async fn stream_request_with_timeouts(
                 }
                 if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, code);
-                    dbg_log!(
+                    crate::dbg_log_for_session!(
+                        request_session_id,
                         "stream_request: retryable status {} (attempt {}/{}), backing off {}ms",
                         status,
                         attempt + 1,
@@ -3988,7 +4024,8 @@ async fn stream_request_with_timeouts(
                     attempt += 1;
                     continue;
                 }
-                dbg_log!(
+                crate::dbg_log_for_session!(
+                    request_session_id,
                     "stream_request: Request failed with status {} (error_body_bytes={})",
                     status,
                     err_body.len()
@@ -4005,7 +4042,8 @@ async fn stream_request_with_timeouts(
             Err(e) => {
                 if retry::is_retryable_transport(&e) && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
-                    dbg_log!(
+                    crate::dbg_log_for_session!(
+                        request_session_id,
                         "stream_request: transient network error (attempt {}/{}), backing off {}ms: {}",
                         attempt + 1,
                         retry::MAX_RETRIES,
@@ -4061,7 +4099,10 @@ async fn stream_request_with_timeouts(
     let mut tool_argument_limit_reached = false;
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
 
-    dbg_log!("stream_request: Starting SSE stream read loop");
+    crate::dbg_log_for_session!(
+        request_session_id,
+        "stream_request: Starting SSE stream read loop"
+    );
     // Absolute progress deadlines anchored at headers. Keep-alive blank /
     // comment lines carry no meaningful event and must not extend them: the
     // per-fill timeout inside `read_sse_line_with_state` still tolerates a
@@ -4073,7 +4114,10 @@ async fn stream_request_with_timeouts(
     let mut last_progress = stream_start;
     loop {
         if cancel_token.is_cancelled() {
-            dbg_log!("stream_request: Stream reading cancelled via token");
+            crate::dbg_log_for_session!(
+                request_session_id,
+                "stream_request: Stream reading cancelled via token"
+            );
             return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
 
@@ -4109,10 +4153,10 @@ async fn stream_request_with_timeouts(
                         } else {
                             StreamFailureKind::StreamIdleTimeout
                         };
-                        dbg_log!(
+                        crate::dbg_log_for_session!(request_session_id,
                             "stream_request: SSE absolute progress deadline elapsed ({kind}, events={stream_events_received}, bytes={stream_bytes_received})"
                         );
-                        crate::logger::operational_event(
+                        request_event!(
                             "stream.progress_deadline",
                             serde_json::json!({
                                 "model": model,
@@ -4138,7 +4182,7 @@ async fn stream_request_with_timeouts(
                 };
                 match r {
                     Ok(0) => {
-                        dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
+                        crate::dbg_log_for_session!(request_session_id,"stream_request: SSE stream read EOF (0 bytes)");
                         if finish_reason.is_none() {
                             return Err(StreamFailure {
                                 kind: StreamFailureKind::PrematureEof,
@@ -4300,10 +4344,10 @@ async fn stream_request_with_timeouts(
                                             if let super::loop_detect::ReasoningLoopStatus::LoopDetected(reason) =
                                                 reasoning_detector.feed_chunk(&bounded.text)
                                             {
-                                                dbg_log!(
+                                                crate::dbg_log_for_session!(request_session_id,
                                                     "stream_request: reasoning loop detected ({reason}) — stopping stream cleanly"
                                                 );
-                                                crate::logger::operational_event(
+                                                request_event!(
                                                     "stream.reasoning_loop_cut",
                                                     serde_json::json!({ "reason": reason }),
                                                 );
@@ -4311,11 +4355,11 @@ async fn stream_request_with_timeouts(
                                                 reasoning_loop_cut = true;
                                             }
                                             if bounded.budget_exhausted {
-                                                dbg_log!(
+                                                crate::dbg_log_for_session!(request_session_id,
                                                     "stream_request: client reasoning budget reached ({} estimated tokens) — stopping stream cleanly",
                                                     thinking_budget.unwrap_or_default()
                                                 );
-                                                crate::logger::operational_event(
+                                                request_event!(
                                                     "stream.reasoning_budget_cut",
                                                     serde_json::json!({
                                                         "budget": thinking_budget,
@@ -4460,7 +4504,7 @@ async fn stream_request_with_timeouts(
                                         let estimation_delta_percent =
                                             prompt_estimation_delta_percent(estimated_prompt_tokens, p);
 
-                                        crate::logger::operational_event(
+                                        request_event!(
                                             "provider.completion",
                                             serde_json::json!({
                                                 "model": model,
@@ -4499,7 +4543,7 @@ async fn stream_request_with_timeouts(
                                     }
                             } else {
                                 stream_trace.record_malformed(line_buf.len());
-                                dbg_log!(
+                                crate::dbg_log_for_session!(request_session_id,
                                     "stream_request: Failed to parse JSON from data payload (bytes={})",
                                     json_str.len()
                                 );
@@ -4516,7 +4560,7 @@ async fn stream_request_with_timeouts(
                         line_buf.clear();
                     }
                     Err(e) => {
-                        dbg_log!("stream_request: SSE read error: {}", e);
+                        crate::dbg_log_for_session!(request_session_id,"stream_request: SSE read error: {}", e);
                         return Err(StreamFailure {
                             kind: e.kind(),
                             status: None,
@@ -4529,7 +4573,7 @@ async fn stream_request_with_timeouts(
                 }
             }
             _ = cancel_token.cancelled() => {
-                dbg_log!("stream_request: Cancelled via select branch");
+                crate::dbg_log_for_session!(request_session_id,"stream_request: Cancelled via select branch");
                 return Err(StreamFailure::new(StreamFailureKind::Cancelled));
             }
         }
@@ -4618,7 +4662,8 @@ async fn stream_request_with_timeouts(
         if finish_reason.is_none() || finish_reason.as_deref() == Some("stop") {
             finish_reason = Some("tool_calls".to_string());
         }
-        dbg_log!(
+        crate::dbg_log_for_session!(
+            request_session_id,
             "stream_request: preserving {} native tool call envelope(s)",
             native_tool_calls.len()
         );
@@ -4635,7 +4680,8 @@ async fn stream_request_with_timeouts(
         .content
         .trim_end_matches(char::is_whitespace)
         .to_string();
-    dbg_log!(
+    crate::dbg_log_for_session!(
+        request_session_id,
         "stream_request: Stream request loop ended. Total content: {} chars",
         buf.content.len()
     );
