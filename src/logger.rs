@@ -71,15 +71,62 @@ fn acquire_log_file_lock(config_dir: &Path) -> Option<std::fs::File> {
 
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
+    let rotated_path = log_dir.join("debug.log.1");
+    let _ = bound_log_file(&rotated_path, limit_bytes);
     let Ok(meta) = std::fs::metadata(&log_path) else {
         return;
     };
     if meta.len() > limit_bytes {
-        let rotated_path = log_dir.join("debug.log.1");
-        // Best-effort: if the rename fails (e.g. permissions), just keep
-        // appending to the oversized file rather than losing log data.
-        let _ = std::fs::rename(&log_path, &rotated_path);
+        if bound_log_file(&log_path, limit_bytes).is_ok() {
+            let _ = replace_rotated_log(&log_path, &rotated_path);
+        }
     }
+}
+
+fn bound_log_file(path: &Path, limit_bytes: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.len() <= limit_bytes {
+        return Ok(());
+    }
+
+    let marker = format!("[logger] earlier log bytes discarded to fit {limit_bytes}-byte cap\n");
+    let marker_bytes = marker
+        .len()
+        .min(usize::try_from(limit_bytes).unwrap_or(usize::MAX));
+    let tail_bytes = limit_bytes.saturating_sub(marker_bytes as u64);
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let mut tail = Vec::with_capacity(tail_bytes as usize);
+    if tail_bytes > 0 {
+        file.seek(SeekFrom::End(-(tail_bytes as i64)))?;
+        file.read_to_end(&mut tail)?;
+        if let Some(line_end) = tail.iter().position(|byte| *byte == b'\n')
+            && line_end + 1 < tail.len()
+        {
+            tail.drain(..=line_end);
+        }
+    }
+
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&marker.as_bytes()[..marker_bytes])?;
+    file.write_all(&tail)?;
+    file.flush()
+}
+
+fn replace_rotated_log(log_path: &Path, rotated_path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(rotated_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    std::fs::rename(log_path, rotated_path)
 }
 
 pub(crate) fn append_line(line: &str) {
@@ -148,12 +195,17 @@ fn capped_log_line<'a>(line: &'a str, limit_bytes: u64) -> std::borrow::Cow<'a, 
 
 fn append_bounded_line(log_dir: &Path, line: &str, append_bytes: u64, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
+    let rotated_path = log_dir.join("debug.log.1");
+    let _ = bound_log_file(&rotated_path, limit_bytes);
     let current_bytes = std::fs::metadata(&log_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     if current_bytes.saturating_add(append_bytes) > limit_bytes {
-        let rotated_path = log_dir.join("debug.log.1");
-        if std::fs::rename(&log_path, &rotated_path).is_err() {
+        if current_bytes > limit_bytes && bound_log_file(&log_path, limit_bytes).is_err() {
+            let _ = truncate_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
+            return;
+        }
+        if replace_rotated_log(&log_path, &rotated_path).is_err() {
             // Rotation can fail when the archive path is unavailable. Preserve
             // the new diagnostic by truncating the active log and writing a
             // marker plus the line when both fit; otherwise keep just the line.
@@ -296,6 +348,61 @@ mod tests {
             dir.path().join("debug.log.1").exists(),
             "rotated log should be preserved as debug.log.1"
         );
+        assert!(
+            std::fs::metadata(dir.path().join("debug.log.1"))
+                .expect("rotated metadata")
+                .len()
+                <= 100,
+            "oversized legacy logs must not leave an oversized archive"
+        );
+    }
+
+    #[test]
+    fn startup_bounds_an_oversized_existing_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        std::fs::write(&log_path, "small active log\n").expect("write active log");
+        std::fs::write(
+            &archive_path,
+            format!("{}latest archived line\n", "x".repeat(150)),
+        )
+        .expect("write oversized archive");
+
+        rotate_log_dir_if_oversized(dir.path(), 100);
+
+        let archive = std::fs::read(&archive_path).expect("bounded archive");
+        assert!(archive.len() <= 100);
+        assert!(archive.ends_with(b"latest archived line\n"));
+        assert!(log_path.exists(), "small active log should remain in place");
+    }
+
+    #[test]
+    fn archive_cap_smaller_than_marker_remains_strict() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("debug.log.1");
+        std::fs::write(&archive_path, vec![b'x'; 100]).expect("write archive");
+
+        bound_log_file(&archive_path, 8).expect("bound tiny archive");
+
+        assert_eq!(std::fs::metadata(archive_path).expect("metadata").len(), 8);
+    }
+
+    #[test]
+    fn rotation_replaces_an_existing_archive_on_all_platforms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        std::fs::write(&log_path, format!("{}new active tail\n", "n".repeat(110)))
+            .expect("write oversized active log");
+        std::fs::write(&archive_path, "old archive segment\n").expect("write old archive");
+
+        rotate_log_dir_if_oversized(dir.path(), 100);
+
+        let archive = std::fs::read(&archive_path).expect("new archive segment");
+        assert!(archive.len() <= 100);
+        assert!(archive.ends_with(b"new active tail\n"));
+        assert!(!log_path.exists());
     }
 
     #[test]

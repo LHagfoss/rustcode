@@ -435,7 +435,7 @@ async fn summarize_session_inner(
         false,
         crate::network::stream_request::ThinkingMode::Normal,
         crate::tools::ToolSchemaPolicy::root(false),
-        None,
+        Some(&captured_session_id),
         None,
     )
     .await;
