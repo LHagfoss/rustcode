@@ -1,3 +1,10 @@
+## [v0.55.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.10) - 2026-09-23
+
+### Fixes
+- Added live steering so corrections can be applied during the active turn while follow-up prompts stay queued.
+- Improved loop recovery to recognize useful progress, and hardened native tool call/result handling and cancellation.
+- Aligned footer context usage with the detailed context view.
+- Removed unused code and test-only APIs to eliminate compiler warnings.
 ## [v0.55.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.9) - 2026-09-23
 
 ### Fixes
