@@ -4975,7 +4975,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
     assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
     assert!(
-        rendered.contains("Token usage by category"),
+        rendered.contains("Stored history estimate by category"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
@@ -4992,7 +4992,9 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .expect("context header should be rendered");
     let summary_row = lines
         .iter()
-        .position(|line| line.contains(" tokens (") && line.contains(" · "))
+        .position(|line| {
+            line.contains(" · ") && (line.contains(" prompt") || line.contains(" estimate"))
+        })
         .expect("context summary should be rendered");
     let first_grid_row = lines
         .iter()
@@ -5000,7 +5002,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .expect("context grid should be rendered");
     let category_header_row = lines
         .iter()
-        .position(|line| line.contains("Token usage by category"))
+        .position(|line| line.contains("Stored history estimate by category"))
         .expect("category header should be rendered");
     let free_space_row = lines
         .iter()
@@ -5019,4 +5021,86 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         0,
         "context modal should not leave bottom padding after its stats: free_space_row={free_space_row}, rendered={rendered:?}"
     );
+}
+
+#[test]
+fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
+    let mut state = AppState::new();
+    let mut profile = crate::config::ModelProfile::default();
+    profile.name = state.model_name.clone();
+    profile.model = state.model_name.clone();
+    profile.url = state.api_base_url.clone();
+    profile.context_window = Some(100_000);
+    state.config.models.clear();
+    state.config.models.push(profile);
+    state
+        .history
+        .push(ChatMessage::new("tool", "x".repeat(80_000)));
+    state.current_token_usage = Some(crate::app::TokenUsage {
+        prompt_tokens: 4_000,
+        completion_tokens: 500,
+        total_tokens: 4_500,
+        ..Default::default()
+    });
+    state.show_context_modal = true;
+
+    let snapshot = state.render_snapshot();
+    let active_usage = super::context_usage::context_usage(&snapshot);
+    assert_eq!(active_usage.used_tokens, 4_000);
+    assert_eq!(
+        crate::app::status::context_remaining_percent(active_usage.used_tokens, 100_000),
+        96
+    );
+
+    let breakdown = modals::calculate_context_breakdown(&snapshot);
+    assert!(breakdown.total_used > active_usage.used_tokens as usize);
+    let rendered = render_context_modal_to_text(&state, 120, 24);
+    assert!(
+        rendered.contains("4.0k/100.0k (4.0%) prompt"),
+        "context summary must match provider prompt usage: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Stored history estimate by category"),
+        "estimated saved history must be distinguished from active prompt usage: {rendered:?}"
+    );
+
+    state.show_context_modal = false;
+    let footer = render_state_to_text(&mut state, 120, 24);
+    assert!(footer.contains("96% context left"), "footer: {footer:?}");
+}
+
+#[test]
+fn selected_subagent_context_usage_and_categories_use_child_history() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new(
+        "assistant",
+        "parent history that is not active",
+    ));
+    let child_history = vec![ChatMessage::new("user", "child task")];
+    state.subagents.push(crate::app::SubAgent {
+        id: 7,
+        name: "reviewer".to_owned(),
+        task: "review".to_owned(),
+        model: None,
+        history: std::sync::Arc::new(child_history.clone()),
+        status: crate::app::SubAgentStatus::Completed,
+        active_turn: false,
+        parent_id: None,
+        write_access: false,
+        allowed_paths: Vec::new(),
+        verification_command: None,
+        workspace_root: None,
+        review_manifest: None,
+    });
+    state.selected_subagent_id = Some(7);
+    state.show_context_modal = true;
+
+    let snapshot = state.render_snapshot();
+    let breakdown = modals::calculate_context_breakdown(&snapshot);
+    assert_eq!(
+        breakdown.user_tokens,
+        crate::network::compaction::estimate_tokens("child task")
+    );
+    assert_eq!(breakdown.assistant_tokens, 0);
+    assert_eq!(breakdown.subagent_tokens, 0);
 }

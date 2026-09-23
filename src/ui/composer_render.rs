@@ -160,28 +160,6 @@ pub(super) fn format_token_count(tokens: u32) -> String {
     }
 }
 
-pub(super) fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
-    if let Some(usage) = &state.current_token_usage() {
-        return (usage.total_tokens, usage.cached_tokens);
-    }
-
-    if let Some(usage) = state
-        .active_history()
-        .iter()
-        .rev()
-        .find_map(|message| message.token_usage.as_ref())
-    {
-        return (usage.total_tokens, usage.cached_tokens);
-    }
-
-    let chars: usize = state
-        .active_history()
-        .iter()
-        .map(|message| message.content.len())
-        .sum();
-    ((chars / 4) as u32, None)
-}
-
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
     let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
@@ -727,7 +705,7 @@ pub(super) fn render_composer_footer(
         return;
     }
 
-    let (used, _) = context_usage(state);
+    let used = super::context_usage::context_usage(state).used_tokens;
     let window = state.active_context_window().max(1);
     let remaining = crate::app::status::context_remaining_percent(used, window);
     let location = footer_location(state);
