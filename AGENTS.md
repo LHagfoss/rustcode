@@ -8,17 +8,23 @@ instructions for work in this repository.
 
 ## Workflow
 
-- Start from current `main` on a `feature/...` or `fix/...` branch.
+- Start from current `main` in an isolated task worktree on a `feature/...` or
+  `fix/...` branch.
 - Never create or switch a task branch in the active user checkout. This
   includes `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`,
   and `git switch -C`. Keep the active checkout on its original branch
   throughout the task. Create and switch task branches only in an isolated
-  worktree (`git worktree add /tmp/...`).
+  worktree (`git worktree add /tmp/...`). If a generic skill or workflow says
+  to create a branch with `git switch -c`, use `git worktree add` instead.
 - Never move the user's checkout: no `rebase` or `reset --hard` in the active
   working tree. Branch and merge work belongs in an isolated worktree.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
 - Run `cargo check --tests` and `cargo test`.
-- Commit, push, PR to `main`, merge, then checkout and pull `main`.
+- Commit, push, PR to `main`, and merge from the isolated task worktree. After
+  merge, never checkout or pull `main` by moving the original active checkout;
+  the original active checkout remains on its original branch. If a local
+  checkout needs to be updated to `main`, do so only in a separate clone or
+  isolated checkout.
 - For releases, load `~/.config/rustcode/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth.
 
