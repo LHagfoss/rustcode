@@ -1,3 +1,7 @@
+## [v0.55.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.9) - 2026-09-23
+
+### Fixes
+Keep partial assistant responses visible while live tools are running.
 ## [v0.55.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.8) - 2026-09-22
 
 ### Features
