@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 /// Keep each active debug log bounded. The current and previous files are
 /// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
+const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
 
 pub(crate) fn set_active_session_id(session_id: Option<&str>) {
     let mut active = active_session_lock()
@@ -29,6 +30,9 @@ fn active_session_lock() -> &'static Mutex<Option<String>> {
 /// Also called before writes so a long-lived process cannot grow the global
 /// or session log beyond the cap by accumulating lines between restarts.
 pub(crate) fn rotate_if_oversized() {
+    let _guard = log_write_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     if let Some(config_dir) = crate::config::get_config_dir() {
         rotate_log_dir_if_oversized(&config_dir, MAX_DEBUG_LOG_BYTES);
         if let Some(session_id) = active_session_id() {
@@ -37,6 +41,11 @@ pub(crate) fn rotate_if_oversized() {
             rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
         }
     }
+}
+
+fn log_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
@@ -77,15 +86,56 @@ fn append_line_to_logs_with_limit(
     line: &str,
     limit_bytes: u64,
 ) {
-    rotate_log_dir_if_oversized(config_dir, limit_bytes);
-    append_line_to_path(&config_dir.join("debug.log"), line);
+    if limit_bytes == 0 {
+        return;
+    }
+
+    let _guard = log_write_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let line = capped_log_line(line, limit_bytes);
+    let append_bytes = line.len().saturating_add(1) as u64;
+    append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
 
     if let Some(session_id) = session_id {
         let session_dir = rustcode_session::SessionStore::new(config_dir).session_dir(session_id);
         let logs_dir = session_dir.join("logs");
-        rotate_log_dir_if_oversized(&logs_dir, limit_bytes);
-        append_line_to_path(&logs_dir.join("debug.log"), line);
+        append_bounded_line(&logs_dir, &line, append_bytes, limit_bytes);
     }
+}
+
+fn capped_log_line<'a>(line: &'a str, limit_bytes: u64) -> std::borrow::Cow<'a, str> {
+    let max_content_bytes = usize::try_from(limit_bytes.saturating_sub(1)).unwrap_or(usize::MAX);
+    if line.len() <= max_content_bytes {
+        return std::borrow::Cow::Borrowed(line);
+    }
+
+    let marker = format!(
+        "{OVERSIZED_LINE_MARKER} ({} bytes)",
+        line.len().saturating_add(1)
+    );
+    if marker.len() <= max_content_bytes {
+        return std::borrow::Cow::Owned(marker);
+    }
+
+    // The marker is ASCII, so slicing at any byte boundary stays valid UTF-8.
+    std::borrow::Cow::Owned(marker[..max_content_bytes].to_owned())
+}
+
+fn append_bounded_line(log_dir: &Path, line: &str, append_bytes: u64, limit_bytes: u64) {
+    let log_path = log_dir.join("debug.log");
+    let current_bytes = std::fs::metadata(&log_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if current_bytes.saturating_add(append_bytes) > limit_bytes {
+        let rotated_path = log_dir.join("debug.log.1");
+        if std::fs::rename(&log_path, &rotated_path).is_err() {
+            // Keep the current file within its cap when permissions or another
+            // filesystem error prevent rotation.
+            return;
+        }
+    }
+    append_line_to_path(&log_path, line);
 }
 
 fn attributed_fields(mut fields: Value) -> (Value, Option<String>) {
@@ -242,35 +292,102 @@ mod tests {
     }
 
     #[test]
-    fn rotates_global_and_session_logs_before_appending() {
+    fn appends_at_exact_cap_boundary_for_global_and_session_logs() {
         let dir = tempfile::tempdir().expect("tempdir");
         let session_id = "2026-09-11T00:00:00Z-test-session";
         let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
         let session_logs = session_dir.join("logs");
         std::fs::create_dir_all(&session_logs).expect("create session log directory");
-        std::fs::write(dir.path().join("debug.log"), b"oversized global log")
-            .expect("write global log");
-        std::fs::write(session_logs.join("debug.log"), b"oversized session log")
-            .expect("write session log");
+        std::fs::write(dir.path().join("debug.log"), b"old\n").expect("write global log");
+        std::fs::write(session_logs.join("debug.log"), b"old\n").expect("write session log");
 
-        append_line_to_logs_with_limit(dir.path(), Some(session_id), "new line", 8);
+        append_line_to_logs_with_limit(dir.path(), Some(session_id), "new", 8);
 
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("debug.log.1")).expect("rotated global log"),
-            "oversized global log"
-        );
-        assert_eq!(
-            std::fs::read_to_string(session_logs.join("debug.log.1")).expect("rotated session log"),
-            "oversized session log"
-        );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("debug.log")).expect("current global log"),
-            "new line\n"
+            "old\nnew\n"
         );
         assert_eq!(
             std::fs::read_to_string(session_logs.join("debug.log")).expect("current session log"),
-            "new line\n"
+            "old\nnew\n"
         );
+        assert_eq!(
+            std::fs::metadata(dir.path().join("debug.log"))
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(
+            std::fs::metadata(session_logs.join("debug.log"))
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(!dir.path().join("debug.log.1").exists());
+        assert!(!session_logs.join("debug.log.1").exists());
+    }
+
+    #[test]
+    fn rotates_before_an_append_that_would_cross_cap_for_both_logs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "2026-09-11T00:00:00Z-test-session";
+        let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
+        let session_logs = session_dir.join("logs");
+        std::fs::create_dir_all(&session_logs).expect("create session log directory");
+        std::fs::write(dir.path().join("debug.log"), b"old!\n").expect("write global log");
+        std::fs::write(session_logs.join("debug.log"), b"old!\n").expect("write session log");
+
+        append_line_to_logs_with_limit(dir.path(), Some(session_id), "new", 8);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("debug.log.1")).expect("rotated global log"),
+            "old!\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_logs.join("debug.log.1")).expect("rotated session log"),
+            "old!\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("debug.log")).unwrap(),
+            "new\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_logs.join("debug.log")).unwrap(),
+            "new\n"
+        );
+        assert_eq!(
+            std::fs::metadata(dir.path().join("debug.log"))
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            std::fs::metadata(session_logs.join("debug.log"))
+                .unwrap()
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn replaces_oversized_line_with_marker_that_fits_both_log_caps() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "2026-09-11T00:00:00Z-test-session";
+        let oversized = "x".repeat(300);
+
+        append_line_to_logs_with_limit(dir.path(), Some(session_id), &oversized, 64);
+
+        let global = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
+        let session_path = rustcode_session::SessionStore::new(dir.path())
+            .session_dir(session_id)
+            .join("logs/debug.log");
+        let session = std::fs::read_to_string(session_path).expect("session log");
+        assert!(global.starts_with(OVERSIZED_LINE_MARKER));
+        assert!(session.starts_with(OVERSIZED_LINE_MARKER));
+        assert!(!global.contains(&oversized));
+        assert!(!session.contains(&oversized));
+        assert!(global.len() <= 64);
+        assert!(session.len() <= 64);
     }
 
     #[test]
