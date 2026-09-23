@@ -842,39 +842,38 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
 // re-render on the next frame. It now drops a single cold entry.
 #[test]
 fn tool_result_cache_evicts_one_lru_entry_at_cap() {
-    use super::{
-        TOOL_RESULT_CACHE, TOOL_RESULT_CACHE_CAP, cached_tool_result, tool_result_cache_key,
-    };
+    use super::{TOOL_RESULT_CACHE_CAP, lru::LruCache, tool_transcript::cached_tool_result_in};
 
     let cap = TOOL_RESULT_CACHE_CAP;
-    let verbosity = crate::app::Verbosity::Low;
+    let cache = std::cell::RefCell::new(LruCache::new(cap));
     for i in 0..cap {
-        cached_tool_result("Bash", &format!("result {i}"), 80, &verbosity, false);
+        cached_tool_result_in(&cache, i as u64, || vec![Line::from(format!("result {i}"))]);
     }
-    TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), cap));
+    assert_eq!(cache.borrow().entries.len(), cap);
 
     // Read the oldest entry so it becomes the most recently used one; a hit
     // must refresh recency.
-    let oldest = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
-    cached_tool_result("Bash", "result 0", 80, &verbosity, false);
+    let oldest = 0;
+    cached_tool_result_in(&cache, oldest, || panic!("cache hit must not render"));
 
     // Exceed the cap by one: exactly one entry is evicted, and it is the
     // least recently used one rather than the entry just read.
-    cached_tool_result("Bash", "overflow", 80, &verbosity, false);
-    TOOL_RESULT_CACHE.with(|cache| {
-        let cache = cache.borrow();
-        assert_eq!(cache.entries.len(), cap, "cap must hold after overflow");
-        assert!(
-            cache.entries.contains_key(&oldest),
-            "entry read just before the insert must survive"
-        );
-        assert!(
-            !cache.entries.contains_key(&tool_result_cache_key(
-                "Bash", "result 1", 80, &verbosity, false
-            )),
-            "the least recently used entry is the eviction victim"
-        );
-    });
+    let overflow = cap as u64;
+    cached_tool_result_in(&cache, overflow, || vec![Line::from("overflow")]);
+    let cache = cache.borrow();
+    assert_eq!(cache.entries.len(), cap, "cap must hold after overflow");
+    assert!(
+        cache.entries.contains_key(&oldest),
+        "entry read just before the insert must survive"
+    );
+    assert!(
+        !cache.entries.contains_key(&1),
+        "the least recently used entry is the eviction victim"
+    );
+    assert!(
+        cache.entries.contains_key(&overflow),
+        "the new entry must be cached"
+    );
 }
 
 #[test]

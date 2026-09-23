@@ -392,18 +392,28 @@ pub(super) fn cached_tool_result(
     let key = tool_result_cache_key(tool_name, result, width, verbosity, show_picker);
 
     TOOL_RESULT_CACHE.with(|cache| {
-        // A hit refreshes recency, so results currently on screen are never the
-        // eviction victim.
-        if let Some(lines) = cache.borrow_mut().get(&key) {
-            return lines.clone();
-        }
-        let lines = render_tool_result(tool_name, result, width, verbosity, show_picker)
-            .iter()
-            .map(own_line)
-            .collect::<Vec<_>>();
-        cache.borrow_mut().insert(key, lines.clone());
-        lines
+        cached_tool_result_in(cache, key, || {
+            render_tool_result(tool_name, result, width, verbosity, show_picker)
+                .iter()
+                .map(own_line)
+                .collect()
+        })
     })
+}
+
+pub(super) fn cached_tool_result_in(
+    cache: &RefCell<lru::LruCache<u64, Vec<Line<'static>>>>,
+    key: u64,
+    render: impl FnOnce() -> Vec<Line<'static>>,
+) -> Vec<Line<'static>> {
+    // A hit refreshes recency, so results currently on screen are never the
+    // eviction victim.
+    if let Some(lines) = cache.borrow_mut().get(&key) {
+        return lines.clone();
+    }
+    let lines = render();
+    cache.borrow_mut().insert(key, lines.clone());
+    lines
 }
 
 pub(super) fn tool_result_is_hidden(tool_name: &str) -> bool {
