@@ -46,7 +46,6 @@ pub(in crate::ui) use navigation::{
     render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
 };
 pub(in crate::ui) use question::render_question_modal;
-use question::textwrap_simple;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
 
 pub(crate) fn approval_event_for_key(key: KeyEvent, selected: usize) -> Option<AppEvent> {
