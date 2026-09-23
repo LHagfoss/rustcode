@@ -1014,6 +1014,7 @@ pub async fn handle_enter(
         s.status = AppStatus::Streaming;
         s.input_buffer.clear();
         s.cursor_position = 0;
+        let owner_session_id = s.active_session_id.clone();
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
         let token_clone = cancel_token.clone();
@@ -1024,6 +1025,7 @@ pub async fn handle_enter(
                 &state_clone,
                 &token_clone,
                 selected_id,
+                &owner_session_id,
             )
             .await;
             let status = if token_clone.is_cancelled() {
