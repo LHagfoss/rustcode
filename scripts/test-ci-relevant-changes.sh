@@ -48,6 +48,8 @@ expect_relevant "CI helper changes run code CI" 'scripts/ci-relevant-changes.sh'
 expect_relevant "build configuration runs code CI" 'Cargo.lock'
 expect_relevant "workflow changes run code CI" '.github/workflows/ci.yml'
 expect_irrelevant "documentation-only changes skip code CI" 'README.md'
+expect_irrelevant "crate README changes skip code CI" 'crates/rustcode-core/README.md'
+expect_irrelevant "crate documentation changes skip code CI" 'crates/rustcode-core/docs/usage.md'
 expect_irrelevant "image-only changes skip code CI" 'images/header.png'
 
 if ((failures > 0)); then
