@@ -3234,21 +3234,63 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
         .find(|tool| tool.name == "run_command")
         .expect("tool exists");
 
-    // Issue #1229: a session yanked the user's checkout with checkout -B +
-    // rebase. Branch/merge work belongs in an isolated worktree.
-    for forbidden in [
+    // Issue #1229: task branches must never be created or checked out in the
+    // active user checkout, and repository instructions outrank generic skills.
+    for required_guidance in [
+        "git branch",
+        "git switch -c",
+        "git checkout -b",
         "checkout -B",
         "switch -C",
         "git rebase",
         "reset --hard",
         "git worktree add",
+        "repository `AGENTS.md` instructions apply",
+        "they outrank generic workflow skills",
+        "original branch throughout the task",
     ] {
         assert!(
-            spec.description.contains(forbidden),
-            "run_command spec must mention {forbidden}: {}",
+            spec.description.contains(required_guidance),
+            "run_command spec must mention {required_guidance}: {}",
             spec.description
         );
     }
+}
+
+#[test]
+fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checkout() {
+    let repository_policy = include_str!("../../AGENTS.md");
+    let run_command_spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "run_command")
+        .expect("tool exists")
+        .description;
+
+    // Reproduce the conflict that caused issue #1229: a generic workflow
+    // recipe recommends `git switch -c`, while this repository requires an
+    // isolated worktree. The repository rule must win, including after merge.
+    assert!(
+        repository_policy.contains("If a generic skill or workflow says"),
+        "repository policy must name the conflicting generic recipe"
+    );
+    assert!(
+        repository_policy
+            .contains("to create a branch with `git switch -c`, use `git worktree add` instead"),
+        "repository policy must resolve that conflict in favor of worktrees"
+    );
+    assert!(
+        repository_policy.contains("the original active checkout remains on its original branch"),
+        "the post-merge workflow must preserve the active checkout's branch"
+    );
+    assert!(
+        repository_policy.contains("do so only in a separate clone or")
+            && repository_policy.contains("isolated checkout"),
+        "the post-merge main update must happen outside the active checkout"
+    );
+    assert!(
+        run_command_spec.contains("repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead"),
+        "run_command must enforce the repository policy over conflicting generic recipes"
+    );
 }
 
 #[test]
