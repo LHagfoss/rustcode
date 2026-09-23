@@ -481,7 +481,7 @@ async fn summarize_session_inner(
             dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
             s.history.push(ChatMessage::new(
                 "system",
-                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check debug.log."),
+                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check this session's logs/debug.log."),
             ));
         }
         Err(e) => {

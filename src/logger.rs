@@ -2,26 +2,9 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-/// debug.log is append-only and never trimmed per write (that would make
-/// every log line pay for a size check). Instead, cap it cheaply once per
-/// process start: if it's grown past this, move it aside so the session
-/// starts with a fresh file instead of growing the old one forever.
+/// Keep each active debug log bounded. The current and previous files are
+/// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
-
-/// Rotate `debug.log` out of the way if it has grown past the size cap.
-/// Call once at process start — not on every write, since the whole point is
-/// to keep per-write logging cheap (a single `metadata()` stat per session,
-/// not per line).
-pub(crate) fn rotate_if_oversized() {
-    if let Some(log_dir) = crate::config::get_config_dir() {
-        rotate_log_dir_if_oversized(&log_dir, MAX_DEBUG_LOG_BYTES);
-        if let Some(session_id) = active_session_id() {
-            let session_dir =
-                rustcode_session::SessionStore::new(&log_dir).session_dir(&session_id);
-            rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
-        }
-    }
-}
 
 pub(crate) fn set_active_session_id(session_id: Option<&str>) {
     let mut active = active_session_lock()
@@ -40,6 +23,20 @@ fn active_session_id() -> Option<String> {
 fn active_session_lock() -> &'static Mutex<Option<String>> {
     static ACTIVE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(None))
+}
+
+/// Rotate `debug.log` out of the way if it has grown past the size cap.
+/// Also called before writes so a long-lived process cannot grow the global
+/// or session log beyond the cap by accumulating lines between restarts.
+pub(crate) fn rotate_if_oversized() {
+    if let Some(config_dir) = crate::config::get_config_dir() {
+        rotate_log_dir_if_oversized(&config_dir, MAX_DEBUG_LOG_BYTES);
+        if let Some(session_id) = active_session_id() {
+            let session_dir =
+                rustcode_session::SessionStore::new(&config_dir).session_dir(&session_id);
+            rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
+        }
+    }
 }
 
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
@@ -63,16 +60,31 @@ fn append_line_with_session(line: &str, session_id: Option<&str>) {
     if let Some(log_dir) = crate::config::get_config_dir() {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{now}] {line}");
-        append_line_to_path(&log_dir.join("debug.log"), &formatted);
+        let session_id = session_id.map(str::to_owned).or_else(active_session_id);
+        append_line_to_logs(&log_dir, session_id.as_deref(), &formatted);
+    }
+}
 
-        if let Some(session_id) = session_id.map(str::to_owned).or_else(active_session_id) {
-            let session_dir =
-                rustcode_session::SessionStore::new(&log_dir).session_dir(&session_id);
-            let logs_dir = session_dir.join("logs");
-            let _ = std::fs::create_dir_all(&logs_dir);
-            rotate_log_dir_if_oversized(&logs_dir, MAX_DEBUG_LOG_BYTES);
-            append_line_to_path(&logs_dir.join("debug.log"), &formatted);
-        }
+/// Write every line to the bounded config-level log, and duplicate it under
+/// its owning session when the logger has an explicit or active session id.
+fn append_line_to_logs(config_dir: &Path, session_id: Option<&str>, line: &str) {
+    append_line_to_logs_with_limit(config_dir, session_id, line, MAX_DEBUG_LOG_BYTES);
+}
+
+fn append_line_to_logs_with_limit(
+    config_dir: &Path,
+    session_id: Option<&str>,
+    line: &str,
+    limit_bytes: u64,
+) {
+    rotate_log_dir_if_oversized(config_dir, limit_bytes);
+    append_line_to_path(&config_dir.join("debug.log"), line);
+
+    if let Some(session_id) = session_id {
+        let session_dir = rustcode_session::SessionStore::new(config_dir).session_dir(session_id);
+        let logs_dir = session_dir.join("logs");
+        rotate_log_dir_if_oversized(&logs_dir, limit_bytes);
+        append_line_to_path(&logs_dir.join("debug.log"), line);
     }
 }
 
@@ -106,7 +118,8 @@ fn append_line_to_path(path: &Path, line: &str) {
     }
 }
 
-/// Install a panic hook that preserves panic evidence in debug.log.
+/// Install a panic hook that preserves panic evidence in the global and, when
+/// available, session-scoped logs.
 /// Issue #1226: two sessions froze/died mid-stream with zero log evidence.
 /// Unwind panics leave no macOS crash report, and a panic in a spawned task
 /// is silently dropped unless its JoinHandle is observed — so without this
@@ -134,7 +147,7 @@ pub(crate) fn install_panic_hook() {
     });
 }
 
-/// Write metadata-only lifecycle events to the existing debug log.
+/// Write metadata-only lifecycle events to the global and owning session logs.
 pub(crate) fn operational_event(event: &str, fields: Value) {
     // Keep every operational event attributable even when a call site is in a
     // low-level stream/parser helper that does not otherwise carry session
@@ -202,12 +215,62 @@ mod tests {
     }
 
     #[test]
-    fn appends_session_log_lines_without_changing_global_format() {
+    fn writes_global_lines_when_no_session_is_active() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("sessions/2026/09/11/abc/logs/debug.log");
-        append_line_to_path(&path, "[time] [op] {\"event\":\"turn.start\"}");
-        let contents = std::fs::read_to_string(path).expect("session log");
-        assert!(contents.contains("turn.start"));
+        append_line_to_logs(dir.path(), None, "[time] early startup");
+        let contents = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
+        assert!(contents.contains("early startup"));
+        assert!(!dir.path().join("sessions").exists());
+    }
+
+    #[test]
+    fn writes_session_lines_to_both_global_and_session_logs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "2026-09-11T00:00:00Z-test-session";
+        append_line_to_logs(
+            dir.path(),
+            Some(session_id),
+            "[time] [op] {\"event\":\"turn.start\"}",
+        );
+        let global = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
+        let session_path = rustcode_session::SessionStore::new(dir.path())
+            .session_dir(session_id)
+            .join("logs/debug.log");
+        let session = std::fs::read_to_string(session_path).expect("session log");
+        assert!(global.contains("turn.start"));
+        assert!(session.contains("turn.start"));
+    }
+
+    #[test]
+    fn rotates_global_and_session_logs_before_appending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "2026-09-11T00:00:00Z-test-session";
+        let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
+        let session_logs = session_dir.join("logs");
+        std::fs::create_dir_all(&session_logs).expect("create session log directory");
+        std::fs::write(dir.path().join("debug.log"), b"oversized global log")
+            .expect("write global log");
+        std::fs::write(session_logs.join("debug.log"), b"oversized session log")
+            .expect("write session log");
+
+        append_line_to_logs_with_limit(dir.path(), Some(session_id), "new line", 8);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("debug.log.1")).expect("rotated global log"),
+            "oversized global log"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_logs.join("debug.log.1")).expect("rotated session log"),
+            "oversized session log"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("debug.log")).expect("current global log"),
+            "new line\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_logs.join("debug.log")).expect("current session log"),
+            "new line\n"
+        );
     }
 
     #[test]

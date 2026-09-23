@@ -330,9 +330,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if run_daemon_or_cron_command(&cli_args).await? {
         return Ok(());
     }
-    // Cheap, once-per-process check: rotate debug.log out of the way if a
-    // prior session let it grow past the size cap, instead of letting every
-    // subsequent write add to an already-huge file.
+    // Rotate a debug log left by a previous process before startup emits new
+    // diagnostics. The logger also checks the cap before each append so long-
+    // lived processes remain bounded.
     crate::logger::rotate_if_oversized();
     // Issue #1226: silent mid-stream hangs left zero evidence. A panic hook
     // preserves the message + location in debug.log even when the process
