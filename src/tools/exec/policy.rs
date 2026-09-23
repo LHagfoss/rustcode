@@ -78,9 +78,31 @@ fn command_basename(command: &str) -> &str {
     let basename = command.rsplit(['/', '\\']).next().unwrap_or(command);
     basename
         .rsplit_once('.')
-        .filter(|(_, extension)| extension.eq_ignore_ascii_case("exe"))
+        .filter(|(_, extension)| {
+            ["exe", "cmd", "bat", "com"]
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
         .map(|(stem, _)| stem)
         .unwrap_or(basename)
+}
+
+fn normalized_deny_executable(command: &str) -> String {
+    let basename = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    let is_windows_shim = basename.rsplit_once('.').is_some_and(|(_, extension)| {
+        ["exe", "cmd", "bat", "com"]
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    });
+    let basename = command_basename(command);
+    if is_windows_shim {
+        return basename.to_ascii_lowercase();
+    }
+    match basename.to_ascii_lowercase().as_str() {
+        "cargo" => "cargo".to_owned(),
+        "git" => "git".to_owned(),
+        _ => basename.to_owned(),
+    }
 }
 
 /// Canonicalize command invocation prefixes for deny matching. Git and Cargo
@@ -90,13 +112,9 @@ fn normalized_deny_command(tokens: &[String], start: usize) -> Vec<String> {
     let Some(executable) = tokens.get(start) else {
         return Vec::new();
     };
-    let executable = match command_basename(executable).to_ascii_lowercase().as_str() {
-        "cargo" => "cargo",
-        "git" => "git",
-        _ => command_basename(executable),
-    };
+    let executable = normalized_deny_executable(executable);
     let args = &tokens[start + 1..];
-    let mut normalized = vec![executable.to_owned()];
+    let mut normalized = vec![executable.clone()];
 
     if executable == "git" {
         let mut git_tokens = Vec::with_capacity(args.len() + 1);
@@ -881,7 +899,7 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
             let normalized = normalized_deny_command(&tokens, start);
             if rules
                 .iter()
-                .any(|rule| !rule.is_empty() && normalized.starts_with(rule))
+                .any(|rule| ordered_deny_tokens_match(rule, &normalized))
             {
                 return true;
             }
@@ -922,6 +940,22 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
                         return true;
                     }
                 }
+            }
+        }
+    }
+    false
+}
+
+fn ordered_deny_tokens_match(rule: &[String], command: &[String]) -> bool {
+    if rule.is_empty() {
+        return false;
+    }
+    let mut matched = 0;
+    for token in command {
+        if token == &rule[matched] {
+            matched += 1;
+            if matched == rule.len() {
+                return true;
             }
         }
     }
@@ -1122,6 +1156,9 @@ mod command_prefix_tests {
             ("/usr/bin/cargo test", "cargo test"),
             ("C:\\Rust\\cargo.exe test", "cargo test"),
             ("\"C:\\Program Files\\Rust\\cargo.exe\" test", "cargo test"),
+            ("C:\\Tools\\NPM.CMD install", "npm install"),
+            ("C:\\Tools\\npm.BAT install", "npm install"),
+            ("C:\\Tools\\npm.Com install", "npm install"),
             ("C:\\Rust\\CARGO.ExE test", "cargo test"),
         ] {
             assert_eq!(
@@ -1172,6 +1209,12 @@ mod command_prefix_tests {
             ("cargo test", "CMD /c \"cargo test\""),
             ("cargo test", "powershell -Command \"cargo test\""),
             ("cargo test", "pwsh -Command \"cargo test\""),
+            ("make test", "make -C . test"),
+            ("make test", "make -f Makefile test"),
+            ("npm install", "npm.cmd install"),
+            ("npm install", "NPM.CMD install"),
+            ("npm install", "npm.BAT install"),
+            ("npm install", "npm.com install"),
         ] {
             assert!(
                 denied_command_prefix_covers_call(
