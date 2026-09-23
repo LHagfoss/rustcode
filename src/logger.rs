@@ -168,26 +168,46 @@ fn replace_rotated_log(
 }
 
 fn recover_rotation(log_dir: &Path) -> std::io::Result<()> {
+    recover_rotation_with(
+        log_dir,
+        |from, to| std::fs::rename(from, to),
+        |path| std::fs::remove_file(path),
+    )
+}
+
+fn recover_rotation_with<R, D>(
+    log_dir: &Path,
+    rename_file: R,
+    remove_file: D,
+) -> std::io::Result<()>
+where
+    R: Fn(&Path, &Path) -> std::io::Result<()>,
+    D: Fn(&Path) -> std::io::Result<()>,
+{
     let rotated_path = log_dir.join("debug.log.1");
+    let log_path = log_dir.join("debug.log");
     let staged_path = log_dir.join(ROTATION_STAGE_NAME);
     let backup_path = log_dir.join(ROTATION_BACKUP_NAME);
     if backup_path.exists() {
+        if !backup_path.is_file() {
+            return Err(std::io::Error::other(
+                "debug log rotation backup is not a regular file",
+            ));
+        }
         if rotated_path.exists() {
-            let _ = remove_file_if_exists(&backup_path);
+            if log_path.exists() {
+                // The new archive is installed, but the source may still be
+                // present if rotation was interrupted. Complete that step
+                // before discarding the previous archive.
+                remove_file_if_exists_with(&log_path, &remove_file)?;
+            }
+            remove_file_if_exists_with(&backup_path, &remove_file)?;
         } else {
-            std::fs::rename(&backup_path, &rotated_path)?;
+            rename_file(&backup_path, &rotated_path)?;
         }
     }
-    let _ = remove_file_if_exists(&staged_path);
+    let _ = remove_file_if_exists_with(&staged_path, &remove_file);
     Ok(())
-}
-
-fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
 }
 
 fn remove_file_if_exists_with<D>(path: &Path, remove_file: &D) -> std::io::Result<()>
@@ -937,6 +957,73 @@ mod tests {
             std::fs::read_to_string(backup_path).unwrap(),
             "prior archive\n"
         );
+    }
+
+    #[test]
+    fn recovery_keeps_previous_archive_until_active_log_removal_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let backup_path = dir.path().join(ROTATION_BACKUP_NAME);
+        let staged_path = dir.path().join(ROTATION_STAGE_NAME);
+        std::fs::write(&log_path, "new active segment\n").expect("write active");
+        std::fs::write(&archive_path, "old archive\n").expect("write archive");
+
+        let fail_active_removal = |path: &Path| {
+            if path == log_path {
+                Err(std::io::Error::other("injected active removal failure"))
+            } else {
+                std::fs::remove_file(path)
+            }
+        };
+        let rotation = replace_rotated_log_with(
+            &log_path,
+            &archive_path,
+            &staged_path,
+            &backup_path,
+            100,
+            |from, to| std::fs::copy(from, to),
+            |from, to| std::fs::rename(from, to),
+            fail_active_removal,
+        );
+        assert!(rotation.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            "old archive\n"
+        );
+
+        let failed_recovery = recover_rotation_with(
+            dir.path(),
+            |from, to| std::fs::rename(from, to),
+            |path| {
+                if path == log_path {
+                    Err(std::io::Error::other("injected recovery removal failure"))
+                } else {
+                    std::fs::remove_file(path)
+                }
+            },
+        );
+        assert!(failed_recovery.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap(),
+            "new active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&archive_path).unwrap(),
+            "new active segment\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            "old archive\n"
+        );
+
+        recover_rotation(dir.path()).expect("finish interrupted rotation");
+        assert!(!log_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&archive_path).unwrap(),
+            "new active segment\n"
+        );
+        assert!(!backup_path.exists());
     }
 
     #[test]
