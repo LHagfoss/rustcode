@@ -213,10 +213,18 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
     let Some(token) = command_token(input) else {
         return Vec::new();
     };
-    COMMANDS
-        .iter()
-        .filter(|command| command.name.starts_with(token))
-        .collect()
+    let token = token.to_lowercase();
+    let mut exact = Vec::new();
+    let mut prefixes = Vec::new();
+    for command in COMMANDS {
+        let name = command.name.to_lowercase();
+        if name == token {
+            exact.push(command);
+        } else if name.starts_with(&token) {
+            prefixes.push(command);
+        }
+    }
+    exact.into_iter().chain(prefixes).collect()
 }
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
@@ -364,6 +372,13 @@ mod tests {
                 .any(|command| command.name == "/model")
         );
         assert!(command_token("plain text").is_none());
+    }
+
+    #[test]
+    fn command_completion_matches_case_insensitively() {
+        let commands = filtered_commands("/MODEL");
+
+        assert!(commands.iter().any(|command| command.name == "/model"));
     }
 
     #[test]
