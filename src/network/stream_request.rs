@@ -1421,6 +1421,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_request_rejects_subagent_tool_result_interleaving_before_send() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(
+                &mut socket,
+                "200 OK",
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"unexpected request\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            )
+            .await;
+            socket.shutdown().await.unwrap();
+        });
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        {
+            let mut state = state.lock().await;
+            state.config.models[0].tool_protocol = Some(crate::config::ToolProtocol::ApiNative);
+        }
+
+        // This is the subagent transcript shape after it drops one call from a
+        // batch: the in-flight call/result pair has a system notice between
+        // them. Alignment carries that notice as a user message, which breaks
+        // the provider's native tool-call transaction.
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": "subagent instructions"}),
+            serde_json::json!({"role": "user", "content": "inspect"}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_kept",
+                    "type": "function",
+                    "function": {"name": "view_file", "arguments": "{}"}
+                }]
+            }),
+            serde_json::json!({
+                "role": "system",
+                "content": "[Subagent tool batch kept 1 of 2 calls and dropped 1.]"
+            }),
+            serde_json::json!({
+                "role": "tool", "tool_call_id": "call_kept", "content": "completed"
+            }),
+        ];
+
+        let result = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            messages,
+            std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new())),
+            true,
+            true,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::subagent(),
+            Some(&session_id),
+            None,
+        )
+        .await;
+        server.abort();
+        let error = result.expect_err("interleaved native tool history must stop locally");
+
+        assert_eq!(error.kind, StreamFailureKind::ProviderError);
+        assert!(error.detail.as_deref().is_some_and(|detail| {
+            detail.contains("Native tool history") && detail.contains("call_kept")
+        }));
+    }
+
+    #[tokio::test]
     async fn stream_request_cancellation_interrupts_a_pending_response() {
         use tokio::io::AsyncWriteExt;
         use tokio::net::TcpListener;
@@ -3152,6 +3228,40 @@ pub async fn stream_request(
     let responses_api = matches!(api_protocol, crate::config::ApiProtocol::Responses);
     let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
+    let (tool_protocol, agent_mode, workspace_root) = {
+        let s = state.lock().await;
+        (
+            s.active_tool_protocol(),
+            s.agent_mode,
+            s.task_working_directory
+                .clone()
+                .or_else(|| s.workspace_root.clone())
+                .or_else(|| std::env::current_dir().ok()),
+        )
+    };
+    if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative)
+        && let Err(diagnostic) =
+            crate::network::history::validate_native_tool_messages(&aligned_messages)
+    {
+        crate::logger::operational_event(
+            "turn.native_history_validation_failed",
+            serde_json::json!({
+                "request_boundary": "stream_request",
+                "message_count": message_count,
+                "diagnostic": diagnostic,
+            }),
+        );
+        return Err(StreamFailure {
+            kind: StreamFailureKind::ProviderError,
+            status: None,
+            detail: Some(format!(
+                "Native tool history is incomplete after provider message alignment: {diagnostic}. The request was stopped locally; review the recent tool activity before retrying."
+            )),
+            bytes_received: 0,
+            events_received: 0,
+            partial_event_bytes: 0,
+        });
+    }
     let mut max_tokens = profile
         .as_ref()
         .map(|p| p.completion_token_limit(allow_tools))
@@ -3219,17 +3329,6 @@ pub async fn stream_request(
             .or_else(|| profile.as_ref().map(|p| p.context_budget().thinking_budget))
     };
 
-    let (tool_protocol, agent_mode, workspace_root) = {
-        let s = state.lock().await;
-        (
-            s.active_tool_protocol(),
-            s.agent_mode,
-            s.task_working_directory
-                .clone()
-                .or_else(|| s.workspace_root.clone())
-                .or_else(|| std::env::current_dir().ok()),
-        )
-    };
     let text_surface = if !allow_tools {
         crate::tools::ToolSurface::default()
     } else if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
