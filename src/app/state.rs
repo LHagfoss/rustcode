@@ -1507,10 +1507,9 @@ impl AppState {
                 .original_prefix
                 .as_deref()
                 .unwrap_or(&self.input_buffer);
-            let matches: Vec<&str> = crate::app::suggestion::COMMANDS
+            let matches: Vec<&str> = crate::app::suggestion::filtered_commands(prefix)
                 .iter()
-                .map(|c| c.name)
-                .filter(|c| c.starts_with(prefix))
+                .map(|command| command.name)
                 .collect();
             if let Some(idx) = self.suggestion_cycle.suggestion_index
                 && idx < matches.len()

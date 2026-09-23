@@ -3301,7 +3301,7 @@ fn live_tool_and_assistant_cells_update_and_clear_independently() {
 }
 
 #[test]
-fn live_exploration_batch_uses_preparing_for_speculative_and_executing_calls() {
+fn live_exploration_batch_uses_exploring_when_one_call_is_executing() {
     let mut speculative =
         crate::app::LiveToolCall::new("local:1", None, "grep", "Grep", "src/**/*.rs");
     speculative.execution_started = false;
@@ -3313,7 +3313,7 @@ fn live_exploration_batch_uses_preparing_for_speculative_and_executing_calls() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Preparing");
+    assert_eq!(rendered[0], "• Exploring");
     assert_eq!(rendered[1], "  └ Grep src/**/*.rs");
     assert_eq!(rendered[2], "    Read src/main.rs");
 }
@@ -3336,7 +3336,7 @@ fn mixed_live_exploration_and_action_batch_uses_running_heading() {
 }
 
 #[test]
-fn live_mcp_calls_use_preparing_heading_for_speculative_and_executing_calls() {
+fn live_mcp_calls_use_running_heading_when_one_call_is_executing() {
     let mut speculative = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -3358,7 +3358,7 @@ fn live_mcp_calls_use_preparing_heading_for_speculative_and_executing_calls() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Preparing");
+    assert_eq!(rendered[0], "• Running");
     assert_eq!(rendered[1], "  └ ClockifyGetTime workspace");
     assert_eq!(rendered[2], "    ClockifyStartTimer task-42");
 }

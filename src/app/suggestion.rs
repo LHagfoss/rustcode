@@ -228,10 +228,9 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
 }
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
-    COMMANDS
+    filtered_commands(prefix)
         .iter()
-        .map(|c| c.name)
-        .filter(|name| name.starts_with(prefix))
+        .map(|command| command.name)
         .collect()
 }
 
@@ -379,6 +378,13 @@ mod tests {
         let commands = filtered_commands("/MODEL");
 
         assert!(commands.iter().any(|command| command.name == "/model"));
+    }
+
+    #[test]
+    fn suggestion_cycle_matches_case_insensitively() {
+        let mut cycle = super::SuggestionCycle::new();
+
+        assert!(cycle.cycle("/MODEL"));
     }
 
     #[test]

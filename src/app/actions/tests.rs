@@ -410,6 +410,18 @@ fn command_autocomplete_replaces_only_the_command_token() {
     assert_eq!(state.active_suggestion_index, None);
 }
 
+#[test]
+fn dismissed_uppercase_command_can_still_be_completed_with_tab() {
+    let mut state = crate::app::AppState::new();
+    state.input_buffer = "/MODEL".to_owned();
+    state.cursor_position = state.input_buffer.len();
+
+    assert!(state.dismiss_completion());
+    state.cycle_suggestion();
+
+    assert_eq!(state.input_buffer, "/model");
+}
+
 #[tokio::test]
 async fn enter_accepts_file_completion_without_submitting_the_prompt() {
     use std::sync::Arc;

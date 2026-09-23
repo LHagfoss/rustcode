@@ -506,7 +506,8 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
-    let label = if has_speculative {
+    let all_speculative = calls.iter().all(|call| !call.execution_started);
+    let label = if all_speculative {
         "Preparing"
     } else if all_exploration {
         "Exploring"
