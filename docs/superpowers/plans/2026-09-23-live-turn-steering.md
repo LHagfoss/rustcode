@@ -80,7 +80,7 @@ When an accepting path wins the state mutex, it owns the transition. Esc first m
 - Produces the state fields and helpers from “Interfaces and Ordering Contract”.
 - The turn setup in Task 3 sets/clears `active_turn_steerable_session`; Tasks 2, 4, 5, and 6 consume the state helpers.
 
-- [ ] **Step 1: Add failing state tests for gating and transitions.** Add tests that construct `AppState::new()`, set `active_turn_steerable_session` to its session, and assert: `Streaming` accepts ordinary non-empty steers; `Idle`, `Queued`, mismatched session marker, `AwaitingToolConfirmation`, pending tool confirmation, `AwaitingQuestion`, and a pending question reject them; empty or whitespace-only text is rejected; multiple accepted steers preserve order and remain separate entries. The core test should use the public state contract directly:
+- [x] **Step 1: Add failing state tests for gating and transitions.** Add tests that construct `AppState::new()`, set `active_turn_steerable_session` to its session, and assert: `Streaming` accepts ordinary non-empty steers; `Idle`, `Queued`, mismatched session marker, `AwaitingToolConfirmation`, pending tool confirmation, `AwaitingQuestion`, and a pending question reject them; empty or whitespace-only text is rejected; multiple accepted steers preserve order and remain separate entries. The core test should use the public state contract directly:
 
 ```rust
 state.status = AppStatus::Streaming;
@@ -91,10 +91,10 @@ assert_eq!(state.pending_steers.iter().map(|s| s.text.as_str()).collect::<Vec<_>
            ["Use Teams", "Keep the same channel"]);
 assert!(state.pending_queue.is_empty());
 ```
-- [ ] **Step 2: Run the focused state tests and confirm failure.** Run `cargo test steering_tests --lib`; expected: compile/test failure because the steering state and helpers do not exist.
-- [ ] **Step 3: Implement the state representation and atomic helpers.** Keep all eligibility decisions and pending-list mutation in `AppState`; make `promote_pending_steers_to_queue` use ordered prepend semantics (`pending_queue.splice(0..0, prompts)`) and reject a stale `session_id` without clearing or moving another session's values.
-- [ ] **Step 4: Add session transition cleanup tests and implementation.** Extend the session-controller tests: create pending steers, call each transition that changes `active_session_id` (fresh, resume, fork, archive/delete when they replace the active session), and assert no steer is visible or queued in the replacement session. Clear the marker and draft mode on the same state transition path that already drops other session-local UI state.
-- [ ] **Step 5: Run the focused tests.** Run `cargo test steering_tests --lib` and `cargo test session_controller --lib`; expected: PASS, with existing session transition tests still passing.
+- [x] **Step 2: Run the focused state tests and confirm failure.** Run `cargo test steering_tests --lib`; expected: compile/test failure because the steering state and helpers do not exist.
+- [x] **Step 3: Implement the state representation and atomic helpers.** Keep all eligibility decisions and pending-list mutation in `AppState`; make `promote_pending_steers_to_queue` use ordered prepend semantics (`pending_queue.splice(0..0, prompts)`) and reject a stale `session_id` without clearing or moving another session's values.
+- [x] **Step 4: Add session transition cleanup tests and implementation.** Extend the session-controller tests: create pending steers, call each transition that changes `active_session_id` (fresh, resume, fork, archive/delete when they replace the active session), and assert no steer is visible or queued in the replacement session. Clear the marker and draft mode on the same state transition path that already drops other session-local UI state.
+- [x] **Step 5: Run the focused tests.** Run `cargo test steering_tests --lib` and `cargo test session_controller --lib`; expected: PASS, with existing session transition tests still passing.
 
 ### Task 2: Route Enter and Tab through steer or queue modes
 
@@ -110,12 +110,12 @@ assert!(state.pending_queue.is_empty());
 - Consumes: `AppState::can_accept_steer`, `queue_steer`, and `DraftSubmitMode` from Task 1.
 - Produces: Enter submissions become pending steers in `Steer` mode, or append to `pending_queue` in `Queue` mode; when not steerable, retain current FIFO behavior. A new draft defaults to `Steer` only while the marker remains valid.
 
-- [ ] **Step 1: Add failing Enter tests.** Test a steerable streaming state with plain text in default mode: Enter clears the draft and records one separate steer without changing `pending_queue`. Set mode to `Queue`: Enter appends only to `pending_queue`. With each unsteerable state from Task 1, Enter keeps existing queue behavior. A slash command during a steerable turn still takes its existing command dispatch path and is not stored as a steer.
-- [ ] **Step 2: Run focused Enter tests and confirm failure.** Run `cargo test actions::tests --lib`; expected: new steering assertions fail against the current unconditional queue behavior.
-- [ ] **Step 3: Implement Enter routing after completion acceptance and slash-command classification.** Preserve `selected_file_completion` handling first and keep slash commands on their existing dispatch path. For non-command text, consult the explicit state helper and draft mode; queue normally when steering is unavailable. Clear the submitted draft and restore the next-draft default from the current marker.
-- [ ] **Step 4: Add failing Tab tests.** Test non-empty drafts toggle `Steer`/`Queue` while the marker is valid and no completion suggestion exists; empty drafts do not toggle; a valid file/command completion retains the current Tab completion action and does not change mode; Tab outside a steerable turn retains current behavior.
-- [ ] **Step 5: Implement the Tab mode action in the input/composer path.** Check completion eligibility using the same existing suggestion state and query used for Tab completion. Only consume Tab for mode toggling when there is no available suggestion, the draft is non-empty, and `can_accept_steer()` is true. Request redraw after changing mode.
-- [ ] **Step 6: Run focused tests.** Run `cargo test actions::tests --lib` and `cargo test composer --lib`; expected: PASS, including existing autocomplete and `↑ edit last queued` behavior.
+- [x] **Step 1: Add failing Enter tests.** Test a steerable streaming state with plain text in default mode: Enter clears the draft and records one separate steer without changing `pending_queue`. Set mode to `Queue`: Enter appends only to `pending_queue`. With each unsteerable state from Task 1, Enter keeps existing queue behavior. A slash command during a steerable turn still takes its existing command dispatch path and is not stored as a steer.
+- [x] **Step 2: Run focused Enter tests and confirm failure.** Run `cargo test actions::tests --lib`; expected: new steering assertions fail against the current unconditional queue behavior.
+- [x] **Step 3: Implement Enter routing after completion acceptance and slash-command classification.** Preserve `selected_file_completion` handling first and keep slash commands on their existing dispatch path. For non-command text, consult the explicit state helper and draft mode; queue normally when steering is unavailable. Clear the submitted draft and restore the next-draft default from the current marker.
+- [x] **Step 4: Add failing Tab tests.** Test non-empty drafts toggle `Steer`/`Queue` while the marker is valid and no completion suggestion exists; empty drafts do not toggle; a valid file/command completion retains the current Tab completion action and does not change mode; Tab outside a steerable turn retains current behavior.
+- [x] **Step 5: Implement the Tab mode action in the input/composer path.** Check completion eligibility using the same existing suggestion state and query used for Tab completion. Only consume Tab for mode toggling when there is no available suggestion, the draft is non-empty, and `can_accept_steer()` is true. Request redraw after changing mode.
+- [x] **Step 6: Run focused tests.** Run `cargo test actions::tests --lib` and `cargo test composer --lib`; expected: PASS, including existing autocomplete and `↑ edit last queued` behavior.
 
 ### Task 3: Mark only regular interactive model requests as steerable
 
@@ -150,7 +150,7 @@ assert!(state.pending_queue.is_empty());
 - Consumes: Task 1 `take_steers_for_history(session_id)` and Task 3 marker lifecycle.
 - Produces: at the next completed tool-batch boundary, append all pending steers as distinct `ChatMessage::new("user", text)` messages after the full batch's result messages and before returning `Continue` for the next provider request.
 
-- [ ] **Step 1: Add failing batch-order tests.** Build a deterministic tool batch with multiple native calls where one result completes, one is deferred, and one is denied/cancelled or unselected. Queue two steers before the boundary. Assert every call has exactly one paired result (including typed cancellation/deferred closure), all result messages precede the two user messages, and the steer texts appear once in submission order. The transcript-order assertion should identify the last result index and the two steer message indices, for example:
+- [x] **Step 1: Add failing batch-order tests.** Build a deterministic tool batch with multiple native calls where one result completes, one is deferred, and one is denied/cancelled or unselected. Queue two steers before the boundary. Assert every call has exactly one paired result (including typed cancellation/deferred closure), all result messages precede the two user messages, and the steer texts appear once in submission order. The transcript-order assertion should identify the last result index and the two steer message indices, for example:
 
 ```rust
 assert!(history.iter().any(|message| message.tool_result.as_ref()
@@ -164,11 +164,11 @@ assert_eq!(steer_positions.len(), 2);
 assert!(last_batch_result_index < steer_positions[0]);
 assert!(steer_positions[0] < steer_positions[1]);
 ```
-- [ ] **Step 2: Add a failing cancellation race test.** Exercise the state transition with cancellation already set before the batch result lock: the cancellation path appends completed/cancelled/deferred results, takes no steers already promoted by Esc, and does not duplicate them. Exercise the inverse state-lock order: completed batch takes the steers, then Esc sees an empty pending list.
-- [ ] **Step 3: Run focused tool tests and confirm failure.** Run `cargo test turn::tools --lib`; expected: new ordering/race tests fail because pending steers are not yet handed off.
-- [ ] **Step 4: Insert handoff at the finalized append point.** In `handle_tool_response`, append sorted `result_messages`, append unanswered/deferred call results, and only then—while still holding the same `AppState` mutex—take matching-session pending steers and append each as an individual user message. In the cancellation branch, first append all `append_cancelled_batch_results` and deferred/unexecuted results, then take and append any still-pending matching-session steers only if Esc did not already promote them. Do not append between tool calls or before a tool result.
-- [ ] **Step 5: Persist the updated history and resume.** Save the session history after the result-plus-steer append and before returning `Continue`; retain the existing stop behavior for a cancelled batch and let queue fallback apply only to still-pending items.
-- [ ] **Step 6: Run focused tests.** Run `cargo test turn::tools --lib`; expected: PASS, including existing tool result pairing/cancellation tests.
+- [x] **Step 2: Add a failing cancellation race test.** Exercise the state transition with cancellation already set before the batch result lock: the cancellation path appends completed/cancelled/deferred results, takes no steers already promoted by Esc, and does not duplicate them. Exercise the inverse state-lock order: completed batch takes the steers, then Esc sees an empty pending list.
+- [x] **Step 3: Run focused tool tests and confirm failure.** Run `cargo test turn::tools --lib`; expected: new ordering/race tests fail because pending steers are not yet handed off.
+- [x] **Step 4: Insert handoff at the finalized append point.** In `handle_tool_response`, append sorted `result_messages`, append unanswered/deferred call results, and only then—while still holding the same `AppState` mutex—take matching-session pending steers and append each as an individual user message. In the cancellation branch, first append all `append_cancelled_batch_results` and deferred/unexecuted results, then take and append any still-pending matching-session steers only if Esc did not already promote them. Do not append between tool calls or before a tool result.
+- [x] **Step 5: Persist the updated history and resume.** Save the session history after the result-plus-steer append and before returning `Continue`; retain the existing stop behavior for a cancelled batch and let queue fallback apply only to still-pending items.
+- [x] **Step 6: Run focused tests.** Run `cargo test turn::tools --lib`; expected: PASS, including existing tool result pairing/cancellation tests.
 
 ### Task 5: Apply pending steers on Esc or turn end exactly once
 
@@ -183,12 +183,12 @@ assert!(steer_positions[0] < steer_positions[1]);
 - Consumes: Task 1 `promote_pending_steers_to_queue(session_id)` and Task 3 marker/session lifecycle.
 - Produces: Esc with pending steers promotes them to the FIFO head before cancellation; any still-pending steers at the active turn boundary are promoted before ordinary follow-ups. The existing orchestrator lease still owns dequeueing.
 
-- [ ] **Step 1: Add failing Esc behavior tests.** Test multiple pending steers plus queued follow-ups: Esc cancels the token, promotes steers to queue positions 0..N in original order, clears pending preview, and preserves all follow-ups/wakeups after them. Test Esc with no pending steers leaves current queue/cancel behavior unchanged.
-- [ ] **Step 2: Add failing end-of-turn fallback tests.** Simulate a turn completing or cancelling before another tool-result boundary and assert the queue begins with the still-pending steers, then prior follow-ups. Test a session switch before old-turn unwind and assert old-session steers do not enter the replacement session queue.
-- [ ] **Step 3: Run focused tests and confirm failure.** Run `cargo test actions::tests --lib` and `cargo test turn::queue --lib`; expected: the new fallback assertions fail before implementation.
-- [ ] **Step 4: Implement Esc promotion under the existing state lock.** Capture the active session ID, call the state helper before cancelling/resetting the token and render projections, then continue existing Esc behavior. Promotion also clears the matching steerability marker immediately, so text submitted during cancellation unwind follows FIFO behavior. With no active matching session or no pending steers, preserve the old path.
-- [ ] **Step 5: Implement turn-end fallback under the queue orchestrator lock.** Immediately after `run_agent_turn_with_context` returns and before saving context or checking whether to continue/dequeue, verify the session is still `turn_session_id` and promote remaining steers to the FIFO head. This lock-order point ensures Esc, batch handoff, and end-of-turn fallback cannot all consume the same pending item.
-- [ ] **Step 6: Run focused tests.** Run `cargo test actions::tests --lib` and `cargo test turn::queue --lib`; expected: PASS, including lease/cancellation queue-preservation tests.
+- [x] **Step 1: Add failing Esc behavior tests.** Test multiple pending steers plus queued follow-ups: Esc cancels the token, promotes steers to queue positions 0..N in original order, clears pending preview, and preserves all follow-ups/wakeups after them. Test Esc with no pending steers leaves current queue/cancel behavior unchanged.
+- [x] **Step 2: Add failing end-of-turn fallback tests.** Simulate a turn completing or cancelling before another tool-result boundary and assert the queue begins with the still-pending steers, then prior follow-ups. Test a session switch before old-turn unwind and assert old-session steers do not enter the replacement session queue.
+- [x] **Step 3: Run focused tests and confirm failure.** Run `cargo test actions::tests --lib` and `cargo test turn::queue --lib`; expected: the new fallback assertions fail before implementation.
+- [x] **Step 4: Implement Esc promotion under the existing state lock.** Capture the active session ID, call the state helper before cancelling/resetting the token and render projections, then continue existing Esc behavior. Promotion also clears the matching steerability marker immediately, so text submitted during cancellation unwind follows FIFO behavior. With no active matching session or no pending steers, preserve the old path.
+- [x] **Step 5: Implement turn-end fallback under the queue orchestrator lock.** Immediately after `run_agent_turn_with_context` returns and before saving context or checking whether to continue/dequeue, verify the session is still `turn_session_id` and promote remaining steers to the FIFO head. This lock-order point ensures Esc, batch handoff, and end-of-turn fallback cannot all consume the same pending item.
+- [x] **Step 6: Run focused tests.** Run `cargo test actions::tests --lib` and `cargo test turn::queue --lib`; expected: PASS, including lease/cancellation queue-preservation tests.
 
 ### Task 6: Render separate pending-steer and queued-follow-up previews
 
@@ -205,12 +205,12 @@ assert!(steer_positions[0] < steer_positions[1]);
 - Consumes: Task 1 state fields and Task 2 draft mode.
 - Produces: separate `Pending steers` and `Queued follow-ups` preview blocks; steer label explains “applies after next tool result”; Esc hint says “interrupt and apply now” only while interruptible; composer shows `Steer`/`Queue` mode and Tab hint; queue count, latest prompts, and `↑ edit last` remain.
 
-- [ ] **Step 1: Add failing snapshot/render tests.** Assert a snapshot contains ordered pending steer texts separately from user follow-ups, hides internal wakeups from the queue preview, and carries mode plus the steerability/interruption marker needed for hints. Test pending steers consume preview rows without suppressing the existing FIFO count.
-- [ ] **Step 2: Run focused render tests and confirm failure.** Run `cargo test ui::render_snapshot --lib` and `cargo test ui::tests --lib`; expected: steering snapshot and output assertions fail.
-- [ ] **Step 3: Extend the immutable render snapshot.** Copy pending steer texts, current draft mode, and a derived interruptible-steer flag; expose read-only accessors and keep the render layer from inspecting mutable `AppState` directly.
-- [ ] **Step 4: Render the two previews and composer mode hint.** Add pending-steer height to layout sizing and render a distinct label plus “applies after next tool result”. Render queue count/latest prompts/`↑ edit last queued` as before. Show Esc “interrupt and apply now” only when pending steers exist and the active marker is interruptible. Show Tab mode guidance only for the non-empty steerable draft case when no completion suggestion is active.
-- [ ] **Step 5: Refresh affected fixtures and tests.** Update only fixture rows whose rendered output changed because of the new intentional UI. Verify both the normal queue-only state and the combined steers-plus-follow-ups state.
-- [ ] **Step 6: Run focused render tests.** Run `cargo test ui::render_snapshot --lib` and `cargo test ui::tests --lib`; expected: PASS and fixture diffs are limited to the new UI.
+- [x] **Step 1: Add failing snapshot/render tests.** Assert a snapshot contains ordered pending steer texts separately from user follow-ups, hides internal wakeups from the queue preview, and carries mode plus the steerability/interruption marker needed for hints. Test pending steers consume preview rows without suppressing the existing FIFO count.
+- [x] **Step 2: Run focused render tests and confirm failure.** Run `cargo test ui::render_snapshot --lib` and `cargo test ui::tests --lib`; expected: steering snapshot and output assertions fail.
+- [x] **Step 3: Extend the immutable render snapshot.** Copy pending steer texts, current draft mode, and a derived interruptible-steer flag; expose read-only accessors and keep the render layer from inspecting mutable `AppState` directly.
+- [x] **Step 4: Render the two previews and composer mode hint.** Add pending-steer height to layout sizing and render a distinct label plus “applies after next tool result”. Render queue count/latest prompts/`↑ edit last queued` as before. Show Esc “interrupt and apply now” only when pending steers exist and the active marker is interruptible. Show Tab mode guidance only for the non-empty steerable draft case when no completion suggestion is active.
+- [x] **Step 5: Refresh affected fixtures and tests.** Update only fixture rows whose rendered output changed because of the new intentional UI. Verify both the normal queue-only state and the combined steers-plus-follow-ups state.
+- [x] **Step 6: Run focused render tests.** Run `cargo test ui::render_snapshot --lib` and `cargo test ui::tests --lib`; expected: PASS and fixture diffs are limited to the new UI.
 
 ### Task 7: Full integration and race regression pass
 
@@ -222,10 +222,10 @@ assert!(steer_positions[0] < steer_positions[1]);
 - Consumes: all earlier tasks; no new public interfaces.
 - Produces: implementation matching every acceptance criterion in the spec.
 
-- [ ] **Step 1: Add any missing deterministic integration assertions.** Ensure the combined path tests (a) two steers handed off after a batch, (b) a steer queued by fallback before an existing follow-up, (c) Esc-vs-batch single-winner transition, and (d) session replacement preventing leakage. Use Tokio synchronization gates rather than sleeps for concurrency tests.
-- [ ] **Step 2: Run focused regression tests.** Run `cargo test steering --lib`, `cargo test turn::tools --lib`, `cargo test turn::queue --lib`, `cargo test actions::tests --lib`, and `cargo test ui::tests --lib`; expected: PASS.
-- [ ] **Step 3: Run required project validation.** Run `cargo check --tests` followed by `cargo test`; expected: both complete successfully.
-- [ ] **Step 4: Review scope and state transitions.** Confirm no model/tool permission/loop threshold/watchdog changes, every pending steer has exactly one transition, slash commands retain dispatch behavior, and no stale session can receive the previous session's steering text.
+- [x] **Step 1: Add any missing deterministic integration assertions.** Ensure the combined path tests (a) two steers handed off after a batch, (b) a steer queued by fallback before an existing follow-up, (c) Esc-vs-batch single-winner transition, and (d) session replacement preventing leakage. Use Tokio synchronization gates rather than sleeps for concurrency tests.
+- [x] **Step 2: Run focused regression tests.** Run `cargo test steering --lib`, `cargo test turn::tools --lib`, `cargo test turn::queue --lib`, `cargo test actions::tests --lib`, and `cargo test ui::tests --lib`; expected: PASS.
+- [x] **Step 3: Run required project validation.** Run `cargo check --tests` followed by `cargo test`; expected: both complete successfully.
+- [x] **Step 4: Review scope and state transitions.** Confirm no model/tool permission/loop threshold/watchdog changes, every pending steer has exactly one transition, slash commands retain dispatch behavior, and no stale session can receive the previous session's steering text.
 
 ## Plan Self-Review
 

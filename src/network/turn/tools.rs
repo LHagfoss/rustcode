@@ -2544,7 +2544,8 @@ mod tests {
         incomplete_tool_result, loop_signal_event, mutation_batch_guidance,
         repetition_advisory_event_fields, repetition_advisory_input, selected_tool_call_indices,
         selected_tool_call_indices_with_assessments, selected_tool_call_indices_with_mode,
-        shell_call_is_read_only_for_mode, should_apply_loop_recovery, targeted_no_progress_guidance,
+        shell_call_is_read_only_for_mode, should_apply_loop_recovery,
+        targeted_no_progress_guidance,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
