@@ -74,6 +74,79 @@ fn git_subcommand<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, usize)> {
     None
 }
 
+fn command_basename(command: &str) -> &str {
+    let basename = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    basename
+        .rsplit_once('.')
+        .filter(|(_, extension)| extension.eq_ignore_ascii_case("exe"))
+        .map(|(stem, _)| stem)
+        .unwrap_or(basename)
+}
+
+/// Canonicalize command invocation prefixes for deny matching. Git and Cargo
+/// accept global options before their subcommand, and executable paths can
+/// hide the same command behind a directory or Windows `.exe` suffix.
+fn normalized_deny_command(tokens: &[String], start: usize) -> Vec<String> {
+    let Some(executable) = tokens.get(start) else {
+        return Vec::new();
+    };
+    let executable = match command_basename(executable).to_ascii_lowercase().as_str() {
+        "cargo" => "cargo",
+        "git" => "git",
+        _ => command_basename(executable),
+    };
+    let args = &tokens[start + 1..];
+    let mut normalized = vec![executable.to_owned()];
+
+    if executable == "git" {
+        let mut git_tokens = Vec::with_capacity(args.len() + 1);
+        git_tokens.push("git");
+        git_tokens.extend(args.iter().map(String::as_str));
+        if let Some((subcommand, index)) = git_subcommand(&git_tokens) {
+            normalized.push(subcommand.to_owned());
+            normalized.extend(
+                git_tokens[index + 1..]
+                    .iter()
+                    .map(|token| (*token).to_owned()),
+            );
+        } else {
+            normalized.extend(args.iter().cloned());
+        }
+        return normalized;
+    }
+
+    if executable == "cargo" {
+        let mut index = 0;
+        while index < args.len() {
+            let argument = args[index].as_str();
+            if argument.starts_with('+') && argument.len() > 1 {
+                index += 1;
+                continue;
+            }
+            if matches!(argument, "--color" | "--config" | "-Z" | "-C") {
+                index = (index + 2).min(args.len());
+                continue;
+            }
+            if matches!(
+                argument,
+                "--verbose" | "-v" | "--quiet" | "-q" | "--frozen" | "--locked" | "--offline"
+            ) || argument.starts_with("--color=")
+                || argument.starts_with("--config=")
+                || argument.starts_with("-Z")
+            {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+        normalized.extend(args[index..].iter().cloned());
+        return normalized;
+    }
+
+    normalized.extend(args.iter().cloned());
+    normalized
+}
+
 fn destructive_git_scope(segment: &str) -> Option<String> {
     let tokens = segment.split_whitespace().collect::<Vec<_>>();
     let (subcommand, subcommand_index) = git_subcommand(&tokens)?;
@@ -459,6 +532,8 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
                     | ']'
                     | '!'
                     | '~'
+                    | '^'
+                    | '%'
             )
         })
     {
@@ -680,7 +755,7 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
 
 pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
     let tokens = plain_deny_rule_tokens(command)?;
-    Some(tokens.join(" "))
+    Some(normalized_deny_command(&tokens, 0).join(" "))
 }
 
 pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Option<String> {
@@ -691,6 +766,14 @@ pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Optio
 /// accepted and normalized because deny rules only block matching calls.
 /// Shell composition and expansion syntax cannot form a stored rule.
 fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
+    let command_start = command
+        .trim_start()
+        .strip_prefix('"')
+        .or_else(|| command.trim_start().strip_prefix('\''))
+        .unwrap_or_else(|| command.trim_start());
+    let windows_executable_path = command_start.as_bytes().get(0..3).is_some_and(|prefix| {
+        prefix[0].is_ascii_alphabetic() && prefix[1] == b':' && prefix[2] == b'\\'
+    });
     if command.is_empty()
         || command.chars().any(|ch| {
             matches!(
@@ -707,14 +790,15 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
                     | ')'
                     | '{'
                     | '}'
-                    | '\\'
                     | '*'
                     | '?'
                     | '['
                     | ']'
                     | '!'
                     | '~'
-            )
+                    | '^'
+                    | '%'
+            ) || ch == '\\' && !windows_executable_path
         })
     {
         return None;
@@ -752,9 +836,9 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
     (!tokens.is_empty()).then_some(tokens)
 }
 
-/// Match a persistent deny prefix before regular command approval. A deny is
-/// anchored to the first command and also blocks composition appended after
-/// that command, so `cargo test; ...` cannot evade a saved forbid rule.
+/// Match a persistent deny prefix before regular command approval. Known
+/// command paths and global options are normalized, and composed segments and
+/// nested wrapper payloads are checked so they cannot hide a saved rule.
 pub(crate) fn denied_command_prefix_covers_call(
     name: &str,
     args: &Value,
@@ -769,6 +853,7 @@ pub(crate) fn denied_command_prefix_covers_call(
     let rule_tokens = prefixes
         .iter()
         .filter_map(|prefix| plain_deny_rule_tokens(prefix))
+        .map(|tokens| normalized_deny_command(&tokens, 0))
         .collect::<Vec<_>>();
     if rule_tokens.is_empty() {
         return false;
@@ -792,21 +877,22 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
             }
             continue;
         };
-        if rules.iter().any(|rule| {
-            !rule.is_empty()
-                && tokens
-                    .windows(rule.len())
-                    .any(|candidate| candidate == rule.as_slice())
-        }) {
-            return true;
+        for start in 0..tokens.len() {
+            let normalized = normalized_deny_command(&tokens, start);
+            if rules
+                .iter()
+                .any(|rule| !rule.is_empty() && normalized.starts_with(rule))
+            {
+                return true;
+            }
         }
         // `sh -c`, `bash -lc`, and equivalent wrappers store the payload as
         // one argv token. Inspect it recursively; unparseable payloads fail
         // closed above.
         for (index, token) in tokens.iter().enumerate() {
-            let binary = token.rsplit(['/', '\\']).next().unwrap_or(token);
+            let binary = command_basename(token);
             if matches!(
-                binary,
+                binary.to_ascii_lowercase().as_str(),
                 "sh" | "bash"
                     | "zsh"
                     | "fish"
@@ -827,6 +913,9 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
                     | "node"
                     | "ruby"
                     | "perl"
+                    | "cmd"
+                    | "powershell"
+                    | "pwsh"
             ) {
                 for payload in tokens.iter().skip(index + 1) {
                     if denied_command_contains_rule(payload, rules, depth + 1) {
@@ -1026,6 +1115,21 @@ mod command_prefix_tests {
             rememberable_command_forbid_prefix("cargo test"),
             Some("cargo test".to_owned())
         );
+        for (command, expected) in [
+            ("git -C . push", "git push"),
+            ("cargo --color=always test", "cargo test"),
+            ("cargo +stable test", "cargo test"),
+            ("/usr/bin/cargo test", "cargo test"),
+            ("C:\\Rust\\cargo.exe test", "cargo test"),
+            ("\"C:\\Program Files\\Rust\\cargo.exe\" test", "cargo test"),
+            ("C:\\Rust\\CARGO.ExE test", "cargo test"),
+        ] {
+            assert_eq!(
+                rememberable_command_forbid_prefix(command).as_deref(),
+                Some(expected),
+                "deny rule normalization for {command:?}"
+            );
+        }
         assert!(denied_command_prefix_covers_call(
             "run_command",
             &serde_json::json!({"command":"cargo test --lib"}),
@@ -1043,6 +1147,9 @@ mod command_prefix_tests {
             serde_json::json!({"command":"sudo cargo test"}),
             serde_json::json!({"command":"sh -c 'cargo test'"}),
             serde_json::json!({"command":"echo okay; cargo test"}),
+            serde_json::json!({"command":"ca^rgo test"}),
+            serde_json::json!({"command":"cargo %FLAGS% test"}),
+            serde_json::json!({"command":"cargo !FLAGS! test"}),
             serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
             serde_json::json!({"command":"cargo test", "background":true}),
             serde_json::json!({"command":"cargo test", "detached":true}),
@@ -1050,6 +1157,29 @@ mod command_prefix_tests {
             assert!(
                 denied_command_prefix_covers_call("run_command", &args, &forbidden),
                 "deny rule should cover {args}"
+            );
+        }
+        for (rule, command) in [
+            ("git push", "git -C . push"),
+            ("git push", "git -c color.ui=always push"),
+            ("cargo test", "cargo --color=always test"),
+            ("cargo test", "cargo --color always test"),
+            ("cargo test", "cargo +stable test"),
+            ("cargo test", "cargo --config config.toml test"),
+            ("cargo test", "/usr/bin/cargo test"),
+            ("cargo test", "C:\\Rust\\cargo.exe test"),
+            ("cargo test", "cmd.exe /C \"cargo test\""),
+            ("cargo test", "CMD /c \"cargo test\""),
+            ("cargo test", "powershell -Command \"cargo test\""),
+            ("cargo test", "pwsh -Command \"cargo test\""),
+        ] {
+            assert!(
+                denied_command_prefix_covers_call(
+                    "run_command",
+                    &serde_json::json!({"command":command}),
+                    &[rule.to_owned()],
+                ),
+                "deny rule {rule:?} should cover {command:?}"
             );
         }
         assert!(!denied_command_prefix_covers_call(
@@ -1061,6 +1191,9 @@ mod command_prefix_tests {
             rememberable_command_forbid_prefix("cargo 'test'"),
             Some("cargo test".to_owned())
         );
+        for command in ["ca^rgo test", "cargo %FLAGS% test", "cargo !FLAGS! test"] {
+            assert_eq!(rememberable_command_forbid_prefix(command), None);
+        }
         for args in [
             serde_json::json!({"command":"cargo test", "env":{"RUSTFLAGS":"-Dwarnings"}}),
             serde_json::json!({"command":"cargo test", "background":true}),
