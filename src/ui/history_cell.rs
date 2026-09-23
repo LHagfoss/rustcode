@@ -27,26 +27,6 @@ pub(super) trait HistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 }
 
-enum ActiveHistoryCell {
-    Assistant(AssistantMarkdownCell),
-    Tools(LiveToolCell),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ActiveHistoryCellKind {
-    Assistant,
-    Tools,
-}
-
-impl ActiveHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        match self {
-            Self::Assistant(cell) => cell.display_lines(width),
-            Self::Tools(cell) => cell.display_lines(width),
-        }
-    }
-}
-
 /// Presentation-only transcript state for the one mutable item at the end of
 /// the TUI transcript.
 ///
@@ -56,8 +36,8 @@ impl ActiveHistoryCell {
 /// to providers; [`AppState`] remains the canonical conversation boundary.
 #[derive(Default)]
 pub(crate) struct TranscriptState {
-    active: Option<ActiveHistoryCell>,
-    active_key: Option<ActiveHistoryCellKind>,
+    assistant: Option<AssistantMarkdownCell>,
+    tools: Option<LiveToolCell>,
     revision: u64,
     history_revision: Option<u64>,
     model: super::TranscriptModel,
@@ -111,46 +91,34 @@ impl TranscriptState {
         thought_time_ms: Option<u64>,
         thought_tokens: Option<u32>,
     ) {
-        let changed = self.active_key != Some(ActiveHistoryCellKind::Assistant)
-            || match self.active.as_ref() {
-                Some(ActiveHistoryCell::Assistant(cell)) => {
-                    cell.source != source
-                        || cell.continuation != continuation
-                        || cell.response_time_ms != response_time_ms
-                        || cell.thought_time_ms != thought_time_ms
-                        || cell.thought_tokens != thought_tokens
-                }
-                _ => true,
-            };
+        let changed = self.assistant.as_ref().is_none_or(|cell| {
+            cell.source != source
+                || cell.continuation != continuation
+                || cell.response_time_ms != response_time_ms
+                || cell.thought_time_ms != thought_time_ms
+                || cell.thought_tokens != thought_tokens
+        });
         if changed {
             self.revision = self.revision.saturating_add(1);
-            self.active = Some(ActiveHistoryCell::Assistant(
-                AssistantMarkdownCell::streaming(
-                    source,
-                    continuation,
-                    response_time_ms,
-                    thought_time_ms,
-                    thought_tokens,
-                ),
+            self.assistant = Some(AssistantMarkdownCell::streaming(
+                source,
+                continuation,
+                response_time_ms,
+                thought_time_ms,
+                thought_tokens,
             ));
         }
-        self.active_key = Some(ActiveHistoryCellKind::Assistant);
     }
 
     pub(crate) fn set_tools(&mut self, calls: &[LiveToolCall]) {
-        let changed = self.active_key != Some(ActiveHistoryCellKind::Tools)
-            || match self.active.as_ref() {
-                Some(ActiveHistoryCell::Tools(cell)) => cell.calls != calls,
-                _ => true,
-            };
+        let changed = self.tools.as_ref().is_none_or(|cell| cell.calls != calls);
         if changed {
             self.revision = self.revision.saturating_add(1);
-            self.active = Some(ActiveHistoryCell::Tools(LiveToolCell {
+            self.tools = Some(LiveToolCell {
                 calls: calls.to_vec(),
                 verbosity: Verbosity::Low,
-            }));
+            });
         }
-        self.active_key = Some(ActiveHistoryCellKind::Tools);
     }
 
     pub(crate) fn set_tools_with_verbosity(
@@ -158,36 +126,55 @@ impl TranscriptState {
         calls: &[LiveToolCall],
         verbosity: &Verbosity,
     ) {
-        let changed = self.active_key != Some(ActiveHistoryCellKind::Tools)
-            || match self.active.as_ref() {
-                Some(ActiveHistoryCell::Tools(cell)) => {
-                    cell.calls != calls || cell.verbosity != *verbosity
-                }
-                _ => true,
-            };
+        let changed = self
+            .tools
+            .as_ref()
+            .is_none_or(|cell| cell.calls != calls || cell.verbosity != *verbosity);
         if changed {
             self.revision = self.revision.saturating_add(1);
-            self.active = Some(ActiveHistoryCell::Tools(LiveToolCell {
+            self.tools = Some(LiveToolCell {
                 calls: calls.to_vec(),
                 verbosity: verbosity.clone(),
-            }));
+            });
         }
-        self.active_key = Some(ActiveHistoryCellKind::Tools);
+    }
+
+    pub(crate) fn clear_assistant(&mut self) {
+        if self.assistant.take().is_some() {
+            self.revision = self.revision.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn clear_tools(&mut self) {
+        if self.tools.take().is_some() {
+            self.revision = self.revision.saturating_add(1);
+        }
     }
 
     pub(crate) fn clear(&mut self) {
-        if self.active.is_some() {
+        if self.assistant.is_some() || self.tools.is_some() {
             self.revision = self.revision.saturating_add(1);
         }
-        self.active = None;
-        self.active_key = None;
+        self.assistant = None;
+        self.tools = None;
     }
 
     pub(crate) fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.active
+        let mut lines = self
+            .tools
             .as_ref()
             .map(|cell| cell.display_lines(width))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let assistant_lines = self
+            .assistant
+            .as_ref()
+            .map(|cell| cell.display_lines(width))
+            .unwrap_or_default();
+        if !lines.is_empty() && !assistant_lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(assistant_lines);
+        lines
     }
 }
 
