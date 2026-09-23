@@ -69,9 +69,24 @@ fn acquire_log_file_lock(config_dir: &Path) -> Option<std::fs::File> {
     Some(lock)
 }
 
+fn try_acquire_log_file_lock(config_dir: &Path) -> Option<std::fs::File> {
+    use std::fs::OpenOptions;
+
+    std::fs::create_dir_all(config_dir).ok()?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(config_dir.join(DEBUG_LOG_LOCK_NAME))
+        .ok()?;
+    lock.try_lock().ok()?;
+    Some(lock)
+}
+
 fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
     let rotated_path = log_dir.join("debug.log.1");
+    let _ = std::fs::remove_file(log_dir.join("debug.log.rotate.tmp"));
     let _ = bound_log_file(&rotated_path, limit_bytes);
     let Ok(meta) = std::fs::metadata(&log_path) else {
         return;
@@ -102,31 +117,48 @@ fn bound_log_file(path: &Path, limit_bytes: u64) -> std::io::Result<()> {
         .read(true)
         .write(true)
         .open(path)?;
-    let mut tail = Vec::with_capacity(tail_bytes as usize);
+    let mut tail_bytes_buffer = Vec::with_capacity(tail_bytes as usize);
     if tail_bytes > 0 {
         file.seek(SeekFrom::End(-(tail_bytes as i64)))?;
-        file.read_to_end(&mut tail)?;
-        if let Some(line_end) = tail.iter().position(|byte| *byte == b'\n')
-            && line_end + 1 < tail.len()
+        file.read_to_end(&mut tail_bytes_buffer)?;
+        if let Some(line_end) = tail_bytes_buffer.iter().position(|byte| *byte == b'\n')
+            && line_end + 1 < tail_bytes_buffer.len()
         {
-            tail.drain(..=line_end);
+            tail_bytes_buffer.drain(..=line_end);
         }
     }
+    let tail = valid_utf8_tail(&tail_bytes_buffer, tail_bytes as usize);
 
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&marker.as_bytes()[..marker_bytes])?;
-    file.write_all(&tail)?;
+    file.write_all(tail.as_bytes())?;
     file.flush()
 }
 
-fn replace_rotated_log(log_path: &Path, rotated_path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(rotated_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+fn valid_utf8_tail(bytes: &[u8], max_bytes: usize) -> String {
+    let decoded = String::from_utf8_lossy(bytes);
+    let mut start = decoded.len().saturating_sub(max_bytes);
+    while !decoded.is_char_boundary(start) {
+        start += 1;
     }
-    std::fs::rename(log_path, rotated_path)
+    decoded[start..].to_owned()
+}
+
+fn replace_rotated_log(log_path: &Path, rotated_path: &Path) -> std::io::Result<()> {
+    let Some(log_dir) = log_path.parent() else {
+        return Err(std::io::Error::other("debug log has no parent directory"));
+    };
+    let staged_path = log_dir.join("debug.log.rotate.tmp");
+    let _ = std::fs::remove_file(&staged_path);
+    let staged = (|| {
+        std::fs::copy(log_path, &staged_path)?;
+        std::fs::copy(&staged_path, rotated_path)?;
+        std::fs::remove_file(log_path)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&staged_path);
+    staged
 }
 
 pub(crate) fn append_line(line: &str) {
@@ -175,6 +207,53 @@ fn append_line_to_logs_with_limit(
     }
 }
 
+fn try_append_panic_line(line: &str) {
+    let Some(config_dir) = crate::config::get_config_dir() else {
+        return;
+    };
+    let session_id = active_session_lock()
+        .try_lock()
+        .ok()
+        .and_then(|active| active.clone());
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let formatted = format!("[{now}] {line}");
+    let _ = try_append_line_to_logs_with_limit(
+        &config_dir,
+        session_id.as_deref(),
+        &formatted,
+        MAX_DEBUG_LOG_BYTES,
+    );
+}
+
+fn try_append_line_to_logs_with_limit(
+    config_dir: &Path,
+    session_id: Option<&str>,
+    line: &str,
+    limit_bytes: u64,
+) -> bool {
+    if limit_bytes == 0 {
+        return false;
+    }
+    let _guard = match log_write_lock().try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    let Some(_file_lock) = try_acquire_log_file_lock(config_dir) else {
+        return false;
+    };
+    let line = capped_log_line(line, limit_bytes);
+    let append_bytes = line.len().saturating_add(1) as u64;
+    append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
+    if let Some(session_id) = session_id {
+        let logs_dir = rustcode_session::SessionStore::new(config_dir)
+            .session_dir(session_id)
+            .join("logs");
+        append_bounded_line(&logs_dir, &line, append_bytes, limit_bytes);
+    }
+    true
+}
+
 fn capped_log_line<'a>(line: &'a str, limit_bytes: u64) -> std::borrow::Cow<'a, str> {
     let max_content_bytes = usize::try_from(limit_bytes.saturating_sub(1)).unwrap_or(usize::MAX);
     if line.len() <= max_content_bytes {
@@ -196,36 +275,60 @@ fn capped_log_line<'a>(line: &'a str, limit_bytes: u64) -> std::borrow::Cow<'a, 
 fn append_bounded_line(log_dir: &Path, line: &str, append_bytes: u64, limit_bytes: u64) {
     let log_path = log_dir.join("debug.log");
     let rotated_path = log_dir.join("debug.log.1");
+    let _ = std::fs::remove_file(log_dir.join("debug.log.rotate.tmp"));
     let _ = bound_log_file(&rotated_path, limit_bytes);
     let current_bytes = std::fs::metadata(&log_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     if current_bytes.saturating_add(append_bytes) > limit_bytes {
         if current_bytes > limit_bytes && bound_log_file(&log_path, limit_bytes).is_err() {
-            let _ = truncate_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
             return;
         }
         if replace_rotated_log(&log_path, &rotated_path).is_err() {
-            // Rotation can fail when the archive path is unavailable. Preserve
-            // the new diagnostic by truncating the active log and writing a
-            // marker plus the line when both fit; otherwise keep just the line.
-            let _ = truncate_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
+            // Keep a bounded tail of the old segment alongside the new line.
+            // If even one prior byte cannot fit, leave the existing segment
+            // untouched rather than replacing it with the new line alone.
+            let _ =
+                retain_old_tail_and_append_bounded_line(&log_path, line, append_bytes, limit_bytes);
             return;
         }
     }
     append_line_to_path(&log_path, line);
 }
 
-fn truncate_and_append_bounded_line(
+fn retain_old_tail_and_append_bounded_line(
     path: &Path,
     line: &str,
     append_bytes: u64,
     limit_bytes: u64,
 ) -> std::io::Result<()> {
-    use std::io::Write;
+    use std::io::{Read, Seek, SeekFrom, Write};
 
     let marker_bytes = ROTATION_FAILURE_MARKER.len().saturating_add(1) as u64;
-    let include_marker = marker_bytes.saturating_add(append_bytes) <= limit_bytes;
+    let available_for_old = limit_bytes.saturating_sub(append_bytes);
+    let current_bytes = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let separator_bytes = u64::from(current_bytes > 0);
+    let include_marker = available_for_old > marker_bytes.saturating_add(separator_bytes);
+    let retained_bytes = available_for_old
+        .saturating_sub(if include_marker { marker_bytes } else { 0 })
+        .saturating_sub(separator_bytes);
+    if current_bytes > 0 && retained_bytes == 0 {
+        return Ok(());
+    }
+    let mut old_tail = Vec::new();
+    if retained_bytes > 0 {
+        let mut old_file = std::fs::File::open(path)?;
+        old_file.seek(SeekFrom::End(-(retained_bytes as i64)))?;
+        old_file.read_to_end(&mut old_tail)?;
+        if let Some(line_end) = old_tail.iter().position(|byte| *byte == b'\n')
+            && line_end + 1 < old_tail.len()
+        {
+            old_tail.drain(..=line_end);
+        }
+    }
+    let old_tail = valid_utf8_tail(&old_tail, retained_bytes as usize);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -233,6 +336,10 @@ fn truncate_and_append_bounded_line(
         .open(path)?;
     if include_marker {
         writeln!(file, "{ROTATION_FAILURE_MARKER}")?;
+    }
+    file.write_all(old_tail.as_bytes())?;
+    if !old_tail.is_empty() && !old_tail.ends_with('\n') {
+        writeln!(file)?;
     }
     writeln!(file, "{line}")?;
     Ok(())
@@ -289,9 +396,9 @@ pub(crate) fn install_panic_hook() {
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown location>".to_owned());
-            // Best-effort synchronous write: async logging may be gone, and
-            // append_line is lock-poison-safe, so this cannot deadlock.
-            append_line(&format!("[PANIC] {payload} at {location}"));
+            // Never wait for a logger lock from the panic hook: a panic can
+            // occur while the same thread is writing a log entry.
+            try_append_panic_line(&format!("[PANIC] {payload} at {location}"));
             previous(info);
         }));
     });
@@ -386,6 +493,28 @@ mod tests {
         bound_log_file(&archive_path, 8).expect("bound tiny archive");
 
         assert_eq!(std::fs::metadata(archive_path).expect("metadata").len(), 8);
+    }
+
+    #[test]
+    fn bounded_tail_never_starts_with_a_partial_utf8_character() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("debug.log.1");
+        let limit_bytes = 64;
+        let marker =
+            format!("[logger] earlier log bytes discarded to fit {limit_bytes}-byte cap\n");
+        let tail_bytes = limit_bytes - marker.len() as u64;
+        let source = format!(
+            "{}é{}",
+            "a".repeat(100),
+            "z".repeat(tail_bytes as usize - 1)
+        );
+        std::fs::write(&archive_path, source).expect("write utf8 archive");
+
+        bound_log_file(&archive_path, limit_bytes).expect("bound utf8 archive");
+
+        let archive = std::fs::read(&archive_path).expect("read bounded archive");
+        assert!(archive.len() <= limit_bytes as usize);
+        assert!(std::str::from_utf8(&archive).is_ok());
     }
 
     #[test]
@@ -557,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_new_line_when_rotation_fails_for_both_log_files() {
+    fn keeps_old_log_tail_when_archive_replacement_fails_for_both_log_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let session_id = "2026-09-11T00:00:00Z-test-session";
         let session_dir = rustcode_session::SessionStore::new(dir.path()).session_dir(session_id);
@@ -576,12 +705,52 @@ mod tests {
         let session = std::fs::read_to_string(session_logs.join("debug.log")).expect("session log");
         assert!(global.starts_with(ROTATION_FAILURE_MARKER));
         assert!(global.ends_with("latest\n"));
+        assert!(global.contains("gggg"), "old global log tail was lost");
         assert!(session.starts_with(ROTATION_FAILURE_MARKER));
         assert!(session.ends_with("latest\n"));
+        assert!(session.contains("ssss"), "old session log tail was lost");
         assert!(global.len() <= 80);
         assert!(session.len() <= 80);
         assert!(global_archive.is_dir());
         assert!(session_archive.is_dir());
+    }
+
+    #[test]
+    fn rotation_copy_failure_preserves_active_and_previous_archive_segments() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("debug.log");
+        let archive_path = dir.path().join("debug.log.1");
+        let staging_path = dir.path().join("debug.log.rotate.tmp");
+        std::fs::write(&log_path, vec![b'a'; 75]).expect("write active segment");
+        std::fs::write(&archive_path, "previous archive segment\n").expect("write archive");
+        std::fs::create_dir(&staging_path).expect("block staging file creation");
+
+        append_bounded_line(dir.path(), "latest", 7, 80);
+
+        assert_eq!(
+            std::fs::read_to_string(&archive_path).expect("old archive"),
+            "previous archive segment\n"
+        );
+        let active = std::fs::read_to_string(&log_path).expect("retained active tail");
+        assert!(active.contains('a'), "old active segment was lost");
+        assert!(active.ends_with("latest\n"));
+        assert!(active.len() <= 80);
+    }
+
+    #[test]
+    fn panic_logging_does_not_wait_for_a_busy_logger_mutex() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = log_write_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        assert!(!try_append_line_to_logs_with_limit(
+            dir.path(),
+            None,
+            "panic while logger is busy",
+            1024,
+        ));
+        assert!(!dir.path().join("debug.log").exists());
     }
 
     #[test]
