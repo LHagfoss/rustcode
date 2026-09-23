@@ -2,6 +2,7 @@
 name = "rustcode-loop-detect"
 version = "0.55.9"
 edition = "2024"
+license = "Apache-2.0"
 
 [dependencies]
 serde_json = "1.0.150"
