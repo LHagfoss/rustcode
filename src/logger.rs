@@ -1,20 +1,54 @@
 use serde_json::Value;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fs::OpenOptions,
+    io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+};
 
 /// Keep each active debug log bounded. The current and previous files are
 /// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
+/// Keep all per-session debug logs together below the 240 MiB allowance.
+const MAX_SESSION_LOGS_BYTES: u64 = 240 * 1024 * 1024;
+/// Recheck the aggregate budget after each 16 MiB written in this process.
+const SESSION_LOG_PRUNE_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
 const DEBUG_LOG_LOCK_NAME: &str = "debug.log.lock";
+const ACTIVE_LOG_MARKERS_DIR: &str = ".active-log-locks";
+/// Keep cleanup bounded so one prune pass cannot monopolize the logger lock.
+const MAX_STALE_ACTIVE_MARKERS_PER_PRUNE: usize = 32;
 const ROTATION_STAGE_NAME: &str = "debug.log.rotate.tmp";
 const ROTATION_BACKUP_NAME: &str = "debug.log.1.rotate.bak";
 
 pub(crate) fn set_active_session_id(session_id: Option<&str>) {
-    let mut active = active_session_lock()
+    let next = session_id.map(str::to_owned).filter(|id| !id.is_empty());
+    let _guard = log_write_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    *active = session_id.map(str::to_owned).filter(|id| !id.is_empty());
+    let changed = active_session_id() != next;
+    if let Some(config_dir) = crate::config::get_config_dir()
+        && let Some(_file_lock) = acquire_log_file_lock(&config_dir)
+    {
+        let marker_registered = update_active_session_marker(&config_dir, next.as_deref());
+        set_active_session_id_memory(next.clone());
+        if changed && (next.is_none() || marker_registered) {
+            prune_session_logs(&config_dir, next.as_deref(), MAX_SESSION_LOGS_BYTES);
+        }
+        return;
+    }
+
+    set_active_session_id_memory(next);
+    if active_session_id().is_none() {
+        *active_session_marker_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
 }
 
 fn active_session_id() -> Option<String> {
@@ -29,6 +63,163 @@ fn active_session_lock() -> &'static Mutex<Option<String>> {
     ACTIVE.get_or_init(|| Mutex::new(None))
 }
 
+fn set_active_session_id_memory(session_id: Option<String>) {
+    *active_session_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = session_id;
+}
+
+struct ActiveSessionMarker {
+    config_dir: PathBuf,
+    path: PathBuf,
+    session_id: String,
+    file: std::fs::File,
+}
+
+fn active_session_marker_lock() -> &'static Mutex<Option<ActiveSessionMarker>> {
+    static MARKER: OnceLock<Mutex<Option<ActiveSessionMarker>>> = OnceLock::new();
+    MARKER.get_or_init(|| Mutex::new(None))
+}
+
+fn active_log_markers_dir(config_dir: &Path) -> PathBuf {
+    config_dir
+        .join(rustcode_session::SESSIONS_DIR)
+        .join(ACTIVE_LOG_MARKERS_DIR)
+}
+
+fn active_log_marker_path(config_dir: &Path, process_id: u32) -> PathBuf {
+    active_log_markers_dir(config_dir).join(format!("{process_id}.lock"))
+}
+
+fn update_active_session_marker(config_dir: &Path, session_id: Option<&str>) -> bool {
+    let marker_path = active_log_marker_path(config_dir, std::process::id());
+    let mut active_marker = active_session_marker_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    if let Some(session_id) = session_id {
+        let sessions_dir = config_dir.join(rustcode_session::SESSIONS_DIR);
+        if std::fs::create_dir_all(&sessions_dir).is_err() || !is_real_directory(&sessions_dir) {
+            return false;
+        }
+        let markers_dir = active_log_markers_dir(config_dir);
+        if std::fs::create_dir_all(&markers_dir).is_err() || !is_real_directory(&markers_dir) {
+            return false;
+        }
+        if let Some(marker) = active_marker.as_mut()
+            && marker.config_dir == config_dir
+            && marker.path == marker_path
+            && is_real_file(&marker.path)
+        {
+            if marker.session_id == session_id {
+                return true;
+            }
+            if write_active_session_marker(&mut marker.file, session_id).is_err() {
+                return false;
+            }
+            marker.session_id = session_id.to_owned();
+            return true;
+        }
+
+        let Some(file) = acquire_active_session_marker(config_dir, std::process::id(), session_id)
+        else {
+            return false;
+        };
+        *active_marker = Some(ActiveSessionMarker {
+            config_dir: config_dir.to_path_buf(),
+            path: marker_path,
+            session_id: session_id.to_owned(),
+            file,
+        });
+        true
+    } else {
+        if let Some(marker) = active_marker.as_mut()
+            && marker.config_dir == config_dir
+        {
+            if write_active_session_marker(&mut marker.file, "").is_err() {
+                return false;
+            }
+        }
+        *active_marker = None;
+        true
+    }
+}
+
+fn acquire_active_session_marker(
+    config_dir: &Path,
+    process_id: u32,
+    session_id: &str,
+) -> Option<std::fs::File> {
+    let markers_dir = active_log_markers_dir(config_dir);
+    if std::fs::create_dir_all(&markers_dir).is_err()
+        || !is_real_directory(&config_dir.join(rustcode_session::SESSIONS_DIR))
+        || !is_real_directory(&markers_dir)
+    {
+        return None;
+    }
+    let mut file = open_active_marker_file(&active_log_marker_path(config_dir, process_id)).ok()?;
+    // Shared locks let independent RustCode processes protect the same
+    // session concurrently. The exclusive fallback still gives this process
+    // a visible lock on filesystems that do not support shared locks.
+    if file.try_lock_shared().is_err() && file.try_lock().is_err() {
+        return None;
+    }
+    write_active_session_marker(&mut file, session_id).ok()?;
+    Some(file)
+}
+
+fn open_active_marker_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(std::io::Error::other(
+            "active session marker is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+fn is_real_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+fn write_active_session_marker(file: &mut std::fs::File, session_id: &str) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(encode_session_id(session_id).as_bytes())?;
+    file.flush()
+}
+
+fn encode_session_id(session_id: &str) -> String {
+    let mut encoded = String::with_capacity(session_id.len().saturating_mul(2));
+    for byte in session_id.as_bytes() {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+fn decode_session_id(encoded: &str) -> Option<String> {
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return None;
+    }
+    let bytes = encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|chunk| {
+            let pair = std::str::from_utf8(chunk).ok()?;
+            u8::from_str_radix(pair, 16).ok()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    String::from_utf8(bytes).ok()
+}
+
 /// Rotate `debug.log` out of the way if it has grown past the size cap.
 /// Also called before writes so a long-lived process cannot grow the global
 /// or session log beyond the cap by accumulating lines between restarts.
@@ -40,11 +231,21 @@ pub(crate) fn rotate_if_oversized() {
         let Some(_file_lock) = acquire_log_file_lock(&config_dir) else {
             return;
         };
+        let active_session_id = active_session_id();
+        let marker_registered =
+            update_active_session_marker(&config_dir, active_session_id.as_deref());
         rotate_log_dir_if_oversized(&config_dir, MAX_DEBUG_LOG_BYTES);
-        if let Some(session_id) = active_session_id() {
+        if let Some(session_id) = active_session_id.as_deref() {
             let session_dir =
-                rustcode_session::SessionStore::new(&config_dir).session_dir(&session_id);
+                rustcode_session::SessionStore::new(&config_dir).session_dir(session_id);
             rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
+        }
+        if active_session_id.is_none() || marker_registered {
+            prune_session_logs(
+                &config_dir,
+                active_session_id.as_deref(),
+                MAX_SESSION_LOGS_BYTES,
+            );
         }
     }
 }
@@ -306,6 +507,12 @@ fn append_line_to_logs_with_limit(
     let Some(_file_lock) = acquire_log_file_lock(config_dir) else {
         return;
     };
+    let active_session_id = active_session_id();
+    let marker_registered = if session_id.is_some() {
+        update_active_session_marker(config_dir, active_session_id.as_deref())
+    } else {
+        true
+    };
     let line = capped_log_line(line, limit_bytes);
     let append_bytes = line.len().saturating_add(1) as u64;
     append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
@@ -314,7 +521,231 @@ fn append_line_to_logs_with_limit(
         let session_dir = rustcode_session::SessionStore::new(config_dir).session_dir(session_id);
         let logs_dir = session_dir.join("logs");
         append_bounded_line(&logs_dir, &line, append_bytes, limit_bytes);
+        if marker_registered {
+            maybe_prune_session_logs(config_dir, append_bytes);
+        }
     }
+}
+
+fn maybe_prune_session_logs(config_dir: &Path, bytes_written: u64) {
+    maybe_prune_session_logs_with_limit(
+        config_dir,
+        active_session_id().as_deref(),
+        bytes_written,
+        MAX_SESSION_LOGS_BYTES,
+    );
+}
+
+fn maybe_prune_session_logs_with_limit(
+    config_dir: &Path,
+    active_session_id: Option<&str>,
+    bytes_written: u64,
+    limit_bytes: u64,
+) {
+    // `append_line_to_logs_with_limit` holds the process and file locks, so a
+    // small process-local counter avoids walking thousands of session folders
+    // for every individual log event while still checking after bounded
+    // amounts of new log data.
+    static BYTES_SINCE_PRUNE: AtomicU64 = AtomicU64::new(0);
+    let bytes_since_prune = BYTES_SINCE_PRUNE.fetch_add(bytes_written, Ordering::Relaxed);
+    if bytes_since_prune.saturating_add(bytes_written) < SESSION_LOG_PRUNE_INTERVAL_BYTES {
+        return;
+    }
+    BYTES_SINCE_PRUNE.store(0, Ordering::Relaxed);
+    prune_session_logs(config_dir, active_session_id, limit_bytes);
+}
+
+#[derive(Debug, Clone)]
+struct SessionLogFile {
+    path: std::path::PathBuf,
+    session_id: String,
+    size: u64,
+    rotated: bool,
+    modified: SystemTime,
+}
+
+fn prune_session_logs(config_dir: &Path, active_session_id: Option<&str>, limit_bytes: u64) {
+    let Some(protected_sessions) = active_session_ids(config_dir, active_session_id) else {
+        // If a live marker cannot be inspected reliably, retain all session
+        // logs instead of risking deletion from an active session.
+        return;
+    };
+    let mut log_files = collect_session_log_files(config_dir);
+    let mut total_bytes = log_files
+        .iter()
+        .fold(0_u64, |total, log| total.saturating_add(log.size));
+    if total_bytes <= limit_bytes {
+        return;
+    }
+
+    log_files.retain(|log| !protected_sessions.contains(&log.session_id));
+    order_session_logs_for_pruning(&mut log_files);
+
+    for log in log_files {
+        if total_bytes <= limit_bytes {
+            break;
+        }
+        if std::fs::remove_file(&log.path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(log.size);
+        }
+    }
+}
+
+fn active_session_ids(
+    config_dir: &Path,
+    local_active_session_id: Option<&str>,
+) -> Option<std::collections::HashSet<String>> {
+    let mut protected = std::collections::HashSet::new();
+    if let Some(session_id) = local_active_session_id {
+        protected.insert(session_id.to_owned());
+    }
+
+    let marker_dir = active_log_markers_dir(config_dir);
+    match std::fs::symlink_metadata(&marker_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(protected),
+        Err(_) => return None,
+        Ok(metadata) if !metadata.file_type().is_dir() => return None,
+        Ok(_) => {}
+    }
+    let entries = match std::fs::read_dir(&marker_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(protected),
+        Err(_) => return None,
+    };
+    let mut stale_markers_removed = 0;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return None;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            return None;
+        };
+        if !file_type.is_file()
+            || !entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "lock")
+        {
+            continue;
+        }
+
+        let Ok(mut file) = OpenOptions::new().read(true).write(true).open(entry.path()) else {
+            return None;
+        };
+        if file.try_lock().is_ok() {
+            // Marker registration and pruning both happen under the global
+            // logger lock, so no cooperating process can start using this
+            // marker between the lock probe and removal. Bound deletions per
+            // pass to keep the global critical section short.
+            drop(file);
+            if stale_markers_removed < MAX_STALE_ACTIVE_MARKERS_PER_PRUNE
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                stale_markers_removed += 1;
+            }
+            continue;
+        }
+
+        let mut encoded_session_id = String::new();
+        if file.seek(SeekFrom::Start(0)).is_err()
+            || file.read_to_string(&mut encoded_session_id).is_err()
+        {
+            return None;
+        }
+        let Some(session_id) = decode_session_id(&encoded_session_id) else {
+            return None;
+        };
+        protected.insert(session_id);
+    }
+    Some(protected)
+}
+
+fn order_session_logs_for_pruning(log_files: &mut [SessionLogFile]) {
+    // Rotated segments contain older evidence than each session's current
+    // segment, so discard those first. Within each class, age is primary and
+    // the full path makes equal timestamps deterministic.
+    log_files.sort_by(|left, right| {
+        right
+            .rotated
+            .cmp(&left.rotated)
+            .then_with(|| left.modified.cmp(&right.modified))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+}
+
+fn collect_session_log_files(config_dir: &Path) -> Vec<SessionLogFile> {
+    let sessions_dir = config_dir.join(rustcode_session::SESSIONS_DIR);
+    let mut session_dirs = Vec::new();
+    for top_level in child_directories(&sessions_dir) {
+        if is_real_directory(&top_level.join("logs")) {
+            // Legacy sessions/<id>/ layout.
+            session_dirs.push(top_level);
+            continue;
+        }
+
+        // Canonical sessions/YYYY/MM/DD/<id>/ layout. Walk only the known
+        // directory depth so unrelated nested artifacts are never treated as
+        // session roots.
+        for month in child_directories(&top_level) {
+            for day in child_directories(&month) {
+                session_dirs.extend(
+                    child_directories(&day)
+                        .into_iter()
+                        .filter(|session| is_real_directory(&session.join("logs"))),
+                );
+            }
+        }
+    }
+
+    let mut log_files = Vec::new();
+    for session_dir in session_dirs {
+        let Some(session_id) = session_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let logs_dir = session_dir.join("logs");
+        for name in ["debug.log", "debug.log.1"] {
+            let path = logs_dir.join(name);
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.file_type().is_file() {
+                continue;
+            }
+            log_files.push(SessionLogFile {
+                path,
+                session_id: session_id.clone(),
+                size: metadata.len(),
+                rotated: name == "debug.log.1",
+                modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+            });
+        }
+    }
+    log_files
+}
+
+fn child_directories(path: &Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(path)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let entry_path = entry.path();
+            entry
+                .file_type()
+                .ok()
+                .filter(|file_type| file_type.is_dir())
+                .map(|_| entry_path)
+        })
+        .collect()
+}
+
+fn is_real_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
 fn try_append_panic_line(line: &str) {
@@ -1050,5 +1481,203 @@ mod tests {
         }));
         assert_eq!(session_id.as_deref(), Some("older-session"));
         assert_eq!(fields["session_id"], "older-session");
+    }
+
+    #[test]
+    fn aggregate_session_log_cap_prunes_oldest_inactive_segments_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions = dir.path().join("sessions");
+        let active_logs = sessions.join("active/logs");
+        let old_session = sessions.join("old-session");
+        let old_logs = old_session.join("logs");
+        std::fs::create_dir_all(&active_logs).expect("active logs");
+        std::fs::create_dir_all(&old_logs).expect("old logs");
+        std::fs::write(active_logs.join("debug.log"), b"curr").expect("active current");
+        std::fs::write(active_logs.join("debug.log.1"), b"arch").expect("active archive");
+        std::fs::write(old_logs.join("debug.log"), b"curr").expect("old current");
+        std::fs::write(old_logs.join("debug.log.1"), b"arch").expect("old archive");
+        std::fs::write(old_session.join("history.json"), b"[]").expect("history");
+        std::fs::write(old_session.join("metadata.json"), b"{}").expect("metadata");
+        std::fs::write(old_session.join("artifact.bin"), b"artifact").expect("artifact");
+
+        prune_session_logs(dir.path(), Some("active"), 12);
+
+        let remaining_bytes = collect_session_log_files(dir.path())
+            .iter()
+            .map(|log| log.size)
+            .sum::<u64>();
+        assert_eq!(remaining_bytes, 12);
+        assert!(active_logs.join("debug.log").exists());
+        assert!(active_logs.join("debug.log.1").exists());
+        assert!(old_logs.join("debug.log").exists());
+        assert!(!old_logs.join("debug.log.1").exists());
+        assert!(old_session.join("history.json").exists());
+        assert!(old_session.join("metadata.json").exists());
+        assert!(old_session.join("artifact.bin").exists());
+        assert!(old_session.is_dir());
+    }
+
+    #[test]
+    fn aggregate_session_log_cap_discovers_canonical_session_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let active_logs = dir.path().join("sessions/2026/09/23/active/logs");
+        let old_logs = dir.path().join("sessions/2026/09/22/old/logs");
+        std::fs::create_dir_all(&active_logs).expect("active logs");
+        std::fs::create_dir_all(&old_logs).expect("old logs");
+        std::fs::write(active_logs.join("debug.log"), b"active").expect("active log");
+        std::fs::write(old_logs.join("debug.log"), b"inactive").expect("old log");
+
+        prune_session_logs(dir.path(), Some("active"), 6);
+
+        assert_eq!(collect_session_log_files(dir.path()).len(), 1);
+        assert!(active_logs.join("debug.log").exists());
+        assert!(!old_logs.join("debug.log").exists());
+    }
+
+    #[test]
+    fn stale_session_log_write_cannot_override_active_session_protection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let active_logs = dir.path().join("sessions/current/logs");
+        let stale_logs = dir.path().join("sessions/stale-owner/logs");
+        std::fs::create_dir_all(&active_logs).expect("active logs");
+        std::fs::create_dir_all(&stale_logs).expect("stale logs");
+        std::fs::write(active_logs.join("debug.log"), b"curr").expect("active current");
+        std::fs::write(active_logs.join("debug.log.1"), b"arch").expect("active archive");
+        std::fs::write(stale_logs.join("debug.log"), b"stale").expect("stale owner log");
+
+        let previous_active = active_session_id();
+        *active_session_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some("current".to_owned());
+
+        // A delayed async request can still log under stale-owner after the
+        // UI has switched to current. The prune decision must consult the
+        // process's active session, not the event's owning session.
+        maybe_prune_session_logs_with_limit(
+            dir.path(),
+            active_session_id().as_deref(),
+            SESSION_LOG_PRUNE_INTERVAL_BYTES,
+            8,
+        );
+
+        assert!(active_logs.join("debug.log").exists());
+        assert!(active_logs.join("debug.log.1").exists());
+        assert!(!stale_logs.join("debug.log").exists());
+        *active_session_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = previous_active;
+    }
+
+    #[test]
+    fn cross_process_active_markers_protect_shared_session_logs_until_both_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let active_logs = dir.path().join("sessions/current/logs");
+        let inactive_logs = dir.path().join("sessions/inactive/logs");
+        std::fs::create_dir_all(&active_logs).expect("active logs");
+        std::fs::create_dir_all(&inactive_logs).expect("inactive logs");
+        std::fs::write(active_logs.join("debug.log"), b"curr").expect("active current");
+        std::fs::write(active_logs.join("debug.log.1"), b"arch").expect("active archive");
+        std::fs::write(inactive_logs.join("debug.log"), b"old!").expect("inactive current");
+
+        // Distinct PID marker files model two RustCode processes holding the
+        // same session active at once. Their shared file locks are independent
+        // but both prevent the pruner from acquiring its exclusive probe.
+        let owner_a = acquire_active_session_marker(dir.path(), 101, "current")
+            .expect("first active process marker");
+        let owner_b = acquire_active_session_marker(dir.path(), 202, "current")
+            .expect("second active process marker");
+
+        prune_session_logs(dir.path(), None, 8);
+
+        assert!(active_logs.join("debug.log").exists());
+        assert!(active_logs.join("debug.log.1").exists());
+        assert!(!inactive_logs.join("debug.log").exists());
+
+        drop((owner_a, owner_b));
+        prune_session_logs(dir.path(), None, 4);
+
+        assert!(active_logs.join("debug.log").exists());
+        assert!(!active_logs.join("debug.log.1").exists());
+    }
+
+    #[test]
+    fn stale_active_marker_cleanup_is_bounded_and_preserves_live_markers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let live_marker =
+            acquire_active_session_marker(dir.path(), 9001, "active").expect("live active marker");
+        for process_id in 10_000..(10_000 + MAX_STALE_ACTIVE_MARKERS_PER_PRUNE as u32 + 3) {
+            let stale_marker = acquire_active_session_marker(dir.path(), process_id, "stale")
+                .expect("stale marker");
+            drop(stale_marker);
+        }
+
+        // Production pruning calls this while holding the cross-process
+        // logger lock, which serializes marker registration with cleanup.
+        prune_session_logs(dir.path(), None, 0);
+
+        let marker_dir = active_log_markers_dir(dir.path());
+        let remaining = std::fs::read_dir(&marker_dir)
+            .expect("marker directory")
+            .map(|entry| entry.expect("marker entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining.len(),
+            4,
+            "cleanup removes at most the configured batch and keeps the live marker"
+        );
+        assert!(active_log_marker_path(dir.path(), 9001).exists());
+        drop(live_marker);
+    }
+
+    #[test]
+    fn session_log_pruning_order_is_age_then_path_with_rotated_files_first() {
+        let older = UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let newer = UNIX_EPOCH + std::time::Duration::from_secs(2);
+        let mut logs = vec![
+            SessionLogFile {
+                path: "sessions/z/debug.log.1".into(),
+                session_id: "z".to_owned(),
+                size: 1,
+                rotated: true,
+                modified: newer,
+            },
+            SessionLogFile {
+                path: "sessions/b/debug.log.1".into(),
+                session_id: "b".to_owned(),
+                size: 1,
+                rotated: true,
+                modified: older,
+            },
+            SessionLogFile {
+                path: "sessions/a/debug.log.1".into(),
+                session_id: "a".to_owned(),
+                size: 1,
+                rotated: true,
+                modified: older,
+            },
+            SessionLogFile {
+                path: "sessions/c/debug.log".into(),
+                session_id: "c".to_owned(),
+                size: 1,
+                rotated: false,
+                modified: UNIX_EPOCH,
+            },
+        ];
+
+        order_session_logs_for_pruning(&mut logs);
+
+        let paths = logs
+            .iter()
+            .map(|log| log.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "sessions/a/debug.log.1",
+                "sessions/b/debug.log.1",
+                "sessions/z/debug.log.1",
+                "sessions/c/debug.log",
+            ]
+        );
     }
 }
