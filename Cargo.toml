@@ -2,6 +2,7 @@
 name = "rustcode"
 version = "0.55.9"
 edition = "2024"
+license = "Apache-2.0"
 
 [workspace]
 members = [

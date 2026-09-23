@@ -1,8 +1,25 @@
-<div align="center">
-<h1>rustcode</h1>
+<p align="center">
+    <picture>
+        <img src="./images/rustcode-logo.png" alt="RustCode logo" width="100"/>
+    </picture>
+</p>
+
+<h1 align="center">rustcode</h1>
+<p align="center">
+    <b>An agent harness (or sum), made in Rust</b>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License: Apache 2.0">
+  <img src="https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust" alt="Rust 1.85+">
+  <img src="https://img.shields.io/badge/platform-cross--platform-blue" alt="Cross-platform">
+</p>
+
+<p align="center">
+  <a href="mailto:lucas@flowdev.no">lucas@flowdev.no</a> · <a href="https://rustcode.lhagfoss.com">rustcode.lhagfoss.com</a>
+</p>
 
 <img src="./images/header.png" alt="rustcode screenshot 1"/>
-</div>
 
 ## about
 
@@ -331,26 +348,24 @@ Video edits are stored in a reusable, versioned project file:
 
 ```json
 {
-  "version": 1,
-  "output": "output/final.mp4",
-  "video": { "width": 1920, "height": 1080, "fps": 30 },
-  "clips": [
-    { "path": "media/intro.mp4", "trim": { "start": 1.5, "end": 8.0 } },
-    { "path": "media/demo.mp4" }
-  ],
-  "transitions": [
-    { "after_clip": 0, "type": "crossfade", "duration": 0.5 }
-  ],
-  "audio": {
-    "music": {
-      "path": "media/music.wav",
-      "volume": 0.2,
-      "fade_in": 1.0,
-      "fade_out": 2.0
-    },
-    "keep_clip_audio": true,
-    "clip_audio_volume": 1.0
-  }
+    "version": 1,
+    "output": "output/final.mp4",
+    "video": { "width": 1920, "height": 1080, "fps": 30 },
+    "clips": [
+        { "path": "media/intro.mp4", "trim": { "start": 1.5, "end": 8.0 } },
+        { "path": "media/demo.mp4" }
+    ],
+    "transitions": [{ "after_clip": 0, "type": "crossfade", "duration": 0.5 }],
+    "audio": {
+        "music": {
+            "path": "media/music.wav",
+            "volume": 0.2,
+            "fade_in": 1.0,
+            "fade_out": 2.0
+        },
+        "keep_clip_audio": true,
+        "clip_audio_volume": 1.0
+    }
 }
 ```
 
@@ -366,3 +381,7 @@ If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have 
 Also not recmomended to use FM system model. as it only have like 2k context window...
 
 Made with [rust](https://www.rust-lang.org/) by goat (me) and models inside [rustcode](README) harness
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

@@ -2,6 +2,7 @@
 name = "rustcode-session"
 version = "0.55.9"
 edition = "2024"
+license = "Apache-2.0"
 
 [dependencies]
 rustcode-core = { path = "../rustcode-core" }
