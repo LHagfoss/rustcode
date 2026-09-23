@@ -1514,13 +1514,6 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
-fn save_toml_config(path: &Path, file: &TomlConfig) -> Result<(), String> {
-    let contents = toml::to_string_pretty(file)
-        .map_err(|error| format!("could not serialize {}: {error}", path.display()))?;
-    write_config_file(path, &contents)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
-}
-
 fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;

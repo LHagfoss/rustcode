@@ -68,14 +68,12 @@ mod tests;
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
-#[cfg(test)]
-pub(crate) use exec::shell_policy_facts;
 pub(crate) use exec::{
-    CommandProgressCallback, ShellClassification, ShellPolicyFacts, abort_background_starts,
-    approved_command_prefix_covers_call, background_task_manager, command_confirmation_preview,
-    command_requires_confirmation, release_background_start, rememberable_command_prefix_for_call,
-    run_command_output_with_progress_cancellable_for_call, shell_policy_facts_for_call,
-    stop_background_tasks, task_event_to_tool_output,
+    CommandProgressCallback, abort_background_starts, approved_command_prefix_covers_call,
+    background_task_manager, command_confirmation_preview, command_requires_confirmation,
+    release_background_start, rememberable_command_prefix_for_call,
+    run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
+    task_event_to_tool_output,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
