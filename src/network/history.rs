@@ -199,8 +199,32 @@ fn announcing_call_index(
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, message)| message.tool_calls.iter().any(|call| call.id == call_id))
+        .find(|(index, message)| {
+            message.tool_calls.iter().any(|call| call.id == call_id)
+                // Native call results must stay in the result run immediately
+                // after their announcement. A result appended after another
+                // user/assistant turn is a late completion; treating it as the
+                // answer leaves the earlier assistant tool_calls open in the
+                // provider transcript.
+                && history[index + 1..result_index]
+                    .iter()
+                    .all(|between| between.role == "tool")
+        })
         .map(|(index, _)| index)
+}
+
+fn has_late_tool_result(history: &[ChatMessage], announcement_index: usize, call_id: &str) -> bool {
+    for message in &history[announcement_index + 1..] {
+        if message.role == "assistant" && message.tool_calls.iter().any(|call| call.id == call_id) {
+            // A repeated ID belongs to its newest announcement; it must not
+            // make an earlier call look as though it completed late.
+            return false;
+        }
+        if message.role == "tool" && message.tool_call_id.as_deref() == Some(call_id) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A bounded, named piece of turn-varying context.
@@ -278,6 +302,69 @@ pub(crate) fn to_messages_for_request(
     instructions: RequestInstructions<'_>,
 ) -> Vec<serde_json::Value> {
     to_messages_with_scope(history, instructions, HistoryRenderScope::RecentTurns)
+}
+
+/// Check the final OpenAI-compatible native-tool message sequence immediately
+/// before sending it. Provider parsers require each assistant tool-call batch
+/// to be followed by exactly one tool result per announced ID, with no other
+/// conversation message interleaved in the batch.
+pub(crate) fn validate_native_tool_messages(messages: &[serde_json::Value]) -> Result<(), String> {
+    let mut index = 0;
+    while index < messages.len() {
+        let message = &messages[index];
+        if message["role"] == "tool" {
+            return Err(format!(
+                "tool result at message {index} has no immediately preceding assistant tool-call batch"
+            ));
+        }
+        let Some(calls) = message["tool_calls"].as_array() else {
+            index += 1;
+            continue;
+        };
+        if calls.is_empty() {
+            index += 1;
+            continue;
+        }
+
+        let mut pending = std::collections::BTreeSet::new();
+        for call in calls {
+            let Some(call_id) = call["id"].as_str().filter(|id| !id.is_empty()) else {
+                return Err(format!(
+                    "assistant message {index} contains a native tool call without a call ID"
+                ));
+            };
+            if !pending.insert(call_id.to_owned()) {
+                return Err(format!(
+                    "assistant message {index} announces native tool call ID {call_id:?} more than once"
+                ));
+            }
+        }
+
+        while !pending.is_empty() {
+            let result_index = index + 1;
+            let Some(result) = messages.get(result_index) else {
+                let missing = pending.iter().next().expect("pending result ID");
+                return Err(format!(
+                    "assistant message {index} announces native tool call {missing:?} without a matching tool result"
+                ));
+            };
+            let Some(result_id) = result["tool_call_id"].as_str() else {
+                let missing = pending.iter().next().expect("pending result ID");
+                return Err(format!(
+                    "assistant message {index} announces native tool call {missing:?}, but the next message is not its tool result"
+                ));
+            };
+            if result["role"] != "tool" || !pending.remove(result_id) {
+                let missing = pending.iter().next().expect("pending result ID");
+                return Err(format!(
+                    "assistant message {index} announces native tool call {missing:?}, but message {result_index} has an unexpected tool result ID {result_id:?}"
+                ));
+            }
+            index += 1;
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -409,10 +496,15 @@ fn to_messages_with_scope(
                 .flat_map(|calls| calls.iter())
                 .filter(|call| !answered.contains(&(index, call.id.clone())))
             {
+                let content = if has_late_tool_result(history, index, &call.id) {
+                    "error: this call's result arrived after the conversation moved on"
+                } else {
+                    "error: this call did not run — the turn ended before it could"
+                };
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": "error: this call did not run — the turn ended before it could",
+                    "content": content,
                 }));
             }
             continue;
@@ -1383,6 +1475,7 @@ mod tests {
     }
 
     fn assert_native_tool_call_results(messages: &[serde_json::Value]) {
+        validate_native_tool_messages(messages).expect("native call/result sequence is valid");
         let mut calls = std::collections::BTreeMap::new();
         let mut results = std::collections::BTreeMap::new();
         for message in messages {
@@ -1402,6 +1495,43 @@ mod tests {
         assert!(
             calls.values().all(|count| *count == 1),
             "duplicate call ids: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn native_message_validation_rejects_missing_and_cross_call_results() {
+        let call = |id: &str| {
+            serde_json::json!({
+                "id": id,
+                "type": "function",
+                "function": {"name": "view_file", "arguments": "{}"}
+            })
+        };
+        let assistant = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [call("call_a"), call("call_b")]
+        });
+
+        let missing = vec![
+            assistant.clone(),
+            serde_json::json!({
+                "role": "tool", "tool_call_id": "call_a", "content": "done"
+            }),
+        ];
+        let error = validate_native_tool_messages(&missing).unwrap_err();
+        assert!(error.contains("call_b"), "unexpected diagnostic: {error}");
+
+        let mismatched = vec![
+            assistant,
+            serde_json::json!({
+                "role": "tool", "tool_call_id": "call_other", "content": "done"
+            }),
+        ];
+        let error = validate_native_tool_messages(&mismatched).unwrap_err();
+        assert!(error.contains("call_a"), "unexpected diagnostic: {error}");
+        assert!(
+            error.contains("call_other"),
+            "unexpected diagnostic: {error}"
         );
     }
 
@@ -1597,6 +1727,7 @@ mod tests {
         // Both announcements are retained; the stale one is closed
         // synthetically while the newer one keeps its real result. A global
         // id set would mark both answered and drop the synthetic close.
+        validate_native_tool_messages(&messages).expect("each reused call ID is paired in order");
         let tool_contents: Vec<&str> = messages
             .iter()
             .filter(|message| message["tool_call_id"] == "call-reused")
@@ -1645,6 +1776,61 @@ mod tests {
         let messages = to_messages(&history, "system");
 
         assert_native_tool_call_results(&messages);
+    }
+
+    #[test]
+    fn late_tool_result_after_a_later_turn_does_not_answer_the_earlier_call() {
+        let call_id = "call_late";
+        let history = vec![
+            ChatMessage::new("user", "run the command"),
+            ChatMessage::new("assistant", "checking").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: call_id.into(),
+                    name: "run_command".into(),
+                    arguments: "{}".into(),
+                },
+            ]),
+            ChatMessage::new("user", "status update"),
+            ChatMessage::new("assistant", "the task is done"),
+            // A background execution completes after the conversation has
+            // already advanced past the unanswered native call.
+            ChatMessage::new("tool", "run_command: completed").answering(Some(call_id.into())),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        assert_native_tool_call_results(&messages);
+        let announcement_index = messages
+            .iter()
+            .position(|message| {
+                message["tool_calls"]
+                    .as_array()
+                    .is_some_and(|calls| calls.iter().any(|call| call["id"] == call_id))
+            })
+            .expect("native call announcement");
+        assert_eq!(
+            messages[announcement_index + 1]["tool_call_id"],
+            call_id,
+            "every call must be closed before another conversation message"
+        );
+        assert!(
+            messages[announcement_index + 1]["content"]
+                .as_str()
+                .is_some_and(
+                    |content| content.contains("result arrived after the conversation moved on")
+                )
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| { message["role"] == "tool" && message["content"] == "completed" })
+        );
+        assert!(messages.iter().any(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("run_command: completed"))
+        }));
     }
 
     // Reads with different content, errors, and truncated reads are never
