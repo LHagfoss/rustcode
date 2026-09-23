@@ -796,6 +796,10 @@ pub(crate) async fn execute_tool_batch_with_assessments(
     deferred_notice: Option<String>,
     assessment_cache: &crate::tools::ShellAssessmentCache,
 ) -> Vec<ToolResult> {
+    if cancel_token.is_cancelled() {
+        return tool_calls.iter().map(cancelled_tool_result).collect();
+    }
+
     if !approved {
         return tool_calls
             .iter()
@@ -837,9 +841,6 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                 ))
                 .await,
             );
-            if cancel_token.is_cancelled() {
-                break;
-            }
         }
         return results;
     }
@@ -1265,6 +1266,70 @@ pub(crate) async fn execute_tool_batch_with_assessments(
         }
     }
     results
+}
+
+fn cancelled_tool_result(call: &crate::tools::ToolCall) -> ToolResult {
+    ToolResult {
+        tool_name: call.name.clone(),
+        content: "error: tool call cancelled before execution".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            success: false,
+            error_kind: Some(crate::tools::ToolErrorKind::Cancelled),
+            retryable: false,
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::execute_tool_batch_with_assessments;
+    use crate::app::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn cancelled_batch_is_reported_as_cancelled_when_approval_returns_false() {
+        let temp = tempfile::tempdir().expect("temporary output directory");
+        let call = crate::tools::ToolCall {
+            name: "write_to_file".to_owned(),
+            arguments: serde_json::json!({
+                "path": temp.path().join("should-not-exist.txt"),
+                "content": "must not be written",
+            }),
+            call_id: Some("cancelled-call".to_owned()),
+        };
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+        let mut compile_dirty = false;
+        let mut compile_cache = None;
+        let mut user_wait_duration = std::time::Duration::ZERO;
+
+        let results = execute_tool_batch_with_assessments(
+            &reqwest::Client::new(),
+            &state,
+            &cancellation,
+            &[call],
+            false,
+            &None,
+            &mut compile_dirty,
+            &mut compile_cache,
+            &mut user_wait_duration,
+            None,
+            &Default::default(),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].metadata.error_kind,
+            Some(crate::tools::ToolErrorKind::Cancelled)
+        );
+        assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
 }
 
 #[cfg(test)]
