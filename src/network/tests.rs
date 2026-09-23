@@ -969,6 +969,7 @@ async fn background_wakeup_releases_state_during_native_schema_selection_and_sta
         model: app.model_name.clone(),
         api_protocol: Some(ApiProtocol::ChatCompletions),
         tool_protocol: Some(ToolProtocol::ApiNative),
+        context_window: Some(32_768),
         ..ModelProfile::default()
     }];
     app.history.push(ChatMessage::new("user", marker));
