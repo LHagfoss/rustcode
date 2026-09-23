@@ -37,7 +37,7 @@ pub(super) async fn apply_approval_decision(
             let valid_prefix = state
                 .pending_tool_confirmation
                 .as_ref()
-                .filter(|items| items.len() == 1 && items[0].tool_name == "run_command")
+                .filter(|items| items.len() == 1 && items[0].rememberable_prefix.is_some())
                 .and_then(|items| items[0].rememberable_prefix.clone())
                 .filter(|actual| actual == &prefix);
             valid_prefix.map_or(crate::app::ToolConfirmationResponse::Approve, |prefix| {

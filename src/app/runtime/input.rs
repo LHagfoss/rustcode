@@ -186,7 +186,7 @@ pub(super) async fn handle_app_event(
                                 .pending_tool_confirmation
                                 .as_ref()
                                 .filter(|items| {
-                                    items.len() == 1 && items[0].tool_name == "run_command"
+                                    items.len() == 1 && items[0].rememberable_prefix.is_some()
                                 })
                                 .and_then(|items| items[0].rememberable_prefix.clone());
                             (s.tool_confirmation_selected, prefix)

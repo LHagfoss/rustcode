@@ -131,7 +131,7 @@ impl<'a> OverlayState<'a> {
         let max = self
             .pending_tool_confirmation
             .as_ref()
-            .filter(|items| items.len() == 1 && items[0].tool_name == "run_command")
+            .filter(|items| items.len() == 1 && items[0].rememberable_prefix.is_some())
             .and_then(|items| items[0].rememberable_prefix.clone())
             .map_or(1, |_| 2);
         *self.tool_confirmation_selected = if direction < 0 {

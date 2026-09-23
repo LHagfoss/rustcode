@@ -47,25 +47,7 @@ fn authorization_for_interactive_call(
 }
 
 fn saved_prefix_covers_call(call: &ToolCall, prefixes: &[String]) -> bool {
-    call.name == "run_command"
-        && call
-            .arguments
-            .get("env")
-            .is_none_or(|env| env.as_object().is_some_and(|values| values.is_empty()))
-        && ["background", "detached"].iter().all(|name| {
-            call.arguments
-                .get(*name)
-                .is_none_or(|value| value.as_bool() == Some(false))
-        })
-        && call
-            .arguments
-            .get("command")
-            .and_then(|value| value.as_str())
-            .is_some_and(|command| {
-                prefixes
-                    .iter()
-                    .any(|prefix| tools::command_prefix_rule_matches(prefix, command))
-            })
+    tools::approved_command_prefix_covers_call(&call.name, &call.arguments, prefixes)
 }
 
 impl InteractivePolicy {

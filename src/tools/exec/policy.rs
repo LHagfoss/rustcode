@@ -607,29 +607,37 @@ fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
     {
         return None;
     }
-    if matches!(binary, "cargo")
-        && matches!(
-            tokens.get(1).map(String::as_str),
-            Some("publish" | "install")
-        )
-    {
-        return None;
-    }
-    if matches!(binary, "npm" | "pnpm" | "yarn")
-        && matches!(
-            tokens.get(1).map(String::as_str),
-            Some("publish" | "install" | "add" | "remove" | "uninstall")
-        )
-    {
-        return None;
-    }
-    Some(tokens)
+    // Reusable rules are intentionally limited to well-known, non-deploying
+    // test/build actions. The verb must be the first argument: otherwise a
+    // selector or option such as `cargo +stable` could become the saved
+    // prefix and silently cover a different action such as `publish`.
+    let action_tokens = match (binary, tokens.get(1).map(String::as_str)) {
+        ("cargo", Some(action @ ("test" | "check" | "build" | "clippy" | "fmt" | "doc"))) => {
+            vec![action.to_owned()]
+        }
+        // A module name is part of the rule. Never persist the broad
+        // `python -m` prefix, and do not remember package installers or
+        // arbitrary modules such as `http.server`.
+        ("python" | "python3", Some("-m")) => {
+            let module = tokens.get(2).map(String::as_str)?;
+            if !matches!(module, "pytest" | "unittest") {
+                return None;
+            }
+            vec!["-m".to_owned(), module.to_owned()]
+        }
+        // Interpreter command strings, package managers, network clients,
+        // and all unreviewed command families remain one-time approvals.
+        _ => return None,
+    };
+    let mut rule_tokens = vec![tokens[0].clone()];
+    rule_tokens.extend(action_tokens);
+    Some(rule_tokens)
 }
 
 /// The short prefix shown to the user for a persistent reusable approval.
 pub(crate) fn rememberable_command_prefix(command: &str) -> Option<String> {
     let tokens = reusable_rule_tokens(command)?;
-    Some(tokens.into_iter().take(2).collect::<Vec<_>>().join(" "))
+    Some(tokens.join(" "))
 }
 
 pub(crate) fn rememberable_command_prefix_for_call(args: &Value) -> Option<String> {
@@ -644,6 +652,25 @@ pub(crate) fn rememberable_command_prefix_for_call(args: &Value) -> Option<Strin
         return None;
     }
     rememberable_command_prefix(args.get("command")?.as_str()?)
+}
+
+/// Whether a saved reusable rule explicitly covers this plain command call.
+/// Keep the argument-shape checks shared between parent and subagent paths.
+pub(crate) fn approved_command_prefix_covers_call(
+    name: &str,
+    args: &Value,
+    prefixes: &[String],
+) -> bool {
+    if name != "run_command" || rememberable_command_prefix_for_call(args).is_none() {
+        return false;
+    }
+    args.get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| {
+            prefixes
+                .iter()
+                .any(|prefix| command_prefix_rule_matches(prefix, command))
+        })
 }
 
 /// Match parsed token prefixes, never raw string prefixes. Rules with shell
@@ -661,8 +688,8 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
 #[cfg(test)]
 mod command_prefix_tests {
     use super::{
-        command_prefix_rule_matches, rememberable_command_prefix,
-        rememberable_command_prefix_for_call,
+        approved_command_prefix_covers_call, command_prefix_rule_matches,
+        rememberable_command_prefix, rememberable_command_prefix_for_call,
     };
 
     #[test]
@@ -708,6 +735,86 @@ mod command_prefix_tests {
         assert!(!command_prefix_rule_matches(
             "git diff",
             "git diff --output=report.txt"
+        ));
+    }
+
+    #[test]
+    fn reusable_prefixes_bind_to_vetted_command_actions() {
+        assert!(rememberable_command_prefix("cargo +stable test").is_none());
+        assert!(!command_prefix_rule_matches(
+            "cargo +stable test",
+            "cargo +stable publish"
+        ));
+
+        assert_eq!(
+            rememberable_command_prefix("python -m pytest"),
+            Some("python -m pytest".to_owned())
+        );
+        assert!(!command_prefix_rule_matches(
+            "python -m pytest",
+            "python -m http.server"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "python -m pytest",
+            "pip install package"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "python -m pytest",
+            "python -m pip install package"
+        ));
+        assert!(rememberable_command_prefix("python -m").is_none());
+
+        for command in ["pip install package", "pip3 install package"] {
+            assert!(rememberable_command_prefix(command).is_none(), "{command}");
+        }
+        for command in [
+            "npm install -g package",
+            "npm publish",
+            "npm install package --global",
+            "pnpm add -g package",
+            "yarn global add package",
+            "yarn publish",
+        ] {
+            assert!(rememberable_command_prefix(command).is_none(), "{command}");
+        }
+    }
+
+    #[test]
+    fn approved_rules_cover_only_plain_vetted_calls() {
+        let prefixes = vec!["cargo test".to_owned()];
+        let args = |command: &str, extra: serde_json::Value| {
+            let mut args = serde_json::json!({"command": command});
+            args.as_object_mut().unwrap().extend(
+                extra
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            args
+        };
+        assert!(approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test --lib", serde_json::json!({})),
+            &prefixes,
+        ));
+        assert!(!approved_command_prefix_covers_call(
+            "run_command",
+            &args(
+                "cargo test",
+                serde_json::json!({"env":{"RUSTFLAGS":"-Dwarnings"}})
+            ),
+            &prefixes,
+        ));
+        assert!(!approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo +stable test", serde_json::json!({})),
+            &prefixes,
+        ));
+        assert!(!approved_command_prefix_covers_call(
+            "write_to_file",
+            &args("cargo test", serde_json::json!({})),
+            &prefixes,
         ));
     }
 }

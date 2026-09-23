@@ -1033,7 +1033,7 @@ pub(in crate::ui) fn tool_confirmation_height(state: &RenderSnapshot, available:
         .min(8);
     let remember_row = confirmations
         .first()
-        .filter(|item| confirmations.len() == 1 && item.tool_name == "run_command")
+        .filter(|item| confirmations.len() == 1 && item.rememberable_prefix.is_some())
         .and_then(|item| item.rememberable_prefix.as_ref())
         .is_some() as u16;
     let content = if confirmations.len() > 1 {

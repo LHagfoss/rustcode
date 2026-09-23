@@ -19,7 +19,8 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     let mut lines = Vec::new();
     let single = confirmations.len() == 1;
     let first = &confirmations[0];
-    let is_command = single && first.tool_name == "run_command";
+    let is_command =
+        single && (first.tool_name == "run_command" || first.rememberable_prefix.is_some());
     let rememberable_prefix = is_command
         .then_some(first.rememberable_prefix.as_deref())
         .flatten();
@@ -93,7 +94,8 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                 ),
                 Span::raw(" "),
             ];
-            if confirmation.tool_name == "run_command" {
+            if confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some()
+            {
                 spans.push(Span::styled(
                     "$ ",
                     Style::default().fg(COLOR_TEXT()).bg(panel),
@@ -375,7 +377,14 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             "run_command" => "Run command",
             _ => "Execute tool",
         };
-        let header_text = if confirmation.tool_name == "run_command" {
+        let is_command =
+            confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some();
+        let action_label = if is_command {
+            "Run command"
+        } else {
+            action_label
+        };
+        let header_text = if is_command {
             "⚠ Would you like to run the following command?".to_owned()
         } else {
             format!("⚠ {action_label}?")
@@ -396,14 +405,13 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             confirmation.path.clone()
         };
 
-        let size_str = if confirmation.tool_name != "run_command" && confirmation.content_bytes > 0
-        {
+        let size_str = if !is_command && confirmation.content_bytes > 0 {
             format!(" ({} bytes)", confirmation.content_bytes)
         } else {
             String::new()
         };
 
-        let command_prefix = (confirmation.tool_name == "run_command").then_some("$ ");
+        let command_prefix = is_command.then_some("$ ");
         let tool_line = Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
@@ -628,7 +636,8 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             };
 
             let marker = if i == 0 { "›" } else { " " };
-            let command_prefix = (c.tool_name == "run_command").then_some("$ ");
+            let command_prefix =
+                (c.tool_name == "run_command" || c.rememberable_prefix.is_some()).then_some("$ ");
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} {}. ", marker, i + 1),

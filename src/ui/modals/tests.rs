@@ -181,6 +181,36 @@ fn approval_selection_visibly_moves_to_deny() {
 }
 
 #[test]
+fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
+    let mut terminal = Terminal::new(TestBackend::new(90, 12)).unwrap();
+    let mut state = AppState::new();
+    state.tool_confirmation_selected = 2;
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "agent-1 · run_command".to_owned(),
+        path: "cargo test --lib".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 14,
+        rememberable_prefix: Some("cargo test".to_owned()),
+    }]);
+    terminal
+        .draw(|frame| {
+            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 90, 10))
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(rendered.contains("Would you like to run the following command?"));
+    assert!(rendered.contains("3. Always allow `cargo test…`"));
+    assert!(rendered.contains("$ cargo test --lib"));
+}
+
+#[test]
 fn approval_selection_reaches_the_reusable_prefix_choice() {
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {

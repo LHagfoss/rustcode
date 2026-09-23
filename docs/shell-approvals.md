@@ -5,12 +5,18 @@ commands may run without a prompt. Mutating, unclassified, or shell-composed
 commands ask for confirmation. A user can approve a command once or save a
 reusable prefix from the confirmation panel.
 
-The reusable option saves the first two whitespace-delimited command tokens.
-For example, approving `cargo test --lib` can save `cargo test`, which also
-covers `cargo test --doc`. Matching compares complete tokens, so `cargo test`
-does not match `cargo testing`. Saved rules only match a single plain command;
-quoting, shell operators, substitutions, redirections, globbing, and
-environment or background overrides continue to require a new confirmation.
+Reusable rules are available only for vetted test/build actions. RustCode
+currently supports Cargo's `test`, `check`, `build`, `clippy`, `fmt`, and `doc`
+actions, plus `python -m pytest` and `python -m unittest`. The action (and, for
+Python, module) is part of the rule: approving `cargo test --lib` saves
+`cargo test`, while `cargo +stable test` is not eligible because the selector
+comes before the action. `python -m` alone is never saved. Matching compares
+complete command tokens, so `cargo test` does not match `cargo testing`.
+Package installers and publishers, arbitrary interpreters/modules, and
+unreviewed command families remain one-time approvals. Saved rules only match
+a single plain command; quoting, shell operators, substitutions, redirections,
+globbing, and environment or background overrides continue to require a new
+confirmation. Parent and subagent shell calls use the same saved rules.
 
 Privilege escalation, network utilities, container and infrastructure tools,
 and known destructive command families cannot receive reusable rules through

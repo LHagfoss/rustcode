@@ -386,7 +386,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             s.laya.config().mode != crate::laya::LayaMode::Off,
         )
     };
-    let authorization = crate::tools::execution_authorization(
+    let mut authorization = crate::tools::execution_authorization(
         name,
         args,
         call_id,
@@ -396,6 +396,24 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         laya_active,
         assessment.as_ref(),
     );
+    // Subagent tool calls use this per-call confirmation path instead of the
+    // parent turn's batch policy. Honor the same explicit user-approved
+    // command rule here, while keeping Plan-mode denial and every other Deny
+    // decision intact. The helper rejects environment/background variants
+    // and only returns prefixes for the vetted command/action pairs.
+    let saved_prefix_covers_call = if name == "run_command" {
+        let prefixes = state.lock().await.config.approved_command_prefixes.clone();
+        crate::tools::approved_command_prefix_covers_call(name, args, &prefixes)
+    } else {
+        false
+    };
+    if matches!(
+        &authorization,
+        crate::tools::AuthorizationDecision::RequireConfirmation
+    ) && saved_prefix_covers_call
+    {
+        authorization = crate::tools::AuthorizationDecision::Allow;
+    }
     if let crate::tools::AuthorizationDecision::Deny(reason) = authorization.clone() {
         return (
             crate::tools::ToolExecutionOutput::failure_with_kind(
