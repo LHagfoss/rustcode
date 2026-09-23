@@ -478,6 +478,240 @@ pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
     }
 }
 
+/// Parse a deliberately small shell language for reusable approval rules.
+/// The command still runs through the normal shell, but saved rules only cover
+/// one plain command with no quoting, expansion, globbing, or control syntax.
+fn reusable_rule_tokens(command: &str) -> Option<Vec<String>> {
+    if command.is_empty()
+        || command.chars().any(|ch| {
+            matches!(
+                ch,
+                '\n' | '\r'
+                    | ';'
+                    | '|'
+                    | '&'
+                    | '<'
+                    | '>'
+                    | '`'
+                    | '$'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '\\'
+                    | '\''
+                    | '"'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '!'
+            )
+        })
+    {
+        return None;
+    }
+    let tokens = command
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if tokens.len() < 2 || tokens.iter().any(|token| token.is_empty()) {
+        return None;
+    }
+    let binary = tokens[0].rsplit(['/', '\\']).next()?;
+    if matches!(binary, "git" | "find" | "dmesg" | "xargs") {
+        return None;
+    }
+    if tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "clean" | "destroy" | "delete" | "wipe" | "purge" | "prune" | "reset"
+        )
+    }) {
+        return None;
+    }
+    if matches!(
+        binary,
+        "sudo"
+            | "doas"
+            | "env"
+            | "command"
+            | "exec"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "rm"
+            | "mv"
+            | "cp"
+            | "touch"
+            | "mkdir"
+            | "rmdir"
+            | "install"
+            | "chmod"
+            | "chown"
+            | "truncate"
+            | "tee"
+            | "sed"
+            | "yq"
+            | "dd"
+            | "shred"
+            | "wipefs"
+            | "fdisk"
+            | "sfdisk"
+            | "parted"
+            | "mkfs"
+            | "diskutil"
+            | "mount"
+            | "umount"
+            | "tar"
+            | "unzip"
+            | "7z"
+            | "zip"
+            | "kill"
+            | "pkill"
+            | "killall"
+            | "service"
+            | "systemctl"
+            | "launchctl"
+            | "nohup"
+            | "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "sftp"
+            | "rsync"
+            | "nc"
+            | "ncat"
+            | "telnet"
+            | "ftp"
+            | "ping"
+            | "dig"
+            | "nslookup"
+            | "nmap"
+            | "gh"
+            | "aws"
+            | "gcloud"
+            | "az"
+            | "docker"
+            | "podman"
+            | "kubectl"
+            | "terraform"
+    ) {
+        return None;
+    }
+    if tokens[0].contains('=')
+        || tokens
+            .get(1)
+            .is_some_and(|arg| arg == "-c" || arg == "--command")
+    {
+        return None;
+    }
+    if matches!(binary, "cargo")
+        && matches!(
+            tokens.get(1).map(String::as_str),
+            Some("publish" | "install")
+        )
+    {
+        return None;
+    }
+    if matches!(binary, "npm" | "pnpm" | "yarn")
+        && matches!(
+            tokens.get(1).map(String::as_str),
+            Some("publish" | "install" | "add" | "remove" | "uninstall")
+        )
+    {
+        return None;
+    }
+    Some(tokens)
+}
+
+/// The short prefix shown to the user for a persistent reusable approval.
+pub(crate) fn rememberable_command_prefix(command: &str) -> Option<String> {
+    let tokens = reusable_rule_tokens(command)?;
+    Some(tokens.into_iter().take(2).collect::<Vec<_>>().join(" "))
+}
+
+pub(crate) fn rememberable_command_prefix_for_call(args: &Value) -> Option<String> {
+    if args
+        .get("env")
+        .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
+        || ["background", "detached"].iter().any(|name| {
+            args.get(*name)
+                .is_some_and(|value| value.as_bool() != Some(false))
+        })
+    {
+        return None;
+    }
+    rememberable_command_prefix(args.get("command")?.as_str()?)
+}
+
+/// Match parsed token prefixes, never raw string prefixes. Rules with shell
+/// syntax or a high-risk command family are ignored even if present in config.
+pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
+    let Some(rule_tokens) = reusable_rule_tokens(rule) else {
+        return false;
+    };
+    let Some(command_tokens) = reusable_rule_tokens(command) else {
+        return false;
+    };
+    command_tokens.starts_with(&rule_tokens)
+}
+
+#[cfg(test)]
+mod command_prefix_tests {
+    use super::{
+        command_prefix_rule_matches, rememberable_command_prefix,
+        rememberable_command_prefix_for_call,
+    };
+
+    #[test]
+    fn saved_prefix_matches_complete_tokens_not_text_fragments() {
+        assert!(command_prefix_rule_matches(
+            "cargo test",
+            "cargo test --lib"
+        ));
+        assert!(!command_prefix_rule_matches("cargo test", "cargo testing"));
+        assert!(!command_prefix_rule_matches("cargo test", "cargo check"));
+    }
+
+    #[test]
+    fn saved_prefix_never_matches_shell_composition_or_privileged_commands() {
+        assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test; rm -rf /"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test | sh"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test clean"
+        ));
+        assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "sudo cargo test"
+        ));
+        assert!(rememberable_command_prefix("cargo test").is_some());
+        assert!(
+            rememberable_command_prefix_for_call(
+                &serde_json::json!({"command":"cargo test", "background":true})
+            )
+            .is_none()
+        );
+        assert!(rememberable_command_prefix("rm file").is_none());
+        assert!(rememberable_command_prefix("curl https://example.com").is_none());
+        assert!(rememberable_command_prefix("git diff --output=report.txt").is_none());
+        assert!(rememberable_command_prefix("make clean").is_none());
+        assert!(rememberable_command_prefix("npm run clean").is_none());
+        assert!(!command_prefix_rule_matches(
+            "git diff",
+            "git diff --output=report.txt"
+        ));
+    }
+}
+
 fn command_binary(segment: &str) -> Option<&str> {
     segment
         .split_whitespace()

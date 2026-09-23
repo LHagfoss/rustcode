@@ -722,6 +722,7 @@ mod tests {
             path: "cargo test".to_owned(),
             content_preview: String::new(),
             content_bytes: 0,
+            rememberable_prefix: None,
         }]);
         state.pending_question = Some(crate::app::PendingQuestion::new(
             "Proceed?".to_owned(),

@@ -15,14 +15,15 @@ pub(super) async fn apply_approval_decision(
     cancel_token: &mut CancellationToken,
     decision: ApprovalDecision,
 ) {
-    let approved = match decision {
-        ApprovalDecision::Approve => true,
+    let (approved, remember_prefix) = match decision {
+        ApprovalDecision::Approve => (true, None),
         ApprovalDecision::ApproveAll => {
             state.lock().await.auto_confirm = true;
-            true
+            (true, None)
         }
-        ApprovalDecision::Deny => false,
-        ApprovalDecision::Custom(reason) => !reason.trim().is_empty(),
+        ApprovalDecision::ApproveAndRemember(prefix) => (true, Some(prefix)),
+        ApprovalDecision::Deny => (false, None),
+        ApprovalDecision::Custom(reason) => (!reason.trim().is_empty(), None),
     };
     if !approved {
         cancel_token.cancel();
@@ -30,7 +31,22 @@ pub(super) async fn apply_approval_decision(
     }
     let mut state = state.lock().await;
     if let Some(tx) = state.tool_confirmation_response.take() {
-        let _ = tx.send(approved);
+        let response = if !approved {
+            crate::app::ToolConfirmationResponse::Deny
+        } else if let Some(prefix) = remember_prefix {
+            let valid_prefix = state
+                .pending_tool_confirmation
+                .as_ref()
+                .filter(|items| items.len() == 1 && items[0].tool_name == "run_command")
+                .and_then(|items| items[0].rememberable_prefix.clone())
+                .filter(|actual| actual == &prefix);
+            valid_prefix.map_or(crate::app::ToolConfirmationResponse::Approve, |prefix| {
+                crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)
+            })
+        } else {
+            crate::app::ToolConfirmationResponse::Approve
+        };
+        let _ = tx.send(response);
     }
     state.pending_tool_confirmation = None;
     state.request_redraw();

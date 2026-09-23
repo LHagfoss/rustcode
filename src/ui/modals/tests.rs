@@ -15,6 +15,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
         path: "git commit --message \"hello\"".to_string(),
         content_preview: String::new(),
         content_bytes: 0,
+        rememberable_prefix: None,
     }]);
 
     let input_area = Rect::new(0, 2, 100, 10);
@@ -77,6 +78,7 @@ fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
             "resolved command: {command}\nscope: unclassified or potentially mutating shell command"
         ),
         content_bytes: 0,
+        rememberable_prefix: None,
     }]);
 
     terminal
@@ -129,6 +131,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
         path: "src/main.rs".to_owned(),
         content_preview: "+new line".to_owned(),
         content_bytes: 9,
+        rememberable_prefix: None,
     }]);
     terminal
         .draw(|frame| {
@@ -157,6 +160,7 @@ fn approval_selection_visibly_moves_to_deny() {
         path: "cargo test".to_owned(),
         content_preview: String::new(),
         content_bytes: 0,
+        rememberable_prefix: Some("cargo test".to_owned()),
     }]);
     terminal
         .draw(|frame| {
@@ -173,6 +177,25 @@ fn approval_selection_visibly_moves_to_deny() {
 
     assert!(rendered.contains("› 2. No, cancel this tool call"));
     assert!(!rendered.contains("› 1. Yes, proceed"));
+    assert!(rendered.contains("3. Always allow `cargo test…`"));
+}
+
+#[test]
+fn approval_selection_reaches_the_reusable_prefix_choice() {
+    let mut state = AppState::new();
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "run_command".to_owned(),
+        path: "cargo test --lib".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+        rememberable_prefix: Some("cargo test".to_owned()),
+    }]);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 1);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 2);
+    state.move_tool_confirmation_selection(-1);
+    assert_eq!(state.tool_confirmation_selected, 1);
 }
 
 #[test]
@@ -185,12 +208,14 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
             path: "src/one.rs".to_owned(),
             content_preview: String::new(),
             content_bytes: 1,
+            rememberable_prefix: None,
         },
         ToolConfirmation {
             tool_name: "run_command".to_owned(),
             path: "cargo check".to_owned(),
             content_preview: String::new(),
             content_bytes: 11,
+            rememberable_prefix: None,
         },
     ]);
     terminal
@@ -217,20 +242,46 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
 #[test]
 fn approval_keys_emit_typed_decisions() {
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), 1),
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            1,
+            None
+        ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Approve))
     ));
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), 1),
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            1,
+            None
+        ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAll))
     ));
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1),
+        approval_event_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1, None),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
     ));
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 0),
+        approval_event_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 0, None),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+    ));
+    assert!(matches!(
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            2,
+            Some("cargo test")
+        ),
+        Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAndRemember(prefix)))
+            if prefix == "cargo test"
+    ));
+    assert!(matches!(
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            0,
+            Some("cargo test")
+        ),
+        Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAndRemember(prefix)))
+            if prefix == "cargo test"
     ));
 }
 

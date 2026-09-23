@@ -1031,10 +1031,15 @@ pub(in crate::ui) fn tool_confirmation_height(state: &RenderSnapshot, available:
         .map(|confirmation| confirmation.content_preview.lines().count() as u16)
         .unwrap_or(0)
         .min(8);
+    let remember_row = confirmations
+        .first()
+        .filter(|item| confirmations.len() == 1 && item.tool_name == "run_command")
+        .and_then(|item| item.rememberable_prefix.as_ref())
+        .is_some() as u16;
     let content = if confirmations.len() > 1 {
         7u16.saturating_add(confirmations.len().min(8) as u16)
     } else {
-        9u16.saturating_add(preview)
+        9u16.saturating_add(preview).saturating_add(remember_row)
     };
     content.saturating_add(2).min(available.max(3))
 }

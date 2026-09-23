@@ -69,6 +69,7 @@ fn test_config_save_load() {
     let dir = temp_dir("config");
     let config = AppConfig {
         default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
+        approved_command_prefixes: vec!["cargo test".to_string()],
         ..AppConfig::default()
     };
     save_config_to(&dir, &config);
@@ -82,6 +83,7 @@ fn test_config_save_load() {
         .unwrap();
     assert_eq!(url, expected.url);
     assert_eq!(model, expected.model);
+    assert_eq!(loaded.approved_command_prefixes, ["cargo test"]);
 }
 
 #[test]

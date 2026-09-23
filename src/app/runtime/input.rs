@@ -181,11 +181,21 @@ pub(super) async fn handle_app_event(
                 {
                     let selected = {
                         let s = app_state.lock().await;
-                        (s.status == AppStatus::AwaitingToolConfirmation)
-                            .then_some(s.tool_confirmation_selected)
+                        (s.status == AppStatus::AwaitingToolConfirmation).then(|| {
+                            let prefix = s
+                                .pending_tool_confirmation
+                                .as_ref()
+                                .filter(|items| {
+                                    items.len() == 1 && items[0].tool_name == "run_command"
+                                })
+                                .and_then(|items| items[0].rememberable_prefix.clone());
+                            (s.tool_confirmation_selected, prefix)
+                        })
                     };
-                    if let Some(selected) = selected {
-                        if let Some(event) = ui::approval_event_for_key(key, selected) {
+                    if let Some((selected, prefix)) = selected {
+                        if let Some(event) =
+                            ui::approval_event_for_key(key, selected, prefix.as_deref())
+                        {
                             let _ = app_event_sender.send(event);
                         } else {
                             if is_shift_tab(key) {
