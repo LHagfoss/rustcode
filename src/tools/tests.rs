@@ -3234,18 +3234,24 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
         .find(|tool| tool.name == "run_command")
         .expect("tool exists");
 
-    // Issue #1229: a session yanked the user's checkout with checkout -B +
-    // rebase. Branch/merge work belongs in an isolated worktree.
-    for forbidden in [
+    // Issue #1229: task branches must never be created or checked out in the
+    // active user checkout, and repository instructions outrank generic skills.
+    for required_guidance in [
+        "git branch",
+        "git switch -c",
+        "git checkout -b",
         "checkout -B",
         "switch -C",
         "git rebase",
         "reset --hard",
         "git worktree add",
+        "repository `AGENTS.md` instructions apply",
+        "they outrank generic workflow skills",
+        "original branch throughout the task",
     ] {
         assert!(
-            spec.description.contains(forbidden),
-            "run_command spec must mention {forbidden}: {}",
+            spec.description.contains(required_guidance),
+            "run_command spec must mention {required_guidance}: {}",
             spec.description
         );
     }
