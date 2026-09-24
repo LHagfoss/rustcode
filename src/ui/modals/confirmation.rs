@@ -240,7 +240,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             ),
             Span::styled(
                 format!(
-                    "{}. Always forbid matching tokens `{prefix}…`",
+                    "{}. Always forbid literal tokens `{prefix}…`",
                     row_index + 1
                 ),
                 Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
@@ -256,7 +256,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     lines.push(Line::from(Span::styled(
         if rememberable_prefix.is_some() && forbidden_prefix.is_some() {
             format!(
-                "  Press enter to confirm · r always allows exact command · f blocks matching prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · r always allows exact command · f blocks literal tokens · tab to {} auto-confirm",
                 if state.auto_confirm() {
                     "disable"
                 } else {
@@ -270,7 +270,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             )
         } else if forbidden_prefix.is_some() {
             format!(
-                "  Press enter to confirm · f blocks matching prefix · tab to {} auto-confirm",
+                "  Press enter to confirm · f blocks literal tokens · tab to {} auto-confirm",
                 if state.auto_confirm() { "disable" } else { "enable" }
             )
         } else {

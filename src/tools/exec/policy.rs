@@ -38,6 +38,47 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
     segments
 }
 
+fn split_deny_command_segments(command: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut follows_pipe = false;
+    for character in command.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if quote.is_some() {
+            current.push(character);
+            if quote == Some(character) {
+                quote = None;
+            } else if character == '\\' && quote == Some('"') {
+                escaped = true;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => {
+                quote = Some(character);
+                current.push(character);
+            }
+            '\\' => {
+                escaped = true;
+                current.push(character);
+            }
+            ';' | '\n' | '\r' | '|' | '&' => {
+                segments.push((std::mem::take(&mut current), follows_pipe));
+                follows_pipe = character == '|';
+            }
+            _ => current.push(character),
+        }
+    }
+    segments.push((current, follows_pipe));
+    segments
+}
+
 fn git_subcommand<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, usize)> {
     let first = tokens.first()?.rsplit(['/', '\\']).next()?;
     if first != "git" {
@@ -108,12 +149,12 @@ fn normalized_deny_executable(command: &str) -> String {
 /// Canonicalize command invocation prefixes for deny matching. Git and Cargo
 /// accept global options before their subcommand, and executable paths can
 /// hide the same command behind a directory or Windows `.exe` suffix.
-fn normalized_deny_command(tokens: &[String], start: usize) -> Vec<String> {
-    let Some(executable) = tokens.get(start) else {
+fn normalized_deny_command(tokens: &[String]) -> Vec<String> {
+    let Some(executable) = tokens.first() else {
         return Vec::new();
     };
     let executable = normalized_deny_executable(executable);
-    let args = &tokens[start + 1..];
+    let args = &tokens[1..];
     let mut normalized = vec![executable.clone()];
 
     if executable == "git" {
@@ -128,7 +169,7 @@ fn normalized_deny_command(tokens: &[String], start: usize) -> Vec<String> {
                     .map(|token| (*token).to_owned()),
             );
         } else {
-            normalized.extend(args.iter().cloned());
+            return normalized;
         }
         return normalized;
     }
@@ -156,6 +197,43 @@ fn normalized_deny_command(tokens: &[String], start: usize) -> Vec<String> {
                 continue;
             }
             break;
+        }
+        normalized.extend(args[index..].iter().cloned());
+        return normalized;
+    }
+
+    if executable == "make" || executable == "gmake" {
+        let mut index = 0;
+        while index < args.len() {
+            let argument = args[index].as_str();
+            if matches!(
+                argument,
+                "-C" | "-f"
+                    | "-I"
+                    | "-o"
+                    | "-W"
+                    | "--directory"
+                    | "--file"
+                    | "--include-dir"
+                    | "--old-file"
+                    | "--what-if"
+            ) {
+                index = (index + 2).min(args.len());
+            } else if argument.starts_with("--directory=")
+                || argument.starts_with("--file=")
+                || argument.starts_with("--include-dir=")
+                || argument.starts_with("--old-file=")
+                || argument.starts_with("--what-if=")
+            {
+                index += 1;
+            } else if argument.starts_with('-') || argument.contains('=') {
+                // Skip make options and variable assignments before the goal.
+                // Unknown options may hide an action, so treating their next
+                // plain token as a goal is conservative for deny matching.
+                index += 1;
+            } else {
+                break;
+            }
         }
         normalized.extend(args[index..].iter().cloned());
         return normalized;
@@ -773,7 +851,7 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
 
 pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
     let tokens = plain_deny_rule_tokens(command)?;
-    Some(normalized_deny_command(&tokens, 0).join(" "))
+    Some(normalized_deny_command(&tokens).join(" "))
 }
 
 pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Option<String> {
@@ -784,50 +862,43 @@ pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Optio
 /// accepted and normalized because deny rules only block matching calls.
 /// Shell composition and expansion syntax cannot form a stored rule.
 fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
-    let command_start = command
-        .trim_start()
+    let trimmed = command.trim_start();
+    let command_start = trimmed
         .strip_prefix('"')
-        .or_else(|| command.trim_start().strip_prefix('\''))
-        .unwrap_or_else(|| command.trim_start());
+        .or_else(|| trimmed.strip_prefix('\''))
+        .unwrap_or(trimmed);
     let windows_executable_path = command_start.as_bytes().get(0..3).is_some_and(|prefix| {
         prefix[0].is_ascii_alphabetic() && prefix[1] == b':' && prefix[2] == b'\\'
     });
-    if command.is_empty()
-        || command.chars().any(|ch| {
-            matches!(
-                ch,
-                '\n' | '\r'
-                    | ';'
-                    | '|'
-                    | '&'
-                    | '<'
-                    | '>'
-                    | '`'
-                    | '$'
-                    | '('
-                    | ')'
-                    | '{'
-                    | '}'
-                    | '*'
-                    | '?'
-                    | '['
-                    | ']'
-                    | '!'
-                    | '~'
-                    | '^'
-                    | '%'
-            ) || ch == '\\' && !windows_executable_path
-        })
-    {
+    if command.is_empty() {
         return None;
     }
     let mut tokens = Vec::new();
     let mut token = String::new();
     let mut quote = None;
     let mut started = false;
-    for character in command.chars() {
+    let mut characters = command.chars().peekable();
+    while let Some(character) = characters.next() {
         match (quote, character) {
             (Some(active), ch) if active == ch => quote = None,
+            (Some('\''), ch) => token.push(ch),
+            (Some('"'), '\\')
+                if characters
+                    .peek()
+                    .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\')) =>
+            {
+                token.push(characters.next().unwrap());
+            }
+            (Some('"'), ch) => {
+                let assignment_value = is_leading_assignment_value(&tokens, &token);
+                if matches!(ch, '$' | '`' | '^') && !assignment_value
+                    || is_paired_expansion_marker(command, ch, '!') && !assignment_value
+                    || is_paired_expansion_marker(command, ch, '%') && !assignment_value
+                {
+                    return None;
+                }
+                token.push(ch);
+            }
             (Some(_), ch) => token.push(ch),
             (None, '\'' | '"') => {
                 quote = Some(character);
@@ -838,6 +909,20 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
                     tokens.push(std::mem::take(&mut token));
                     started = false;
                 }
+            }
+            (None, ch)
+                if (matches!(
+                    ch,
+                    ';' | '|' | '&' | '<' | '>' | '`' | '$' | '(' | ')' | '{' | '}'
+                ) || matches!(ch, '*' | '?' | '[' | ']' | '~' | '^'))
+                    && !is_leading_assignment_value(&tokens, &token)
+                    || ch == '\\' && !windows_executable_path
+                    || is_paired_expansion_marker(command, ch, '!')
+                        && !is_leading_assignment_value(&tokens, &token)
+                    || is_paired_expansion_marker(command, ch, '%')
+                        && !is_leading_assignment_value(&tokens, &token) =>
+            {
+                return None;
             }
             (None, ch) => {
                 token.push(ch);
@@ -852,6 +937,26 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
         tokens.push(token);
     }
     (!tokens.is_empty()).then_some(tokens)
+}
+
+fn is_leading_assignment_value(tokens: &[String], token: &str) -> bool {
+    tokens
+        .iter()
+        .all(|token| is_posix_environment_assignment(token))
+        && token
+            .split_once('=')
+            .is_some_and(|(name, _)| is_valid_environment_name(name))
+}
+
+fn is_valid_environment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().enumerate().all(|(index, ch)| {
+            ch == '_' || ch.is_ascii_alphanumeric() && (index > 0 || !ch.is_ascii_digit())
+        })
+}
+
+fn is_paired_expansion_marker(command: &str, current: char, marker: char) -> bool {
+    current == marker && command.matches(marker).count() > 1
 }
 
 /// Match a persistent deny prefix before regular command approval. Known
@@ -871,7 +976,7 @@ pub(crate) fn denied_command_prefix_covers_call(
     let rule_tokens = prefixes
         .iter()
         .filter_map(|prefix| plain_deny_rule_tokens(prefix))
-        .map(|tokens| normalized_deny_command(&tokens, 0))
+        .map(|tokens| normalized_deny_command(&tokens))
         .collect::<Vec<_>>();
     if rule_tokens.is_empty() {
         return false;
@@ -883,83 +988,393 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
     if depth > 4 {
         return true;
     }
-    // This splitter deliberately separates operators even inside quotes. For
-    // deny decisions that is conservative: any segment matching a saved rule
-    // blocks the whole composed command.
-    for segment in split_command_segments(command) {
+    // Split shell operators only outside quotes so punctuation in search
+    // patterns, messages, and other literal arguments stays literal.
+    let mut previous_pipeline_segment: Option<String> = None;
+    for (segment, follows_pipe) in split_deny_command_segments(command) {
         let Some(tokens) = plain_deny_rule_tokens(&segment) else {
             // We cannot safely understand shell syntax with active deny rules;
             // fail closed so wrappers/redirections cannot hide a denied argv.
             if segment.chars().any(|ch| !ch.is_whitespace()) {
                 return true;
             }
+            previous_pipeline_segment = None;
             continue;
         };
-        for start in 0..tokens.len() {
-            let normalized = normalized_deny_command(&tokens, start);
-            if rules
-                .iter()
-                .any(|rule| ordered_deny_tokens_match(rule, &normalized))
-            {
+        let mut resolved_xargs_input = false;
+        if follows_pipe
+            && let Some(input) = previous_pipeline_segment
+            && let Some(expanded) = xargs_with_literal_input(&tokens, &input)
+        {
+            resolved_xargs_input = true;
+            if denied_command_tokens_cover(&expanded, rules, depth + 1) {
                 return true;
             }
         }
-        // `sh -c`, `bash -lc`, and equivalent wrappers store the payload as
-        // one argv token. Inspect it recursively; unparseable payloads fail
-        // closed above.
-        for (index, token) in tokens.iter().enumerate() {
-            let binary = command_basename(token);
-            if matches!(
-                binary.to_ascii_lowercase().as_str(),
-                "sh" | "bash"
-                    | "zsh"
-                    | "fish"
-                    | "dash"
-                    | "ksh"
-                    | "env"
-                    | "sudo"
-                    | "doas"
-                    | "command"
-                    | "exec"
-                    | "time"
-                    | "nice"
-                    | "nohup"
-                    | "setsid"
-                    | "xargs"
-                    | "python"
-                    | "python3"
-                    | "node"
-                    | "ruby"
-                    | "perl"
-                    | "cmd"
-                    | "powershell"
-                    | "pwsh"
-            ) {
-                for payload in tokens.iter().skip(index + 1) {
-                    if denied_command_contains_rule(payload, rules, depth + 1) {
-                        return true;
-                    }
-                }
-            }
+        if !resolved_xargs_input && denied_command_tokens_cover(&tokens, rules, depth + 1) {
+            return true;
         }
+        previous_pipeline_segment = Some(segment);
     }
     false
 }
 
-fn ordered_deny_tokens_match(rule: &[String], command: &[String]) -> bool {
-    if rule.is_empty() {
+fn denied_command_tokens_cover(tokens: &[String], rules: &[Vec<String>], depth: usize) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    let command_index = tokens
+        .iter()
+        .position(|token| !is_posix_environment_assignment(token))
+        .unwrap_or(tokens.len());
+    if command_index > 0 {
+        return denied_command_tokens_cover(&tokens[command_index..], rules, depth + 1);
+    }
+    if tokens.first().is_some_and(|executable| {
+        executable
+            .chars()
+            .any(|character| matches!(character, '$' | '`' | '^' | '%' | '!'))
+    }) {
+        return true;
+    }
+    if git_command_sets_inline_alias(tokens)
+        && rules
+            .iter()
+            .any(|rule| rule.first().is_some_and(|token| token == "git"))
+    {
+        return true;
+    }
+    let normalized = normalized_deny_command(tokens);
+    if rules
+        .iter()
+        .any(|rule| !rule.is_empty() && normalized.starts_with(rule))
+    {
+        return true;
+    }
+    match wrapped_command_payload(tokens) {
+        Some(WrappedCommandPayload::Shell(payload)) => {
+            denied_command_contains_rule(&payload, rules, depth + 1)
+        }
+        Some(WrappedCommandPayload::Arguments(payload)) => {
+            denied_command_tokens_cover(&payload, rules, depth + 1)
+        }
+        Some(WrappedCommandPayload::DynamicArguments(payload, placeholder)) => {
+            denied_command_tokens_cover(&payload, rules, depth + 1)
+                || dynamic_target_may_match_rule(&payload, rules, placeholder.as_deref(), depth + 1)
+        }
+        Some(WrappedCommandPayload::Ambiguous) => true,
+        None => false,
+    }
+}
+
+fn is_posix_environment_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    is_valid_environment_name(name)
+}
+
+fn xargs_with_literal_input(tokens: &[String], input: &str) -> Option<Vec<String>> {
+    let WrappedCommandPayload::DynamicArguments(mut payload, Some(placeholder)) =
+        wrapped_command_payload(tokens)?
+    else {
+        return None;
+    };
+    let input_tokens = plain_deny_rule_tokens(input)?;
+    let values = match normalized_deny_command(&input_tokens)
+        .first()
+        .map(String::as_str)
+    {
+        Some("printf") => input_tokens.into_iter().skip(1).collect::<Vec<_>>(),
+        Some("echo") => input_tokens.into_iter().skip(1).collect::<Vec<_>>(),
+        _ => return None,
+    };
+    if values.len() != 1 {
+        return None;
+    }
+    for token in &mut payload {
+        *token = token.replace(&placeholder, &values[0]);
+    }
+    Some(payload)
+}
+
+fn dynamic_target_may_match_rule(
+    tokens: &[String],
+    rules: &[Vec<String>],
+    placeholder: Option<&str>,
+    depth: usize,
+) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    let normalized = normalized_deny_command(tokens);
+    if normalized.len() == 1
+        && normalized
+            .first()
+            .is_some_and(|executable| rules.iter().any(|rule| rule.first() == Some(executable)))
+    {
+        return true;
+    }
+    if let Some(placeholder) = placeholder
+        && rules.iter().any(|rule| {
+            !rule.is_empty()
+                && normalized.first() == rule.first()
+                && normalized
+                    .iter()
+                    .take(rule.len())
+                    .zip(rule)
+                    .all(|(actual, denied)| actual == denied || actual.contains(placeholder))
+                && normalized.len() >= rule.len()
+        })
+    {
+        return true;
+    }
+    match wrapped_command_payload(tokens) {
+        Some(WrappedCommandPayload::Arguments(payload))
+        | Some(WrappedCommandPayload::DynamicArguments(payload, _)) => {
+            dynamic_target_may_match_rule(&payload, rules, placeholder, depth + 1)
+        }
+        _ => false,
+    }
+}
+
+fn git_command_sets_inline_alias(tokens: &[String]) -> bool {
+    if !tokens
+        .first()
+        .is_some_and(|executable| normalized_deny_executable(executable) == "git")
+    {
         return false;
     }
-    let mut matched = 0;
-    for token in command {
-        if token == &rule[matched] {
-            matched += 1;
-            if matched == rule.len() {
-                return true;
-            }
+    let args = &tokens[1..];
+    let mut index = 0;
+    while index < args.len() {
+        let config = if args[index] == "-c" {
+            index += 1;
+            args.get(index).map(String::as_str)
+        } else if args[index].starts_with("-c") && args[index].len() > 2 {
+            Some(&args[index][2..])
+        } else {
+            None
+        };
+        if config.is_some_and(|value| {
+            value
+                .split_once('=')
+                .is_some_and(|(key, _)| key.starts_with("alias."))
+        }) {
+            return true;
         }
+        index += 1;
     }
     false
+}
+
+enum WrappedCommandPayload {
+    Shell(String),
+    Arguments(Vec<String>),
+    DynamicArguments(Vec<String>, Option<String>),
+    Ambiguous,
+}
+
+fn wrapped_command_payload(tokens: &[String]) -> Option<WrappedCommandPayload> {
+    let executable = normalized_deny_executable(tokens.first()?);
+    let args = &tokens[1..];
+    let args_from = |index: usize| {
+        let payload = args.get(index..)?.to_vec();
+        (!payload.is_empty()).then_some(payload)
+    };
+    let shell_from = |index: usize| {
+        let payload = args.get(index..)?.join(" ");
+        (!payload.is_empty()).then_some(WrappedCommandPayload::Shell(payload))
+    };
+
+    match executable.to_ascii_lowercase().as_str() {
+        "git" => {
+            let normalized = normalized_deny_command(tokens);
+            if normalized.get(1).is_some_and(|token| token == "submodule")
+                && normalized.get(2).is_some_and(|token| token == "foreach")
+            {
+                let mut index = 3;
+                while index < normalized.len() && normalized[index].starts_with('-') {
+                    if normalized[index] == "--jobs" {
+                        index = (index + 2).min(normalized.len());
+                    } else {
+                        index += 1;
+                    }
+                }
+                return normalized
+                    .get(index)
+                    .cloned()
+                    .map(WrappedCommandPayload::Shell);
+            }
+            None
+        }
+        "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" => {
+            let command_flag = args.iter().position(|arg| {
+                arg == "-c"
+                    || arg.starts_with('-')
+                        && !arg.starts_with("--")
+                        && arg.chars().skip(1).any(|flag| flag == 'c')
+            })?;
+            args.get(command_flag + 1)
+                .cloned()
+                .map(WrappedCommandPayload::Shell)
+        }
+        "cmd" => args
+            .iter()
+            .position(|arg| matches!(arg.to_ascii_lowercase().as_str(), "/c" | "/k"))
+            .and_then(|index| shell_from(index + 1)),
+        "powershell" | "pwsh" => args
+            .iter()
+            .position(|arg| matches!(arg.to_ascii_lowercase().as_str(), "-command" | "-c" | "/c"))
+            .and_then(|index| shell_from(index + 1)),
+        "python" | "python3" | "node" | "ruby" | "perl" => args
+            .iter()
+            .position(|arg| matches!(arg.as_str(), "-c" | "-e"))
+            .and_then(|index| shell_from(index + 1)),
+        "env" => {
+            let mut index = 0;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--" => {
+                        index += 1;
+                        break;
+                    }
+                    "-i" | "--ignore-environment" => index += 1,
+                    "-u" | "--unset" | "-C" | "--chdir" => index += 2,
+                    "-S" | "--split-string" => return Some(WrappedCommandPayload::Ambiguous),
+                    argument if argument.starts_with('-') => index += 1,
+                    argument if argument.contains('=') => index += 1,
+                    _ => break,
+                }
+            }
+            args_from(index).map(WrappedCommandPayload::Arguments)
+        }
+        "sudo" | "doas" => {
+            let mut index = 0;
+            while index < args.len() && args[index].starts_with('-') {
+                let argument = args[index].as_str();
+                if argument == "--" {
+                    index += 1;
+                    break;
+                }
+                if let Some(long) = argument.strip_prefix("--") {
+                    let name = long.split('=').next().unwrap_or(long);
+                    if SUDO_LONG_OPTS_WITH_VALUE.contains(&name) {
+                        index += if long.contains('=') { 1 } else { 2 };
+                    } else if matches!(
+                        name,
+                        "non-interactive"
+                            | "stdin"
+                            | "preserve-env"
+                            | "login"
+                            | "set-home"
+                            | "shell"
+                            | "bell"
+                            | "close-from"
+                    ) {
+                        index += 1;
+                    } else {
+                        return Some(WrappedCommandPayload::Ambiguous);
+                    }
+                } else if let Some(short) = argument.strip_prefix('-') {
+                    if short.is_empty() {
+                        return Some(WrappedCommandPayload::Ambiguous);
+                    }
+                    let mut consumes_value = false;
+                    for (position, option) in short.chars().enumerate() {
+                        if SUDO_SHORT_OPTS_WITH_VALUE.contains(option) {
+                            consumes_value = position + option.len_utf8() == short.len();
+                            break;
+                        }
+                        if !matches!(
+                            option,
+                            'n' | 'S' | 'b' | 'E' | 'H' | 'K' | 'k' | 'V' | 'v' | 'l' | 'N' | 'P'
+                        ) {
+                            return Some(WrappedCommandPayload::Ambiguous);
+                        }
+                    }
+                    index += if consumes_value { 2 } else { 1 };
+                } else {
+                    break;
+                }
+            }
+            if args.get(index).is_some_and(|arg| arg == "--") {
+                index += 1;
+            }
+            args_from(index).map(WrappedCommandPayload::Arguments)
+        }
+        "command" | "exec" | "time" | "nice" | "nohup" | "setsid" => {
+            let mut index = 0;
+            while index < args.len() && args[index].starts_with('-') {
+                if matches!(args[index].as_str(), "-n" | "-u" | "--adjustment") {
+                    index = (index + 2).min(args.len());
+                } else {
+                    index += 1;
+                }
+            }
+            if args.get(index).is_some_and(|arg| arg == "--") {
+                index += 1;
+            }
+            args_from(index).map(WrappedCommandPayload::Arguments)
+        }
+        "eval" => {
+            let payload = args.join(" ");
+            (!payload.is_empty()).then_some(WrappedCommandPayload::Shell(payload))
+        }
+        "xargs" => {
+            let mut index = 0;
+            let mut placeholder = None;
+            while index < args.len() && args[index].starts_with('-') {
+                if matches!(args[index].as_str(), "-0" | "-r" | "-t" | "-x") {
+                    index += 1;
+                } else if matches!(
+                    args[index].as_str(),
+                    "-I" | "-J" | "-d" | "-n" | "-P" | "-s" | "-a" | "-E" | "-L" | "-l"
+                ) {
+                    if matches!(args[index].as_str(), "-I" | "-J") {
+                        placeholder = args.get(index + 1).cloned();
+                    }
+                    index = (index + 2).min(args.len());
+                } else if args[index].starts_with("-I") || args[index].starts_with("-J") {
+                    placeholder = Some(args[index][2..].to_owned());
+                    index += 1;
+                } else if ["-L", "-l", "-d", "-n", "-P", "-s", "-a", "-E"]
+                    .iter()
+                    .any(|option| {
+                        args[index].starts_with(option) && args[index].len() > option.len()
+                    })
+                {
+                    index += 1;
+                } else if args[index].starts_with("--") {
+                    let option = args[index].split('=').next().unwrap_or(&args[index]);
+                    if matches!(
+                        option,
+                        "--no-run-if-empty" | "--null" | "--verbose" | "--exit" | "--replace"
+                    ) {
+                        index += 1;
+                    } else if matches!(
+                        option,
+                        "--delimiter"
+                            | "--max-args"
+                            | "--max-procs"
+                            | "--max-chars"
+                            | "--arg-file"
+                            | "--eof"
+                            | "--max-lines"
+                    ) {
+                        index += if args[index].contains('=') { 1 } else { 2 };
+                    } else {
+                        return Some(WrappedCommandPayload::Ambiguous);
+                    }
+                } else {
+                    return Some(WrappedCommandPayload::Ambiguous);
+                }
+            }
+            args_from(index)
+                .map(|payload| WrappedCommandPayload::DynamicArguments(payload, placeholder))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1199,6 +1614,10 @@ mod command_prefix_tests {
         for (rule, command) in [
             ("git push", "git -C . push"),
             ("git push", "git -c color.ui=always push"),
+            ("git push", "git submodule foreach 'git push'"),
+            ("git push", "git submodule foreach --recursive 'git push'"),
+            ("git push", "git -c alias.ship=!git push ship"),
+            ("git push", "git -c alias.ship=push ship"),
             ("cargo test", "cargo --color=always test"),
             ("cargo test", "cargo --color always test"),
             ("cargo test", "cargo +stable test"),
@@ -1209,6 +1628,24 @@ mod command_prefix_tests {
             ("cargo test", "CMD /c \"cargo test\""),
             ("cargo test", "powershell -Command \"cargo test\""),
             ("cargo test", "pwsh -Command \"cargo test\""),
+            ("git push", "sh -c 'git push' marker"),
+            ("git push", "bash --norc -c 'git push' marker"),
+            ("git push", "env sh -c 'git push' marker"),
+            ("git push", "printf push | xargs git"),
+            ("git push", "printf push | xargs -I_ git _ --force"),
+            ("git push", "printf push | xargs -J_ git _ --force"),
+            ("git push", "printf push | xargs -J _ git _ --force"),
+            ("git push", "printf origin | xargs -L 1 git push"),
+            ("git push", "printf origin | xargs -L1 git push"),
+            ("git push", "FOO=bar git push"),
+            ("git push", "FOO='static value' git push"),
+            ("git push", "FOO=1 BAR=\"$VALUE\" git push"),
+            ("git push", "eval git push"),
+            ("git push", "eval 'git push'"),
+            ("git push", "sudo --user root git push"),
+            ("git push", "sudo --user=root git push"),
+            ("git push", "sudo --group wheel git push"),
+            ("git push", "env -S 'sh -c \"git push\"'"),
             ("make test", "make -C . test"),
             ("make test", "make -f Makefile test"),
             ("npm install", "npm.cmd install"),
@@ -1223,6 +1660,33 @@ mod command_prefix_tests {
                     &[rule.to_owned()],
                 ),
                 "deny rule {rule:?} should cover {command:?}"
+            );
+        }
+        for (rule, command) in [
+            ("git push", "git log --oneline push"),
+            ("cargo test", "rg cargo unrelated test"),
+            ("cargo test", "rg 'foo[0-9]'"),
+            ("cargo test", "echo 'hello!'"),
+            ("cargo test", "printf 'a;b'"),
+            ("git push", "printf push | xargs echo"),
+            ("git push", "printf log | xargs -J_ git _ -1"),
+            ("git push", "rg \"foo\\sbar\""),
+            ("git push", "FOO=bar git log"),
+            ("git push", "FOO='static value' git log"),
+            ("git push", "FOO=\"$VALUE\" echo harmless"),
+            ("git push", "FOO=1 BAR=\"$VALUE\" git log"),
+            ("git push", "sudo --user root git log"),
+            ("git push", "sudo --group wheel git log"),
+            ("git push", "git submodule foreach 'echo push'"),
+            ("git push", "git ship"),
+        ] {
+            assert!(
+                !denied_command_prefix_covers_call(
+                    "run_command",
+                    &serde_json::json!({"command":command}),
+                    &[rule.to_owned()],
+                ),
+                "deny rule {rule:?} should not match unrelated invocation {command:?}"
             );
         }
         assert!(!denied_command_prefix_covers_call(

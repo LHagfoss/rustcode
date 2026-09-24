@@ -20,13 +20,17 @@ sandbox is available. Parent and subagent shell calls use the same saved rules.
 
 Forbid rules persist in `~/.config/rustcode/config.toml` as
 `denied_command_prefixes`, are user-level only, and take precedence over saved
-allow rules and session auto-confirm. A denied command prefix cannot be
-approved through the normal prompt. Denies match token sequences regardless
-of whitespace, basic quoting, environment overrides, or background/detached
-mode; shell wrappers and composition are inspected conservatively, and
-ambiguous syntax is blocked while a deny rule is active. Remove or edit an
-entry in the global config to change it. One-time approval remains available
-for commands without a matching saved forbid rule.
+allow rules and session auto-confirm. A denied command cannot be approved
+through the normal prompt. Denies match literal token sequences regardless of
+whitespace, basic quoting, environment overrides, or background/detached
+mode. Known shell wrappers, `git submodule foreach`, and command composition
+are inspected conservatively; ambiguous syntax is blocked while a deny rule
+is active. An inline `git -c alias.name=...` is blocked whenever a Git deny
+rule exists. Aliases already stored in Git configuration are not expanded by
+the matcher; save a deny for the alias command itself if it can run a
+forbidden action. Remove or edit an entry in the global config to change it.
+One-time approval remains available for commands without a matching saved
+forbid rule.
 
 RustCode does not currently provide an operating-system sandbox for shell
 commands. A one-time or reusable approval authorizes execution in the normal
