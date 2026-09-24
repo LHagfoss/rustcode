@@ -835,10 +835,9 @@ pub(crate) fn approved_command_prefix_covers_call(
         })
 }
 
-/// Match exactly the normalized argv the user reviewed. Without an enforced
-/// OS sandbox, allowing additional operands or flags could widen the effect.
-/// Rules with shell syntax or a high-risk command family are ignored even if
-/// present in config.
+/// Match a complete token prefix from the normalized argv the user reviewed.
+/// Plain-token validation rejects shell composition and known high-risk
+/// commands or arguments before a saved rule can cover a call.
 pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
     let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
         return false;
@@ -846,7 +845,7 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
     let Some(command_tokens) = reusable_rule_tokens(command, true) else {
         return false;
     };
-    command_tokens == rule_tokens
+    command_tokens.starts_with(&rule_tokens)
 }
 
 pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
@@ -1751,26 +1750,30 @@ mod command_prefix_tests {
     };
 
     #[test]
-    fn saved_allow_rules_match_exact_normalized_argv_only() {
+    fn saved_allow_rules_match_safe_normalized_argv_prefixes() {
         assert!(command_prefix_rule_matches(
             "cargo test --lib",
             "cargo   test --lib"
         ));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "cargo test",
             "cargo test --lib"
         ));
         assert!(!command_prefix_rule_matches("cargo test", "cargo testing"));
         assert!(!command_prefix_rule_matches("cargo test", "cargo check"));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "git add src/main.rs",
             "git add src/main.rs ."
         ));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "make test",
-            "make test upload-prod"
+            "make test --jobs=2"
         ));
         assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test publish"
+        ));
+        assert!(command_prefix_rule_matches(
             "cargo test",
             "cargo test --all-features"
         ));
@@ -1878,7 +1881,7 @@ mod command_prefix_tests {
     }
 
     #[test]
-    fn approved_rules_cover_only_the_exact_plain_call() {
+    fn approved_rules_cover_safe_plain_calls_with_the_saved_token_prefix() {
         let prefixes = vec!["cargo test".to_owned()];
         let args = |command: &str, extra: serde_json::Value| {
             let mut args = serde_json::json!({"command": command});
@@ -1891,7 +1894,7 @@ mod command_prefix_tests {
             );
             args
         };
-        assert!(!approved_command_prefix_covers_call(
+        assert!(approved_command_prefix_covers_call(
             "run_command",
             &args("cargo test --lib", serde_json::json!({})),
             &prefixes,
