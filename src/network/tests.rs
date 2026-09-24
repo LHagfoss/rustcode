@@ -1,6 +1,81 @@
 use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
 use super::*;
 
+#[test]
+fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
+    let history = vec![
+        ChatMessage::new("user", "first task"),
+        ChatMessage::new("assistant", "older call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "older-call".into(),
+                name: "run_command".into(),
+                arguments: r#"{"command":"npm run build"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "run_command: earlier build output")
+            .answering(Some("older-call".into())),
+        ChatMessage::new("assistant", "first task done"),
+        ChatMessage::new("user", "second task"),
+        ChatMessage::new("assistant", "second task done"),
+        ChatMessage::new("user", "current task"),
+        ChatMessage::new("assistant", "current call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "current-call".into(),
+                name: "view_file".into(),
+                arguments: r#"{"path":"src/lib.rs"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "view_file: current inspection output")
+            .answering(Some("current-call".into())),
+    ];
+    let instructions = history::RequestInstructions::new("base", None);
+    let full = history::to_messages_for_request_with_scope(
+        &history,
+        instructions,
+        history::RequestHistoryScope::Full,
+    );
+    let mut budget = crate::config::ModelProfile {
+        name: "projection-test".into(),
+        model: "projection-test".into(),
+        context_window: Some(100_000),
+        max_output_tokens: Some(1_000),
+        ..Default::default()
+    }
+    .context_budget();
+    budget.soft_context_target = u32::MAX;
+    let full_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+
+    assert_eq!(
+        history_scope_for_preflight(&full_preflight),
+        history::RequestHistoryScope::Full
+    );
+    history::validate_native_tool_messages(&full).expect("full history keeps valid tool pairs");
+    assert!(
+        serde_json::to_string(&full)
+            .unwrap()
+            .contains("earlier build output")
+    );
+
+    budget.soft_context_target = u32::try_from(full_preflight.total_estimated_prompt)
+        .expect("fixture prompt fits in u32")
+        .saturating_sub(1);
+    let pressured_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+    let pressured_scope = history_scope_for_preflight(&pressured_preflight);
+    assert_eq!(pressured_scope, history::RequestHistoryScope::RecentTurns);
+
+    let pressured =
+        history::to_messages_for_request_with_scope(&history, instructions, pressured_scope);
+    history::validate_native_tool_messages(&pressured)
+        .expect("recent-turn projection keeps valid tool pairs");
+    let rendered = serde_json::to_string(&pressured).unwrap();
+    assert!(!rendered.contains("older-call"));
+    assert!(!rendered.contains("earlier build output"));
+    assert!(rendered.contains("current-call"));
+    assert!(rendered.contains("current inspection output"));
+}
+
 #[tokio::test]
 async fn context_detection_does_not_probe_unverified_omlx_endpoints() {
     use std::time::Duration;

@@ -84,9 +84,9 @@ pub fn calculate_preflight_budget(
 }
 
 /// Calculate budget usage from the exact provider message projection that will
-/// be sent. `history::to_messages_for_request` has already applied its recent
-/// turn projection and attached developer instructions; callers should invoke
-/// this after request-local reminders/nudges are injected as well.
+/// be sent. `history::to_messages_for_request_with_scope` has already applied
+/// the selected history scope and attached developer instructions; callers
+/// should invoke this after request-local reminders/nudges are injected as well.
 ///
 /// Native schemas are separate from the message array and are counted here.
 /// Text-protocol tool definitions are already inside the system message and
