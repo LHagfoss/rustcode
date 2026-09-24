@@ -95,6 +95,11 @@ fn test_config_save_load() {
     assert_eq!(model, expected.model);
     assert_eq!(loaded.approved_command_prefixes, ["cargo test"]);
     assert_eq!(loaded.denied_command_prefixes, ["make clean"]);
+    assert!(!crate::tools::approved_command_prefix_covers_call(
+        "run_command",
+        &serde_json::json!({"command":"cargo test --lib"}),
+        &loaded.approved_command_prefixes
+    ));
 }
 
 #[test]

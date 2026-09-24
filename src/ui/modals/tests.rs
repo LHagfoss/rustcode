@@ -155,7 +155,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
 
 #[test]
 fn approval_selection_visibly_moves_to_deny() {
-    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
     let mut state = AppState::new();
     state.tool_confirmation_selected = 1;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
@@ -168,7 +168,7 @@ fn approval_selection_visibly_moves_to_deny() {
     }]);
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 80, 10))
+            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 80, 14))
         })
         .unwrap();
     let rendered = terminal
@@ -181,8 +181,12 @@ fn approval_selection_visibly_moves_to_deny() {
 
     assert!(rendered.contains("› 2. No, cancel this tool call"));
     assert!(!rendered.contains("› 1. Yes, proceed"));
-    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("3. Always allow plain token prefix `cargo test`"));
     assert!(rendered.contains("4. Always forbid literal tokens `cargo test…`"));
+    assert!(
+        rendered.contains("Approval controls prompts; OS isolation is separate."),
+        "rendered: {rendered:?}"
+    );
 }
 
 #[test]
@@ -212,7 +216,7 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
         .collect::<String>();
 
     assert!(rendered.contains("Would you like to run the following command?"));
-    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("3. Always allow plain token prefix `cargo test`"));
     assert!(rendered.contains("4. Always forbid literal tokens `cargo test…`"));
     assert!(rendered.contains("$ cargo test --lib"));
 }

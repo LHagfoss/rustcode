@@ -661,8 +661,13 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 == Some(prefix.as_str())
         {
             let mut state = state.lock().await;
-            if !state.config.approved_command_prefixes.contains(prefix) {
-                state.config.approved_command_prefixes.push(prefix.clone());
+            let stored_prefix = crate::tools::persisted_approved_command_prefix(prefix);
+            if !state
+                .config
+                .approved_command_prefixes
+                .contains(&stored_prefix)
+            {
+                state.config.approved_command_prefixes.push(stored_prefix);
                 crate::config::save_entire_config(&state.config);
             }
         }

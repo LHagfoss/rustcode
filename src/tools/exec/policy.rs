@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+const APPROVED_COMMAND_PREFIX_MARKER: &str = "prefix-v1:";
+
 // Keep command classification separate from process execution: these helpers
 // decide whether a command is safe to run without confirmation, but never
 // execute or mutate anything themselves.
@@ -645,12 +647,14 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     {
         return None;
     }
-    let binary = tokens[0].rsplit(['/', '\\']).next()?;
+    // Use the same Windows executable normalization as deny rules so `.exe`,
+    // `.cmd`, `.bat`, and `.com` shims cannot bypass risky-command checks.
+    let binary = command_basename(&tokens[0]).to_ascii_lowercase();
     if !allow {
         return Some(tokens);
     }
     if matches!(
-        binary,
+        binary.as_str(),
         "sudo"
             | "doas"
             | "env"
@@ -719,31 +723,49 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     ) {
         return None;
     }
-    if tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "clean"
-                | "destroy"
-                | "delete"
-                | "wipe"
-                | "purge"
-                | "prune"
-                | "reset"
-                | "push"
-                | "publish"
-                | "deploy"
-                | "release"
-        )
-    }) {
+    if tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .any(|token| {
+            matches!(
+                token.as_str(),
+                "clean"
+                    | "destroy"
+                    | "delete"
+                    | "wipe"
+                    | "purge"
+                    | "prune"
+                    | "reset"
+                    | "push"
+                    | "publish"
+                    | "deploy"
+                    | "release"
+            )
+        })
+    {
         return None;
     }
-    if matches!(binary, "pip" | "pip3")
-        || matches!(binary, "npm" | "pnpm" | "yarn" | "bun")
-            && tokens
+    let normalized_tokens = tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let is_pip = binary == "pip"
+        || binary.strip_prefix("pip").is_some_and(|version| {
+            version
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+                && version
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '.')
+        });
+    if is_pip
+        || matches!(binary.as_str(), "npm" | "pnpm" | "yarn" | "bun")
+            && normalized_tokens
                 .iter()
                 .any(|token| matches!(token.as_str(), "install" | "add" | "publish" | "link"))
         || binary == "cargo"
-            && tokens
+            && normalized_tokens
                 .iter()
                 .any(|token| matches!(token.as_str(), "install" | "publish" | "login" | "owner"))
     {
@@ -757,7 +779,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
         return None;
     }
     // Do not turn an interpreter/module prefix into a broad reusable rule.
-    if matches!(binary, "python" | "python3") {
+    if matches!(binary.as_str(), "python" | "python3") {
         if tokens
             .get(1)
             .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-e"))
@@ -772,7 +794,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
         {
             return None;
         }
-    } else if matches!(binary, "node" | "ruby" | "perl")
+    } else if matches!(binary.as_str(), "node" | "ruby" | "perl")
         && (tokens
             .get(1)
             .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-m" | "-e"))
@@ -785,7 +807,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     if tokens.iter().any(|token| {
         let lower = token.to_ascii_lowercase();
         matches!(
-            token.as_str(),
+            lower.as_str(),
             "-f" | "--force" | "--global" | "-g" | "--output" | "-o"
         ) || lower.starts_with("--output=")
             || lower.starts_with("--prefix=")
@@ -829,17 +851,21 @@ pub(crate) fn approved_command_prefix_covers_call(
     args.get("command")
         .and_then(Value::as_str)
         .is_some_and(|command| {
-            prefixes
-                .iter()
-                .any(|prefix| command_prefix_rule_matches(prefix, command))
+            prefixes.iter().any(|stored_rule| {
+                if let Some(prefix) = stored_rule.strip_prefix(APPROVED_COMMAND_PREFIX_MARKER) {
+                    command_prefix_rule_matches(prefix, command)
+                } else {
+                    exact_command_rule_matches(stored_rule, command)
+                }
+            })
         })
 }
 
-/// Match exactly the normalized argv the user reviewed. Without an enforced
-/// OS sandbox, allowing additional operands or flags could widen the effect.
-/// Rules with shell syntax or a high-risk command family are ignored even if
-/// present in config.
-pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
+pub(crate) fn persisted_approved_command_prefix(prefix: &str) -> String {
+    format!("{APPROVED_COMMAND_PREFIX_MARKER}{prefix}")
+}
+
+fn exact_command_rule_matches(rule: &str, command: &str) -> bool {
     let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
         return false;
     };
@@ -847,6 +873,19 @@ pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
         return false;
     };
     command_tokens == rule_tokens
+}
+
+/// Match a complete token prefix from the normalized argv the user reviewed.
+/// Plain-token validation rejects shell composition and known high-risk
+/// commands or arguments before a saved rule can cover a call.
+pub(crate) fn command_prefix_rule_matches(rule: &str, command: &str) -> bool {
+    let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
+        return false;
+    };
+    let Some(command_tokens) = reusable_rule_tokens(command, true) else {
+        return false;
+    };
+    command_tokens.starts_with(&rule_tokens)
 }
 
 pub(crate) fn rememberable_command_forbid_prefix(command: &str) -> Option<String> {
@@ -1751,26 +1790,30 @@ mod command_prefix_tests {
     };
 
     #[test]
-    fn saved_allow_rules_match_exact_normalized_argv_only() {
+    fn saved_allow_rules_match_safe_normalized_argv_prefixes() {
         assert!(command_prefix_rule_matches(
             "cargo test --lib",
             "cargo   test --lib"
         ));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "cargo test",
             "cargo test --lib"
         ));
         assert!(!command_prefix_rule_matches("cargo test", "cargo testing"));
         assert!(!command_prefix_rule_matches("cargo test", "cargo check"));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "git add src/main.rs",
             "git add src/main.rs ."
         ));
-        assert!(!command_prefix_rule_matches(
+        assert!(command_prefix_rule_matches(
             "make test",
-            "make test upload-prod"
+            "make test --jobs=2"
         ));
         assert!(!command_prefix_rule_matches(
+            "cargo test",
+            "cargo test publish"
+        ));
+        assert!(command_prefix_rule_matches(
             "cargo test",
             "cargo test --all-features"
         ));
@@ -1878,8 +1921,30 @@ mod command_prefix_tests {
     }
 
     #[test]
-    fn approved_rules_cover_only_the_exact_plain_call() {
-        let prefixes = vec!["cargo test".to_owned()];
+    fn windows_executable_shims_do_not_bypass_risky_command_filters() {
+        for command in [
+            "pip.exe install package",
+            "pip3.EXE install package",
+            "pip3.11.exe install package",
+            "C:\\Python\\Scripts\\pip.exe install package",
+            "npm.cmd install package",
+            "NPM.CMD install package",
+            "npm.BAT install package",
+            "npm.com install package",
+            "C:\\Progra~1\\nodejs\\npm.cmd install package",
+            "cargo.exe install package",
+            "C:\\Rust\\cargo.EXE install package",
+        ] {
+            assert!(
+                rememberable_command_prefix(command).is_none(),
+                "Windows risky command should not be reusable: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn approved_rules_cover_safe_plain_calls_with_the_saved_token_prefix() {
+        let prefixes = vec!["prefix-v1:cargo test".to_owned()];
         let args = |command: &str, extra: serde_json::Value| {
             let mut args = serde_json::json!({"command": command});
             args.as_object_mut().unwrap().extend(
@@ -1891,7 +1956,7 @@ mod command_prefix_tests {
             );
             args
         };
-        assert!(!approved_command_prefix_covers_call(
+        assert!(approved_command_prefix_covers_call(
             "run_command",
             &args("cargo test --lib", serde_json::json!({})),
             &prefixes,
@@ -1918,6 +1983,21 @@ mod command_prefix_tests {
             "write_to_file",
             &args("cargo test", serde_json::json!({})),
             &prefixes,
+        ));
+    }
+
+    #[test]
+    fn legacy_saved_allow_entries_remain_exact_while_new_rules_are_prefixes() {
+        let args = |command: &str| serde_json::json!({"command":command});
+        assert!(!approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test --lib"),
+            &["cargo test".to_owned()]
+        ));
+        assert!(approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test --lib"),
+            &["prefix-v1:cargo test".to_owned()]
         ));
     }
 
