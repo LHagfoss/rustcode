@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_allow_applies_only_to_exact_plain_run_command_calls() {
+    fn saved_allow_applies_to_safe_plain_run_command_prefixes() {
         let prefixes = vec!["cargo test".to_string()];
         let call = |command: &str, extra: serde_json::Value| ToolCall {
             name: "run_command".to_string(),
@@ -303,7 +303,7 @@ mod tests {
             &call("cargo test", serde_json::json!({})),
             &prefixes
         ));
-        assert!(!saved_prefix_covers_call(
+        assert!(saved_prefix_covers_call(
             &call("cargo test --lib", serde_json::json!({})),
             &prefixes
         ));
@@ -321,6 +321,21 @@ mod tests {
                 serde_json::json!({"env": {"RUSTFLAGS": "-C opt-level=3"}})
             ),
             &prefixes
+        ));
+    }
+
+    #[test]
+    fn saved_forbid_matches_a_command_even_when_an_allow_prefix_matches() {
+        let args = serde_json::json!({"command":"cargo test --lib"});
+        assert!(crate::tools::approved_command_prefix_covers_call(
+            "run_command",
+            &args,
+            &["cargo test".to_owned()]
+        ));
+        assert!(crate::tools::denied_command_prefix_covers_call(
+            "run_command",
+            &args,
+            &["cargo test".to_owned()]
         ));
     }
 
