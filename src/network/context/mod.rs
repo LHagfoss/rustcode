@@ -281,8 +281,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_old_file_reads_are_excluded_at_render_not_in_storage() {
-        use crate::network::history::{redundant_tool_result_indices, to_messages};
+    fn duplicate_old_file_reads_remain_in_storage_until_request_projection() {
+        use crate::network::history::{
+            RequestHistoryScope, RequestInstructions, redundant_tool_result_indices,
+            to_messages_for_request_with_scope,
+        };
         let same = "view_file: [File: src/lib.rs]\n1: old";
         let changed = "view_file: [File: src/lib.rs]\n1: new";
         let history = vec![
@@ -313,13 +316,17 @@ mod tests {
         let before = serde_json::to_string(&history).unwrap();
         assert_eq!(prune_duplicate_tool_results(&history, 2), 0);
         assert_eq!(serde_json::to_string(&history).unwrap(), before);
-        // Storage keeps the older copy verbatim; only the request drops it
-        // while the newer identical read is retained.
+        // Storage keeps the older copy verbatim. Under budget pressure, the
+        // recent-turn projection may drop stale history as a whole.
         assert!(history[0].content.contains("1: old"));
         assert_eq!(redundant_tool_result_indices(&history, 2), [0].into());
-        let rendered = serde_json::to_string(&to_messages(&history, "system")).unwrap();
-        assert_eq!(rendered.matches("1: old").count(), 1);
-        assert!(rendered.contains("1: new"));
+        let rendered = serde_json::to_string(&to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("system", None),
+            RequestHistoryScope::RecentTurns,
+        ))
+        .unwrap();
+        assert_eq!(rendered.matches("1: old").count(), 0);
     }
 
     #[test]

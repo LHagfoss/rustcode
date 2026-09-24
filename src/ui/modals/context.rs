@@ -134,7 +134,7 @@ pub struct ContextBreakdown {
     pub system_tools_tokens: usize,
     pub skills_tokens: usize,
     pub subagent_tokens: usize,
-    pub free_tokens: usize,
+    pub prompt_headroom_tokens: usize,
 }
 
 pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
@@ -207,15 +207,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         0
     };
 
-    let total_used = user_tokens
-        .saturating_add(assistant_tokens)
-        .saturating_add(tool_tokens)
-        .saturating_add(system_prompt_tokens)
-        .saturating_add(system_tools_tokens)
-        .saturating_add(skills_tokens)
-        .saturating_add(subagent_tokens);
-
-    let free_tokens = context_window.saturating_sub(total_used);
+    let prompt_headroom_tokens = context_window.saturating_sub(current_usage.used_tokens as usize);
 
     ContextBreakdown {
         model_name: state.model_name().to_owned(),
@@ -228,7 +220,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         system_tools_tokens,
         skills_tokens,
         subagent_tokens,
-        free_tokens,
+        prompt_headroom_tokens,
     }
 }
 
@@ -321,18 +313,10 @@ pub(in crate::ui) fn render_context_modal(
         }
     };
 
-    let user_b = compute_blocks(breakdown.user_tokens);
-    let asst_b = compute_blocks(breakdown.assistant_tokens);
-    let tool_b = compute_blocks(breakdown.tool_tokens);
-    let sys_p_b = compute_blocks(breakdown.system_prompt_tokens);
-    let sys_t_b = compute_blocks(breakdown.system_tools_tokens);
-    let skill_b = compute_blocks(breakdown.skills_tokens);
-    let sub_b = compute_blocks(breakdown.subagent_tokens);
+    let prompt_b = compute_blocks(breakdown.current_usage.used_tokens as usize);
+    let free_b = total_blocks.saturating_sub(prompt_b);
 
-    let used_b = user_b + asst_b + tool_b + sys_p_b + sys_t_b + skill_b + sub_b;
-    let free_b = total_blocks.saturating_sub(used_b);
-
-    let color_user = Color::Rgb(100, 160, 255);
+    let color_prompt = Color::Rgb(100, 160, 255);
     let color_asst = Color::Rgb(120, 220, 120);
     let color_tool = Color::Rgb(240, 200, 100);
     let color_sys_p = Color::Rgb(140, 180, 220);
@@ -352,13 +336,7 @@ pub(in crate::ui) fn render_context_modal(
         }
     };
 
-    push_dots(user_b, "● ", color_user);
-    push_dots(asst_b, "● ", color_asst);
-    push_dots(tool_b, "● ", color_tool);
-    push_dots(sys_p_b, "● ", color_sys_p);
-    push_dots(sys_t_b, "● ", color_sys_t);
-    push_dots(skill_b, "● ", color_skill);
-    push_dots(sub_b, "● ", color_sub);
+    push_dots(prompt_b, "● ", color_prompt);
     push_dots(free_b, "□ ", color_free);
 
     while dot_spans.len() < total_blocks {
@@ -386,8 +364,8 @@ pub(in crate::ui) fn render_context_modal(
         0.0
     };
 
-    let free_pct = if breakdown.context_window > 0 {
-        (breakdown.free_tokens as f64 / breakdown.context_window as f64) * 100.0
+    let headroom_pct = if breakdown.context_window > 0 {
+        (breakdown.prompt_headroom_tokens as f64 / breakdown.context_window as f64) * 100.0
     } else {
         0.0
     };
@@ -418,7 +396,9 @@ pub(in crate::ui) fn render_context_modal(
                 format_token_count(breakdown.context_window),
                 current_usage_pct,
                 match breakdown.current_usage.source {
-                    super::super::context_usage::ContextUsageSource::ProviderPrompt => "prompt",
+                    super::super::context_usage::ContextUsageSource::ProviderPrompt => {
+                        "prompt"
+                    }
                     super::super::context_usage::ContextUsageSource::HistoryEstimate => "estimate",
                 }
             ),
@@ -430,7 +410,7 @@ pub(in crate::ui) fn render_context_modal(
 
     stats_lines.push(Line::default());
     stats_lines.push(Line::from(vec![Span::styled(
-        "Stored history estimate by category",
+        "Saved history estimate · % of context window",
         Style::default().fg(COLOR_MUTED()),
     )]));
 
@@ -438,7 +418,7 @@ pub(in crate::ui) fn render_context_modal(
     let categories = [
         (
             "●",
-            color_user,
+            color_prompt,
             "User messages",
             breakdown.user_tokens,
             pct(breakdown.user_tokens),
@@ -492,14 +472,6 @@ pub(in crate::ui) fn render_context_modal(
             pct(breakdown.subagent_tokens),
             true,
         ),
-        (
-            "□",
-            color_free,
-            "Free space",
-            breakdown.free_tokens,
-            free_pct,
-            false,
-        ),
     ];
 
     for (icon, color, label, count, percent, include_tokens_word) in categories {
@@ -522,6 +494,25 @@ pub(in crate::ui) fn render_context_modal(
         ]));
     }
 
+    stats_lines.push(Line::from(vec![
+        Span::styled("□ ", Style::default().fg(color_free).bg(COLOR_PANEL())),
+        Span::styled(
+            format!(
+                "{}: {} ({:.1}%)",
+                match breakdown.current_usage.source {
+                    super::super::context_usage::ContextUsageSource::ProviderPrompt => {
+                        "Latest prompt headroom"
+                    }
+                    super::super::context_usage::ContextUsageSource::HistoryEstimate => {
+                        "Estimated headroom"
+                    }
+                },
+                format_token_count(breakdown.prompt_headroom_tokens),
+                headroom_pct
+            ),
+            Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+        ),
+    ]));
     f.render_widget(
         Paragraph::new(stats_lines).style(Style::default().bg(COLOR_PANEL())),
         stats_area,
