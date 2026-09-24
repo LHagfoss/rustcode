@@ -20,7 +20,7 @@ const CAPTURE_TAIL_BYTES: usize = MAX_OUTPUT_BYTES - CAPTURE_HEAD_BYTES;
 
 /// A fully resolved command request. Callers resolve aliases such as
 /// `sandbox` and inject the effective environment before crossing this seam.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CommandRequest {
     pub command: String,
     pub cwd: Option<PathBuf>,
@@ -29,7 +29,28 @@ pub struct CommandRequest {
     /// Background callers request a process group so they can terminate the
     /// shell and its descendants from the application-owned task manager.
     pub process_group: bool,
+    /// File descriptors explicitly inherited by the command process.
+    /// Linux bubblewrap uses this only to read a seccomp policy at startup.
+    pub inherited_fds: Vec<Arc<std::fs::File>>,
 }
+
+impl PartialEq for CommandRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.command == other.command
+            && self.cwd == other.cwd
+            && self.env == other.env
+            && self.timeout == other.timeout
+            && self.process_group == other.process_group
+            && self.inherited_fds.len() == other.inherited_fds.len()
+            && self
+                .inherited_fds
+                .iter()
+                .zip(&other.inherited_fds)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+    }
+}
+
+impl Eq for CommandRequest {}
 
 /// Callback invoked as bytes arrive from stdout or stderr.
 pub type ProgressCallback = Arc<dyn Fn(&[u8], bool) + Send + Sync + 'static>;
@@ -168,9 +189,35 @@ fn build_command_with_environment(
         command.env(key, value);
     }
     #[cfg(unix)]
-    if request.process_group {
+    if request.process_group || !request.inherited_fds.is_empty() {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        if request.process_group {
+            command.process_group(0);
+        }
+        let inherited_fds = request
+            .inherited_fds
+            .iter()
+            .map(|file| {
+                use std::os::fd::AsRawFd;
+                file.as_raw_fd()
+            })
+            .collect::<Vec<_>>();
+        // SAFETY: this child hook only changes close-on-exec flags on caller
+        // owned descriptors before exec. The Arc<File>s stay alive because
+        // run_* borrows CommandRequest until the child completes.
+        unsafe {
+            command.pre_exec(move || {
+                for fd in &inherited_fds {
+                    let flags = libc::fcntl(*fd, libc::F_GETFD);
+                    if flags == -1
+                        || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
     }
     command
 }
@@ -484,7 +531,24 @@ mod tests {
             env: Vec::new(),
             timeout: Duration::from_secs(5),
             process_group: false,
+            inherited_fds: Vec::new(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicitly_inherited_file_descriptor_reaches_shell_child() {
+        use std::os::fd::AsRawFd;
+
+        let file = Arc::new(std::fs::File::open("/dev/null").unwrap());
+        let fd = file.as_raw_fd();
+        let request = CommandRequest {
+            command: format!("test -r /dev/fd/{fd}"),
+            inherited_fds: vec![file],
+            ..request("")
+        };
+        let output = run_with_timeout(&request, None).unwrap();
+        assert!(output.success);
     }
 
     #[test]

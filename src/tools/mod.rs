@@ -853,6 +853,7 @@ pub(crate) fn spawn_background_task_for_test(
                     env: Vec::new(),
                     timeout: std::time::Duration::from_secs(30),
                     process_group: true,
+                    inherited_fds: Vec::new(),
                 },
             ),
         )
