@@ -13,21 +13,13 @@ pub(crate) struct ContextUsage {
     pub(crate) source: ContextUsageSource,
 }
 
-/// The footer and `/context` headline use the provider's latest input usage
-/// when available. Completion tokens do not occupy the context window. Before
-/// provider usage exists, estimate from the active saved history.
+/// The footer and `/context` headline use usage from the current request when
+/// available. Completion tokens do not occupy the context window. When there
+/// is no current-request usage, estimate from active history instead of
+/// reusing a previous request's saved usage.
 pub(crate) fn context_usage(state: &RenderSnapshot) -> ContextUsage {
     if state.selected_subagent_id().is_none()
         && let Some(usage) = state.current_token_usage()
-    {
-        return provider_prompt_usage(usage);
-    }
-
-    if let Some(usage) = state
-        .active_history()
-        .iter()
-        .rev()
-        .find_map(|message| message.token_usage.as_ref())
     {
         return provider_prompt_usage(usage);
     }
@@ -56,7 +48,7 @@ mod tests {
     use crate::app::{AppState, ChatMessage, TokenUsage};
 
     #[test]
-    fn usage_falls_back_to_history_then_prefers_latest_prompt_tokens() {
+    fn cleared_current_usage_does_not_reuse_a_previous_provider_prompt() {
         let mut state = AppState::new();
         assert_eq!(
             context_usage(&state.render_snapshot()),
@@ -77,23 +69,25 @@ mod tests {
 
         let mut message = ChatMessage::new("assistant", "reply");
         message.token_usage = Some(TokenUsage {
-            prompt_tokens: 12,
+            prompt_tokens: 900,
             completion_tokens: 99,
-            total_tokens: 111,
+            total_tokens: 999,
             ..Default::default()
         });
         state.history.push(message);
+        state.history.push(ChatMessage::new("user", "new"));
+
         assert_eq!(
             context_usage(&state.render_snapshot()),
             ContextUsage {
-                used_tokens: 12,
-                source: ContextUsageSource::ProviderPrompt,
+                used_tokens: 3,
+                source: ContextUsageSource::HistoryEstimate,
             }
         );
     }
 
     #[test]
-    fn selected_subagent_usage_does_not_reuse_parent_request_usage() {
+    fn selected_subagent_usage_uses_history_estimate_without_current_usage() {
         let mut state = AppState::new();
         state.current_token_usage = Some(TokenUsage {
             prompt_tokens: 12,
@@ -128,8 +122,8 @@ mod tests {
         assert_eq!(
             context_usage(&state.render_snapshot()),
             ContextUsage {
-                used_tokens: 5,
-                source: ContextUsageSource::ProviderPrompt,
+                used_tokens: 2,
+                source: ContextUsageSource::HistoryEstimate,
             }
         );
     }
