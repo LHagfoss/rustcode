@@ -176,8 +176,34 @@ pub(crate) fn runtime_tests_available() -> bool {
                 }
                 None => return Err("installed bubblewrap is not trusted".to_string()),
             };
-            let filter = Arc::new(create_network_filter()?);
-            probe_network_namespace(&bubblewrap, &filter).map(|_| ())
+            let workspace = tempfile::tempdir()
+                .map_err(|error| format!("could not create sandbox probe workspace: {error}"))?;
+            let writable_roots = vec![workspace.path().to_path_buf()];
+            let prepared = command(
+                "true",
+                SandboxPolicy {
+                    command_cwd: Some(workspace.path()),
+                    workspace_root: Some(workspace.path()),
+                    writable_roots: &writable_roots,
+                    session_scratch_roots: &[],
+                    network_access: false,
+                },
+            )?;
+            let request = rustcode_command::CommandRequest {
+                command: prepared.command,
+                cwd: Some(workspace.path().to_path_buf()),
+                env: Vec::new(),
+                timeout: std::time::Duration::from_secs(5),
+                process_group: true,
+                inherited_fds: prepared.inherited_fds,
+            };
+            let output = rustcode_command::run_with_timeout(&request, None)
+                .map_err(|error| format!("sandbox execution probe failed: {error}"))?;
+            if output.success {
+                Ok(())
+            } else {
+                Err(String::from_utf8_lossy(output.stderr.bytes()).into_owned())
+            }
         }) {
             Ok(()) => true,
             Err(reason)
