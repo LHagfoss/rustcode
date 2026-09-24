@@ -433,11 +433,12 @@ impl ActionBackend for ProductionActions {
                             return Err("cancelled before shell dispatch".to_owned());
                         }
                         let request = rustcode_command::CommandRequest {
-                            command: sandboxed_command,
+                            command: sandboxed_command.command,
                             cwd: Some(cwd),
                             env: vec![],
                             timeout: Duration::from_secs(timeout_seconds),
                             process_group: true,
+                            inherited_fds: sandboxed_command.inherited_fds,
                         };
                         rustcode_command::run_with_timeout_cancellable_env(
                             &request,
