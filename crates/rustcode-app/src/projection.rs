@@ -117,7 +117,6 @@ pub struct ChatViewState {
     turn_started_at: Option<Instant>,
     last_turn_elapsed_ms: Option<u64>,
     thinking_started_at: Option<Instant>,
-    thinking_elapsed_ms: u64,
     pending_question: Option<QuestionPrompt>,
     pending_approval: Option<ApprovalPrompt>,
 }
@@ -144,6 +143,19 @@ impl ChatViewState {
                     .iter()
                     .any(|row| row == &ProjectionRow::User(item.content.clone()))
         }) {
+            // Active tools point into this vector. Keep those indices aligned
+            // when an in-flight snapshot absorbs the optimistic user row.
+            let mut removed_before = vec![0; self.stream_rows.len()];
+            let mut removed = 0;
+            for (index, row) in self.stream_rows.iter().enumerate() {
+                removed_before[index] = removed;
+                if matches!(row, ProjectionRow::User(_)) {
+                    removed += 1;
+                }
+            }
+            for (row, _) in self.active_tools.values_mut() {
+                *row -= removed_before[*row];
+            }
             self.stream_rows
                 .retain(|row| !matches!(row, ProjectionRow::User(_)));
         }
@@ -161,7 +173,6 @@ impl ChatViewState {
                 self.turn_started_at = Some(Instant::now());
                 self.last_turn_elapsed_ms = None;
                 self.thinking_started_at = None;
-                self.thinking_elapsed_ms = 0;
                 self.error = None;
                 self.approval_denied = false;
                 self.stream_rows.clear();
@@ -184,12 +195,13 @@ impl ChatViewState {
                     let thinking = open.is_some_and(|open| close.is_none_or(|close| open > close));
                     if thinking && self.thinking_started_at.is_none() {
                         self.thinking_started_at = Some(Instant::now());
-                    } else if !thinking && let Some(started) = self.thinking_started_at.take() {
-                        self.thinking_elapsed_ms += started.elapsed().as_millis() as u64;
+                    } else if !thinking {
+                        self.finish_thinking();
                     }
                 }
             }
             TurnUpdate::ToolStarted { id, name } => {
+                self.finish_thinking();
                 self.turn_active = true;
                 let row = self.stream_rows.len();
                 self.stream_rows.push(ProjectionRow::Tool {
@@ -236,13 +248,23 @@ impl ChatViewState {
             }
             TurnUpdate::TurnFinished | TurnUpdate::Cancelled => {
                 self.turn_active = false;
-                if let Some(started) = self.thinking_started_at.take() {
-                    self.thinking_elapsed_ms += started.elapsed().as_millis() as u64;
-                }
+                self.finish_thinking();
                 self.last_turn_elapsed_ms = self
                     .turn_started_at
                     .take()
                     .map(|started| started.elapsed().as_millis() as u64);
+            }
+        }
+    }
+
+    fn finish_thinking(&mut self) {
+        if let Some(started) = self.thinking_started_at.take() {
+            let elapsed = started.elapsed().as_millis() as u64;
+            if let Some(ProjectionRow::Assistant {
+                thought_time_ms, ..
+            }) = self.stream_rows.last_mut()
+            {
+                *thought_time_ms = Some(thought_time_ms.unwrap_or(0).saturating_add(elapsed));
             }
         }
     }
@@ -261,17 +283,23 @@ impl ChatViewState {
         self.turn_started_at = None;
         self.last_turn_elapsed_ms = None;
         self.thinking_started_at = None;
-        self.thinking_elapsed_ms = 0;
     }
 
     pub fn thought_elapsed_ms(&self) -> Option<u64> {
-        (self.thinking_elapsed_ms > 0 || self.thinking_started_at.is_some()).then(|| {
-            self.thinking_elapsed_ms
-                + self
-                    .thinking_started_at
-                    .map(|started| started.elapsed().as_millis() as u64)
+        let Some(ProjectionRow::Assistant {
+            thought_time_ms, ..
+        }) = self.stream_rows.last()
+        else {
+            return None;
+        };
+        match self.thinking_started_at {
+            Some(started) => Some(
+                thought_time_ms
                     .unwrap_or(0)
-        })
+                    .saturating_add(started.elapsed().as_millis() as u64),
+            ),
+            None => *thought_time_ms,
+        }
     }
 
     pub fn stream_rows(&self) -> &[ProjectionRow] {
@@ -571,6 +599,74 @@ mod tests {
             project_rows(&final_snapshot.transcript, &final_snapshot.live_response),
             vec![ProjectionRow::User("show this immediately".to_owned())]
         );
+    }
+
+    #[test]
+    fn active_snapshot_preserves_tool_completion_targets() {
+        let mut view = ChatViewState::default();
+        view.apply_turn_update(TurnUpdate::PromptStarted("run".into()));
+        for id in ["first", "second"] {
+            view.apply_turn_update(TurnUpdate::ToolStarted {
+                id: id.into(),
+                name: "view_file".into(),
+            });
+        }
+        let mut active = snapshot(true);
+        active.transcript.push(user("run"));
+        view.apply_snapshot(active);
+        for id in ["second", "first"] {
+            view.apply_turn_update(TurnUpdate::ToolFinished {
+                id: id.into(),
+                content: id.into(),
+                success: true,
+                pending: false,
+            });
+        }
+        assert!(
+            matches!(&view.stream_rows()[0], ProjectionRow::Tool { content, status: ToolStatus::Completed, .. } if content == "first")
+        );
+        assert!(
+            matches!(&view.stream_rows()[1], ProjectionRow::Tool { content, status: ToolStatus::Completed, .. } if content == "second")
+        );
+        assert!(view.active_tools.is_empty());
+    }
+
+    #[test]
+    fn starting_tools_ends_unclosed_reasoning_and_its_timer() {
+        let mut view = ChatViewState::default();
+        view.apply_turn_update(TurnUpdate::PromptStarted("inspect".into()));
+        view.apply_turn_update(TurnUpdate::TextDelta("<think>Read the file".into()));
+        assert!(view.thinking_started_at.is_some());
+        view.apply_turn_update(TurnUpdate::ToolStarted {
+            id: "read".into(),
+            name: "view_file".into(),
+        });
+        assert!(view.thinking_started_at.is_none());
+        assert!(
+            matches!(&view.stream_rows()[1], ProjectionRow::Assistant { content, thought_time_ms: Some(_), .. } if content == "<think>Read the file")
+        );
+    }
+
+    #[test]
+    fn thinking_duration_belongs_to_current_assistant_phase() {
+        let mut view = ChatViewState::default();
+        view.apply_turn_update(TurnUpdate::PromptStarted("inspect".into()));
+        view.apply_turn_update(TurnUpdate::TextDelta("<think>First step".into()));
+        view.thinking_started_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        view.apply_turn_update(TurnUpdate::ToolStarted {
+            id: "read".into(),
+            name: "view_file".into(),
+        });
+        assert_eq!(view.thought_elapsed_ms(), None);
+        view.apply_turn_update(TurnUpdate::TextDelta("<think>Second step".into()));
+        assert!(
+            view.thought_elapsed_ms().unwrap() < 1_000,
+            "the second phase must not inherit the previous minute of reasoning"
+        );
+        view.apply_turn_update(TurnUpdate::TextDelta("</think>Answer".into()));
+        assert!(view.thinking_started_at.is_none());
+        assert!(view.thought_elapsed_ms().unwrap() < 1_000);
     }
 
     #[test]
