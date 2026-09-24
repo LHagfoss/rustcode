@@ -347,6 +347,10 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
         let s = state.lock().await;
         (s.config.max_tool_rounds, s.config.max_total_tool_rounds)
     };
+    // Keep this lock guard out of the awaited turn future. The turn locks
+    // AppState while preparing each provider request, so an inline lock
+    // expression here can retain the mutex for the whole async call.
+    let turn_session_id = { state.lock().await.active_session_id.clone() };
     run_agent_turn_with_events_and_context_mode(
         client,
         state,
@@ -356,7 +360,7 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
         prompt,
         sender,
         super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
-        state.lock().await.active_session_id.clone(),
+        turn_session_id,
         true,
     )
     .await
@@ -372,6 +376,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy
     sender: AgentUiEventSender,
     context: super::TurnContext,
 ) -> super::TurnContext {
+    let turn_session_id = { state.lock().await.active_session_id.clone() };
     run_agent_turn_with_events_and_context_mode(
         client,
         state,
@@ -381,7 +386,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy
         prompt,
         sender,
         context,
-        state.lock().await.active_session_id.clone(),
+        turn_session_id,
         true,
     )
     .await
