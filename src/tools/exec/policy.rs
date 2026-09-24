@@ -1170,6 +1170,29 @@ fn denied_command_tokens_cover(tokens: &[String], rules: &[Vec<String>], depth: 
     if command_index > 0 {
         return denied_command_tokens_cover(&tokens[command_index..], rules, depth + 1);
     }
+    if tokens.first().is_some_and(|token| {
+        matches!(
+            token.as_str(),
+            "if" | "then"
+                | "elif"
+                | "else"
+                | "fi"
+                | "while"
+                | "until"
+                | "do"
+                | "done"
+                | "for"
+                | "select"
+                | "case"
+                | "esac"
+                | "function"
+                | "coproc"
+        )
+    }) {
+        // Shell control words can make later segments conditional or repeat
+        // them. We do not attempt to interpret that grammar for saved denies.
+        return true;
+    }
     if tokens.first().is_some_and(|executable| {
         executable
             .chars()
@@ -1472,6 +1495,15 @@ fn wrapped_command_payload(tokens: &[String]) -> Option<WrappedCommandPayload> {
             let payload = args.join(" ");
             (!payload.is_empty()).then_some(WrappedCommandPayload::Shell(payload))
         }
+        "builtin" => match args.first().map(String::as_str) {
+            Some("eval") => {
+                let payload = args[1..].join(" ");
+                (!payload.is_empty()).then_some(WrappedCommandPayload::Shell(payload))
+            }
+            Some("source") | Some(".") => Some(WrappedCommandPayload::Ambiguous),
+            Some("exec") | Some("command") => args_from(1).map(WrappedCommandPayload::Arguments),
+            _ => None,
+        },
         "xargs" => {
             let mut index = 0;
             let mut placeholder = None;
@@ -1801,6 +1833,10 @@ mod command_prefix_tests {
             ("git push", "sh -c '$CMD push'"),
             ("git push", "sh -c \"$CMD push\""),
             ("git push", "git \"$SUBCOMMAND\""),
+            ("git push", "if git push; then echo ok; fi"),
+            ("git push", "! git push"),
+            ("git push", "builtin eval 'git push'"),
+            ("git push", "builtin exec git push"),
             ("git push", "eval git push"),
             ("git push", "eval 'git push'"),
             ("git push", "sudo --user root git push"),
