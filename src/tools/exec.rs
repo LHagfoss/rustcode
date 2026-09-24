@@ -1449,6 +1449,9 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn run_command_propagates_pipeline_failures() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "false | tail -n 1"
         }))
@@ -1522,6 +1525,9 @@ mod tests {
 
     #[test]
     fn background_command_start_is_pending_and_names_command() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let command = "sleep 1; printf background-output";
         let output = run_command_output(&serde_json::json!({
             "command": command,
@@ -1564,6 +1570,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn detached_server_start_is_completed_but_remains_tracked_and_killable() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "detached-server-test-{}",
             std::time::SystemTime::now()
@@ -1665,6 +1674,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn shell_background_operator_is_auto_detached_without_background_flag() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "nested-background-test-{}",
             std::time::SystemTime::now()
@@ -1694,6 +1706,9 @@ mod tests {
 
     #[test]
     fn short_discovery_commands_ignore_background_request() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         for command in [
             "printf synchronous-output",
             "pwd",
@@ -1716,6 +1731,9 @@ mod tests {
 
     #[test]
     fn background_request_is_preserved_for_long_or_mutating_commands() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let command = "sleep 1";
         let output = run_command_output(&serde_json::json!({
             "command": command,
