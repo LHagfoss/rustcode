@@ -70,7 +70,7 @@ pub struct AppView {
     clear_composer_on_render: bool,
     sidebar_collapsed: bool,
     git_branch: Option<String>,
-    expanded_thoughts: HashSet<usize>,
+    expanded_thoughts: HashSet<(usize, usize)>,
     expanded_tools: HashSet<(usize, usize)>,
     turn_timer_epoch: u64,
 }
@@ -451,7 +451,6 @@ impl AppView {
             && let Some(ProjectionRow::Assistant {
                 thought_time_ms, ..
             }) = rows.last_mut()
-            && thought_time_ms.is_none()
         {
             *thought_time_ms = self.chat_state.thought_elapsed_ms();
         }
@@ -483,15 +482,17 @@ impl AppView {
             }
         });
         let view = cx.entity().downgrade();
+        let turn_active = self.chat_state.turn_active();
         MessageScroller::new("conversation", self.messages.clone(), move |index, _, _| {
             let element = match rendered_rows.get(index).cloned() {
                 Some(DisplayRow::Turn(parts)) => render_turn(
                     parts,
                     index,
-                    expanded_thoughts.contains(&index),
+                    expanded_thoughts.clone(),
                     expanded_tools.clone(),
                     mono_font.clone(),
                     view.clone(),
+                    turn_active && index + 1 == rendered_rows.len(),
                 ),
                 Some(DisplayRow::User(text)) => render_user_message(text),
                 Some(DisplayRow::System(text)) => render_system_message(text, index),
@@ -845,7 +846,9 @@ fn tool_summary(tools: &[ProjectionRow]) -> String {
             let noun = match name {
                 "view_file" | "read_file" => "file read",
                 "list_directory" => "directory listing",
-                "search_files" | "grep_search" => "search",
+                "search_files" | "grep_search" => {
+                    return format!("{count} search{}", if count == 1 { "" } else { "es" });
+                }
                 _ => return format!("{count} {}", name.replace('_', " ")),
             };
             format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
@@ -882,13 +885,81 @@ fn render_system_message(text: String, index: usize) -> gpui_kit::AnyElement {
         .into_any_element()
 }
 
+// Keep commentary on the side of the tools where it was emitted. Each
+// segment ends with visible assistant text, so later activity cannot jump
+// above an earlier progress update.
+fn turn_segments(parts: Vec<ProjectionRow>) -> Vec<Vec<ProjectionRow>> {
+    let mut segments = Vec::new();
+    let mut pending = Vec::new();
+    for part in parts {
+        let ends_segment = matches!(&part, ProjectionRow::Assistant { content, .. }
+            if !split_thinking(content).0.trim().is_empty());
+        pending.push(part);
+        if ends_segment {
+            segments.push(std::mem::take(&mut pending));
+        }
+    }
+    if !pending.is_empty() {
+        segments.push(pending);
+    }
+    segments
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_turn(
     parts: Vec<ProjectionRow>,
     index: usize,
+    expanded_thoughts: HashSet<(usize, usize)>,
+    expanded_tools: HashSet<(usize, usize)>,
+    mono_font: gpui_kit::SharedString,
+    view: gpui_kit::WeakEntity<AppView>,
+    turn_active: bool,
+) -> gpui_kit::AnyElement {
+    let segments = turn_segments(parts);
+    let last_segment = segments.len().saturating_sub(1);
+    let mut tool_offset = 0;
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .children(
+            segments
+                .into_iter()
+                .enumerate()
+                .map(|(segment_index, parts)| {
+                    let offset = tool_offset;
+                    tool_offset += parts
+                        .iter()
+                        .filter(|part| matches!(part, ProjectionRow::Tool { .. }))
+                        .count();
+                    render_turn_segment(
+                        parts,
+                        index,
+                        segment_index,
+                        offset,
+                        expanded_thoughts.contains(&(index, segment_index)),
+                        expanded_tools.clone(),
+                        mono_font.clone(),
+                        view.clone(),
+                        turn_active && segment_index == last_segment,
+                    )
+                }),
+        )
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_turn_segment(
+    parts: Vec<ProjectionRow>,
+    index: usize,
+    segment_index: usize,
+    tool_offset: usize,
     expanded: bool,
     expanded_tools: HashSet<(usize, usize)>,
     mono_font: gpui_kit::SharedString,
     view: gpui_kit::WeakEntity<AppView>,
+    turn_active: bool,
 ) -> gpui_kit::AnyElement {
     let mut answers = Vec::new();
     let mut thoughts = Vec::new();
@@ -910,15 +981,42 @@ fn render_turn(
                     if !text.is_empty() {
                         thoughts.push(text);
                     }
-                    thinking |= ongoing;
+                    thinking = ongoing;
                     thought_ms = thought_ms.saturating_add(thought_time_ms.unwrap_or(0));
+                } else {
+                    thinking = false;
                 }
             }
-            tool @ ProjectionRow::Tool { .. } => tools.push(tool),
+            tool @ ProjectionRow::Tool { .. } => {
+                thinking = false;
+                tools.push(tool);
+            }
             _ => {}
         }
     }
 
+    thinking &= turn_active
+        && !tools.iter().any(|tool| {
+            matches!(
+                tool,
+                ProjectionRow::Tool {
+                    status: ToolStatus::Running | ToolStatus::Pending,
+                    ..
+                }
+            )
+        });
+    let failed_count = tools
+        .iter()
+        .filter(|tool| {
+            matches!(
+                tool,
+                ProjectionRow::Tool {
+                    status: ToolStatus::Failed,
+                    ..
+                }
+            )
+        })
+        .count();
     let has_activity = !thoughts.is_empty() || !tools.is_empty() || thinking;
     let activity_label = {
         let mut labels = Vec::new();
@@ -944,6 +1042,9 @@ fn render_turn(
                 labels.push("Running tools".to_owned());
             }
             labels.push(tool_summary(&tools));
+            if failed_count > 0 {
+                labels.push(format!("{failed_count} failed"));
+            }
         }
         labels.join(" · ")
     };
@@ -966,7 +1067,7 @@ fn render_turn(
                 .gap_2()
                 .child(
                     div()
-                        .id(format!("activity-{index}"))
+                        .id(format!("activity-{index}-{segment_index}"))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -984,9 +1085,13 @@ fn render_turn(
                         .child(activity_label)
                         .on_click(move |_, _, cx| {
                             let _ = toggle_view.update(cx, |this, cx| {
-                                if !this.expanded_thoughts.insert(index) {
-                                    this.expanded_thoughts.remove(&index);
+                                let key = (index, segment_index);
+                                if !this.expanded_thoughts.insert(key) {
+                                    this.expanded_thoughts.remove(&key);
                                 }
+                                this.messages.update(cx, |state, cx| {
+                                    state.remeasure_items(index..index + 1, cx)
+                                });
                                 cx.notify();
                             });
                         }),
@@ -1006,7 +1111,7 @@ fn render_turn(
                             .children(thoughts.into_iter().enumerate().map(
                                 |(thought_index, thought)| {
                                     TextView::markdown(
-                                        format!("thought-{index}-{thought_index}"),
+                                        format!("thought-{index}-{segment_index}-{thought_index}"),
                                         thought,
                                     )
                                     .style(markdown_style())
@@ -1021,8 +1126,8 @@ fn render_turn(
                                 render_tool_detail(
                                     tool,
                                     index,
-                                    tool_index,
-                                    expanded_tools.contains(&(index, tool_index)),
+                                    tool_offset + tool_index,
+                                    expanded_tools.contains(&(index, tool_offset + tool_index)),
                                     mono_font.clone(),
                                     view.clone(),
                                 )
@@ -1041,13 +1146,15 @@ fn render_turn(
         .flex_col()
         .gap_3()
         .text_color(rgb(0xdfe1e5))
-        .child(
-            div()
-                .text_size(px(12.))
-                .font_medium()
-                .text_color(rgb(0x92969e))
-                .child("RustCode"),
-        )
+        .when(segment_index == 0, |this| {
+            this.child(
+                div()
+                    .text_size(px(12.))
+                    .font_medium()
+                    .text_color(rgb(0x92969e))
+                    .child("RustCode"),
+            )
+        })
         .when_some(activity, |this, activity| this.child(activity))
         .children(
             answers
@@ -1060,12 +1167,15 @@ fn render_turn(
                         .text_size(px(15.))
                         .line_height(px(23.))
                         .child(
-                            TextView::markdown(format!("assistant-{index}-{answer_index}"), answer)
-                                .style(markdown_style())
-                                .text_size(px(15.))
-                                .line_height(px(23.))
-                                .font_weight(gpui_kit::FontWeight::NORMAL)
-                                .text_color(rgb(0xdfe1e5)),
+                            TextView::markdown(
+                                format!("assistant-{index}-{segment_index}-{answer_index}"),
+                                answer,
+                            )
+                            .style(markdown_style())
+                            .text_size(px(15.))
+                            .line_height(px(23.))
+                            .font_weight(gpui_kit::FontWeight::NORMAL)
+                            .text_color(rgb(0xdfe1e5)),
                         )
                 }),
         )
@@ -1134,6 +1244,9 @@ fn render_tool_detail(
                         if !this.expanded_tools.insert(key) {
                             this.expanded_tools.remove(&key);
                         }
+                        this.messages.update(cx, |state, cx| {
+                            state.remeasure_items(turn_index..turn_index + 1, cx)
+                        });
                         cx.notify();
                     });
                 }),
@@ -1335,8 +1448,15 @@ impl Render for AppView {
                     .when(stop_available(turn_active), |this| {
                         this.child(
                             Button::new("stop-turn")
-                                .ghost()
-                                .icon(IconName::CircleX)
+                                .primary()
+                                .rounded(px(999.))
+                                .size(px(32.))
+                                .child(
+                                    div()
+                                        .size(px(10.))
+                                        .rounded(px(2.))
+                                        .bg(Theme::global(cx).button_primary_foreground),
+                                )
                                 .accessibility_label("Stop turn")
                                 .tooltip("Stop turn")
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1344,21 +1464,23 @@ impl Render for AppView {
                                 })),
                         )
                     })
-                    .child(
-                        Button::new("send-message")
-                            .primary()
-                            .icon(IconName::ArrowUp)
-                            .rounded(px(999.))
-                            .accessibility_label(if pending_question {
-                                "Answer"
-                            } else {
-                                "Send message"
-                            })
-                            .disabled(!send_enabled)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.submit_composer(window, cx)),
-                            ),
-                    ),
+                    .when(!turn_active || send_enabled, |this| {
+                        this.child(
+                            Button::new("send-message")
+                                .primary()
+                                .icon(IconName::ArrowUp)
+                                .rounded(px(999.))
+                                .accessibility_label(if pending_question {
+                                    "Answer"
+                                } else {
+                                    "Send message"
+                                })
+                                .disabled(!send_enabled)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.submit_composer(window, cx)
+                                })),
+                        )
+                    }),
             );
 
         let main = div()
@@ -1443,7 +1565,7 @@ mod tests {
 
     use super::{
         ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow, ToolStatus, group_turn_rows,
-        should_show_start_screen,
+        should_show_start_screen, turn_segments,
     };
 
     #[test]
@@ -1472,6 +1594,30 @@ mod tests {
         assert!(matches!(&rows[0], DisplayRow::User(text) if text == "question"));
         assert!(matches!(&rows[1], DisplayRow::Turn(parts) if parts.len() == 3));
         assert!(matches!(&rows[2], DisplayRow::User(text) if text == "follow up"));
+    }
+
+    #[test]
+    fn commentary_stays_before_the_tools_it_introduces() {
+        let before = ProjectionRow::Assistant {
+            content: "I will inspect the file.".into(),
+            response_time_ms: None,
+            thought_time_ms: None,
+        };
+        let tool = ProjectionRow::Tool {
+            name: "view_file".into(),
+            content: "file".into(),
+            status: ToolStatus::Completed,
+            elapsed_ms: None,
+        };
+        let after = ProjectionRow::Assistant {
+            content: "Here is the result.".into(),
+            response_time_ms: None,
+            thought_time_ms: None,
+        };
+        assert_eq!(
+            turn_segments(vec![before.clone(), tool.clone(), after.clone()]),
+            vec![vec![before], vec![tool, after]]
+        );
     }
 
     #[test]
