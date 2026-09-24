@@ -2496,6 +2496,39 @@ fn command_authorization_distinguishes_safe_and_unknown_shell_commands() {
 }
 
 #[test]
+fn one_shot_network_sandbox_escalation_always_requires_confirmation() {
+    assert_eq!(
+        authorize_tool_with_args(
+            "run_command",
+            &serde_json::json!({"command": "curl https://example.com", "network_access": true}),
+            crate::config::AgentMode::Build,
+            true,
+            false,
+        ),
+        AuthorizationDecision::RequireConfirmation
+    );
+}
+
+#[test]
+fn one_shot_filesystem_sandbox_escalation_always_requires_confirmation() {
+    let args = serde_json::json!({
+        "command": "touch /tmp/release.txt",
+        "filesystem_write_path": "/tmp"
+    });
+    assert_eq!(
+        authorize_tool_with_args(
+            "run_command",
+            &args,
+            crate::config::AgentMode::Build,
+            true,
+            false,
+        ),
+        AuthorizationDecision::RequireConfirmation
+    );
+    assert!(crate::tools::rememberable_command_prefix_for_call(&args).is_none());
+}
+
+#[test]
 fn command_authorization_allows_harmless_inspection_but_confirms_side_effects() {
     for command in [
         "cat src/main.rs",
