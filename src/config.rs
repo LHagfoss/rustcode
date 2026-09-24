@@ -793,6 +793,11 @@ pub struct McpServerConfig {
     pub env: std::collections::HashMap<String, String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Reserve this server's complete MCP toolset in every native tool request.
+    /// If the complete set cannot fit within the native schema count or byte
+    /// budget, none of that server's tools are bound and the omission is logged.
+    #[serde(default)]
+    pub always_include: bool,
 }
 
 /// Local audio generation preferences. Backends are external processes and
@@ -1188,6 +1193,7 @@ impl Default for AppConfig {
                 args: vec!["-y".to_string(), "socraticode@latest".to_string()],
                 env: std::collections::HashMap::new(),
                 enabled: true,
+                always_include: false,
             }],
             approved_command_prefixes: Vec::new(),
             audio: AudioConfig::default(),
