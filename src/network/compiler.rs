@@ -54,11 +54,25 @@ async fn run_compiler_command(
     if cancel_token.is_cancelled() {
         return unverified("was cancelled");
     }
+    let writable_roots = [cwd.to_path_buf()];
+    let command_for_exec = match crate::tools::exec::sandbox::command(
+        command,
+        crate::tools::exec::sandbox::SandboxPolicy {
+            command_cwd: Some(cwd),
+            workspace_root: Some(cwd),
+            writable_roots: &writable_roots,
+            session_scratch_roots: &[],
+            network_access: false,
+        },
+    ) {
+        Ok(command) => command,
+        Err(error) => return unverified(&error),
+    };
     // A child token also stops the blocking worker if this async future is dropped.
     let worker_token = cancel_token.child_token();
     let _cancel_on_drop = worker_token.clone().drop_guard();
     let request = rustcode_command::CommandRequest {
-        command: command.to_owned(),
+        command: command_for_exec,
         cwd: Some(cwd.to_path_buf()),
         env: vec![("PATH".into(), compiler_augmented_path().into())],
         timeout,
