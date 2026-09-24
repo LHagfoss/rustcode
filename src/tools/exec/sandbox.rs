@@ -400,11 +400,25 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
     probe
         .args([
             "--die-with-parent",
+            "--new-session",
             "--unshare-user",
+            "--unshare-pid",
+            "--unshare-ipc",
             "--unshare-net",
+            "--disable-userns",
+            "--cap-drop",
+            "ALL",
             "--ro-bind",
             "/",
             "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+            "--tmpfs",
+            "/run",
             "--seccomp",
         ])
         .arg(fd.to_string())
