@@ -180,8 +180,9 @@ shell syntax, environment or background overrides, privileged/network
 commands, package installation/publication, deployment/release actions, and
 known destructive commands remain ineligible for reusable allows. Approval
 rules do not provide operating-system isolation or change the shell process's
-permissions; sandbox permissions are enforced separately by the platform
-backend. See
+permissions. OS sandbox enforcement is available only on supported backends
+(currently Linux and macOS); on unsupported platforms such as Windows,
+approved commands run with the RustCode process's permissions. See
 [docs/shell-approvals.md](docs/shell-approvals.md).
 
 ## Background commands

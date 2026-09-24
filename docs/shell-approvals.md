@@ -20,8 +20,10 @@ Forbid rules take precedence over allows and session auto-confirm. Parent and
 subagent shell calls use the same saved rules.
 
 Approval rules decide when RustCode asks the user. They do not provide
-operating-system isolation or change the shell process's permissions. Sandbox
-permissions are enforced separately by the platform backend.
+operating-system isolation or change the shell process's permissions. OS
+permissions are enforced separately only on platforms with a supported
+sandbox backend. On unsupported platforms such as Windows, commands run with
+the RustCode process's permissions.
 
 Forbid rules persist in `~/.config/rustcode/config.toml` as
 `denied_command_prefixes`, are user-level only, and take precedence over saved

@@ -647,12 +647,14 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     {
         return None;
     }
-    let binary = tokens[0].rsplit(['/', '\\']).next()?;
+    // Use the same Windows executable normalization as deny rules so `.exe`,
+    // `.cmd`, `.bat`, and `.com` shims cannot bypass risky-command checks.
+    let binary = command_basename(&tokens[0]).to_ascii_lowercase();
     if !allow {
         return Some(tokens);
     }
     if matches!(
-        binary,
+        binary.as_str(),
         "sudo"
             | "doas"
             | "env"
@@ -721,31 +723,49 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     ) {
         return None;
     }
-    if tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "clean"
-                | "destroy"
-                | "delete"
-                | "wipe"
-                | "purge"
-                | "prune"
-                | "reset"
-                | "push"
-                | "publish"
-                | "deploy"
-                | "release"
-        )
-    }) {
+    if tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .any(|token| {
+            matches!(
+                token.as_str(),
+                "clean"
+                    | "destroy"
+                    | "delete"
+                    | "wipe"
+                    | "purge"
+                    | "prune"
+                    | "reset"
+                    | "push"
+                    | "publish"
+                    | "deploy"
+                    | "release"
+            )
+        })
+    {
         return None;
     }
-    if matches!(binary, "pip" | "pip3")
-        || matches!(binary, "npm" | "pnpm" | "yarn" | "bun")
-            && tokens
+    let normalized_tokens = tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let is_pip = binary == "pip"
+        || binary.strip_prefix("pip").is_some_and(|version| {
+            version
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+                && version
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '.')
+        });
+    if is_pip
+        || matches!(binary.as_str(), "npm" | "pnpm" | "yarn" | "bun")
+            && normalized_tokens
                 .iter()
                 .any(|token| matches!(token.as_str(), "install" | "add" | "publish" | "link"))
         || binary == "cargo"
-            && tokens
+            && normalized_tokens
                 .iter()
                 .any(|token| matches!(token.as_str(), "install" | "publish" | "login" | "owner"))
     {
@@ -759,7 +779,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
         return None;
     }
     // Do not turn an interpreter/module prefix into a broad reusable rule.
-    if matches!(binary, "python" | "python3") {
+    if matches!(binary.as_str(), "python" | "python3") {
         if tokens
             .get(1)
             .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-e"))
@@ -774,7 +794,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
         {
             return None;
         }
-    } else if matches!(binary, "node" | "ruby" | "perl")
+    } else if matches!(binary.as_str(), "node" | "ruby" | "perl")
         && (tokens
             .get(1)
             .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-m" | "-e"))
@@ -787,7 +807,7 @@ fn reusable_rule_tokens(command: &str, allow: bool) -> Option<Vec<String>> {
     if tokens.iter().any(|token| {
         let lower = token.to_ascii_lowercase();
         matches!(
-            token.as_str(),
+            lower.as_str(),
             "-f" | "--force" | "--global" | "-g" | "--output" | "-o"
         ) || lower.starts_with("--output=")
             || lower.starts_with("--prefix=")
@@ -1896,6 +1916,28 @@ mod command_prefix_tests {
             assert_eq!(
                 rememberable_command_prefix(command).as_deref(),
                 Some(command)
+            );
+        }
+    }
+
+    #[test]
+    fn windows_executable_shims_do_not_bypass_risky_command_filters() {
+        for command in [
+            "pip.exe install package",
+            "pip3.EXE install package",
+            "pip3.11.exe install package",
+            "C:\\Python\\Scripts\\pip.exe install package",
+            "npm.cmd install package",
+            "NPM.CMD install package",
+            "npm.BAT install package",
+            "npm.com install package",
+            "C:\\Progra~1\\nodejs\\npm.cmd install package",
+            "cargo.exe install package",
+            "C:\\Rust\\cargo.EXE install package",
+        ] {
+            assert!(
+                rememberable_command_prefix(command).is_none(),
+                "Windows risky command should not be reusable: {command}"
             );
         }
     }
