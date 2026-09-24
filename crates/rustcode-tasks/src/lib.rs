@@ -967,6 +967,7 @@ fn test_request(command: &str) -> CommandRequest {
     CommandRequest {
         command: command.to_owned(),
         status_command: None,
+        sandboxed_shell: false,
         cwd: None,
         env: Vec::new(),
         timeout: std::time::Duration::from_secs(5),

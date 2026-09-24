@@ -435,6 +435,7 @@ impl ActionBackend for ProductionActions {
                         let request = rustcode_command::CommandRequest {
                             command: sandboxed_command.command,
                             status_command: None,
+                            sandboxed_shell: true,
                             cwd: Some(cwd),
                             env: vec![],
                             timeout: Duration::from_secs(timeout_seconds),

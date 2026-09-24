@@ -850,6 +850,7 @@ pub(crate) fn spawn_background_task_for_test(
                 rustcode_command::CommandRequest {
                     command: command.to_owned(),
                     status_command: None,
+                    sandboxed_shell: false,
                     cwd: None,
                     env: Vec::new(),
                     timeout: std::time::Duration::from_secs(30),

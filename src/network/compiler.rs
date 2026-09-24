@@ -74,6 +74,7 @@ async fn run_compiler_command(
     let request = rustcode_command::CommandRequest {
         command: command_for_exec.command,
         status_command: None,
+        sandboxed_shell: true,
         cwd: Some(cwd.to_path_buf()),
         env: vec![("PATH".into(), compiler_augmented_path().into())],
         timeout,

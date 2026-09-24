@@ -604,6 +604,7 @@ fn run_command_output_inner(
     let command_request = rustcode_command::CommandRequest {
         command: sandboxed.command,
         status_command: Some(command_str.to_owned()),
+        sandboxed_shell: true,
         cwd: resolved_cwd.clone(),
         env: command_env,
         timeout: Duration::from_millis(timeout_ms.max(1)),
@@ -1056,6 +1057,7 @@ mod tests {
         rustcode_command::CommandRequest {
             command: command.to_owned(),
             status_command: None,
+            sandboxed_shell: false,
             cwd,
             env: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
