@@ -1,0 +1,1862 @@
+use crate::atomic_file::replace_file;
+use serde::{Deserialize, Serialize};
+use serde_millis;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub use rustcode_core::{AgentMode, ToolProtocol};
+
+/// OS-enforced command permissions on platforms with a native sandbox backend.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxMode {
+    /// Read-only host view, with no writable workspace or network access.
+    ReadOnly,
+    /// Read the host, write only to the active workspace/session scratch, and deny network.
+    #[default]
+    WorkspaceWrite,
+    /// Workspace writes with network access enabled.
+    WorkspaceWriteNetwork,
+}
+
+impl SandboxMode {
+    pub fn allows_workspace_write(self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
+
+    pub fn allows_network(self) -> bool {
+        matches!(self, Self::WorkspaceWriteNetwork)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only host; no network",
+            Self::WorkspaceWrite => "workspace/session writes; no network",
+            Self::WorkspaceWriteNetwork => "workspace/session writes; network",
+        }
+    }
+
+    pub fn effective_description(self) -> &'static str {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.description()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = self;
+            "OS sandbox unavailable; shell uses RustCode process permissions"
+        }
+    }
+}
+
+pub const MAX_CONTEXT_TOKENS: u32 = 2048;
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
+/// Zero means no fixed round ceiling. Turns still terminate on context,
+/// token, cancellation, and progress/recovery safety budgets.
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 0;
+/// Zero means no additional total-round ceiling. Set this explicitly for an
+/// unattended/CI run that needs a hard cap across all continuation segments.
+pub const DEFAULT_MAX_TOTAL_TOOL_ROUNDS: usize = 0;
+pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
+/// Tool rounds should be short and action-oriented. Reasoning models often
+/// spend their entire completion allowance thinking before emitting a tool
+/// call; a smaller cap keeps local agent turns responsive while final prose
+/// still uses the profile's full completion budget.
+pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
+/// Upper bound for an explicitly verified profile tool-round override. This
+/// remains below the normal context-budget ceiling for a 128k context model.
+pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
+const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
+const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
+const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
+/// Safe mutation cap for explicitly enabled response batching. The scheduler
+/// batches every valid read-only call and runs one mutation per round by
+/// default; read-only inspection (`grep`, `glob`, `view_file`, and read-only
+/// shell commands) is classified separately and never consumes this budget.
+pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
+/// Keep profile overrides bounded even when a config typo requests an
+/// unreasonably large mutation batch.
+pub const MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE: usize = 8;
+/// Read-only calls are independently bounded for explicitly trusted profiles.
+pub const DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE: usize = 4;
+pub const MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE: usize = 8;
+/// A response may be continued twice by default. Larger values require an
+/// explicit profile opt-in because continuation requests replay the response
+/// prefix and can amplify incomplete structured calls.
+pub const DEFAULT_MAX_TOOL_CONTINUATIONS: usize = 2;
+pub const MAX_CONFIGURED_TOOL_CONTINUATIONS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSchedulingPolicy {
+    pub allow_batching: bool,
+    pub max_read_only_calls: usize,
+    pub max_mutating_calls: usize,
+    pub max_continuations: usize,
+}
+
+impl Default for ToolSchedulingPolicy {
+    fn default() -> Self {
+        Self {
+            allow_batching: false,
+            max_read_only_calls: 1,
+            max_mutating_calls: 1,
+            max_continuations: DEFAULT_MAX_TOOL_CONTINUATIONS,
+        }
+    }
+}
+
+pub const MODELS_FILE: &str = "models.json";
+pub const CONFIG_FILE: &str = "config.json";
+pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_FORMAT_VERSION: u32 = 1;
+pub const PROJECT_CONFIG_DIR: &str = ".rustcode";
+pub const PROJECT_CONFIG_FILE: &str = "config.toml";
+const PROJECT_GITIGNORE_ENTRY: &str = ".rustcode/config.toml";
+const HISTORY_FILE: &str = "history.json";
+#[cfg(test)]
+const SESSIONS_DIR: &str = "sessions";
+#[allow(dead_code)]
+const MAX_SESSIONS: usize = 30;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct ModelProfile {
+    pub name: String,
+    pub url: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_key: Option<String>,
+    /// Request API dialect used by the endpoint. Omitted profiles retain the
+    /// OpenAI-compatible chat-completions behavior; a `/responses` URL also
+    /// selects the Responses dialect for convenient hand-written configs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ApiProtocol>,
+    /// Forces a tool protocol for this profile, overriding provider detection.
+    /// Set it when a self-hosted server implements OpenAI-style function
+    /// calling (or advertises it but gets it wrong).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_protocol: Option<ToolProtocol>,
+    /// Sends Qwen3's top-level `enable_thinking` request field when set.
+    /// `Some(false)` skips `<think>` generation entirely at the chat-template
+    /// level (much faster, no reasoning trace); `Some(true)` forces it on;
+    /// `None` (default) leaves the server's own template default in place —
+    /// matches prior behavior for profiles that don't opt in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_thinking: Option<bool>,
+    /// Reasoning effort level (e.g. "low", "medium", "high") sent in OpenAI-compatible payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Hard provider-side cap for reasoning tokens when the OpenAI-compatible
+    /// endpoint supports the `thinking_budget` extension. Unlike
+    /// `reasoning_effort`, this is an explicit token limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
+    /// Whether the endpoint has been verified to accept `thinking_budget`.
+    /// Unknown providers default to false so an unsupported extension is not
+    /// mistaken for an effective client-side limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_thinking_budget: Option<bool>,
+    /// Whether the endpoint has been verified to accept `reasoning_effort`.
+    /// This is separate from `enable_thinking`, which controls chat-template
+    /// thinking mode for providers such as Qwen/oMLX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning_effort: Option<bool>,
+    /// Sampling temperature sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// Nucleus-sampling probability sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    /// Top-k sampling cutoff used by local OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    /// Presence penalty sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    /// Frequency penalty sent to OpenAI-compatible endpoints. When absent,
+    /// RustCode preserves its historical default of 0.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    /// Force stochastic sampling on servers such as oMLX that otherwise keep
+    /// their per-model greedy/default sampling policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_sampling: Option<bool>,
+    /// Ask compatible chat templates to retain historical thinking traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserve_thinking: Option<bool>,
+    /// Per-profile completion token cap. `None` lets ordinary responses use
+    /// the provider/model default; tool and recovery rounds still receive a
+    /// bounded client-side cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Optional maximum tool-round completion ceiling for a verified
+    /// provider/model combination. Tool requests begin at the safe 8K cap and
+    /// may use this ceiling only after an actionable textual call is proven to
+    /// have been truncated. Recovery requests intentionally ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_max_tokens: Option<u32>,
+    /// Explicit name for the total provider output ceiling. `max_tokens` is
+    /// retained as a legacy alias for existing configuration files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Minimum visible answer space to preserve when thinking and visible
+    /// output share the provider's `max_output_tokens` ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_answer_tokens: Option<u32>,
+    /// Wire field used when an explicit output cap must be sent. This is an
+    /// endpoint capability/dialect override, not a model-name lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_token_field: Option<OutputTokenField>,
+    /// Whether this model accepts image input. `None` means unsupported until
+    /// the profile is explicitly configured, avoiding a provider failure as a
+    /// capability probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
+    /// Effective soft context target at which proactive compaction and context
+    /// optimization trigger, preventing requests from routinely driving close to
+    /// the theoretical maximum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_context_target: Option<u32>,
+    /// Hard upper limit on estimated prompt tokens plus completion reserve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hard_effective_limit: Option<u32>,
+    /// Conservative safety margin for provider chat-template framing and tokenizer variations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_overhead_margin: Option<u32>,
+    /// Provider-reported or explicitly verified context limit. When both
+    /// this and `context_window` are present, the effective window is their
+    /// safe minimum. This prevents a stale model profile from advertising a
+    /// larger window than the running server accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_context_window: Option<u32>,
+    /// Maximum number of workspace-changing tool calls accepted from one
+    /// response when batching is enabled. Omitted profiles retain the safe
+    /// four-call cap, while scheduling remains strict by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mutating_calls_per_response: Option<usize>,
+    /// Explicitly identify an OpenAI-compatible endpoint as local. This is
+    /// needed for self-hosted gateways whose URL and engine name look remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
+    /// Explicitly allow this profile to batch multiple workspace-changing
+    /// tool calls in one response. Omitted profiles run one mutation per
+    /// round; read-only calls always batch regardless of this flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_tool_batching: Option<bool>,
+    /// Maximum read-only calls in one response when batching is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_read_only_calls_per_response: Option<usize>,
+    /// Maximum response continuations for this profile. Omitted profiles
+    /// retain the conservative default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_continuations: Option<usize>,
+    /// Use a compact text-protocol tool menu for providers with small request
+    /// bodies, omitting long descriptions and MCP tool listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_tool_prompt: Option<bool>,
+    /// Client-only allowance for reasoning deltas from providers that expose
+    /// reasoning in streams but reject reasoning-control request fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_reasoning_budget: Option<u32>,
+}
+
+/// Provider-specific spelling for an output token limit.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputTokenField {
+    MaxTokens,
+    MaxCompletionTokens,
+    MaxOutputTokens,
+    /// Google Generative Language native `generationConfig` spelling.
+    GoogleMaxOutputTokens,
+}
+
+/// Wire protocol used to exchange model requests and streamed responses.
+///
+/// Most RustCode profiles use the OpenAI-compatible Chat Completions API.
+/// OpenCode Zen's Muse and GPT profiles use the OpenAI Responses API instead,
+/// so the dialect must be explicit rather than inferred from the model name.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiProtocol {
+    ChatCompletions,
+    Responses,
+}
+
+impl Default for ApiProtocol {
+    fn default() -> Self {
+        Self::ChatCompletions
+    }
+}
+
+impl OutputTokenField {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::MaxTokens => "max_tokens",
+            Self::MaxCompletionTokens => "max_completion_tokens",
+            Self::MaxOutputTokens => "max_output_tokens",
+            Self::GoogleMaxOutputTokens => "maxOutputTokens",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputTokenField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.wire_name())
+    }
+}
+
+/// Fallback output ceiling used when a `ModelProfile` doesn't set its own.
+pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
+/// Provider chat templates and tokenizer dialects can add materially more
+/// framing than the local BPE estimate. This reserve is calibrated from
+/// observed provider prompt usage and is intentionally bounded below the
+/// context window so request trimming remains conservative.
+pub const DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT: u32 = 15;
+const MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN: u32 = 32768;
+/// Preserve visible answer/tool-call room when thinking shares the provider's
+/// total output ceiling. This is a reservation, not an increase to the
+/// provider request limit.
+pub const DEFAULT_MINIMUM_ANSWER_TOKENS: u32 = 1024;
+
+/// The portion of a model context that is intentionally unavailable to the
+/// conversation history. Tool schemas, completion/tool-call output, and (when
+/// enabled) reasoning all compete with the transcript for the same provider
+/// context window, so history must not be budgeted as a fixed percentage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextBudget {
+    pub context_window: u32,
+    pub soft_context_target: u32,
+    pub hard_effective_limit: u32,
+    pub completion_reserve: u32,
+    pub max_output_tokens: u32,
+    pub thinking_reserve: u32,
+    pub thinking_budget: u32,
+    pub minimum_answer_tokens: u32,
+    pub tool_reserve: u32,
+    pub safety_reserve: u32,
+    pub provider_overhead_margin: u32,
+    pub history_tokens: u32,
+}
+
+impl ModelProfile {
+    /// Whether this profile is the provider/model combination whose larger
+    /// tool budget has been verified. Other profiles must opt in explicitly
+    /// with `tool_max_tokens` instead of inheriting this exception.
+    pub fn is_verified_kat_coder(&self) -> bool {
+        self.name
+            .eq_ignore_ascii_case(VERIFIED_KAT_CODER_PROFILE_NAME)
+            && self.model.eq_ignore_ascii_case(VERIFIED_KAT_CODER_MODEL)
+            && self
+                .url
+                .to_ascii_lowercase()
+                .starts_with(VERIFIED_KAT_CODER_HOST)
+    }
+
+    /// Match the profile used to construct a request. The endpoint is part of
+    /// the identity so a model name alone cannot inherit another profile's
+    /// output or provider capability settings.
+    pub fn matches_request(&self, url: &str, model: &str) -> bool {
+        let configured_url = self.url.trim_end_matches('/');
+        let request_url = url.trim_end_matches('/');
+        (self.model == model || self.name == model)
+            && (configured_url == request_url || self.endpoint_url() == request_url)
+    }
+
+    /// Resolve the request dialect without requiring every legacy profile to
+    /// add a new field. Explicit metadata wins, then a `/responses` endpoint
+    /// is recognized as the OpenAI Responses API.
+    pub fn resolved_api_protocol(&self) -> ApiProtocol {
+        self.api_protocol.unwrap_or_else(|| {
+            self.url
+                .trim_end_matches('/')
+                .ends_with("/responses")
+                .then_some(ApiProtocol::Responses)
+                .unwrap_or_default()
+        })
+    }
+
+    /// Resolve the per-profile mutation policy once at the orchestration
+    /// boundary. Zero is treated as an omitted value, and overrides cannot
+    /// exceed the small hard cap used to contain configuration mistakes.
+    pub fn max_mutating_calls_per_response(&self) -> usize {
+        self.max_mutating_calls_per_response
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE)
+            .min(MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE)
+    }
+
+    /// Whether this explicitly trusted profile may schedule a bounded
+    /// mutation batch instead of the default one-mutation-per-response policy.
+    /// Read-only calls always batch; this flag only raises the mutation cap.
+    pub fn tool_batching_enabled(&self) -> bool {
+        self.allow_tool_batching == Some(true)
+    }
+
+    pub fn max_read_only_calls_per_response(&self) -> usize {
+        self.max_read_only_calls_per_response
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_READ_ONLY_CALLS_PER_RESPONSE)
+            .min(MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE)
+    }
+
+    pub fn max_tool_continuations(&self) -> usize {
+        self.max_tool_continuations
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_TOOL_CONTINUATIONS)
+            .min(MAX_CONFIGURED_TOOL_CONTINUATIONS)
+    }
+
+    pub fn tool_scheduling_policy(&self) -> ToolSchedulingPolicy {
+        ToolSchedulingPolicy {
+            allow_batching: self.tool_batching_enabled(),
+            max_read_only_calls: if self.tool_batching_enabled() {
+                self.max_read_only_calls_per_response()
+            } else {
+                1
+            },
+            max_mutating_calls: if self.tool_batching_enabled() {
+                self.max_mutating_calls_per_response()
+            } else {
+                1
+            },
+            max_continuations: self.max_tool_continuations(),
+        }
+    }
+
+    /// Return the completion cap for one request. Tool-enabled requests are
+    /// deliberately bounded for every model: a long speculative generation is
+    /// expensive and cannot be useful until it produces an action.
+    /// Requests without tools retain the configured cap for normal answers.
+    pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
+        let configured = self.context_budget().max_output_tokens;
+        if allow_tools {
+            configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
+        } else {
+            configured
+        }
+    }
+
+    /// Resolve an explicitly opted-in tool ceiling without allowing a profile
+    /// typo to bypass the context-derived normal completion ceiling.
+    pub fn tool_output_ceiling(&self) -> u32 {
+        let configured = self.context_budget().max_output_tokens;
+        self.verified_tool_output_ceiling()
+            .unwrap_or(DEFAULT_TOOL_ROUND_MAX_TOKENS)
+            .min(configured)
+    }
+
+    /// Return a larger tool ceiling only for an explicit opt-in or the known
+    /// verified kat-coder profile. A normal output budget alone is not enough
+    /// for arbitrary profiles, preserving the conservative fallback.
+    pub fn verified_tool_output_ceiling(&self) -> Option<u32> {
+        let configured_output = self.max_output_tokens.or(self.max_tokens);
+        let requested = self.tool_max_tokens.filter(|limit| *limit > 0).or_else(|| {
+            self.is_verified_kat_coder()
+                .then_some(configured_output)
+                .flatten()
+        });
+        requested.map(|limit| {
+            limit
+                .clamp(1, MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS)
+                .min(self.context_budget().max_output_tokens)
+        })
+    }
+
+    /// Resolve the endpoint's output-limit field. Explicit profile metadata
+    /// wins; otherwise recognize only a stable endpoint dialect and keep the
+    /// generic OpenAI-compatible field for local gateways and other proxies.
+    pub fn resolved_output_token_field(&self) -> OutputTokenField {
+        self.output_token_field
+            .unwrap_or_else(|| match self.resolved_api_protocol() {
+                ApiProtocol::Responses => OutputTokenField::MaxOutputTokens,
+                ApiProtocol::ChatCompletions => {
+                    if self.is_google_native_endpoint() {
+                        OutputTokenField::GoogleMaxOutputTokens
+                    } else {
+                        OutputTokenField::MaxTokens
+                    }
+                }
+            })
+    }
+
+    /// Whether this profile points at Google's native Generative Language
+    /// endpoint rather than its OpenAI-compatible `/openai/` adapter.
+    pub fn is_google_native_endpoint(&self) -> bool {
+        let url = self.url.to_ascii_lowercase();
+        let is_google = url.contains("generativelanguage.googleapis.com");
+        let is_native_path = url.contains(":generatecontent") || url.contains("/generatecontent");
+        is_google && !url.contains("/openai/") && is_native_path
+    }
+
+    /// Return the wire output cap for one request. Context reserves remain
+    /// independent: an unset ordinary response uses the provider default,
+    /// while tool and recovery rounds retain a hard client-side ceiling.
+    pub fn output_token_limit(&self, allow_tools: bool, bounded_recovery: bool) -> Option<u32> {
+        if self.max_output_tokens.is_some()
+            || self.max_tokens.is_some()
+            || allow_tools
+            || bounded_recovery
+        {
+            Some(self.completion_token_limit(allow_tools))
+        } else {
+            None
+        }
+    }
+
+    pub fn context_budget(&self) -> ContextBudget {
+        // Keep the effective value bounded and honest. In particular, do not
+        // inflate a deliberately small profile and then send a request that
+        // cannot fit the provider's configured window.
+        let configured_context_window = self
+            .context_window
+            .or(self.provider_context_window)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+            .max(1);
+        let context_window = self
+            .provider_context_window
+            .map(|provider| configured_context_window.min(provider.max(1)))
+            .unwrap_or(configured_context_window);
+        let default_completion = if self.is_local() {
+            (context_window / 8).clamp(1024, 4096)
+        } else {
+            DEFAULT_REQUEST_MAX_TOKENS.min((context_window / 4).max(1))
+        };
+        let configured_completion = self
+            .max_output_tokens
+            .or(self.max_tokens)
+            .unwrap_or(default_completion);
+        let requested_completion = configured_completion
+            .min((context_window / 4).max(1))
+            .max(1);
+        let thinking_enabled = self.enable_thinking == Some(true)
+            || self
+                .reasoning_effort
+                .as_deref()
+                .filter(|_| self.supports_reasoning_effort_wire())
+                .map(|e| e != "off" && e != "none")
+                .unwrap_or(false);
+        let requested_thinking = if thinking_enabled {
+            self.thinking_budget.unwrap_or_else(|| {
+                // Scale the derived default with the output cap so large-context
+                // profiles keep thinking room proportional to the answer budget.
+                // The client-side cut remains only as a high backstop against
+                // runaway thought eating the whole turn; provider-side controls
+                // (effort/thinking_budget) are the primary mechanism.
+                (context_window / 8).clamp(1, (requested_completion / 2).max(1))
+            })
+        } else {
+            0
+        };
+        let minimum_answer_tokens = self
+            .minimum_answer_tokens
+            .unwrap_or_else(|| {
+                if thinking_enabled {
+                    // Scale the default for small output ceilings so a local
+                    // model still gets both a thinking slice and answer space.
+                    DEFAULT_MINIMUM_ANSWER_TOKENS
+                        .min((requested_completion / 4).max(1))
+                        .min(requested_completion.saturating_sub(1))
+                } else {
+                    0
+                }
+            })
+            .min(requested_completion);
+        let requested_tool = (context_window / 16).min(4096);
+        let requested_safety = (context_window / 32).min(1024);
+
+        let provider_overhead_margin = self
+            .provider_overhead_margin
+            .unwrap_or_else(|| {
+                let proportional = (u64::from(context_window)
+                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT))
+                    / 100;
+                (proportional as u32).min(MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
+            })
+            .min(context_window.saturating_sub(1));
+
+        let hard_effective_limit = self
+            .hard_effective_limit
+            .unwrap_or_else(|| context_window.saturating_sub(provider_overhead_margin))
+            .clamp(1, context_window);
+
+        let soft_context_target = self
+            .soft_context_target
+            .unwrap_or_else(|| {
+                if self.is_local() {
+                    ((context_window as f64 * 0.70) as u32).clamp(1, hard_effective_limit)
+                } else {
+                    hard_effective_limit
+                }
+            })
+            .clamp(1, hard_effective_limit);
+
+        // Keep the fields honest even for synthetic or unusually small model
+        // profiles: the published reserves must never add up to more than the
+        // context window, and history always retains a small inspectable tail.
+        let completion_reserve = requested_completion.min(hard_effective_limit);
+        let mut reserve_capacity = hard_effective_limit.saturating_sub(completion_reserve);
+        // Thinking and visible answer tokens share max_output_tokens; they
+        // must not be double-counted against the prompt context. The fields
+        // below describe the split within that output reservation.
+        let thinking_reserve =
+            requested_thinking.min(completion_reserve.saturating_sub(minimum_answer_tokens));
+        let thinking_budget = thinking_reserve;
+        let tool_reserve = requested_tool.min(reserve_capacity);
+        reserve_capacity = reserve_capacity.saturating_sub(tool_reserve);
+        let safety_reserve = requested_safety.min(reserve_capacity);
+        let reserved = completion_reserve
+            .saturating_add(tool_reserve)
+            .saturating_add(safety_reserve);
+        // `hard_effective_limit` already excludes provider framing overhead.
+        // Keep the early history/compaction trigger on that safe side of the
+        // boundary; final request trimming uses the exact projected payload.
+        let history_tokens = hard_effective_limit.saturating_sub(reserved);
+        ContextBudget {
+            context_window,
+            soft_context_target,
+            hard_effective_limit,
+            completion_reserve,
+            max_output_tokens: completion_reserve,
+            thinking_reserve,
+            thinking_budget,
+            minimum_answer_tokens,
+            tool_reserve,
+            safety_reserve,
+            provider_overhead_margin,
+            history_tokens,
+        }
+    }
+
+    /// The context window RustCode may safely use for this profile.
+    #[cfg(test)]
+    pub fn effective_context_window(&self) -> u32 {
+        self.context_budget().context_window
+    }
+
+    /// Returns the configured and provider-reported windows when the profile
+    /// is wider than the provider. This is useful for a concise diagnostic.
+    pub fn context_window_mismatch(&self) -> Option<(u32, u32)> {
+        let configured = self.context_window?;
+        let provider = self.provider_context_window?;
+        (provider < configured).then_some((configured, provider))
+    }
+
+    pub fn supports_thinking_budget_wire(&self) -> bool {
+        // Profiles written before capability metadata was introduced may
+        // still contain `thinking_budget`. Preserve their established wire
+        // behavior while allowing an explicit `false` to opt out.
+        self.supports_thinking_budget
+            .unwrap_or(self.thinking_budget.is_some())
+    }
+
+    pub fn supports_reasoning_effort_wire(&self) -> bool {
+        // `None` means legacy/unknown metadata, not an explicit rejection.
+        // Existing profiles with reasoning_effort must continue sending it.
+        self.supports_reasoning_effort
+            .unwrap_or(self.reasoning_effort.is_some())
+    }
+}
+
+impl ModelProfile {
+    pub fn image_input_supported(&self) -> Option<bool> {
+        self.supports_vision
+    }
+
+    pub fn is_local(&self) -> bool {
+        if let Some(local) = self.local {
+            return local;
+        }
+        if let Some(ref engine) = self.engine {
+            let eng = engine.to_ascii_lowercase();
+            if matches!(
+                eng.as_str(),
+                "local"
+                    | "ollama"
+                    | "llama.cpp"
+                    | "llama_cpp"
+                    | "lmstudio"
+                    | "omlx"
+                    | "mlx"
+                    | "vllm"
+                    | "tgi"
+            ) {
+                return true;
+            }
+        }
+        let url_lower = self.url.to_ascii_lowercase();
+        let authority = url_lower
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(url_lower.as_str())
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .rsplit('@')
+            .next()
+            .unwrap_or_default();
+        let host = authority
+            .strip_prefix('[')
+            .and_then(|value| value.split(']').next())
+            .or_else(|| authority.rsplit_once(':').map(|(host, _)| host))
+            .unwrap_or(authority);
+        let loopback = matches!(host, "localhost" | "::1" | "0.0.0.0") || host.starts_with("127.");
+        url_lower.contains("ollama")
+            || url_lower.contains(":11434")
+            || url_lower.contains(":1234")
+            || (self.engine.is_none() && loopback)
+    }
+
+    pub fn endpoint_url(&self) -> String {
+        let trimmed = self.url.trim_end_matches('/');
+        match self.resolved_api_protocol() {
+            ApiProtocol::Responses => {
+                if trimmed.ends_with("/responses") {
+                    trimmed.to_string()
+                } else if let Some(base) = trimmed.strip_suffix("/chat/completions") {
+                    format!("{base}/responses")
+                } else if let Some(base) = trimmed.strip_suffix("/chats/completion") {
+                    format!("{base}/responses")
+                } else {
+                    format!("{trimmed}/responses")
+                }
+            }
+            ApiProtocol::ChatCompletions => {
+                if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion")
+                {
+                    trimmed.to_string()
+                } else if let Some(base) = trimmed.strip_suffix("/responses") {
+                    format!("{base}/chat/completions")
+                } else {
+                    format!("{trimmed}/chat/completions")
+                }
+            }
+        }
+    }
+
+    pub fn resolved_api_key(&self) -> Option<String> {
+        // `shell_env` falls back to the login/interactive shell (`$SHELL -l
+        // -i -c printenv) and static dotfile parsing, so keys exported in
+        // `~/.zshrc` resolve even when RustCode was launched outside the
+        // user's interactive shell (desktop entry, systemd, IDE, tmux
+        // server). Process env always wins. See `shell_env.rs`.
+        if let Some(ref env_name) = self.env_key
+            && let Some(val) = crate::shell_env::env_var(env_name)
+            && !val.trim().is_empty()
+        {
+            return Some(val);
+        }
+        if let Some(ref k) = self.api_key {
+            if let Some(var_name) = k.strip_prefix("env:") {
+                if let Some(val) = crate::shell_env::env_var(var_name)
+                    && !val.trim().is_empty()
+                {
+                    return Some(val);
+                }
+            } else if let Some(val) = crate::shell_env::env_var(k) {
+                if !val.trim().is_empty() {
+                    return Some(val);
+                }
+            } else if !k.trim().is_empty() {
+                return Some(k.clone());
+            }
+        }
+        None
+    }
+
+    /// Name of the environment variable holding this profile's key, for
+    /// startup hydration and `doctor` diagnostics.
+    pub fn api_key_env_name(&self) -> Option<&str> {
+        if let Some(ref env_name) = self.env_key {
+            return Some(env_name);
+        }
+        if let Some(ref k) = self.api_key {
+            if let Some(var_name) = k.strip_prefix("env:") {
+                return Some(var_name);
+            }
+            // A bare `api_key = "SOME_VAR"` doubles as an env reference when
+            // it looks like a variable name; surface it so hydration and
+            // diagnostics can pick it up. Literal secrets (spaces, dashes,
+            // `sk-...`) are not env names.
+            let looks_like_env = !k.trim().is_empty()
+                && k.len() <= 128
+                && k.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && !k.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if looks_like_env {
+                return Some(k);
+            }
+        }
+        None
+    }
+}
+
+/// Hosts whose OpenAI-compatible endpoints are known to implement function
+/// calling, so no probe request is needed before using it.
+///
+/// Absence proves nothing: most setups reach these providers through a local
+/// gateway (`localhost:3000`, an ollama port, a tailnet address), where the
+/// hostname says nothing about what the endpoint supports. Anything not listed
+/// here is probed instead of assumed.
+const FUNCTION_CALLING_HOSTS: &[&str] = &[
+    "api.openai.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "openrouter.ai",
+    "api.groq.com",
+    "api.mistral.ai",
+    "api.deepseek.com",
+    "api.x.ai",
+    "api.together.xyz",
+    "api.fireworks.ai",
+    "api.cerebras.ai",
+    "openai.azure.com",
+    "open.bigmodel.cn",
+    "api.z.ai",
+    "z.ai",
+];
+
+/// Whether `url` is a provider already known to implement function calling.
+pub fn provider_supports_function_calling(url: &str) -> bool {
+    let url = url.to_ascii_lowercase();
+    FUNCTION_CALLING_HOSTS.iter().any(|host| url.contains(host))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Reserve this server's complete MCP toolset in every native tool request.
+    /// If the complete set cannot fit within the native schema count or byte
+    /// budget, none of that server's tools are bound and the omission is logged.
+    #[serde(default)]
+    pub always_include: bool,
+}
+
+/// Local audio generation preferences. Backends are external processes and
+/// are discovered lazily when an audio tool is called.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AudioConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_audio_backend")]
+    pub sfx_backend: String,
+    #[serde(default = "default_audio_backend")]
+    pub music_backend: String,
+}
+
+fn default_audio_backend() -> String {
+    "auto".to_string()
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sfx_backend: default_audio_backend(),
+            music_backend: default_audio_backend(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct DefaultConfigTable {
+    #[serde(alias = "big_model")]
+    pub big: String,
+    #[serde(alias = "small_model")]
+    pub small: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum DefaultConfig {
+    Simple(String),
+    Table {
+        #[serde(alias = "big_model")]
+        big: String,
+        #[serde(alias = "small_model")]
+        small: String,
+    },
+    Array(Vec<DefaultConfigTable>),
+}
+
+impl DefaultConfig {
+    pub fn big(&self) -> &str {
+        match self {
+            DefaultConfig::Simple(s) => s,
+            DefaultConfig::Table { big, .. } => big,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first() {
+                    &first.big
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    pub fn small(&self) -> &str {
+        match self {
+            DefaultConfig::Simple(s) => s,
+            DefaultConfig::Table { small, .. } => small,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first() {
+                    &first.small
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    pub fn set_big(&mut self, new_big: String) {
+        match self {
+            DefaultConfig::Simple(s) => *s = new_big,
+            DefaultConfig::Table { big, .. } => *big = new_big,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first_mut() {
+                    first.big = new_big;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+enum DefaultOverride {
+    Simple(String),
+    Table {
+        #[serde(default, alias = "big_model")]
+        big: Option<String>,
+        #[serde(default, alias = "small_model")]
+        small: Option<String>,
+    },
+    Array(Vec<DefaultConfigTable>),
+}
+
+impl From<DefaultConfig> for DefaultOverride {
+    fn from(value: DefaultConfig) -> Self {
+        match value {
+            DefaultConfig::Simple(value) => Self::Simple(value),
+            DefaultConfig::Table { big, small } => Self::Table {
+                big: Some(big),
+                small: Some(small),
+            },
+            DefaultConfig::Array(value) => Self::Array(value),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub default: DefaultConfig,
+    pub models: Vec<ModelProfile>,
+    /// Profile name (or model id) used for image analysis fallback requests.
+    #[serde(default)]
+    pub vision_model: Option<String>,
+    #[serde(default)]
+    pub tool_protocol: ToolProtocol,
+    /// Maximum tool/recovery rounds in one resumable segment. A finite legacy
+    /// value such as 40 remains valid and is continued automatically only
+    /// after meaningful progress; zero disables this segment backstop.
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: usize,
+    /// Optional hard ceiling across all segments, intended for unattended or
+    /// CI runs. Zero leaves total rounds bounded by the other safety guards.
+    #[serde(default = "default_max_total_tool_rounds")]
+    pub max_total_tool_rounds: usize,
+    #[serde(default = "default_subagent_concurrency_limit")]
+    pub subagent_concurrency_limit: usize,
+    #[serde(default)]
+    pub last_active_session_id: Option<String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+    /// User-approved plain shell command prefixes that may run without a
+    /// repeated confirmation. Values are revalidated before matching.
+    #[serde(default)]
+    pub approved_command_prefixes: Vec<String>,
+    /// User-forbidden plain shell command prefixes. Deny rules take precedence
+    /// over reusable approvals and session auto-confirm.
+    #[serde(default)]
+    pub denied_command_prefixes: Vec<String>,
+    /// Effective OS sandbox permissions for shell commands.
+    #[serde(default)]
+    pub sandbox_mode: SandboxMode,
+    #[serde(default)]
+    pub audio: AudioConfig,
+    /// Publish the active RustCode session to the local Discord desktop IPC
+    /// client when available. This never contains Discord credentials.
+    #[serde(default = "default_true")]
+    pub discord_rpc_enabled: bool,
+    /// Opaque legacy values retained through config rewrites, but never read
+    /// by runtime behavior or written to the JSON compatibility config.
+    #[doc(hidden)]
+    #[serde(skip, default)]
+    pub legacy_laya: Option<toml::Value>,
+
+    #[serde(default)]
+    pub agent_mode: AgentMode,
+    #[serde(default)]
+    pub verbosity: crate::app::state::Verbosity,
+    /// Opt-in: log the full outbound chat-completion payload (entire message
+    /// array, tool schemas) on every request round instead of a metadata-only
+    /// summary. Off by default — the full payload is what blows debug.log up
+    /// to hundreds of MB over a long session. Turn on only when actually
+    /// diagnosing a request-shape issue.
+    #[serde(default = "default_false")]
+    pub debug_verbose_network_logging: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default)]
+    #[serde(with = "serde_millis")]
+    pub start_time: Option<std::time::SystemTime>,
+    #[serde(skip, default = "default_true")]
+    pub is_valid: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ModelsConfig {
+    default: DefaultConfig,
+    models: Vec<ModelProfile>,
+    #[serde(default)]
+    vision_model: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeConfig {
+    #[serde(default)]
+    tool_protocol: ToolProtocol,
+    #[serde(default = "default_max_tool_rounds")]
+    max_tool_rounds: usize,
+    #[serde(default = "default_max_total_tool_rounds")]
+    max_total_tool_rounds: usize,
+    #[serde(default = "default_subagent_concurrency_limit")]
+    subagent_concurrency_limit: usize,
+    #[serde(default)]
+    last_active_session_id: Option<String>,
+    #[serde(default)]
+    mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    approved_command_prefixes: Vec<String>,
+    #[serde(default)]
+    denied_command_prefixes: Vec<String>,
+    #[serde(default)]
+    sandbox_mode: SandboxMode,
+    #[serde(default)]
+    audio: AudioConfig,
+    #[serde(default = "default_true")]
+    discord_rpc_enabled: bool,
+    #[serde(default)]
+    agent_mode: AgentMode,
+    #[serde(default)]
+    verbosity: crate::app::state::Verbosity,
+    #[serde(default = "default_false")]
+    debug_verbose_network_logging: bool,
+    #[serde(default = "default_theme")]
+    theme: String,
+    #[serde(default)]
+    #[serde(with = "serde_millis")]
+    start_time: Option<std::time::SystemTime>,
+}
+
+/// Canonical, human-editable configuration file.
+///
+/// Fields are optional so users can keep a small hand-written config while
+/// the runtime still supplies defaults for everything they omit. The two
+/// JSON files remain readable as a compatibility path for older installs.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct TomlConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<DefaultOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    models: Option<Vec<ModelProfile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vision_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_protocol: Option<ToolProtocol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_tool_rounds: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_total_tool_rounds: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_concurrency_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_active_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approved_command_prefixes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    denied_command_prefixes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox_mode: Option<SandboxMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio: Option<AudioConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discord_rpc_enabled: Option<bool>,
+    /// Raw, ignored legacy configuration retained so routine rewrites do not
+    /// delete user data left by the removed Laya sidecar.
+    #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
+    legacy_laya: Option<toml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_mode: Option<AgentMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verbosity: Option<crate::app::state::Verbosity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    debug_verbose_network_logging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_millis"
+    )]
+    start_time: Option<std::time::SystemTime>,
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_max_tool_rounds() -> usize {
+    DEFAULT_MAX_TOOL_ROUNDS
+}
+
+fn default_max_total_tool_rounds() -> usize {
+    DEFAULT_MAX_TOTAL_TOOL_ROUNDS
+}
+
+fn default_subagent_concurrency_limit() -> usize {
+    DEFAULT_SUBAGENT_CONCURRENCY_LIMIT
+}
+
+fn default_theme() -> String {
+    "default".to_string()
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct UserSettings {
+    #[serde(default)]
+    pub auto_confirm: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            default: DefaultConfig::Table {
+                big: "gemini-3.6-flash".to_string(),
+                small: "gemini-3.6-flash".to_string(),
+            },
+            models: vec![
+                ModelProfile {
+                    name: "qwen3.6-dense".to_string(),
+                    url: "http://100.90.28.23:11434/v1/chat/completions".to_string(),
+                    model: "qwen3.6:27b-coding-mxfp8".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("ollama".to_string()),
+                    api_key: None,
+                    env_key: None,
+                    tool_protocol: None,
+                    enable_thinking: None,
+                    reasoning_effort: None,
+                    max_tokens: None,
+                    supports_vision: Some(false),
+                    ..Default::default()
+                },
+                ModelProfile {
+                    name: "gemini-3.6-flash".to_string(),
+                    url: "http://localhost:3000/v1/chat/completions".to_string(),
+                    model: "gemini-3.6-flash".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("openai".to_string()),
+                    api_key: None,
+                    env_key: None,
+                    tool_protocol: None,
+                    enable_thinking: None,
+                    reasoning_effort: None,
+                    max_tokens: None,
+                    supports_vision: Some(true),
+                    ..Default::default()
+                },
+                ModelProfile {
+                    name: "gemma4:e2b-it-qat".to_string(),
+                    url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
+                    model: "gemma4:e2b-it-qat".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("ollama".to_string()),
+                    api_key: None,
+                    env_key: None,
+                    tool_protocol: None,
+                    enable_thinking: None,
+                    reasoning_effort: None,
+                    max_tokens: None,
+                    supports_vision: Some(true),
+                    ..Default::default()
+                },
+                ModelProfile {
+                    name: "tinkerer".to_string(),
+                    url: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1/chat/completions".to_string(),
+                    model: "thinkingmachines/Inkling".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("tinker".to_string()),
+                    api_key: None,
+                    env_key: Some("TINKER_API_KEY".to_string()),
+                    tool_protocol: None,
+                    enable_thinking: None,
+                    reasoning_effort: None,
+                    max_tokens: None,
+                    supports_vision: Some(false),
+                    ..Default::default()
+                },
+                ModelProfile {
+                    name: "opencode-muse-spark-1.3".to_string(),
+                    url: "https://opencode.ai/zen/v1/responses".to_string(),
+                    model: "muse-spark-1.3".to_string(),
+                    context_window: Some(262_144),
+                    engine: Some("openai".to_string()),
+                    env_key: Some("OPENCODE_API_KEY".to_string()),
+                    api_protocol: Some(ApiProtocol::Responses),
+                    tool_protocol: Some(ToolProtocol::ApiNative),
+                    supports_vision: Some(false),
+                    ..Default::default()
+                },
+            ],
+            tool_protocol: ToolProtocol::default(),
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_total_tool_rounds: DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
+            subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
+            vision_model: Some("gemini-3.6-flash".to_string()),
+            last_active_session_id: None,
+            mcp_servers: vec![McpServerConfig {
+                name: "socraticode".to_string(),
+                command: "npx".to_string(),
+                args: vec!["-y".to_string(), "socraticode@latest".to_string()],
+                env: std::collections::HashMap::new(),
+                enabled: true,
+                always_include: false,
+            }],
+            approved_command_prefixes: Vec::new(),
+            denied_command_prefixes: Vec::new(),
+            sandbox_mode: SandboxMode::default(),
+            audio: AudioConfig::default(),
+            discord_rpc_enabled: true,
+            legacy_laya: None,
+            agent_mode: AgentMode::default(),
+            verbosity: crate::app::state::Verbosity::default(),
+            debug_verbose_network_logging: false,
+            theme: default_theme(),
+            start_time: None,
+            is_valid: true,
+        }
+    }
+}
+
+pub fn get_config_dir() -> Option<PathBuf> {
+    if let Ok(override_dir) = std::env::var("RUSTCODE_CONFIG_DIR")
+        && !override_dir.trim().is_empty()
+    {
+        let dir = PathBuf::from(override_dir);
+        let _ = fs::create_dir_all(&dir);
+        return Some(dir);
+    }
+    #[cfg(test)]
+    {
+        let dir = test_config_dir();
+        let _ = fs::create_dir_all(&dir);
+        return Some(dir);
+    }
+    #[cfg(not(test))]
+    {
+        #[cfg(windows)]
+        let config_root = std::env::var_os("APPDATA")
+            .or_else(|| std::env::var_os("LOCALAPPDATA"))
+            .map(PathBuf::from)?;
+
+        #[cfg(not(windows))]
+        let config_root = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+
+        let dir = config_root.join("rustcode");
+
+        if !dir.exists() {
+            let legacy = config_root.join("fmr");
+            if legacy.exists() && fs::rename(&legacy, &dir).is_ok() {
+                let old_history = dir.join("fmr_history.json");
+                if old_history.exists() {
+                    let _ = fs::rename(&old_history, dir.join(HISTORY_FILE));
+                }
+            }
+        }
+
+        return Some(dir);
+    }
+}
+
+#[cfg(test)]
+fn test_config_dir() -> PathBuf {
+    let thread = std::thread::current();
+    let identity = thread
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{:?}", thread.id()));
+    let suffix: String = identity
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
+    std::env::temp_dir().join(format!(
+        "rustcode_test_config_{}_{}",
+        std::process::id(),
+        suffix
+    ))
+}
+
+fn default_endpoint(config: &AppConfig) -> (String, String) {
+    let profile = config.models[0].clone();
+    (profile.url, profile.model)
+}
+
+pub fn load_config() -> (String, String, AppConfig) {
+    match get_config_dir() {
+        Some(dir) => load_config_from(&dir),
+        None => {
+            let config = AppConfig::default();
+            let (url, model) = default_endpoint(&config);
+            (url, model, config)
+        }
+    }
+}
+
+/// Load global configuration and overlay project configuration files from
+/// repository ancestors. Later (closer) project files take precedence over
+/// earlier ones, and all project files take precedence over the global file.
+pub fn load_config_for_workspace(workspace: &Path) -> (String, String, AppConfig) {
+    let (_, _, mut config) = load_config();
+    for path in project_config_paths(workspace) {
+        match read_toml_config(&path) {
+            Ok(file) => apply_project_toml_config(&mut config, file),
+            Err(error) => eprintln!("[rustcode] WARNING: {error}"),
+        }
+    }
+    let (url, model) = resolve_model_endpoint(&config, config.default.big());
+    (url, model, config)
+}
+
+fn project_config_paths(workspace: &Path) -> Vec<PathBuf> {
+    let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mut ancestors: Vec<PathBuf> = workspace.ancestors().map(Path::to_path_buf).collect();
+    ancestors.reverse();
+    ancestors
+        .into_iter()
+        .map(|ancestor| ancestor.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String) {
+    config
+        .models
+        .iter()
+        .find(|m| m.name == name)
+        .or_else(|| config.models.first())
+        .map(|p| (p.url.clone(), p.model.clone()))
+        .unwrap_or_else(|| default_endpoint(&AppConfig::default()))
+}
+
+/// Ordered provider fallback chain for a primary profile name: the primary
+/// first, then the configured `default.small` profile, then remaining
+/// profiles in config order. Capped at 3 so retries stay bounded.
+#[cfg(test)]
+pub fn fallback_chain<'a>(config: &'a AppConfig, primary: &str) -> Vec<&'a ModelProfile> {
+    let mut chain: Vec<&ModelProfile> = Vec::new();
+    if let Some(profile) = config.models.iter().find(|m| m.name == primary) {
+        chain.push(profile);
+    }
+    let small = config.default.small();
+    if small != primary
+        && let Some(profile) = config.models.iter().find(|m| m.name == small)
+        && !chain.iter().any(|p| p.name == profile.name)
+    {
+        chain.push(profile);
+    }
+    for profile in &config.models {
+        if chain.len() >= 3 {
+            break;
+        }
+        if !chain.iter().any(|p| p.name == profile.name) {
+            chain.push(profile);
+        }
+    }
+    chain
+}
+
+pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
+    let defaults = AppConfig::default();
+    let mut config = defaults.clone();
+    let mut is_valid = true;
+
+    let toml_path = dir.join(CONFIG_TOML_FILE);
+    if toml_path.exists() {
+        match fs::read_to_string(&toml_path)
+            .ok()
+            .and_then(|content| toml::from_str::<TomlConfig>(&content).ok())
+        {
+            Some(file) => {
+                if let Some(version) = file.version
+                    && version > CONFIG_FORMAT_VERSION
+                {
+                    eprintln!(
+                        "[rustcode] WARNING: {} uses unsupported config format version {} (this version supports up to {}). Using built-in defaults.",
+                        toml_path.display(),
+                        version,
+                        CONFIG_FORMAT_VERSION
+                    );
+                    is_valid = false;
+                } else {
+                    apply_toml_config(&mut config, file);
+                }
+            }
+            None => {
+                eprintln!(
+                    "[rustcode] WARNING: Failed to parse {}. Using built-in defaults.",
+                    toml_path.display()
+                );
+                is_valid = false;
+            }
+        }
+    } else {
+        // Compatibility path for pre-0.30 installations. A successful load
+        // is migrated to config.toml on the next normal save.
+        let models_path = dir.join(MODELS_FILE);
+        if models_path.exists() {
+            match fs::read_to_string(&models_path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<ModelsConfig>(&content).ok())
+            {
+                Some(models) => {
+                    config.default = models.default;
+                    config.models = models.models;
+                    config.vision_model = models.vision_model.or(config.vision_model);
+                }
+                None => {
+                    eprintln!(
+                        "[rustcode] WARNING: Failed to parse {}. Using built-in model defaults.",
+                        models_path.display()
+                    );
+                    is_valid = false;
+                }
+            }
+        }
+
+        let runtime_path = dir.join(CONFIG_FILE);
+        if runtime_path.exists() {
+            match fs::read_to_string(&runtime_path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<RuntimeConfig>(&content).ok())
+            {
+                Some(runtime) => {
+                    config.tool_protocol = runtime.tool_protocol;
+                    config.max_tool_rounds = runtime.max_tool_rounds;
+                    config.max_total_tool_rounds = runtime.max_total_tool_rounds;
+                    config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
+                    config.last_active_session_id = runtime.last_active_session_id;
+                    config.mcp_servers = runtime.mcp_servers;
+                    config.approved_command_prefixes = runtime.approved_command_prefixes;
+                    config.denied_command_prefixes = runtime.denied_command_prefixes;
+                    config.sandbox_mode = runtime.sandbox_mode;
+                    config.agent_mode = runtime.agent_mode;
+                    config.verbosity = runtime.verbosity;
+                    config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
+                    config.theme = runtime.theme;
+                    config.start_time = runtime.start_time;
+                    config.audio = runtime.audio;
+                    config.discord_rpc_enabled = runtime.discord_rpc_enabled;
+                }
+                None => {
+                    eprintln!(
+                        "[rustcode] WARNING: Failed to parse {}. Using built-in runtime defaults.",
+                        runtime_path.display()
+                    );
+                    is_valid = false;
+                }
+            }
+        }
+    }
+
+    config.is_valid = is_valid;
+
+    // backfill windows for profiles saved before the context_window field
+    let defaults = AppConfig::default();
+    for profile in &mut config.models {
+        if profile.context_window.is_none()
+            && let Some(d) = defaults.models.iter().find(|m| m.name == profile.name)
+        {
+            profile.context_window = d.context_window;
+        }
+    }
+
+    let (url, model) = resolve_model_endpoint(&config, config.default.big());
+
+    (url, model, config)
+}
+
+pub fn save_entire_config(config: &AppConfig) {
+    if !config.is_valid {
+        return;
+    }
+    if let Some(dir) = get_config_dir() {
+        let mut persisted = config.clone();
+        if let Ok(workspace) = std::env::current_dir() {
+            let (_, _, global) = load_config_from(&dir);
+            for path in project_config_paths(&workspace) {
+                if let Ok(file) = read_toml_config(&path) {
+                    preserve_project_overrides(&mut persisted, &global, &file);
+                }
+            }
+        }
+        save_config_to(&dir, &persisted);
+        if let Some(session_id) = persisted.last_active_session_id.as_deref() {
+            session::record_session_settings(session_id, &persisted);
+        }
+    }
+}
+
+fn save_config_to(dir: &Path, config: &AppConfig) {
+    if let Err(error) = save_config_to_result(dir, config) {
+        eprintln!("[rustcode] WARNING: {error}");
+    }
+}
+
+fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
+    if !config.is_valid {
+        return Err("configuration is invalid".to_owned());
+    }
+    fs::create_dir_all(dir).map_err(|error| {
+        format!(
+            "failed to create config directory {}: {error}",
+            dir.display()
+        )
+    })?;
+
+    let file = TomlConfig {
+        version: Some(CONFIG_FORMAT_VERSION),
+        default: Some(config.default.clone().into()),
+        models: Some(config.models.clone()),
+        vision_model: config.vision_model.clone(),
+        tool_protocol: Some(config.tool_protocol),
+        max_tool_rounds: Some(config.max_tool_rounds),
+        max_total_tool_rounds: Some(config.max_total_tool_rounds),
+        subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
+        last_active_session_id: config.last_active_session_id.clone(),
+        mcp_servers: Some(config.mcp_servers.clone()),
+        approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
+        denied_command_prefixes: Some(config.denied_command_prefixes.clone()),
+        sandbox_mode: Some(config.sandbox_mode),
+        audio: Some(config.audio.clone()),
+        discord_rpc_enabled: Some(config.discord_rpc_enabled),
+        legacy_laya: config.legacy_laya.clone(),
+        agent_mode: Some(config.agent_mode),
+        verbosity: Some(config.verbosity.clone()),
+        debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
+        theme: Some(config.theme.clone()),
+        start_time: config.start_time,
+    };
+
+    let path = dir.join(CONFIG_TOML_FILE);
+    let contents = toml::to_string_pretty(&file)
+        .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
+    write_config_file(&path, &contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+    let document = toml::from_str::<toml::Value>(&contents)
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    // The removed `[laya]` table is retained as a raw value so rewrites
+    // preserve it, but `apply_toml_config` deliberately ignores it.
+    let file = document
+        .try_into::<TomlConfig>()
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    if let Some(version) = file.version
+        && version > CONFIG_FORMAT_VERSION
+    {
+        return Err(format!(
+            "{} uses unsupported config format version {} (this version supports up to {})",
+            path.display(),
+            version,
+            CONFIG_FORMAT_VERSION
+        ));
+    }
+    Ok(file)
+}
+
+fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
+    if let Some(default) = file.default {
+        apply_default_override(config, default);
+    }
+    if let Some(models) = file.models {
+        config.models = models;
+    }
+    if let Some(vision_model) = file.vision_model {
+        config.vision_model = Some(vision_model);
+    }
+    if let Some(tool_protocol) = file.tool_protocol {
+        config.tool_protocol = tool_protocol;
+    }
+    if let Some(max_tool_rounds) = file.max_tool_rounds {
+        config.max_tool_rounds = max_tool_rounds;
+    }
+    if let Some(max_total_tool_rounds) = file.max_total_tool_rounds {
+        config.max_total_tool_rounds = max_total_tool_rounds;
+    }
+    if let Some(limit) = file.subagent_concurrency_limit {
+        config.subagent_concurrency_limit = limit;
+    }
+    if let Some(session_id) = file.last_active_session_id {
+        config.last_active_session_id = Some(session_id);
+    }
+    if let Some(mcp_servers) = file.mcp_servers {
+        config.mcp_servers = mcp_servers;
+    }
+    if let Some(prefixes) = file.approved_command_prefixes {
+        config.approved_command_prefixes = prefixes;
+    }
+    if let Some(prefixes) = file.denied_command_prefixes {
+        config.denied_command_prefixes = prefixes;
+    }
+    if let Some(sandbox_mode) = file.sandbox_mode {
+        config.sandbox_mode = sandbox_mode;
+    }
+    if let Some(audio) = file.audio {
+        config.audio = audio;
+    }
+    if let Some(enabled) = file.discord_rpc_enabled {
+        config.discord_rpc_enabled = enabled;
+    }
+    if file.legacy_laya.is_some() {
+        config.legacy_laya = file.legacy_laya;
+    }
+    if let Some(agent_mode) = file.agent_mode {
+        config.agent_mode = agent_mode;
+    }
+    if let Some(verbosity) = file.verbosity {
+        config.verbosity = verbosity;
+    }
+    if let Some(enabled) = file.debug_verbose_network_logging {
+        config.debug_verbose_network_logging = enabled;
+    }
+    if let Some(theme) = file.theme {
+        config.theme = theme;
+    }
+    if file.start_time.is_some() {
+        config.start_time = file.start_time;
+    }
+}
+
+fn apply_default_override(config: &mut AppConfig, default: DefaultOverride) {
+    match default {
+        DefaultOverride::Simple(name) => config.default = DefaultConfig::Simple(name),
+        DefaultOverride::Table { big, small } => {
+            let current_big = config.default.big().to_string();
+            let current_small = config.default.small().to_string();
+            config.default = DefaultConfig::Table {
+                big: big.unwrap_or(current_big),
+                small: small.unwrap_or(current_small),
+            };
+        }
+        DefaultOverride::Array(values) => config.default = DefaultConfig::Array(values),
+    }
+}
+
+fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
+    // Session state belongs to the user config, never to a project checkout.
+    file.last_active_session_id = None;
+    file.start_time = None;
+    // Command approvals are user trust decisions and must not be granted by a
+    // checked-out project configuration.
+    file.approved_command_prefixes = None;
+    file.denied_command_prefixes = None;
+    // A checked-out project must not widen the user's OS command permissions.
+    file.sandbox_mode = None;
+    // Legacy user data should remain attached to the global config, never a
+    // checked-out project file.
+    file.legacy_laya = None;
+    apply_toml_config(config, file);
+}
+
+fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, file: &TomlConfig) {
+    if file.default.is_some() {
+        persisted.default = global.default.clone();
+    }
+    if file.models.is_some() {
+        persisted.models = global.models.clone();
+    }
+    if file.vision_model.is_some() {
+        persisted.vision_model = global.vision_model.clone();
+    }
+    if file.tool_protocol.is_some() {
+        persisted.tool_protocol = global.tool_protocol;
+    }
+    if file.max_tool_rounds.is_some() {
+        persisted.max_tool_rounds = global.max_tool_rounds;
+    }
+    if file.max_total_tool_rounds.is_some() {
+        persisted.max_total_tool_rounds = global.max_total_tool_rounds;
+    }
+    if file.subagent_concurrency_limit.is_some() {
+        persisted.subagent_concurrency_limit = global.subagent_concurrency_limit;
+    }
+    if file.mcp_servers.is_some() {
+        persisted.mcp_servers = global.mcp_servers.clone();
+    }
+    if file.audio.is_some() {
+        persisted.audio = global.audio.clone();
+    }
+    if file.discord_rpc_enabled.is_some() {
+        persisted.discord_rpc_enabled = global.discord_rpc_enabled;
+    }
+    if file.agent_mode.is_some() {
+        persisted.agent_mode = global.agent_mode;
+    }
+    if file.sandbox_mode.is_some() {
+        persisted.sandbox_mode = global.sandbox_mode;
+    }
+    if file.verbosity.is_some() {
+        persisted.verbosity = global.verbosity.clone();
+    }
+    if file.debug_verbose_network_logging.is_some() {
+        persisted.debug_verbose_network_logging = global.debug_verbose_network_logging;
+    }
+    if file.theme.is_some() {
+        persisted.theme = global.theme.clone();
+    }
+}
+
+/// Create a small project override from global model selection. Deliberately
+/// do not copy model profiles, API keys, MCP servers, session state, or other
+/// machine-specific state into a project file.
+pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
+    let workspace = fs::canonicalize(workspace).map_err(|error| {
+        format!(
+            "could not resolve workspace {}: {error}",
+            workspace.display()
+        )
+    })?;
+    let project_dir = workspace.join(PROJECT_CONFIG_DIR);
+    let path = project_dir.join(PROJECT_CONFIG_FILE);
+    if path.exists() {
+        return Err(format!("project config already exists: {}", path.display()));
+    }
+
+    let (_, _, global) = load_config();
+    let file = TomlConfig {
+        version: Some(CONFIG_FORMAT_VERSION),
+        default: Some(global.default.into()),
+        models: None,
+        vision_model: None,
+        tool_protocol: None,
+        max_tool_rounds: None,
+        max_total_tool_rounds: None,
+        subagent_concurrency_limit: None,
+        last_active_session_id: None,
+        mcp_servers: None,
+        approved_command_prefixes: None,
+        denied_command_prefixes: None,
+        sandbox_mode: None,
+        audio: None,
+        discord_rpc_enabled: None,
+        legacy_laya: None,
+        agent_mode: None,
+        verbosity: None,
+        debug_verbose_network_logging: None,
+        theme: None,
+        start_time: None,
+    };
+    let contents = toml::to_string_pretty(&file)
+        .map_err(|error| format!("could not serialize project config: {error}"))?;
+
+    fs::create_dir_all(&project_dir)
+        .map_err(|error| format!("could not create {}: {error}", project_dir.display()))?;
+    write_config_file(&path, &contents)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    ensure_project_gitignore(&workspace)?;
+    Ok(path)
+}
+
+fn ensure_project_gitignore(workspace: &Path) -> Result<(), String> {
+    let path = workspace.join(".gitignore");
+    let current = fs::read_to_string(&path).unwrap_or_default();
+    if current
+        .lines()
+        .any(|line| line.trim() == PROJECT_GITIGNORE_ENTRY)
+    {
+        return Ok(());
+    }
+
+    let mut updated = current;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(PROJECT_GITIGNORE_ENTRY);
+    updated.push('\n');
+    fs::write(&path, updated)
+        .map_err(|error| format!("could not update {}: {error}", path.display()))
+}
+
+fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    let temporary = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    fs::write(&temporary, contents)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+
+    let result = replace_file(&temporary, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+mod session;
+pub use session::*;
+
+#[cfg(test)]
+use session::{next_session_id_value, queue_history_write, write_history_file};
+
+#[cfg(test)]
+mod tests;

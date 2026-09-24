@@ -1,0 +1,410 @@
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub desc: &'static str,
+}
+
+pub const COMMANDS: &[CommandInfo] = &[
+    CommandInfo {
+        name: "/cancel",
+        desc: "Cancel active stream or queued prompt",
+    },
+    CommandInfo {
+        name: "/changelog",
+        desc: "Show recent changelog updates",
+    },
+    CommandInfo {
+        name: "/change_title",
+        desc: "Rename the current session title",
+    },
+    CommandInfo {
+        name: "/clear",
+        desc: "Clear conversation history",
+    },
+    CommandInfo {
+        name: "/context",
+        desc: "Show context usage or set context window",
+    },
+    CommandInfo {
+        name: "/copy",
+        desc: "Copy last assistant reply to clipboard",
+    },
+    CommandInfo {
+        name: "/continue",
+        desc: "Continue restored pending session work",
+    },
+    CommandInfo {
+        name: "/exit",
+        desc: "Exit the app",
+    },
+    CommandInfo {
+        name: "/goal",
+        desc: "Run a task in continuous autoloop mode until complete_task is called",
+    },
+    CommandInfo {
+        name: "/about",
+        desc: "Show version and basic info about rustcode",
+    },
+    CommandInfo {
+        name: "/info",
+        desc: "Show version and basic info about rustcode",
+    },
+    CommandInfo {
+        name: "/help",
+        desc: "Show help info",
+    },
+    CommandInfo {
+        name: "/history",
+        desc: "Pick a previous session to resume",
+    },
+    CommandInfo {
+        name: "/memory",
+        desc: "Inspect or update bounded project memory (no option shows RAM)",
+    },
+    CommandInfo {
+        name: "/mcp",
+        desc: "Configure Model Context Protocol (MCP) servers",
+    },
+    CommandInfo {
+        name: "/model",
+        desc: "Open model picker, switch profile, or override model",
+    },
+    CommandInfo {
+        name: "/new",
+        desc: "Start a new conversation",
+    },
+    CommandInfo {
+        name: "/fork",
+        desc: "Fork the current conversation into a new session",
+    },
+    CommandInfo {
+        name: "/archive",
+        desc: "Persist the current session",
+    },
+    CommandInfo {
+        name: "/agents",
+        desc: "Browse subagent conversation contexts",
+    },
+    CommandInfo {
+        name: "/delete_chat",
+        desc: "Delete current session and start fresh",
+    },
+    CommandInfo {
+        name: "/delegate",
+        desc: "Allow subagents for the next task only",
+    },
+    CommandInfo {
+        name: "/workspace",
+        desc: "Manage an isolated task workspace",
+    },
+    CommandInfo {
+        name: "/ollama",
+        desc: "Configure or list Ollama models",
+    },
+    CommandInfo {
+        name: "/parser",
+        desc: "Show or set current tool protocol (json only)",
+    },
+    CommandInfo {
+        name: "/provider",
+        desc: "Add/update model provider profile",
+    },
+    CommandInfo {
+        name: "/protocol",
+        desc: "Show or set current tool protocol (json only)",
+    },
+    CommandInfo {
+        name: "/ps",
+        desc: "Show running background terminals",
+    },
+    CommandInfo {
+        name: "/quit",
+        desc: "Exit the app",
+    },
+    CommandInfo {
+        name: "/quota",
+        desc: "Show model quota percentages",
+    },
+    CommandInfo {
+        name: "/resume",
+        desc: "Resume most recent session",
+    },
+    CommandInfo {
+        name: "/session",
+        desc: "Show current session ID, token budget, and active model",
+    },
+    CommandInfo {
+        name: "/skills",
+        desc: "Show available skills and their locations",
+    },
+    CommandInfo {
+        name: "/stats",
+        desc: "Show token usage and context statistics",
+    },
+    CommandInfo {
+        name: "/stop",
+        desc: "Stop all running background terminals",
+    },
+    CommandInfo {
+        name: "/status",
+        desc: "Show token usage and context statistics",
+    },
+    CommandInfo {
+        name: "/compact",
+        desc: "Manually compact session history to save context space",
+    },
+    CommandInfo {
+        name: "/summarize",
+        desc: "Summarize the current chat session now (also runs after inactivity)",
+    },
+    CommandInfo {
+        name: "/sync",
+        desc: "Sync config, skills, and themes with remote Git repo",
+    },
+    CommandInfo {
+        name: "/update",
+        desc: "Check the Homebrew tap and upgrade rustcode if a newer version exists",
+    },
+    CommandInfo {
+        name: "/tools",
+        desc: "List available tools",
+    },
+    CommandInfo {
+        name: "/usage",
+        desc: "Show token usage and context stats",
+    },
+    CommandInfo {
+        name: "/verbosity",
+        desc: "Show or set verbosity (low|high|toggle)",
+    },
+    CommandInfo {
+        name: "/yolo",
+        desc: "Show or set automatic tool confirmation (on|off|toggle)",
+    },
+    CommandInfo {
+        name: "/sandbox",
+        desc: "Show or set OS sandbox mode (read_only|workspace_write|workspace_write_network)",
+    },
+    CommandInfo {
+        name: "/effort",
+        desc: "Show or set model reasoning effort (low|medium|high|off)",
+    },
+    CommandInfo {
+        name: "/theme",
+        desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
+    },
+    CommandInfo {
+        name: "/thinking",
+        desc: "Show or set model thinking (on|off|default)",
+    },
+];
+
+/// Return the slash command token from the first input line. Arguments remain
+/// outside the token so the popup can continue to describe `/model foo` (and
+/// similar commands) without replacing or discarding the user's arguments.
+pub fn command_token(input: &str) -> Option<&str> {
+    let first_line = input.lines().next().unwrap_or("");
+    if !first_line.starts_with('/') {
+        return None;
+    }
+    let end = first_line
+        .char_indices()
+        .find_map(|(index, character)| character.is_whitespace().then_some(index))
+        .unwrap_or(first_line.len());
+    Some(&first_line[..end])
+}
+
+pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
+    let Some(token) = command_token(input) else {
+        return Vec::new();
+    };
+    let token = token.to_lowercase();
+    let mut exact = Vec::new();
+    let mut prefixes = Vec::new();
+    for command in COMMANDS {
+        let name = command.name.to_lowercase();
+        if name == token {
+            exact.push(command);
+        } else if name.starts_with(&token) {
+            prefixes.push(command);
+        }
+    }
+    exact.into_iter().chain(prefixes).collect()
+}
+
+fn matching_command_names(prefix: &str) -> Vec<&'static str> {
+    filtered_commands(prefix)
+        .iter()
+        .map(|command| command.name)
+        .collect()
+}
+
+#[derive(Debug, Default)]
+pub struct SuggestionCycle {
+    pub original_prefix: Option<String>,
+    pub suggestion_index: Option<usize>,
+}
+
+impl SuggestionCycle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cycle the match list forward, updating internal state. Returns true if advanced.
+    pub fn cycle(&mut self, input_buffer: &str) -> bool {
+        let Some(command) = command_token(input_buffer) else {
+            return false;
+        };
+
+        let prefix = if let Some(ref p) = self.original_prefix {
+            p.clone()
+        } else {
+            let p = command.to_owned();
+            self.original_prefix = Some(p.clone());
+            p
+        };
+
+        let matches = matching_command_names(&prefix);
+        if matches.is_empty() {
+            return false;
+        }
+
+        let next_idx = match self.suggestion_index {
+            Some(idx) => (idx + 1) % matches.len(),
+            None => 0,
+        };
+
+        self.suggestion_index = Some(next_idx);
+        true
+    }
+
+    /// Returns the suffix to render as a completion hint (text after `input_buffer`).
+    pub fn get_completion_suffix(&self, input_buffer: &str) -> Option<String> {
+        let command = command_token(input_buffer)?;
+
+        let prefix = self.original_prefix.as_deref().unwrap_or(command);
+        let matches = matching_command_names(prefix);
+        if matches.is_empty() {
+            return None;
+        }
+
+        let idx = self.suggestion_index?;
+        Some(matches[idx].get(command.len()..).unwrap_or("").to_string())
+    }
+
+    /// Reset the cycle state (called on any keypress other than Tab).
+    pub fn reset(&mut self) {
+        self.original_prefix = None;
+        self.suggestion_index = None;
+    }
+}
+
+pub fn list_project_file_paths(query: &str) -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut files = Vec::new();
+    let query_lower = query.to_lowercase();
+
+    let walker = ignore::WalkBuilder::new(&cwd)
+        .hidden(true)
+        .git_ignore(true)
+        .max_depth(Some(6))
+        .build();
+
+    for result in walker {
+        if let Ok(entry) = result
+            && entry.file_type().is_some_and(|ft| ft.is_file())
+            && let Ok(rel) = entry.path().strip_prefix(&cwd)
+        {
+            let rel_str = rel.to_string_lossy().to_string();
+            if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
+                files.push(format!("@{}", rel_str));
+                if files.len() >= 25 {
+                    break;
+                }
+            }
+        }
+    }
+    files
+}
+
+fn safe_byte_index(s: &str, byte_pos: usize) -> usize {
+    let mut position = byte_pos.min(s.len());
+    while !s.is_char_boundary(position) {
+        position = position.saturating_sub(1);
+    }
+    position
+}
+
+pub fn get_at_word_query(input_buffer: &str, cursor_pos: usize) -> Option<(usize, String)> {
+    let pos = safe_byte_index(input_buffer, cursor_pos);
+    let before = &input_buffer[..pos];
+    if let Some(at_idx) = before.rfind('@') {
+        if at_idx > 0
+            && before[..at_idx]
+                .chars()
+                .next_back()
+                .is_some_and(|character| !character.is_whitespace())
+        {
+            return None;
+        }
+        let query = &before[at_idx + 1..];
+        if !query.contains(' ') && !query.contains('\n') {
+            return Some((at_idx, query.to_string()));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_token, filtered_commands, get_at_word_query};
+
+    #[test]
+    fn command_completion_stays_active_while_arguments_are_present() {
+        assert_eq!(command_token("/model --fast"), Some("/model"));
+        assert_eq!(command_token("/mo --fast"), Some("/mo"));
+        assert!(
+            filtered_commands("/model --fast")
+                .iter()
+                .any(|command| command.name == "/model")
+        );
+        assert!(command_token("plain text").is_none());
+    }
+
+    #[test]
+    fn command_completion_matches_case_insensitively() {
+        let commands = filtered_commands("/MODEL");
+
+        assert!(commands.iter().any(|command| command.name == "/model"));
+    }
+
+    #[test]
+    fn suggestion_cycle_matches_case_insensitively() {
+        let mut cycle = super::SuggestionCycle::new();
+
+        assert!(cycle.cycle("/MODEL --fast"));
+        assert_eq!(
+            cycle.get_completion_suffix("/MODEL --fast"),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn at_completion_uses_the_byte_cursor_without_splitting_unicode() {
+        let input = "inspect café @src/ma";
+        let cursor = input.len();
+
+        assert_eq!(
+            get_at_word_query(input, cursor),
+            Some((14, "src/ma".to_owned()))
+        );
+    }
+
+    #[test]
+    fn at_completion_is_scoped_to_the_token_before_the_cursor() {
+        assert_eq!(
+            get_at_word_query("look @src/main.rs then", 17),
+            Some((5, "src/main.rs".to_owned()))
+        );
+        assert_eq!(get_at_word_query("email a@b.com", 13), None);
+    }
+}

@@ -1,0 +1,938 @@
+use super::*;
+use crate::app::ChatMessage;
+use rustcode_session::SessionStore;
+pub use rustcode_session::{
+    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceManager,
+    WorkspaceRequest,
+};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+const HISTORY_FILE: &str = rustcode_session::HISTORY_FILE;
+pub const SESSION_SETTINGS_FILE: &str = "settings.json";
+const SESSION_SETTINGS_SCHEMA_VERSION: u32 = 1;
+
+fn store() -> Option<SessionStore> {
+    get_config_dir().map(SessionStore::new)
+}
+
+fn ensure_session_dir(session_id: &str) -> Option<PathBuf> {
+    store().map(|session_store| session_store.ensure_session(session_id))
+}
+
+#[cfg(test)]
+pub(super) fn next_session_id_value(now: u64, previous: u64) -> u64 {
+    rustcode_session::next_session_id_value(now, previous)
+}
+
+fn next_session_id() -> String {
+    rustcode_session::next_session_id()
+}
+
+#[cfg(test)]
+pub(super) fn queue_history_write(
+    path: PathBuf,
+    history: &[ChatMessage],
+    revision: Option<u64>,
+) -> bool {
+    rustcode_session::queue_history_write(path, history, revision)
+}
+
+pub(super) fn write_history_file(path: &Path, history: &[ChatMessage]) {
+    rustcode_session::write_history_file(path, history)
+}
+
+pub fn flush_history() {
+    rustcode_session::flush_history()
+}
+
+pub fn flush_history_async() {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(flush_history);
+        }
+        Err(_) => flush_history(),
+    }
+}
+
+pub fn set_active_session_id(session_id: &str) {
+    let mut cache = lock(active_session_cache());
+    *cache = if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id.to_string())
+    };
+    crate::logger::set_active_session_id(cache.as_deref());
+}
+
+fn active_session_cache() -> &'static Mutex<Option<String>> {
+    static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn active_session_id() -> Option<String> {
+    let mut cache = lock(active_session_cache());
+    if cache.is_none() {
+        let (_, _, config) = load_config();
+        *cache = config
+            .last_active_session_id
+            .filter(|id| !id.trim().is_empty());
+    }
+    cache.clone()
+}
+
+pub fn session_has_content(history: &[ChatMessage]) -> bool {
+    SessionStore::session_has_content(history)
+}
+
+#[allow(dead_code)]
+pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
+    SessionStore::session_is_resumable(history)
+}
+
+pub(crate) fn session_title(history: &[ChatMessage]) -> String {
+    SessionStore::session_title(history)
+}
+
+pub(crate) fn session_id_from_path(path: &Path) -> Option<String> {
+    SessionStore::session_id_from_path(path)
+}
+
+pub fn load_session_meta(path: &Path) -> Option<SessionMeta> {
+    store()?.load_session_meta(path)
+}
+
+pub fn session_id_has_content(session_id: &str) -> bool {
+    store().is_some_and(|session_store| session_store.session_id_has_content(session_id))
+}
+
+pub fn save_history<H: HistorySnapshot + ?Sized>(history: &H) {
+    if let Some(session_store) = store() {
+        session_store.save_history(active_session_id().as_deref(), history);
+    }
+}
+
+pub fn save_session_history<H: HistorySnapshot + ?Sized>(session_id: &str, history: &H) {
+    if let Some(session_store) = store() {
+        session_store.save_session_history(session_id, history);
+    }
+}
+
+/// A redacted configuration snapshot used to explain how a session behaved.
+/// API keys and MCP environment values are never persisted here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSettingsSnapshot {
+    pub captured_at_ms: u64,
+    pub active_profile: String,
+    pub config: serde_json::Value,
+}
+
+/// Configuration snapshots are appended only when the effective settings
+/// change. Keeping this separate from history avoids polluting the model
+/// transcript while preserving the settings used across model switches.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionSettingsLog {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub snapshots: Vec<SessionSettingsSnapshot>,
+}
+
+pub fn load_session_settings(session_id: &str) -> Option<SessionSettingsSnapshot> {
+    let path = store()?.session_dir(session_id).join(SESSION_SETTINGS_FILE);
+    let log: SessionSettingsLog = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    log.snapshots.last().cloned()
+}
+
+fn session_settings_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn redact_session_config(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(api_key) = object.remove("api_key")
+                && api_key.as_str().is_some_and(|value| !value.is_empty())
+            {
+                object.insert(
+                    "api_key_configured".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            if let Some(env) = object
+                .get_mut("env")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for value in env.values_mut() {
+                    *value = serde_json::Value::String("<redacted>".to_string());
+                }
+            }
+            for child in object.values_mut() {
+                redact_session_config(child);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                redact_session_config(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn session_settings_snapshot(
+    config: &AppConfig,
+    active_profile: Option<&str>,
+) -> Option<SessionSettingsSnapshot> {
+    let active_profile = active_profile
+        .unwrap_or_else(|| config.default.big())
+        .to_owned();
+    let mut serialized = serde_json::to_value(config).ok()?;
+    if let Some(object) = serialized.as_object_mut() {
+        // These are process/session pointers, not settings used by the model.
+        object.remove("last_active_session_id");
+        object.remove("start_time");
+        object.remove("is_valid");
+    }
+    redact_session_config(&mut serialized);
+    Some(SessionSettingsSnapshot {
+        captured_at_ms: current_time_ms(),
+        active_profile,
+        config: serialized,
+    })
+}
+
+/// Record the current redacted runtime configuration for a session. Repeated
+/// saves of an unchanged configuration do not create duplicate entries.
+pub fn record_session_settings(session_id: &str, config: &AppConfig) {
+    record_session_settings_inner(session_id, config, None);
+}
+
+pub(crate) fn record_session_settings_for_profile(
+    session_id: &str,
+    config: &AppConfig,
+    active_profile: &str,
+) {
+    record_session_settings_inner(session_id, config, Some(active_profile));
+}
+
+fn record_session_settings_inner(
+    session_id: &str,
+    config: &AppConfig,
+    active_profile: Option<&str>,
+) {
+    if session_id.is_empty() || !config.is_valid {
+        return;
+    }
+    let Some(store) = store() else {
+        return;
+    };
+    let Some(snapshot) = session_settings_snapshot(config, active_profile) else {
+        return;
+    };
+
+    let _guard = lock(session_settings_lock());
+    let session_dir = store.session_dir(session_id);
+    if fs::create_dir_all(&session_dir).is_err() {
+        return;
+    }
+    let path = session_dir.join(SESSION_SETTINGS_FILE);
+    let mut log = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<SessionSettingsLog>(&content).ok())
+        .unwrap_or_default();
+    log.schema_version = SESSION_SETTINGS_SCHEMA_VERSION;
+
+    let unchanged = log.snapshots.last().is_some_and(|previous| {
+        previous.active_profile == snapshot.active_profile && previous.config == snapshot.config
+    });
+    if unchanged {
+        return;
+    }
+    log.snapshots.push(snapshot);
+
+    let Ok(json) = serde_json::to_string_pretty(&log) else {
+        return;
+    };
+    let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
+    if fs::write(&temporary, json).is_ok() {
+        let _ = fs::rename(&temporary, path);
+    } else {
+        let _ = fs::remove_file(temporary);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_settings_snapshot_redacts_credentials() {
+        let mut config = AppConfig::default();
+        config.models[0].api_key = Some("model-secret".to_string());
+        config.mcp_servers.push(McpServerConfig {
+            name: "mail".to_string(),
+            command: "mail-mcp".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::from([(
+                "PASSWORD".to_string(),
+                "mcp-secret".to_string(),
+            )]),
+            enabled: true,
+            always_include: false,
+        });
+
+        let snapshot = session_settings_snapshot(&config, Some("selected-profile"))
+            .expect("config should serialize");
+        assert_eq!(snapshot.active_profile, "selected-profile");
+        let default_snapshot =
+            session_settings_snapshot(&config, None).expect("default config should serialize");
+        assert_eq!(default_snapshot.active_profile, config.default.big());
+        let json = snapshot.config.to_string();
+        assert!(json.contains("api_key_configured"), "snapshot: {json}");
+        assert!(json.contains("<redacted>"));
+        assert!(!json.contains("model-secret"));
+        assert!(!json.contains("mcp-secret"));
+        assert!(!json.contains("last_active_session_id"));
+    }
+}
+
+pub fn save_session_title(session_id: &str, title: &str) {
+    if let Some(session_store) = store() {
+        session_store.save_session_title(session_id, title);
+    }
+}
+
+pub(crate) fn save_session_title_if_absent(session_id: &str, history: &[ChatMessage]) {
+    if let Some(session_store) = store() {
+        session_store.save_session_title_if_absent(session_id, history);
+    }
+}
+
+pub fn load_session_title(session_id: &str) -> Option<String> {
+    store()?.load_session_title(session_id)
+}
+
+pub fn load_session_history_direct(session_id: &str) -> Vec<ChatMessage> {
+    store().map_or_else(Vec::new, |session_store| {
+        session_store.load_session_history_direct(session_id)
+    })
+}
+
+pub fn save_session_image_cache(session_id: &str, cache: &HashMap<String, String>) {
+    if let Some(session_store) = store() {
+        session_store.save_session_image_cache(session_id, cache);
+    }
+}
+
+pub fn load_session_image_cache(session_id: &str) -> HashMap<String, String> {
+    store().map_or_else(HashMap::new, |session_store| {
+        session_store.load_session_image_cache(session_id)
+    })
+}
+
+pub fn save_segment_checkpoint(session_id: &str, checkpoint: &crate::network::SegmentCheckpoint) {
+    if let Some(session_store) = store() {
+        session_store.save_segment_checkpoint(session_id, checkpoint);
+    }
+}
+
+pub fn load_segment_checkpoint(session_id: &str) -> Option<crate::network::SegmentCheckpoint> {
+    store()?.load_segment_checkpoint(session_id)
+}
+
+pub fn clear_segment_checkpoint(session_id: &str) {
+    if let Some(session_store) = store() {
+        session_store.clear_segment_checkpoint(session_id);
+    }
+}
+
+pub fn get_active_session_dir(session_id: &str) -> Option<PathBuf> {
+    store().map(|session_store| session_store.get_active_session_dir(session_id))
+}
+
+pub fn get_active_session_sandbox_dir(session_id: &str) -> Option<PathBuf> {
+    store().map(|session_store| session_store.get_active_session_sandbox_dir(session_id))
+}
+
+pub fn get_active_session_artifacts_dir(session_id: &str) -> Option<PathBuf> {
+    store().map(|session_store| session_store.get_active_session_artifacts_dir(session_id))
+}
+
+pub fn workspace_manager() -> Option<WorkspaceManager> {
+    store().map(|session_store| session_store.workspace_manager())
+}
+
+pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<PathBuf, String> {
+    store()
+        .ok_or_else(|| "active session directory unavailable".to_string())?
+        .create_subagent_workspace(session_id, agent_id)
+}
+
+/// Migrate only the configured RustCode session store. Callers can inspect the
+/// report in dry-run mode before allowing the filesystem changes.
+pub fn migrate_legacy_sessions(dry_run: bool) -> Option<SessionMigrationReport> {
+    store().map(|session_store| session_store.migrate_legacy_sessions(dry_run))
+}
+
+pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
+    SessionStore::write_subagent_review_manifest(workspace, agent_id)
+}
+
+pub fn init_active_session(config: &mut AppConfig) -> String {
+    let Some(dir) = get_config_dir() else {
+        return String::new();
+    };
+
+    if let Some(ref session_id) = config.last_active_session_id {
+        let session_dir = SessionStore::new(&dir).session_dir(session_id);
+        if session_dir.exists() {
+            let _ = fs::create_dir_all(session_dir.join("sandbox"));
+            let _ = fs::create_dir_all(session_dir.join("artifacts"));
+            set_active_session_id(session_id);
+            return session_id.clone();
+        }
+    }
+
+    let legacy_history_path = dir.join(HISTORY_FILE);
+    let legacy_history = load_session_file(&legacy_history_path);
+    if session_has_content(&legacy_history) {
+        let session_id = next_session_id();
+        let Some(session_dir) = ensure_session_dir(&session_id) else {
+            return String::new();
+        };
+        write_history_file(&session_dir.join(HISTORY_FILE), &legacy_history);
+        let _ = fs::remove_file(&legacy_history_path);
+        config.last_active_session_id = Some(session_id.clone());
+        save_entire_config(config);
+        set_active_session_id(&session_id);
+        return session_id;
+    }
+
+    let session_id = next_session_id();
+    let _ = ensure_session_dir(&session_id);
+    config.last_active_session_id = Some(session_id.clone());
+    save_entire_config(config);
+    set_active_session_id(&session_id);
+    session_id
+}
+
+pub fn create_new_session(config: &mut AppConfig) -> String {
+    let Some(_dir) = get_config_dir() else {
+        return String::new();
+    };
+    let session_id = next_session_id();
+    let _ = ensure_session_dir(&session_id);
+    config.last_active_session_id = Some(session_id.clone());
+    save_entire_config(config);
+    flush_history();
+    set_active_session_id(&session_id);
+    session_id
+}
+
+pub fn start_session(config: &mut AppConfig) -> String {
+    let last = init_active_session(config);
+    if last.is_empty() {
+        return last;
+    }
+    if session_id_has_content(&last) {
+        create_new_session(config)
+    } else {
+        last
+    }
+}
+
+#[allow(dead_code)]
+pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
+    store()?.archive_session(history)
+}
+
+pub fn latest_resumable_session_meta() -> Option<SessionMeta> {
+    store()?.latest_resumable_session_meta()
+}
+
+pub fn session_meta_by_id(id: &str) -> Option<SessionMeta> {
+    store()?.session_meta_by_id(id)
+}
+
+pub fn list_sessions_limited(limit: usize) -> (Vec<SessionMeta>, bool) {
+    store().map_or_else(
+        || (Vec::new(), false),
+        |session_store| session_store.list_sessions_limited(limit),
+    )
+}
+
+pub fn list_sessions_page<F>(
+    after_id: Option<&str>,
+    limit: usize,
+    include: F,
+) -> Result<(Vec<SessionMeta>, Option<String>), ()>
+where
+    F: FnMut(&SessionMeta) -> bool,
+{
+    store()
+        .map(|session_store| session_store.list_sessions_page(after_id, limit, include))
+        .unwrap_or(Ok((Vec::new(), None)))
+}
+
+pub fn load_session_by_id(session_id: &str) -> Option<(SessionMeta, Vec<ChatMessage>)> {
+    let session_store = store()?;
+    let meta = session_store.session_meta_by_id(session_id)?;
+    let history = session_store.load_session_file(&meta.path);
+    (!history.is_empty()).then_some((meta, history))
+}
+
+pub fn load_session_workspace(session_id: &str) -> Option<SessionWorkspace> {
+    store()?.load_session_workspace(session_id)
+}
+
+pub fn load_session_metadata(session_id: &str) -> Option<rustcode_session::SessionMetadata> {
+    store()?.load_session_metadata(session_id)
+}
+
+pub fn save_session_workspace(
+    session_id: &str,
+    workspace: &SessionWorkspace,
+) -> std::io::Result<()> {
+    store()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "session store unavailable")
+        })?
+        .save_session_workspace(session_id, workspace)
+}
+
+#[allow(dead_code)]
+pub fn list_sessions() -> Vec<SessionMeta> {
+    store().map_or_else(Vec::new, |session_store| session_store.list_sessions())
+}
+
+pub fn archive_live_history() {}
+
+pub fn live_session_meta() -> Option<SessionMeta> {
+    let (_, _, config) = load_config();
+    let session_id = config.last_active_session_id?;
+    let path = store()?.session_dir(&session_id).join(HISTORY_FILE);
+    path.exists().then(|| load_session_meta(&path)).flatten()
+}
+
+pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
+    store().map_or_else(Vec::new, |session_store| {
+        session_store.load_session_file(path)
+    })
+}
+
+#[allow(dead_code)]
+pub fn delete_session_file(path: &Path) {
+    SessionStore::delete_session_file(path);
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MonthlyUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub calls: u64,
+}
+
+pub fn track_usage(prompt_tokens: u64, completion_tokens: u64) {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return,
+    };
+    let path = dir.join("usage_stats.json");
+    let mut stats: std::collections::BTreeMap<String, MonthlyUsage> = if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            std::collections::BTreeMap::new()
+        }
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
+    let month_str = chrono::Local::now().format("%Y-%m").to_string();
+    let entry = stats.entry(month_str).or_default();
+    entry.prompt_tokens += prompt_tokens;
+    entry.completion_tokens += completion_tokens;
+    entry.total_tokens += prompt_tokens + completion_tokens;
+    entry.calls += 1;
+
+    if let Ok(json_str) = serde_json::to_string_pretty(&stats) {
+        let _ = fs::write(&path, json_str);
+    }
+}
+
+pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return std::collections::BTreeMap::new(),
+    };
+    let path = dir.join("usage_stats.json");
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+    {
+        return serde_json::from_str(&content).unwrap_or_default();
+    }
+    std::collections::BTreeMap::new()
+}
+
+pub const DEFAULT_SYNC_GITIGNORE: &str = r#"debug.log
+debug.log.*
+*.log
+*.bak
+symbols.db
+tool_output/
+attachments/
+backups/
+sessions/
+usage_stats.json
+# Legacy configuration files are read-only migration inputs, not sync state.
+models.json
+config.json
+sessions/*/sandbox/
+sessions/*/artifacts/
+sessions/*/subagents/
+sessions/*/image_cache.json
+.DS_Store
+*.tmp
+"#;
+
+pub fn ensure_sync_gitignore(dir: &Path) -> Result<(), String> {
+    let gitignore_path = dir.join(".gitignore");
+    if !gitignore_path.exists() {
+        return fs::write(&gitignore_path, DEFAULT_SYNC_GITIGNORE)
+            .map_err(|e| format!("Failed to write .gitignore: {e}"));
+    }
+
+    let current = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let mut missing = Vec::new();
+    for line in DEFAULT_SYNC_GITIGNORE.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && !current.lines().any(|l| l.trim() == trimmed) {
+            missing.push(trimmed);
+        }
+    }
+
+    if !missing.is_empty() {
+        let mut updated = current;
+        if !updated.ends_with('\n') && !updated.is_empty() {
+            updated.push('\n');
+        }
+        for item in missing {
+            updated.push_str(item);
+            updated.push('\n');
+        }
+        fs::write(&gitignore_path, updated)
+            .map_err(|e| format!("Failed to update .gitignore: {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn get_sync_branch(dir: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output();
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !branch.is_empty() && branch != "HEAD" {
+            return branch;
+        }
+    }
+    "main".to_string()
+}
+
+fn sync_path_is_allowed(path: &str) -> bool {
+    matches!(path, ".gitignore" | "config.toml")
+        || path.starts_with("skills/")
+        || path.starts_with("themes/")
+}
+
+/// Remove already tracked runtime files from the sync index without deleting
+/// their local copies. This makes the allowlist safe for repositories that
+/// were initialized before the narrower sync scope existed.
+pub(crate) fn untrack_non_sync_files(dir: &Path) -> Result<usize, String> {
+    let listed = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Failed to inspect sync index: {e}"))?;
+    if !listed.status.success() {
+        return Err("Failed to inspect sync index".to_string());
+    }
+
+    let mut unwanted = Vec::new();
+    for path in listed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path_text = String::from_utf8_lossy(path);
+        if !sync_path_is_allowed(&path_text) {
+            unwanted.extend_from_slice(path);
+            unwanted.push(0);
+        }
+    }
+
+    if unwanted.is_empty() {
+        return Ok(0);
+    }
+
+    let mut child = Command::new("git")
+        .args(["update-index", "--force-remove", "-z", "--stdin"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to clean sync index: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open sync index input".to_string())?
+        .write_all(&unwanted)
+        .map_err(|e| format!("Failed to clean sync index: {e}"))?;
+    let result = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to finish sync index cleanup: {e}"))?;
+    if !result.status.success() {
+        let error = String::from_utf8_lossy(&result.stderr);
+        return Err(format!("Failed to clean sync index: {}", error.trim()));
+    }
+
+    Ok(unwanted.iter().filter(|byte| **byte == 0).count())
+}
+
+fn stage_sync_files(dir: &Path) -> Result<(), String> {
+    let mut args = vec!["add", "-A", "--"];
+    for path in [".gitignore", "config.toml", "skills", "themes"] {
+        if dir.join(path).exists() {
+            args.push(path);
+        }
+    }
+
+    if args.len() == 2 {
+        return Ok(());
+    }
+
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .map_err(|e| format!("Failed to stage sync files: {e}"))?;
+    if !status.success() {
+        return Err("git add failed".to_string());
+    }
+    Ok(())
+}
+
+pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
+    let dir = get_config_dir().ok_or("Failed to get config directory")?;
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
+    }
+
+    ensure_sync_gitignore(&dir)?;
+
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() {
+        let init_status = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .status()
+            .map_err(|e| format!("Failed to run git init: {e}"))?;
+        if !init_status.success() {
+            return Err("git init failed".to_string());
+        }
+    }
+
+    // Set remote origin
+    let _ = std::process::Command::new("git")
+        .args(["remote", "remove", "origin"])
+        .current_dir(&dir)
+        .status();
+
+    let remote_status = std::process::Command::new("git")
+        .args(["remote", "add", "origin", remote_url])
+        .current_dir(&dir)
+        .status()
+        .map_err(|e| format!("Failed to add git remote: {e}"))?;
+
+    if !remote_status.success() {
+        return Err("git remote add origin failed".to_string());
+    }
+
+    Ok(())
+}
+
+pub fn sync_config_pull() -> Result<(), String> {
+    let dir = get_config_dir().ok_or("Failed to get config directory")?;
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() {
+        return Err(
+            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+                .to_string(),
+        );
+    }
+
+    ensure_sync_gitignore(&dir)?;
+    let branch = get_sync_branch(&dir);
+
+    // A config directory can have a .git directory and a remote configured
+    // without having a local commit yet (for example after `sync init`). Git
+    // refuses to pull in that state when remote files would overwrite the
+    // existing untracked config. Record the local snapshot first so the
+    // normal rebase pull can merge it with the remote history.
+    let has_head = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(&dir)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !has_head {
+        untrack_non_sync_files(&dir)?;
+        stage_sync_files(&dir)?;
+
+        let commit_out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=rustcode",
+                "-c",
+                "user.email=rustcode@localhost",
+                "commit",
+                "-m",
+                "Initialize local config snapshot",
+            ])
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| format!("Failed to create initial config snapshot: {e}"))?;
+        if !commit_out.status.success() {
+            let err = String::from_utf8_lossy(&commit_out.stderr);
+            return Err(format!(
+                "Failed to create initial config snapshot: {}",
+                err.trim()
+            ));
+        }
+    }
+
+    let pull_out = std::process::Command::new("git")
+        .args(["pull", "--rebase", "--autostash", "origin", &branch])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| format!("Failed to pull updates: {e}"))?;
+
+    if pull_out.status.success() {
+        let msg = String::from_utf8_lossy(&pull_out.stdout);
+        if !msg.contains("Already up to date") && !msg.contains("Current branch") {
+            println!("Pull result: {}", msg.trim());
+        }
+        Ok(())
+    } else {
+        // Abort rebase if in progress to keep the repo clean and usable
+        let _ = std::process::Command::new("git")
+            .args(["rebase", "--abort"])
+            .current_dir(&dir)
+            .status();
+
+        let err = String::from_utf8_lossy(&pull_out.stderr);
+        let out = String::from_utf8_lossy(&pull_out.stdout);
+        let combined = if !err.trim().is_empty() {
+            err.trim()
+        } else {
+            out.trim()
+        };
+        Err(format!("Pull failed (rebase aborted): {combined}"))
+    }
+}
+
+pub fn sync_config_push() -> Result<(), String> {
+    let dir = get_config_dir().ok_or("Failed to get config directory")?;
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() {
+        return Err(
+            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+                .to_string(),
+        );
+    }
+
+    ensure_sync_gitignore(&dir)?;
+    let branch = get_sync_branch(&dir);
+
+    let host = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "device".to_string())
+        });
+
+    // 1. Keep runtime state local and stage only the sync allowlist.
+    let removed = untrack_non_sync_files(&dir)?;
+    if removed > 0 {
+        println!(
+            "Removed {removed} local-only file(s) from the sync index; local copies were preserved."
+        );
+    }
+    stage_sync_files(&dir)?;
+
+    // 2. Commit changes if any
+    let commit_msg = format!(
+        "sync: {} ({})",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        host
+    );
+    let commit_status = std::process::Command::new("git")
+        .args(["commit", "-m", &commit_msg])
+        .current_dir(&dir)
+        .status();
+
+    let mut committed = false;
+    if let Ok(st) = commit_status {
+        if st.success() {
+            println!("Committed local changes: {}", commit_msg);
+            committed = true;
+        } else {
+            println!("No new local changes to commit.");
+        }
+    }
+
+    // 3. Push to remote
+    if committed {
+        let push_out = std::process::Command::new("git")
+            .args(["push", "-u", "origin", &branch])
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| format!("Failed to push to remote: {e}"))?;
+
+        if push_out.status.success() {
+            println!("Successfully pushed config to remote origin/{branch}! 🚀");
+            Ok(())
+        } else {
+            let err = String::from_utf8_lossy(&push_out.stderr);
+            Err(format!("Push failed: {}", err.trim()))
+        }
+    } else {
+        Ok(()) // Nothing to push if nothing was committed
+    }
+}

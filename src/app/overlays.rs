@@ -1,0 +1,227 @@
+use crate::app::events::Overlay;
+use crate::app::state::{AppState, AppStatus, ChatMessage, History};
+
+pub(crate) struct OverlayState<'a> {
+    history: &'a mut History,
+    status: &'a mut AppStatus,
+    show_model_picker: &'a mut bool,
+    show_theme_picker: &'a mut bool,
+    show_command_picker: &'a mut bool,
+    show_history_picker: &'a mut bool,
+    show_subagent_picker: &'a mut bool,
+    show_context_modal: &'a mut bool,
+    show_mcp_config: &'a mut bool,
+    pending_delete_session_idx: &'a mut Option<usize>,
+    mcp_edit_state: &'a mut Option<crate::app::state::McpEditState>,
+    pending_tool_confirmation: &'a mut Option<Vec<crate::app::state::ToolConfirmation>>,
+    tool_confirmation_selected: &'a mut usize,
+    auto_confirm: &'a mut bool,
+    pending_question: &'a mut Option<crate::app::state::PendingQuestion>,
+    orchestrator_running: bool,
+    pending_queue_empty: bool,
+}
+
+impl<'a> OverlayState<'a> {
+    pub(crate) fn new(state: &'a mut AppState) -> Self {
+        Self {
+            history: &mut state.history,
+            status: &mut state.status,
+            show_model_picker: &mut state.show_model_picker,
+            show_theme_picker: &mut state.show_theme_picker,
+            show_command_picker: &mut state.show_command_picker,
+            show_history_picker: &mut state.show_history_picker,
+            show_subagent_picker: &mut state.show_subagent_picker,
+            show_context_modal: &mut state.show_context_modal,
+            show_mcp_config: &mut state.show_mcp_config,
+            pending_delete_session_idx: &mut state.pending_delete_session_idx,
+            mcp_edit_state: &mut state.mcp_edit_state,
+            pending_tool_confirmation: &mut state.pending_tool_confirmation,
+            tool_confirmation_selected: &mut state.tool_confirmation_selected,
+            auto_confirm: &mut state.auto_confirm,
+            pending_question: &mut state.pending_question,
+            orchestrator_running: state.orchestrator_running,
+            pending_queue_empty: state.pending_queue.is_empty(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn any_open(&self) -> bool {
+        *self.show_model_picker
+            || *self.show_theme_picker
+            || *self.show_command_picker
+            || *self.show_history_picker
+            || *self.show_subagent_picker
+            || *self.show_context_modal
+            || *self.show_mcp_config
+            || self.pending_delete_session_idx.is_some()
+            || self.mcp_edit_state.is_some()
+            || self.pending_tool_confirmation.is_some()
+            || self.pending_question.is_some()
+            || matches!(
+                *self.status,
+                AppStatus::VerbosityPicker
+                    | AppStatus::ThinkingPicker
+                    | AppStatus::EffortPicker
+                    | AppStatus::ProtocolPicker
+                    | AppStatus::YoloPicker
+            )
+    }
+
+    pub(crate) fn close_all(&mut self) {
+        *self.show_model_picker = false;
+        *self.show_theme_picker = false;
+        *self.show_command_picker = false;
+        *self.show_history_picker = false;
+        *self.show_subagent_picker = false;
+        *self.show_context_modal = false;
+        *self.show_mcp_config = false;
+        *self.pending_delete_session_idx = None;
+        *self.mcp_edit_state = None;
+        if matches!(
+            *self.status,
+            AppStatus::VerbosityPicker
+                | AppStatus::ThinkingPicker
+                | AppStatus::EffortPicker
+                | AppStatus::ProtocolPicker
+                | AppStatus::YoloPicker
+        ) {
+            *self.status = if self.orchestrator_running {
+                AppStatus::Streaming
+            } else if !self.pending_queue_empty {
+                AppStatus::Queued
+            } else {
+                AppStatus::Idle
+            };
+        }
+    }
+
+    pub(crate) fn open(&mut self, overlay: Overlay) {
+        match overlay {
+            Overlay::CommandPalette => *self.show_command_picker = true,
+            Overlay::History => *self.show_history_picker = true,
+            Overlay::Subagents => *self.show_subagent_picker = true,
+            Overlay::Context => *self.show_context_modal = true,
+            Overlay::Model => *self.show_model_picker = true,
+            Overlay::Theme => *self.show_theme_picker = true,
+            Overlay::McpConfig => *self.show_mcp_config = true,
+            Overlay::Verbosity => *self.status = AppStatus::VerbosityPicker,
+            Overlay::Thinking => *self.status = AppStatus::ThinkingPicker,
+            Overlay::Effort => *self.status = AppStatus::EffortPicker,
+            Overlay::Protocol => *self.status = AppStatus::ProtocolPicker,
+            Overlay::Yolo => *self.status = AppStatus::YoloPicker,
+            Overlay::ToolConfirmation => {
+                if self.pending_tool_confirmation.is_some() {
+                    *self.status = AppStatus::AwaitingToolConfirmation;
+                }
+            }
+            Overlay::Question => {
+                if self.pending_question.is_some() {
+                    *self.status = AppStatus::AwaitingQuestion;
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn approval_selected(&self) -> usize {
+        *self.tool_confirmation_selected
+    }
+
+    pub(crate) fn move_approval_selection(&mut self, direction: i8) {
+        let max = self
+            .pending_tool_confirmation
+            .as_ref()
+            .filter(|items| {
+                items.len() == 1
+                    && (items[0].rememberable_prefix.is_some()
+                        || items[0].forbidden_prefix.is_some())
+            })
+            .map_or(1, |items| {
+                1 + items[0].rememberable_prefix.is_some() as usize
+                    + items[0].forbidden_prefix.is_some() as usize
+            });
+        *self.tool_confirmation_selected = if direction < 0 {
+            self.tool_confirmation_selected.saturating_sub(1)
+        } else {
+            (*self.tool_confirmation_selected + 1).min(max)
+        };
+    }
+
+    pub(crate) fn toggle_auto_confirm(&mut self) {
+        *self.auto_confirm = !*self.auto_confirm;
+        let status = if *self.auto_confirm {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.history
+            .push(ChatMessage::new("system", format!("YOLO mode {status}")));
+    }
+}
+
+impl AppState {
+    pub(crate) fn overlays(&mut self) -> OverlayState<'_> {
+        OverlayState::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OverlayState;
+    use crate::app::events::Overlay;
+    use crate::app::{AppState, AppStatus};
+
+    #[test]
+    fn overlay_view_can_close_all_picker_surfaces() {
+        let mut state = AppState::new();
+        state.show_model_picker = true;
+        state.show_command_picker = true;
+        state.show_context_modal = true;
+
+        {
+            let mut overlays = OverlayState::new(&mut state);
+            assert!(overlays.any_open());
+            overlays.close_all();
+        }
+
+        assert!(!state.show_model_picker);
+        assert!(!state.show_command_picker);
+        assert!(!state.show_context_modal);
+    }
+
+    #[test]
+    fn overlay_view_owns_approval_selection_and_opening() {
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(Vec::new());
+
+        {
+            let mut overlays = OverlayState::new(&mut state);
+            overlays.open(Overlay::ToolConfirmation);
+            overlays.move_approval_selection(1);
+            overlays.toggle_auto_confirm();
+            assert_eq!(overlays.approval_selected(), 1);
+        }
+
+        assert_eq!(state.status, AppStatus::AwaitingToolConfirmation);
+        assert!(state.auto_confirm);
+        let history = state.history.snapshot().into_vec();
+        assert_eq!(
+            history.last().map(|message| message.content.as_str()),
+            Some("YOLO mode enabled")
+        );
+    }
+
+    #[test]
+    fn overlay_close_preserves_streaming_status_when_orchestrator_running() {
+        let mut state = AppState::new();
+        state.orchestrator_running = true;
+        state.status = AppStatus::YoloPicker;
+
+        {
+            let mut overlays = OverlayState::new(&mut state);
+            overlays.close_all();
+        }
+
+        assert_eq!(state.status, AppStatus::Streaming);
+    }
+}

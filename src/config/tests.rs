@@ -1,0 +1,1464 @@
+use super::*;
+use crate::app::ChatMessage;
+
+#[test]
+fn sandbox_modes_round_trip_and_default_to_workspace_write() {
+    assert_eq!(SandboxMode::default(), SandboxMode::WorkspaceWrite);
+    for (serialized, expected) in [
+        ("read_only", SandboxMode::ReadOnly),
+        ("workspace_write", SandboxMode::WorkspaceWrite),
+        (
+            "workspace_write_network",
+            SandboxMode::WorkspaceWriteNetwork,
+        ),
+    ] {
+        let decoded: SandboxMode = serde_json::from_str(&format!("\"{serialized}\"")).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            format!("\"{serialized}\"")
+        );
+    }
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("rustcode-tests").join(format!(
+        "{}-{}",
+        name,
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn session_id_allocator_advances_when_clock_repeats() {
+    assert_eq!(next_session_id_value(1_000, 0), 1_000);
+    assert_eq!(next_session_id_value(1_000, 1_000), 1_001);
+    assert_eq!(next_session_id_value(999, 1_001), 1_002);
+}
+
+#[test]
+fn test_config_directory_is_unique_to_the_test_thread() {
+    let dir = get_config_dir().expect("test config directory");
+    assert!(
+        dir.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rustcode_test_config_")),
+        "unexpected test config directory: {}",
+        dir.display()
+    );
+}
+
+#[test]
+fn legacy_laya_config_is_ignored_without_blocking_config_load() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        "version = 1\n[laya]\nmode = \"not-a-mode\"\nunknown = true\n",
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+}
+
+#[test]
+fn legacy_laya_config_survives_full_config_save_while_ignored() {
+    let dir = TempDir::new().unwrap();
+    let original = r#"version = 1
+
+[laya]
+mode = "relaxed"
+adapter = "/custom/location/adapter.py"
+model = "/custom/location/model"
+timeout_ms = 173
+extra = { enabled = true, labels = ["kept", "as-is"] }
+"#;
+    let original_laya = toml::from_str::<toml::Value>(original).unwrap()["laya"].clone();
+    fs::write(dir.path().join(CONFIG_TOML_FILE), original).unwrap();
+
+    let (_, _, mut config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert_eq!(config.legacy_laya.as_ref(), Some(&original_laya));
+    config.theme = "future-theme".to_owned();
+    fs::remove_file(dir.path().join(CONFIG_TOML_FILE)).unwrap();
+    save_config_to_result(dir.path(), &config).unwrap();
+
+    let saved = fs::read_to_string(dir.path().join(CONFIG_TOML_FILE)).unwrap();
+    let saved = toml::from_str::<toml::Value>(&saved).unwrap();
+    assert_eq!(saved.get("laya"), Some(&original_laya));
+}
+
+#[test]
+fn test_config_save_load() {
+    let dir = temp_dir("config");
+    let config = AppConfig {
+        default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
+        approved_command_prefixes: vec!["cargo test".to_string()],
+        denied_command_prefixes: vec!["make clean".to_string()],
+        sandbox_mode: SandboxMode::WorkspaceWriteNetwork,
+        ..AppConfig::default()
+    };
+    save_config_to(&dir, &config);
+
+    let (url, model, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.default.big(), "gemma4:e2b-it-qat");
+    let expected = &loaded
+        .models
+        .iter()
+        .find(|m| m.name == "gemma4:e2b-it-qat")
+        .unwrap();
+    assert_eq!(url, expected.url);
+    assert_eq!(model, expected.model);
+    assert_eq!(loaded.approved_command_prefixes, ["cargo test"]);
+    assert_eq!(loaded.denied_command_prefixes, ["make clean"]);
+    assert_eq!(loaded.sandbox_mode, SandboxMode::WorkspaceWriteNetwork);
+    assert!(!crate::tools::approved_command_prefix_covers_call(
+        "run_command",
+        &serde_json::json!({"command":"cargo test --lib"}),
+        &loaded.approved_command_prefixes
+    ));
+}
+
+#[test]
+fn mcp_server_always_include_defaults_false_and_round_trips() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+enabled = true
+always_include = true
+"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert!(config.mcp_servers[0].always_include);
+
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+enabled = true
+"#,
+    )
+    .unwrap();
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert!(!config.mcp_servers[0].always_include);
+}
+
+#[test]
+fn discord_rich_presence_defaults_enabled_and_round_trips() {
+    assert!(AppConfig::default().discord_rpc_enabled);
+
+    let dir = temp_dir("discord-rpc");
+    let mut config = AppConfig::default();
+    config.discord_rpc_enabled = false;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert!(!loaded.discord_rpc_enabled);
+}
+
+#[test]
+fn test_default_profile_is_source_of_truth() {
+    let dir = temp_dir("latest");
+    let config = AppConfig {
+        default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
+        ..AppConfig::default()
+    };
+    save_config_to(&dir, &config);
+
+    let (url, model, _) = load_config_from(&dir);
+    let expected = &config
+        .models
+        .iter()
+        .find(|m| m.name == "gemma4:e2b-it-qat")
+        .unwrap();
+    assert_eq!(url, expected.url);
+    assert_eq!(model, expected.model);
+}
+
+#[test]
+fn test_context_window_optional() {
+    let dir = temp_dir("ctxwin");
+    let mut config = AppConfig::default();
+    config.models[0].context_window = Some(4096);
+    save_config_to(&dir, &config);
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(
+        loaded
+            .models
+            .iter()
+            .find(|m| m.name == "qwen3.6-dense")
+            .unwrap()
+            .context_window,
+        Some(4096)
+    );
+}
+
+#[test]
+fn model_sampling_controls_round_trip_through_toml() {
+    let dir = temp_dir("sampling");
+    let mut config = AppConfig::default();
+    let profile = &mut config.models[0];
+    profile.temperature = Some(1.0);
+    profile.top_p = Some(0.95);
+    profile.top_k = Some(20);
+    profile.presence_penalty = Some(1.5);
+    profile.frequency_penalty = Some(0.0);
+    profile.force_sampling = Some(true);
+    profile.preserve_thinking = Some(true);
+
+    save_config_to(&dir, &config);
+    let (_, _, loaded) = load_config_from(&dir);
+    let profile = &loaded.models[0];
+
+    assert_eq!(profile.temperature, Some(1.0));
+    assert_eq!(profile.top_p, Some(0.95));
+    assert_eq!(profile.top_k, Some(20));
+    assert_eq!(profile.presence_penalty, Some(1.5));
+    assert_eq!(profile.frequency_penalty, Some(0.0));
+    assert_eq!(profile.force_sampling, Some(true));
+    assert_eq!(profile.preserve_thinking, Some(true));
+}
+
+#[test]
+fn mutation_limit_defaults_overrides_and_caps_safely() {
+    let mut profile = ModelProfile::default();
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+
+    profile.max_mutating_calls_per_response = Some(3);
+    assert_eq!(profile.max_mutating_calls_per_response(), 3);
+
+    profile.max_mutating_calls_per_response = Some(0);
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+
+    profile.max_mutating_calls_per_response = Some(usize::MAX);
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE
+    );
+}
+
+#[test]
+fn mutation_limit_round_trips_through_toml() {
+    let dir = temp_dir("mutation-limit");
+    let mut config = AppConfig::default();
+    config.models[0].max_mutating_calls_per_response = Some(3);
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.models[0].max_mutating_calls_per_response, Some(3));
+}
+
+#[test]
+fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
+    let mut profile = ModelProfile::default();
+    let default_policy = profile.tool_scheduling_policy();
+    assert!(!default_policy.allow_batching);
+    assert_eq!(default_policy.max_read_only_calls, 1);
+    assert_eq!(default_policy.max_mutating_calls, 1);
+    assert_eq!(
+        default_policy.max_continuations,
+        DEFAULT_MAX_TOOL_CONTINUATIONS
+    );
+
+    profile.allow_tool_batching = Some(true);
+    profile.max_read_only_calls_per_response = Some(32);
+    profile.max_mutating_calls_per_response = Some(32);
+    profile.max_tool_continuations = Some(32);
+    let policy = profile.tool_scheduling_policy();
+    assert!(policy.allow_batching);
+    assert_eq!(
+        policy.max_read_only_calls,
+        MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE
+    );
+    assert_eq!(
+        policy.max_mutating_calls,
+        MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE
+    );
+    assert_eq!(policy.max_continuations, MAX_CONFIGURED_TOOL_CONTINUATIONS);
+}
+
+#[test]
+fn context_budget_reserves_completion_thinking_tools_and_safety() {
+    let mut profile = AppConfig::default().models[0].clone();
+    profile.context_window = Some(4096);
+    profile.max_tokens = Some(2048);
+    profile.enable_thinking = Some(true);
+    let budget = profile.context_budget();
+    assert_eq!(budget.context_window, 4096);
+    assert!(budget.completion_reserve > 0);
+    assert!(budget.thinking_reserve > 0);
+    assert_eq!(budget.max_output_tokens, budget.completion_reserve);
+    assert_eq!(budget.thinking_budget, budget.thinking_reserve);
+    assert!(budget.tool_reserve > 0);
+    assert!(budget.history_tokens < budget.context_window);
+    assert_eq!(
+        budget.history_tokens
+            + budget.completion_reserve
+            + budget.tool_reserve
+            + budget.safety_reserve,
+        budget.hard_effective_limit
+    );
+
+    profile.context_window = Some(512);
+    let tiny = profile.context_budget();
+    assert_eq!(
+        tiny.history_tokens + tiny.completion_reserve + tiny.tool_reserve + tiny.safety_reserve,
+        tiny.hard_effective_limit
+    );
+}
+
+#[test]
+fn default_provider_margin_covers_observed_prompt_framing_gap() {
+    let mut profile = AppConfig::default().models[0].clone();
+    profile.context_window = Some(128_000);
+    profile.provider_overhead_margin = None;
+
+    let budget = profile.context_budget();
+    assert_eq!(
+        budget.provider_overhead_margin,
+        128_000 * DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT / 100
+    );
+    assert_eq!(
+        budget.hard_effective_limit,
+        128_000 - budget.provider_overhead_margin
+    );
+}
+
+#[test]
+fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
+    let mut profile = ModelProfile {
+        name: "local-ollama".to_string(),
+        url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
+        model: "qwen2.5:32b".to_string(),
+        context_window: Some(128_000),
+        engine: Some("ollama".to_string()),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.context_budget().completion_reserve, 4096);
+
+    profile.max_tokens = Some(8192);
+    assert_eq!(profile.context_budget().completion_reserve, 8192);
+}
+
+#[test]
+fn explicit_output_and_answer_budgets_are_independent() {
+    let profile = ModelProfile {
+        context_window: Some(32_768),
+        max_output_tokens: Some(8_192),
+        thinking_budget: Some(6_000),
+        minimum_answer_tokens: Some(1_024),
+        enable_thinking: Some(true),
+        ..ModelProfile::default()
+    };
+    let budget = profile.context_budget();
+
+    assert_eq!(budget.max_output_tokens, 8_192);
+    assert_eq!(budget.completion_reserve, 8_192);
+    assert_eq!(budget.thinking_budget, 6_000);
+    assert_eq!(budget.minimum_answer_tokens, 1_024);
+    assert_eq!(profile.completion_token_limit(false), 8_192);
+}
+
+#[test]
+fn new_budget_fields_round_trip_without_rewriting_legacy_fields() {
+    let profile = ModelProfile {
+        max_output_tokens: Some(8_192),
+        minimum_answer_tokens: Some(1_024),
+        supports_thinking_budget: Some(false),
+        supports_reasoning_effort: Some(true),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    let encoded = serde_json::to_value(&profile).unwrap();
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.max_output_tokens, Some(8_192));
+    assert_eq!(decoded.minimum_answer_tokens, Some(1_024));
+    assert_eq!(decoded.supports_thinking_budget, Some(false));
+    assert_eq!(decoded.supports_reasoning_effort, Some(true));
+    assert_eq!(decoded.provider_context_window, Some(32_768));
+    assert_eq!(decoded.max_tokens, None);
+}
+
+#[test]
+fn effective_context_window_clamps_stale_model_profile() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 32_768);
+    assert_eq!(profile.context_window_mismatch(), Some((128_000, 32_768)));
+}
+
+#[test]
+fn provider_context_window_is_used_when_model_profile_is_unspecified() {
+    let profile = ModelProfile {
+        provider_context_window: Some(65_536),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 65_536);
+    assert_eq!(profile.context_window_mismatch(), None);
+}
+
+#[test]
+fn omlx_context_window_requires_explicit_provider_limit() {
+    let profile = ModelProfile {
+        engine: Some("omlx".to_string()),
+        context_window: Some(128_000),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 32_768);
+    assert_eq!(profile.context_window_mismatch(), Some((128_000, 32_768)));
+}
+
+#[test]
+fn legacy_reasoning_fields_remain_wire_enabled_without_capability_metadata() {
+    let profile = ModelProfile {
+        engine: Some("omlx".to_string()),
+        thinking_budget: Some(4_096),
+        reasoning_effort: Some("medium".to_string()),
+        ..ModelProfile::default()
+    };
+
+    assert!(profile.supports_thinking_budget_wire());
+    assert!(profile.supports_reasoning_effort_wire());
+}
+
+#[test]
+fn explicitly_unsupported_reasoning_extensions_stay_disabled() {
+    let profile = ModelProfile {
+        thinking_budget: Some(4_096),
+        reasoning_effort: Some("medium".to_string()),
+        supports_thinking_budget: Some(false),
+        supports_reasoning_effort: Some(false),
+        ..ModelProfile::default()
+    };
+
+    assert!(!profile.supports_thinking_budget_wire());
+    assert!(!profile.supports_reasoning_effort_wire());
+}
+
+#[test]
+fn every_model_tool_round_cap_preserves_full_final_cap() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.completion_token_limit(true), 8192);
+    assert_eq!(profile.completion_token_limit(false), 16_000);
+}
+
+#[test]
+fn verified_profile_can_raise_tool_ceiling_without_changing_initial_default() {
+    let default_profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(default_profile.completion_token_limit(true), 8_192);
+
+    let kat_omlx_profile = ModelProfile {
+        name: "kat-coder".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "KAT-Coder-V2.5-Dev-OptiQ-4bit".to_string(),
+        engine: Some("omlx".to_string()),
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        tool_max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(kat_omlx_profile.completion_token_limit(true), 8_192);
+    assert_eq!(kat_omlx_profile.tool_output_ceiling(), 16_000);
+    assert_eq!(kat_omlx_profile.completion_token_limit(false), 16_000);
+}
+
+#[test]
+fn verified_kat_profile_derives_tool_ceiling_but_mismatched_profiles_fall_back() {
+    let kat = ModelProfile {
+        name: "kat-coder".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "KAT-Coder-V2.5-Dev-OptiQ-4bit".to_string(),
+        context_window: Some(262_144),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+
+    assert!(kat.is_verified_kat_coder());
+    assert_eq!(kat.verified_tool_output_ceiling(), Some(16_000));
+    assert_eq!(kat.tool_output_ceiling(), 16_000);
+    assert_eq!(
+        kat.completion_token_limit(true),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+    let budget = kat.context_budget();
+    assert_eq!(budget.completion_reserve, 16_000);
+    assert_eq!(
+        budget.history_tokens
+            + budget.completion_reserve
+            + budget.tool_reserve
+            + budget.safety_reserve,
+        budget.hard_effective_limit
+    );
+    assert!(kat.matches_request(&kat.url, &kat.model));
+
+    let mut unverified = kat.clone();
+    unverified.url = "https://unverified.example/v1/chat/completions".to_string();
+    assert!(!unverified.is_verified_kat_coder());
+    assert_eq!(unverified.verified_tool_output_ceiling(), None);
+    assert_eq!(
+        unverified.tool_output_ceiling(),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+    assert!(!kat.matches_request(&unverified.url, &kat.model));
+
+    let mut wrong_model = kat;
+    wrong_model.model = "KAT-Coder-V2.5-Dev-oQ4e-mtp".to_string();
+    assert!(!wrong_model.is_verified_kat_coder());
+    assert_eq!(
+        wrong_model.tool_output_ceiling(),
+        DEFAULT_TOOL_ROUND_MAX_TOKENS
+    );
+}
+
+#[test]
+fn tool_round_override_is_bounded_by_profile_and_hard_safety_limits() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        tool_max_tokens: Some(64_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(profile.completion_token_limit(true), 8_192);
+    assert_eq!(profile.tool_output_ceiling(), 16_000);
+
+    let larger_profile = ModelProfile {
+        context_window: Some(262_144),
+        max_tokens: Some(65_536),
+        tool_max_tokens: Some(64_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(larger_profile.completion_token_limit(true), 8_192);
+    assert_eq!(
+        larger_profile.tool_output_ceiling(),
+        MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS
+    );
+}
+
+#[test]
+fn ordinary_unconfigured_output_uses_provider_default_but_tools_are_bounded() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.output_token_limit(false, false), None);
+    assert_eq!(profile.output_token_limit(true, false), Some(8192));
+    assert_eq!(profile.output_token_limit(false, true), Some(32_000));
+}
+
+#[test]
+fn tool_round_override_round_trips_through_json() {
+    let profile = ModelProfile {
+        tool_max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    let encoded = serde_json::to_value(&profile).unwrap();
+    assert_eq!(encoded["tool_max_tokens"], 16_000);
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.tool_max_tokens, Some(16_000));
+}
+
+#[test]
+fn output_token_field_override_and_legacy_cap_are_backward_compatible() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        output_token_field: Some(OutputTokenField::MaxCompletionTokens),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxCompletionTokens
+    );
+    assert_eq!(
+        profile.resolved_output_token_field().wire_name(),
+        "max_completion_tokens"
+    );
+    assert_eq!(profile.output_token_limit(false, false), Some(16_000));
+
+    let encoded = serde_json::to_value(&profile).unwrap();
+    assert_eq!(encoded["max_tokens"], 16_000);
+    assert!(encoded.get("max_output_tokens").is_none());
+    assert_eq!(encoded["output_token_field"], "max_completion_tokens");
+
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.max_tokens, Some(16_000));
+    assert_eq!(decoded.max_output_tokens, None);
+    assert_eq!(
+        decoded.output_token_field,
+        Some(OutputTokenField::MaxCompletionTokens)
+    );
+}
+
+#[test]
+fn native_google_endpoint_resolves_camel_case_output_limit_without_model_lookup() {
+    let native = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+            .to_string(),
+        ..ModelProfile::default()
+    };
+    assert!(native.is_google_native_endpoint());
+    assert_eq!(
+        native.resolved_output_token_field(),
+        OutputTokenField::GoogleMaxOutputTokens
+    );
+
+    let compatible = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string(),
+        ..ModelProfile::default()
+    };
+    assert!(!compatible.is_google_native_endpoint());
+    assert_eq!(
+        compatible.resolved_output_token_field(),
+        OutputTokenField::MaxTokens
+    );
+}
+
+#[test]
+fn explicit_output_field_overrides_native_google_capability() {
+    let profile = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+            .to_string(),
+        output_token_field: Some(OutputTokenField::MaxOutputTokens),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxOutputTokens
+    );
+}
+
+#[test]
+fn responses_profiles_resolve_endpoint_and_output_field() {
+    let profile = ModelProfile {
+        name: "opencode-muse-spark-1.3".to_string(),
+        url: "https://opencode.ai/zen/v1/responses".to_string(),
+        model: "muse-spark-1.3".to_string(),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.resolved_api_protocol(), ApiProtocol::Responses);
+    assert_eq!(profile.endpoint_url(), profile.url);
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxOutputTokens
+    );
+
+    let mut explicit = profile.clone();
+    explicit.url = "https://opencode.ai/zen/v1/chat/completions".to_string();
+    explicit.api_protocol = Some(ApiProtocol::Responses);
+    assert_eq!(
+        explicit.endpoint_url(),
+        "https://opencode.ai/zen/v1/responses"
+    );
+
+    let encoded = serde_json::to_value(&explicit).unwrap();
+    assert_eq!(encoded["api_protocol"], "responses");
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.api_protocol, Some(ApiProtocol::Responses));
+}
+
+#[test]
+fn built_in_opencode_profile_uses_paid_responses_model() {
+    let profile = AppConfig::default()
+        .models
+        .into_iter()
+        .find(|profile| profile.name == "opencode-muse-spark-1.3")
+        .expect("OpenCode profile should be available by default");
+
+    assert_eq!(profile.model, "muse-spark-1.3");
+    assert_eq!(profile.env_key.as_deref(), Some("OPENCODE_API_KEY"));
+    assert_eq!(profile.resolved_api_protocol(), ApiProtocol::Responses);
+    assert_eq!(profile.tool_protocol, Some(ToolProtocol::ApiNative));
+}
+
+#[test]
+fn context_budget_scales_without_double_reserving_large_or_small_windows() {
+    let mut profile = AppConfig::default().models[0].clone();
+    profile.max_tokens = Some(u32::MAX);
+    for window in [
+        1, 32, 64, 128, 256, 512, 4_096, 8_192, 32_768, 128_000, 262_144,
+    ] {
+        profile.context_window = Some(window);
+        profile.enable_thinking = Some(false);
+        let budget = profile.context_budget();
+        assert_eq!(budget.context_window, window.max(1));
+        assert_eq!(
+            budget.history_tokens
+                + budget.completion_reserve
+                + budget.tool_reserve
+                + budget.safety_reserve,
+            budget.hard_effective_limit
+        );
+        assert!(
+            budget.context_window < 4 || budget.completion_reserve <= budget.context_window / 4
+        );
+        if window > 1 {
+            assert!(budget.history_tokens > 0);
+        }
+
+        profile.enable_thinking = Some(true);
+        let thinking = profile.context_budget();
+        if window >= 64 {
+            assert!(thinking.thinking_reserve > 0);
+            assert_eq!(thinking.history_tokens, budget.history_tokens);
+        }
+    }
+}
+
+#[test]
+fn tool_round_limit_round_trips_through_runtime_config() {
+    let dir = temp_dir("tool_round_limit");
+    let mut config = AppConfig::default();
+    config.max_tool_rounds = 17;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.max_tool_rounds, 17);
+}
+
+#[test]
+fn long_turn_limits_round_trip_and_legacy_40_remains_valid() {
+    let dir = temp_dir("long_turn_limits");
+    let mut config = AppConfig::default();
+    config.max_tool_rounds = 40;
+    config.max_total_tool_rounds = 120;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.max_tool_rounds, 40);
+    assert_eq!(loaded.max_total_tool_rounds, 120);
+
+    let legacy_dir = temp_dir("legacy_40_round_limit");
+    std::fs::write(legacy_dir.join(CONFIG_FILE), r#"{"max_tool_rounds":40}"#).unwrap();
+    let (_, _, legacy) = load_config_from(&legacy_dir);
+    assert_eq!(legacy.max_tool_rounds, 40);
+    assert_eq!(legacy.max_total_tool_rounds, DEFAULT_MAX_TOTAL_TOOL_ROUNDS);
+}
+
+#[test]
+fn older_runtime_config_defaults_subagent_concurrency_limit() {
+    let dir = temp_dir("legacy_subagent_concurrency_limit");
+    std::fs::write(dir.join(CONFIG_FILE), "{}").unwrap();
+
+    let (_, _, loaded) = load_config_from(&dir);
+
+    assert_eq!(loaded.subagent_concurrency_limit, 4);
+}
+
+#[test]
+fn subagent_concurrency_limit_round_trips_through_runtime_config() {
+    let dir = temp_dir("subagent_concurrency_limit");
+    let mut config = AppConfig::default();
+    config.subagent_concurrency_limit = 2;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+
+    assert_eq!(loaded.subagent_concurrency_limit, 2);
+}
+
+#[test]
+fn image_input_capability_is_explicit_and_vision_profile_is_configurable() {
+    let mut profile = AppConfig::default().models[0].clone();
+    assert_eq!(profile.image_input_supported(), Some(false));
+
+    profile.supports_vision = Some(true);
+    assert_eq!(profile.image_input_supported(), Some(true));
+
+    let mut config = AppConfig::default();
+    config.vision_model = Some("vision-helper".to_string());
+    let json = serde_json::to_string(&config).unwrap();
+    let decoded: AppConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.vision_model.as_deref(), Some("vision-helper"));
+}
+
+#[test]
+fn test_history_save_load() {
+    let dir = temp_dir("history");
+    let msgs = vec![
+        ChatMessage::new("user", "Hello"),
+        ChatMessage::new("assistant", "Hi there"),
+    ];
+    write_history_file(&dir.join(HISTORY_FILE), &msgs);
+    let loaded = load_session_file(&dir.join(HISTORY_FILE));
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].role, "user");
+    assert_eq!(loaded[0].content, "Hello");
+    assert_eq!(loaded[1].role, "assistant");
+    assert_eq!(loaded[1].content, "Hi there");
+}
+
+#[test]
+fn test_history_is_written_compactly_and_atomically() {
+    let dir = temp_dir("history-compact");
+    let msgs = vec![ChatMessage::new("user", "Hello")];
+    write_history_file(&dir.join(HISTORY_FILE), &msgs);
+
+    let raw = fs::read_to_string(dir.join(HISTORY_FILE)).unwrap();
+    assert!(
+        !raw.contains('\n'),
+        "history must be compact JSON, got: {raw}"
+    );
+    assert_eq!(load_session_file(&dir.join(HISTORY_FILE)).len(), 1);
+
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != HISTORY_FILE)
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "atomic write left temp files behind: {leftovers:?}"
+    );
+}
+
+#[test]
+fn test_queued_history_writes_coalesce_and_flush() {
+    let dir = temp_dir("history-queue");
+    let path = dir.join(HISTORY_FILE);
+
+    for i in 0..5 {
+        let msgs: Vec<ChatMessage> = (0..=i)
+            .map(|n| ChatMessage::new("user", format!("msg {n}")))
+            .collect();
+        queue_history_write(path.clone(), &msgs, None);
+    }
+    flush_history();
+
+    // The flush must persist the newest snapshot, not an earlier one.
+    let loaded = load_session_file(&path);
+    assert_eq!(loaded.len(), 5);
+    assert_eq!(loaded[4].content, "msg 4");
+}
+
+#[test]
+fn revisioned_history_write_skips_an_identical_pending_snapshot() {
+    let dir = temp_dir("history-queue-dedup");
+    let path = dir.join(HISTORY_FILE);
+    let mut history = crate::app::History::default();
+    history.push(ChatMessage::new("user", "same"));
+    let revision = history.revision();
+
+    assert!(queue_history_write(
+        path.clone(),
+        history.as_slice(),
+        Some(revision)
+    ));
+    assert!(!queue_history_write(
+        path,
+        history.as_slice(),
+        Some(revision)
+    ));
+    flush_history();
+}
+
+#[test]
+fn test_session_has_content_ignores_commands() {
+    let cmds_only = vec![
+        ChatMessage::new("user", "/help"),
+        ChatMessage::new("system", "help text"),
+    ];
+    assert!(!session_has_content(&cmds_only));
+    let real = vec![ChatMessage::new("user", "fix the bug")];
+    assert!(session_has_content(&real));
+}
+
+#[test]
+fn test_session_title_first_prompt_truncated() {
+    let history = vec![
+        ChatMessage::new("user", "/model"),
+        ChatMessage::new("user", "x".repeat(100)),
+    ];
+    let title = session_title(&history);
+    assert!(title.ends_with("..."));
+    assert_eq!(title.chars().count(), 48);
+    assert_eq!(session_title(&[]), "(no prompt)");
+}
+
+#[test]
+fn test_delete_session_file_only_in_sessions_dir() {
+    let dir = temp_dir("delete-guard");
+    let outside = dir.join("history.json");
+    fs::write(&outside, "[]").unwrap();
+    delete_session_file(&outside);
+    assert!(outside.exists(), "live history file must not be deleted");
+
+    let sessions = dir.join(SESSIONS_DIR);
+    fs::create_dir_all(&sessions).unwrap();
+    let inside = sessions.join("123.json");
+    fs::write(&inside, "[]").unwrap();
+    delete_session_file(&inside);
+    assert!(!inside.exists());
+}
+
+#[test]
+fn test_history_persists_full_log() {
+    let dir = temp_dir("history-full");
+    let msgs: Vec<ChatMessage> = (0..80)
+        .map(|i| ChatMessage::new("user", format!("msg {}", i)))
+        .collect();
+    write_history_file(&dir.join(HISTORY_FILE), &msgs);
+    let loaded = load_session_file(&dir.join(HISTORY_FILE));
+    assert_eq!(loaded.len(), msgs.len());
+    assert_eq!(loaded[0].content, "msg 0");
+}
+
+#[test]
+fn test_default_config_parsing() {
+    // String format
+    let toml_str1 = r#"default = "my-big-model""#;
+    #[derive(Deserialize)]
+    struct TempConfig {
+        default: DefaultConfig,
+    }
+    let parsed1: TempConfig = toml::from_str(toml_str1).unwrap();
+    assert_eq!(parsed1.default.big(), "my-big-model");
+    assert_eq!(parsed1.default.small(), "my-big-model");
+
+    // Table format
+    let toml_str2 = r#"
+            [default]
+            big_model = "my-big-model"
+            small_model = "my-small-model"
+        "#;
+    let parsed2: TempConfig = toml::from_str(toml_str2).unwrap();
+    assert_eq!(parsed2.default.big(), "my-big-model");
+    assert_eq!(parsed2.default.small(), "my-small-model");
+
+    // Table format (alternate names)
+    let toml_str2_alt = r#"
+            [default]
+            big = "alt-big"
+            small = "alt-small"
+        "#;
+    let parsed2_alt: TempConfig = toml::from_str(toml_str2_alt).unwrap();
+    assert_eq!(parsed2_alt.default.big(), "alt-big");
+    assert_eq!(parsed2_alt.default.small(), "alt-small");
+
+    // Double brackets format [[default]]
+    let toml_str3 = r#"
+            [[default]]
+            big_model = "my-big-model"
+            small_model = "my-small-model"
+        "#;
+    let parsed3: TempConfig = toml::from_str(toml_str3).unwrap();
+    assert_eq!(parsed3.default.big(), "my-big-model");
+    assert_eq!(parsed3.default.small(), "my-small-model");
+}
+
+use tempfile::TempDir;
+
+#[test]
+fn test_load_valid_config() {
+    let dir = TempDir::new().unwrap();
+    let models = r#"{
+            "default": {"big": "test_model", "small": "test_small"},
+            "models": [{"name": "test_model", "url": "http://test/v1/chat/completions", "model": "test"}]
+        }"#;
+    fs::write(dir.path().join(MODELS_FILE), models).unwrap();
+
+    let (url, model, config) = load_config_from(dir.path());
+    assert_eq!(config.default.big(), "test_model");
+    assert_eq!(config.models[0].name, "test_model");
+    assert_eq!(url, "http://test/v1/chat/completions");
+    assert_eq!(model, "test");
+}
+
+#[test]
+fn test_load_invalid_config_returns_default() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join(CONFIG_FILE);
+    fs::write(&config_path, b"invalid json content").unwrap();
+
+    let (_url, _model, config) = load_config_from(dir.path());
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert!(!config.is_valid);
+
+    assert_eq!(fs::read(&config_path).unwrap(), b"invalid json content");
+    assert!(!dir.path().join("config.json.bak").exists());
+}
+
+#[test]
+fn test_load_missing_config_returns_default() {
+    let dir = TempDir::new().unwrap();
+    let (_url, _model, config) = load_config_from(dir.path());
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+
+    assert!(!dir.path().join("models.json").exists());
+    assert!(!dir.path().join("config.json").exists());
+    assert!(!dir.path().join("config.toml").exists());
+}
+
+#[test]
+fn test_load_json_configuration_files() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("models.json"),
+        r#"{
+                "default": {"big": "custom", "small": "custom-small"},
+                "models": [{
+                    "name": "custom",
+                    "url": "http://custom/v1/chat/completions",
+                    "model": "custom-model"
+                }]
+            }"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+                "theme": "nord",
+                "tool_protocol": "native"
+            }"#,
+    )
+    .unwrap();
+
+    let (url, model, config) = load_config_from(dir.path());
+
+    assert_eq!(config.default.big(), "custom");
+    assert_eq!(config.default.small(), "custom-small");
+    assert_eq!(config.models[0].name, "custom");
+    assert_eq!(config.theme, "nord");
+    assert_eq!(config.tool_protocol, ToolProtocol::Native);
+    assert_eq!(url, "http://custom/v1/chat/completions");
+    assert_eq!(model, "custom-model");
+}
+
+#[test]
+fn test_malformed_json_is_preserved() {
+    let dir = TempDir::new().unwrap();
+    let malformed_models = b"{ malformed models";
+    let malformed_runtime = b"{ malformed runtime";
+    fs::write(dir.path().join("models.json"), malformed_models).unwrap();
+    fs::write(dir.path().join("config.json"), malformed_runtime).unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+
+    let defaults = AppConfig::default();
+    assert_eq!(config.default.big(), defaults.default.big());
+    assert_eq!(config.models, defaults.models);
+    assert_eq!(config.theme, defaults.theme);
+    assert_eq!(config.tool_protocol, defaults.tool_protocol);
+    assert!(!config.is_valid);
+    assert_eq!(
+        fs::read(dir.path().join("models.json")).unwrap(),
+        malformed_models
+    );
+    assert_eq!(
+        fs::read(dir.path().join("config.json")).unwrap(),
+        malformed_runtime
+    );
+    assert!(!dir.path().join("models.json.bak").exists());
+    assert!(!dir.path().join("config.json.bak").exists());
+}
+
+#[test]
+fn test_malformed_models_preserves_valid_runtime_config() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join(MODELS_FILE), b"not json").unwrap();
+    fs::write(
+        dir.path().join(CONFIG_FILE),
+        r#"{"theme":"nord","tool_protocol":"native"}"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+
+    assert_eq!(config.theme, "nord");
+    assert_eq!(config.tool_protocol, ToolProtocol::Native);
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert!(!config.is_valid);
+}
+
+#[test]
+fn test_empty_models_use_default_endpoint() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(MODELS_FILE),
+        r#"{"default":{"big":"missing","small":"missing"},"models":[]}"#,
+    )
+    .unwrap();
+
+    let (url, model, config) = load_config_from(dir.path());
+    let defaults = AppConfig::default();
+    assert!(config.models.is_empty());
+    assert_eq!(url, defaults.models[0].url);
+    assert_eq!(model, defaults.models[0].model);
+}
+
+#[test]
+fn test_config_save_writes_versioned_toml_without_split_json() {
+    let dir = TempDir::new().unwrap();
+    let mut config = AppConfig::default();
+    config.default = DefaultConfig::Simple("custom".to_string());
+    config.models[0].name = "custom".to_string();
+    config.theme = "nord".to_string();
+    config.tool_protocol = ToolProtocol::Native;
+
+    save_config_to(dir.path(), &config);
+
+    let path = dir.path().join(CONFIG_TOML_FILE);
+    assert!(path.exists());
+    assert!(!dir.path().join(MODELS_FILE).exists());
+    assert!(!dir.path().join(CONFIG_FILE).exists());
+    let contents = fs::read_to_string(&path).unwrap();
+    assert!(contents.contains("version = 1"));
+    let (_, _, loaded) = load_config_from(dir.path());
+    assert_eq!(loaded.default.big(), "custom");
+    assert_eq!(loaded.theme, "nord");
+    assert_eq!(loaded.tool_protocol, ToolProtocol::Native);
+}
+
+#[test]
+fn test_legacy_json_is_migrated_when_saved() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(MODELS_FILE),
+        r#"{
+                "default": "legacy-model",
+                "models": [{"name":"legacy-model","url":"http://legacy","model":"legacy"}]
+            }"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert_eq!(config.default.big(), "legacy-model");
+    save_config_to(dir.path(), &config);
+
+    assert!(dir.path().join(CONFIG_TOML_FILE).exists());
+    assert!(dir.path().join(MODELS_FILE).exists());
+    let (_, _, migrated) = load_config_from(dir.path());
+    assert_eq!(migrated.default.big(), "legacy-model");
+}
+
+#[test]
+fn test_invalid_toml_is_preserved_and_does_not_fall_back_to_legacy_json() {
+    let dir = TempDir::new().unwrap();
+    let invalid = b"[models\nnot valid";
+    fs::write(dir.path().join(CONFIG_TOML_FILE), invalid).unwrap();
+    fs::write(
+        dir.path().join(MODELS_FILE),
+        r#"{"default":"legacy","models":[]}"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert!(!config.is_valid);
+    assert_eq!(
+        fs::read(dir.path().join(CONFIG_TOML_FILE)).unwrap(),
+        invalid
+    );
+}
+
+#[test]
+fn test_unsupported_toml_version_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        format!("version = {}\n", CONFIG_FORMAT_VERSION + 1),
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+
+    assert_eq!(config.default.big(), AppConfig::default().default.big());
+    assert!(!config.is_valid);
+}
+
+#[test]
+fn project_config_overrides_global_defaults_from_near_to_far() {
+    let root = TempDir::new().unwrap();
+    let workspace = root.path().join("nested");
+    fs::create_dir_all(workspace.join(PROJECT_CONFIG_DIR)).unwrap();
+    fs::create_dir_all(root.path().join(PROJECT_CONFIG_DIR)).unwrap();
+    fs::write(
+        root.path()
+            .join(PROJECT_CONFIG_DIR)
+            .join(PROJECT_CONFIG_FILE),
+        "version = 1\n[default]\nbig = \"parent\"\nsmall = \"parent-small\"\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE),
+        "version = 1\n[default]\nbig = \"child\"\n",
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_for_workspace(&workspace);
+
+    assert_eq!(config.default.big(), "child");
+    assert_eq!(config.default.small(), "parent-small");
+}
+
+#[test]
+fn project_overrides_are_not_persisted_into_global_config() {
+    let global = AppConfig::default();
+    let mut merged = global.clone();
+    let project: TomlConfig =
+        toml::from_str("version = 1\n[default]\nbig = \"project\"\nsmall = \"project-small\"\n")
+            .unwrap();
+    apply_project_toml_config(&mut merged, project.clone());
+    assert_eq!(merged.default.big(), "project");
+
+    preserve_project_overrides(&mut merged, &global, &project);
+
+    assert_eq!(merged.default.big(), global.default.big());
+    assert_eq!(merged.default.small(), global.default.small());
+}
+
+#[test]
+fn project_config_cannot_grant_or_forbid_user_command_rules() {
+    let mut merged = AppConfig::default();
+    let project: TomlConfig = toml::from_str(
+        "version = 1\napproved_command_prefixes = [\"cargo test\"]\ndenied_command_prefixes = [\"git push\"]",
+    )
+    .unwrap();
+    apply_project_toml_config(&mut merged, project.clone());
+    assert!(merged.approved_command_prefixes.is_empty());
+    assert!(merged.denied_command_prefixes.is_empty());
+
+    preserve_project_overrides(&mut merged, &AppConfig::default(), &project);
+    assert!(merged.approved_command_prefixes.is_empty());
+    assert!(merged.denied_command_prefixes.is_empty());
+}
+
+#[test]
+fn project_init_writes_safe_template_and_gitignore_entry() {
+    let workspace = TempDir::new().unwrap();
+    let path = init_project_config(workspace.path()).unwrap();
+
+    assert_eq!(
+        path,
+        fs::canonicalize(workspace.path())
+            .unwrap()
+            .join(PROJECT_CONFIG_DIR)
+            .join(PROJECT_CONFIG_FILE)
+    );
+    let contents = fs::read_to_string(path).unwrap();
+    assert!(contents.contains("version = 1"));
+    assert!(contents.contains("[default]"));
+    assert!(!contents.contains("api_key"));
+    assert!(!contents.contains("mcp_servers"));
+    assert_eq!(
+        fs::read_to_string(workspace.path().join(".gitignore")).unwrap(),
+        ".rustcode/config.toml\n"
+    );
+    assert!(init_project_config(workspace.path()).is_err());
+}
+
+#[test]
+fn test_provider_supports_function_calling_includes_zai() {
+    assert!(provider_supports_function_calling(
+        "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    ));
+    assert!(provider_supports_function_calling(
+        "https://api.z.ai/v1/chat/completions"
+    ));
+}
+
+#[test]
+fn test_ensure_sync_gitignore_creates_and_updates() {
+    let dir = TempDir::new().unwrap();
+    ensure_sync_gitignore(dir.path()).unwrap();
+    let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert!(content.contains("sessions/"));
+    assert!(content.contains("backups/"));
+    assert!(content.contains("usage_stats.json"));
+    assert!(content.contains("sessions/*/sandbox/"));
+    assert!(content.contains("sessions/*/artifacts/"));
+    assert!(content.contains("sessions/*/subagents/"));
+    assert!(content.contains("sessions/*/image_cache.json"));
+    assert!(content.contains("*.bak"));
+
+    // Test updating existing with missing entries
+    let custom_dir = TempDir::new().unwrap();
+    fs::write(custom_dir.path().join(".gitignore"), "custom_entry\n").unwrap();
+    ensure_sync_gitignore(custom_dir.path()).unwrap();
+    let updated = fs::read_to_string(custom_dir.path().join(".gitignore")).unwrap();
+    assert!(updated.starts_with("custom_entry\n"));
+    assert!(updated.contains("sessions/*/sandbox/"));
+}
+
+#[test]
+fn sync_index_cleanup_preserves_local_runtime_files() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("config.toml"), "version = 1\n").unwrap();
+    fs::create_dir_all(dir.path().join("skills/example")).unwrap();
+    fs::write(dir.path().join("skills/example/SKILL.md"), "# Example\n").unwrap();
+    fs::create_dir_all(dir.path().join("themes")).unwrap();
+    fs::write(dir.path().join("themes/default.toml"), "[theme]\n").unwrap();
+    fs::create_dir_all(dir.path().join("sessions/2026/09/11/example")).unwrap();
+    fs::write(
+        dir.path().join("sessions/2026/09/11/example/history.json"),
+        "[]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("backups")).unwrap();
+    fs::write(dir.path().join("backups/archive.tar.gz"), "backup\n").unwrap();
+    ensure_sync_gitignore(dir.path()).unwrap();
+
+    let run_git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {:?} failed", args);
+    };
+    run_git(&["init", "-q"]);
+    run_git(&["add", "-A"]);
+    run_git(&["add", "-f", "sessions", "backups"]);
+    run_git(&[
+        "-c",
+        "user.name=rustcode-test",
+        "-c",
+        "user.email=rustcode-test@localhost",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+
+    assert_eq!(untrack_non_sync_files(dir.path()).unwrap(), 2);
+    assert!(
+        dir.path()
+            .join("sessions/2026/09/11/example/history.json")
+            .exists()
+    );
+    assert!(dir.path().join("backups/archive.tar.gz").exists());
+
+    let tracked = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["ls-files"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(tracked.lines().any(|path| path == "config.toml"));
+    assert!(
+        tracked
+            .lines()
+            .any(|path| path == "skills/example/SKILL.md")
+    );
+    assert!(tracked.lines().any(|path| path == "themes/default.toml"));
+    assert!(!tracked.lines().any(|path| path.starts_with("sessions/")));
+    assert!(!tracked.lines().any(|path| path.starts_with("backups/")));
+}
+
+#[test]
+fn test_get_sync_branch_fallback() {
+    let dir = TempDir::new().unwrap();
+    // Non-git directory falls back to main
+    assert_eq!(get_sync_branch(dir.path()), "main");
+}
+
+#[test]
+fn test_load_session_meta_fast_path() {
+    let dir = TempDir::new().unwrap();
+    let session_dir = dir.path().join(SESSIONS_DIR).join("12345");
+    fs::create_dir_all(&session_dir).unwrap();
+    let history_file = session_dir.join(HISTORY_FILE);
+
+    let json = r#"[
+            {"role": "user", "content": "hello world\nsecond line", "timestamp": "12:00", "images": ["massive_base64_data_12345"]},
+            {"role": "assistant", "content": "hi there", "timestamp": "12:01"}
+        ]"#;
+    fs::write(&history_file, json).unwrap();
+
+    let meta = load_session_meta(&history_file).expect("should parse meta");
+    assert_eq!(meta.title, "hello world");
+    assert_eq!(meta.when, "12:00");
+    assert_eq!(meta.message_count, 2);
+    assert_eq!(meta.path, history_file);
+    assert_eq!(
+        session_id_from_path(&history_file).as_deref(),
+        Some("12345")
+    );
+}
+
+#[test]
+fn test_load_session_meta_unresumable_abandoned_session() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.json");
+    // User prompt with no assistant reply is not resumable
+    let json = r#"[{"role": "user", "content": "unfinished", "timestamp": "12:00"}]"#;
+    fs::write(&file, json).unwrap();
+    assert!(load_session_meta(&file).is_none());
+}
+
+#[test]
+fn test_session_id_from_path_variations() {
+    let path1 = PathBuf::from("/home/user/.config/rustcode/sessions/sess-abc/history.json");
+    assert_eq!(session_id_from_path(&path1).as_deref(), Some("sess-abc"));
+
+    let path2 = PathBuf::from("/home/user/.config/rustcode/sessions/sess-xyz.json");
+    assert_eq!(session_id_from_path(&path2).as_deref(), Some("sess-xyz"));
+
+    let path3 = PathBuf::from("/tmp/history.json");
+    assert_eq!(session_id_from_path(&path3), None);
+}
+
+#[test]
+fn fallback_chain_starts_with_primary_then_small_then_rest_capped() {
+    let config = crate::config::AppConfig::default();
+    let primary = config.default.big().to_string();
+    let chain = crate::config::fallback_chain(&config, &primary);
+    assert!(!chain.is_empty());
+    assert_eq!(chain[0].name, primary);
+    assert!(chain.len() <= 3);
+    let names: Vec<&str> = chain.iter().map(|p| p.name.as_str()).collect();
+    let mut dedup = names.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(names.len(), dedup.len());
+}

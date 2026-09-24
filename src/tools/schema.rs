@@ -1,0 +1,1941 @@
+use super::{TOOLS, ToolCapability, allowed_in_plan_mode};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::Path;
+use std::sync::{Arc, LazyLock};
+
+#[cfg(test)]
+use std::sync::{
+    Condvar, Mutex as StdMutex, OnceLock,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+#[cfg(test)]
+static NATIVE_SCHEMA_TEST_GATE: OnceLock<StdMutex<Option<Arc<NativeSchemaTestGateState>>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+struct NativeSchemaTestGateState {
+    marker: String,
+    pause_on_call: usize,
+    matching_calls: AtomicUsize,
+    entered: AtomicBool,
+    released: StdMutex<bool>,
+    release_cv: Condvar,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct NativeSchemaTestGate {
+    state: Arc<NativeSchemaTestGateState>,
+}
+
+#[cfg(test)]
+impl NativeSchemaTestGate {
+    pub(crate) fn is_entered(&self) -> bool {
+        self.state.entered.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn release(&self) {
+        let mut released = self.state.released.lock().unwrap();
+        *released = true;
+        self.state.release_cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Drop for NativeSchemaTestGate {
+    fn drop(&mut self) {
+        self.release();
+        let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+        let mut installed = slot.lock().unwrap();
+        if installed
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        {
+            *installed = None;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_native_schema_test_gate(
+    marker: impl Into<String>,
+    pause_on_call: usize,
+) -> NativeSchemaTestGate {
+    let state = Arc::new(NativeSchemaTestGateState {
+        marker: marker.into(),
+        pause_on_call,
+        matching_calls: AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+        released: StdMutex::new(false),
+        release_cv: Condvar::new(),
+    });
+    let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+    let mut installed = slot.lock().unwrap();
+    assert!(
+        installed.is_none(),
+        "native schema test gate already installed"
+    );
+    *installed = Some(state.clone());
+    NativeSchemaTestGate { state }
+}
+
+#[cfg(test)]
+fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
+    let slot = NATIVE_SCHEMA_TEST_GATE.get_or_init(|| StdMutex::new(None));
+    let Some(state) = slot.lock().unwrap().clone() else {
+        return;
+    };
+    if !messages
+        .iter()
+        .any(|message| message.to_string().contains(&state.marker))
+    {
+        return;
+    }
+    let call = state.matching_calls.fetch_add(1, Ordering::AcqRel) + 1;
+    if call != state.pause_on_call {
+        return;
+    }
+    state.entered.store(true, Ordering::Release);
+    let mut released = state.released.lock().unwrap();
+    while !*released {
+        released = state.release_cv.wait(released).unwrap();
+    }
+}
+
+/// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
+/// mirrors what `tool_system_prompt` lists for the text protocols, reused here
+/// to build the native function schema.
+pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
+    (
+        "spawn_agent",
+        "Start an asynchronous read-only subagent and return its id. Use wait_agent for completion. Write access, allowed paths, and verification must be explicit.",
+        r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
+    ),
+    (
+        "send_agent",
+        "Start one follow-up turn for a completed subagent. Running subagents reject follow-ups.",
+        r#"{"id": "subagent id", "message": "message text"}"#,
+    ),
+    (
+        "set_goal",
+        "Set a new long-running task and switch the agent to continuous autoloop mode.",
+        r#"{"goal": "goal description"}"#,
+    ),
+    (
+        "todo_write",
+        "Replace the persistent task plan with a list of steps.",
+        r#"{"todos": "list of steps, each with content, status and priority"}"#,
+    ),
+];
+
+/// Selects the tool schemas visible to one provider request.
+///
+/// This is intentionally request-scoped: a child request must not infer its
+/// capabilities from the parent session's mutable delegation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToolSchemaPolicy {
+    pub(crate) include_agent_tools: bool,
+    pub(crate) include_mcp_tools: bool,
+    pub(crate) include_session_title_tool: bool,
+    pub(crate) profile: ToolSchemaProfile,
+    pub(crate) compact_text_prompt: bool,
+}
+
+/// Counts the capabilities advertised by a textual tool contract. Native
+/// requests derive the equivalent counts from the selected schema result, but
+/// textual requests still need an explicit inventory for diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ToolSurface {
+    pub(crate) builtin: usize,
+    pub(crate) mcp: usize,
+    pub(crate) agent: usize,
+}
+
+impl ToolSurface {
+    pub(crate) const fn total(self) -> usize {
+        self.builtin + self.mcp + self.agent
+    }
+}
+
+/// Deterministic provider-facing tool menu for the read-only inspection mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ToolSchemaProfile {
+    #[default]
+    Coding,
+    ReadOnlyInspection,
+}
+
+/// Request phase used to keep the initial tool menu small for new projects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ToolSchemaPhase {
+    /// The workspace has no (or only a handful of) source files.
+    Bootstrap,
+    /// Established repositories retain the broad, context-ranked menu.
+    #[default]
+    Established,
+}
+
+impl ToolSchemaPolicy {
+    pub(crate) const fn root(include_agent_tools: bool) -> Self {
+        Self {
+            include_agent_tools,
+            include_mcp_tools: true,
+            include_session_title_tool: false,
+            profile: ToolSchemaProfile::Coding,
+            compact_text_prompt: false,
+        }
+    }
+
+    pub(crate) fn root_for_mode(include_agent_tools: bool, mode: crate::config::AgentMode) -> Self {
+        if mode == crate::config::AgentMode::Plan {
+            Self::read_only_inspection()
+        } else {
+            Self::root(include_agent_tools)
+        }
+    }
+
+    pub(crate) const fn read_only_inspection() -> Self {
+        Self {
+            include_agent_tools: false,
+            include_mcp_tools: false,
+            include_session_title_tool: false,
+            profile: ToolSchemaProfile::ReadOnlyInspection,
+            compact_text_prompt: false,
+        }
+    }
+
+    pub(crate) const fn subagent() -> Self {
+        Self {
+            include_agent_tools: false,
+            include_mcp_tools: false,
+            include_session_title_tool: false,
+            profile: ToolSchemaProfile::ReadOnlyInspection,
+            compact_text_prompt: false,
+        }
+    }
+
+    pub(crate) const fn with_session_title_tool(mut self) -> Self {
+        self.include_session_title_tool = true;
+        self
+    }
+
+    pub(crate) fn root_for_mode_with_compact_prompt(
+        include_agent_tools: bool,
+        mode: crate::config::AgentMode,
+        compact_text_prompt: bool,
+    ) -> Self {
+        let mut policy = Self::root_for_mode(include_agent_tools, mode);
+        policy.compact_text_prompt = compact_text_prompt;
+        if compact_text_prompt {
+            policy.include_mcp_tools = false;
+        }
+        policy
+    }
+}
+
+/// Derive a permissive JSON Schema object from a tool's human-readable
+/// `arguments` string (e.g. `{"path": "file path", "start_line": optional}`).
+/// Every parameter is declared as an optional `string`; the tool handlers
+/// already coerce strings to numbers/bools (see `parse_json_number`/
+/// `parse_json_bool`), so this stays correct without a real schema per tool.
+pub(super) fn schema_from_arguments(arguments: &str) -> Value {
+    let mut properties = serde_json::Map::new();
+    let bytes = arguments.as_bytes();
+    let read_string = |start: usize| -> (String, usize) {
+        // `start` points just past the opening quote; returns (contents, index of closing quote).
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != b'"' {
+            if bytes[j] == b'\\' {
+                j += 1;
+            }
+            j += 1;
+        }
+        (arguments[start..j.min(arguments.len())].to_string(), j)
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let (token, end) = read_string(i + 1);
+        // A key is a string immediately followed (past whitespace) by ':'.
+        let mut k = end + 1;
+        while k < bytes.len() && (bytes[k] as char).is_whitespace() {
+            k += 1;
+        }
+        if k < bytes.len() && bytes[k] == b':' {
+            // Optional description: the following string literal, if any.
+            let mut m = k + 1;
+            while m < bytes.len() && (bytes[m] as char).is_whitespace() {
+                m += 1;
+            }
+            // An array-literal value (`[...]`) marks a structured param even
+            // when no description string follows it (e.g. `options`).
+            let is_array_literal = m < bytes.len() && bytes[m] == b'[';
+            let desc = if m < bytes.len() && bytes[m] == b'"' {
+                read_string(m + 1).0
+            } else {
+                String::new()
+            };
+            let mut prop = serde_json::Map::new();
+            // Params whose description says "array" carry structured JSON (e.g.
+            // `edits`, `replacements`). Advertising them as `string` makes
+            // strict ApiNative providers stringify the value, which the handlers
+            // then fail to read via `as_array()`. Emit a real array schema so the
+            // model passes structured data. Everything else stays an optional
+            // string (handlers coerce scalars via parse_json_number/bool).
+            if is_array_literal || desc.to_lowercase().contains("array") {
+                prop.insert("type".into(), Value::String("array".into()));
+                prop.insert("items".into(), serde_json::json!({ "type": "object" }));
+            } else {
+                prop.insert("type".into(), Value::String("string".into()));
+            }
+            if !desc.is_empty() {
+                prop.insert("description".into(), Value::String(desc));
+            }
+            properties
+                .entry(token)
+                .or_insert_with(|| Value::Object(prop));
+        }
+        i = end + 1;
+    }
+    serde_json::json!({ "type": "object", "properties": properties })
+}
+
+/// Build the OpenAI-style `tools` array sent in the request when the tool
+/// protocol is `ApiNative`. Covers the built-in `TOOLS`, any MCP tools (which
+/// carry real JSON Schemas), and the agent tools.
+/// Gather all connected MCP tools as `(name, description, input_schema)`,
+/// sorted by name for a deterministic, cache-stable ordering. Shared by both
+/// the native schema builder and the text-protocol prompt listing.
+pub(super) fn mcp_canonical_name(server: &str, tool: &str) -> String {
+    let server = server
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    format!("mcp__{server}__{tool}")
+}
+
+pub(super) fn mcp_canonical_name_for_clients(
+    server: &str,
+    tool: &str,
+    clients: &[Arc<crate::mcp::McpClient>],
+) -> String {
+    let base = mcp_canonical_name(server, tool);
+    let collides = clients
+        .iter()
+        .filter(|client| mcp_canonical_name(&client.name, tool) == base)
+        .count()
+        > 1;
+    if !collides {
+        return base;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    server.hash(&mut hasher);
+    format!("{base}__{:016x}", hasher.finish())
+}
+
+pub(super) fn mcp_raw_name_is_unique(name: &str, clients: &[Arc<crate::mcp::McpClient>]) -> bool {
+    if TOOLS.iter().any(|tool| tool.name == name)
+        || AGENT_TOOL_SPECS.iter().any(|(tool, _, _)| *tool == name)
+    {
+        return false;
+    }
+    clients
+        .iter()
+        .filter_map(|client| client.get_tools().ok())
+        .flatten()
+        .filter(|tool| tool.get("name").and_then(|value| value.as_str()) == Some(name))
+        .count()
+        == 1
+}
+
+fn mcp_display_name_from_canonical(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("mcp__")?;
+    let (server, tool) = rest.split_once("__")?;
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some(format!("{server}.{tool}"))
+}
+
+/// Resolve an MCP provider-facing name to the server-qualified label shown in
+/// the transcript. Unique raw names need the live registry to recover their
+/// server; canonical names remain displayable after a server disconnects.
+pub(crate) fn mcp_tool_display_name(name: &str) -> Option<String> {
+    if let Ok(registry) = crate::mcp::get_mcp_registry().lock() {
+        let mut clients = registry.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|a, b| a.name.cmp(&b.name));
+        for client in &clients {
+            let Ok(tools) = client.get_tools() else {
+                continue;
+            };
+            for tool in tools {
+                let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let canonical = mcp_canonical_name_for_clients(&client.name, raw_name, &clients);
+                if name == canonical
+                    || (name == raw_name && mcp_raw_name_is_unique(raw_name, &clients))
+                {
+                    return Some(format!("{}.{}", client.name, raw_name));
+                }
+            }
+        }
+    }
+    mcp_display_name_from_canonical(name)
+}
+
+pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
+    collect_mcp_tools_with_servers()
+        .into_iter()
+        .map(|(name, _, description, schema)| (name, description, schema))
+        .collect()
+}
+
+/// Collect MCP schemas with their configured server name alongside the
+/// provider-facing tool name. The owner is needed for per-server reservations;
+/// the provider-facing name remains unchanged for compatibility.
+fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, Value)> {
+    let mut discovered = Vec::new();
+    let mut clients_for_names = Vec::new();
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        let mut clients = reg.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|a, b| a.name.cmp(&b.name));
+        clients_for_names = clients.clone();
+        for client in &clients {
+            if let Ok(mcp_tools) = client.get_tools() {
+                for tool in mcp_tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let schema = tool
+                        .get("inputSchema")
+                        .filter(|schema| {
+                            schema.is_object()
+                                && schema.get("type").and_then(Value::as_str) == Some("object")
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+                    discovered.push((client.name.clone(), name.to_string(), desc, schema));
+                }
+            }
+        }
+    }
+    discovered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut counts = HashMap::new();
+    for (_, name, _, _) in &discovered {
+        *counts.entry(name.clone()).or_insert(0usize) += 1;
+    }
+    let mut out = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    for (server, raw_name, desc, schema) in discovered {
+        let qualified = counts.get(&raw_name).copied().unwrap_or(0) > 1
+            || TOOLS.iter().any(|tool| tool.name == raw_name)
+            || AGENT_TOOL_SPECS
+                .iter()
+                .any(|(name, _, _)| *name == raw_name);
+        let name = if qualified {
+            mcp_canonical_name_for_clients(&server, &raw_name, &clients_for_names)
+        } else {
+            raw_name
+        };
+        if emitted.insert(name.clone()) {
+            out.push((name, server, desc, schema));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
+    let registry_handle = crate::mcp::get_mcp_registry();
+    let Ok(registry) = registry_handle.lock() else {
+        return false;
+    };
+    let mut clients = registry.values().cloned().collect::<Vec<_>>();
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+    clients.iter().any(|client| {
+        client.get_tools().is_ok_and(|tools| {
+            tools.iter().any(|tool| {
+                let Some(raw) = tool.get("name").and_then(Value::as_str) else {
+                    return false;
+                };
+                let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
+                let matches_name =
+                    name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients));
+                matches_name
+                    && tool
+                        .get("annotations")
+                        .and_then(|annotations| annotations.get("readOnlyHint"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            })
+        })
+    })
+}
+
+pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
+/// Keep the selected MCP contract bounded by measured serialized bytes as well
+/// as count. A single verbose MCP schema must not consume the whole request
+/// budget or make the menu unstable across providers.
+pub(crate) const MAX_MCP_NATIVE_SCHEMA_BYTES: usize = 24 * 1024;
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 32 * 1024;
+pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
+const MCP_RELEVANCE_THRESHOLD: usize = 6;
+const MCP_DISCOVERY_CORE: &[&str] = &[
+    "codebase_search",
+    "codebase_symbols",
+    "codebase_impact",
+    "codebase_flow",
+];
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct McpSchemaSelectionStats {
+    pub available: usize,
+    pub selected: usize,
+    pub relevant: usize,
+    pub previously_used: usize,
+    pub fallback: usize,
+    pub omitted: usize,
+    /// Names omitted from the provider schema, included in operational events
+    /// so a missing callable MCP tool is diagnosable.
+    pub omitted_names: Vec<String>,
+    /// Configured servers whose complete toolsets were bound by reservation.
+    pub reserved_servers: Vec<String>,
+    /// Servers whose reservation could not fit the count or byte budget.
+    pub rejected_reservations: Vec<String>,
+    pub selected_names: Vec<String>,
+    pub phase: ToolSchemaPhase,
+    pub builtin_available: usize,
+    pub builtin_selected: usize,
+    pub builtin_schema_bytes: usize,
+    pub mcp_schema_bytes: usize,
+    pub mcp_schema_budget_bytes: usize,
+    pub schema_budget_exhausted: bool,
+}
+
+const CORE_CODING_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
+    "run_command",
+    "manage_task",
+    "ask_question",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+/// The compact text protocol keeps the normal coding surface, but leaves
+/// specialized media, memory, web, and lifecycle tools out of the prompt.
+/// Native requests apply the finer-grained relevance filter below.
+const TEXT_CODING_TOOLS: &[&str] = &[
+    "set_session_title",
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "write_to_file",
+    "write_file_chunk",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "run_command",
+    "manage_task",
+    "ask_question",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+const EDIT_TOOL_TERMS: &[&str] = &[
+    "add",
+    "change",
+    "chunk",
+    "code",
+    "create",
+    "edit",
+    "fix",
+    "implement",
+    "insert",
+    "large",
+    "modify",
+    "patch",
+    "refactor",
+    "replace",
+    "resumable",
+    "update",
+    "write",
+];
+
+const DELETE_TOOL_TERMS: &[&str] = &["copy", "delete", "remove", "rename", "move"];
+
+const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "run_command",
+    "manage_task",
+    "view_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "write_to_file",
+    "write_file_chunk",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
+];
+
+const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
+
+fn text_builtin_is_advertised(
+    tool: &super::Tool,
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> bool {
+    if (tool.name == "set_session_title" && !policy.include_session_title_tool)
+        || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&tool.name))
+    {
+        return false;
+    }
+    if policy.profile == ToolSchemaProfile::ReadOnlyInspection
+        && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name)
+    {
+        return false;
+    }
+    if tool.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools {
+        return false;
+    }
+    agent_mode != crate::config::AgentMode::Plan || allowed_in_plan_mode(tool.name)
+}
+
+pub(crate) fn textual_tool_surface(
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> ToolSurface {
+    ToolSurface {
+        builtin: TOOLS
+            .iter()
+            .filter(|tool| text_builtin_is_advertised(tool, policy, agent_mode))
+            .count(),
+        mcp: usize::from(policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan)
+            * collect_mcp_tools().len(),
+        agent: agent_tool_count(policy, agent_mode),
+    }
+}
+
+pub(crate) fn agent_tool_count(
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> usize {
+    usize::from(policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan)
+        * AGENT_TOOL_SPECS.len()
+}
+
+fn source_file_count(root: &Path) -> usize {
+    let mut pending = vec![root.to_path_buf()];
+    let mut count = 0;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.')
+                || matches!(name.as_str(), "target" | "node_modules" | "vendor")
+            {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        matches!(
+                            extension,
+                            "rs" | "ts"
+                                | "tsx"
+                                | "js"
+                                | "jsx"
+                                | "py"
+                                | "go"
+                                | "java"
+                                | "c"
+                                | "h"
+                                | "cpp"
+                                | "hpp"
+                                | "swift"
+                                | "kt"
+                                | "rb"
+                                | "php"
+                                | "cs"
+                                | "vue"
+                                | "svelte"
+                        )
+                    })
+            {
+                count += 1;
+                if count > BOOTSTRAP_SOURCE_FILE_LIMIT {
+                    return count;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn explicitly_requests_codebase_analysis(messages: &[Value]) -> bool {
+    messages
+        .iter()
+        .filter_map(|message| {
+            matches!(
+                message.get("role").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+            .then(|| message.get("content").and_then(Value::as_str).unwrap_or(""))
+        })
+        .any(|content| {
+            let content = content.to_ascii_lowercase();
+            [
+                "codebase analysis",
+                "call graph",
+                "dependency graph",
+                "find symbol",
+                "impact analysis",
+                "trace callers",
+                "trace callees",
+                "refactor the existing",
+                "analyze the repository",
+                "analyze this repository",
+            ]
+            .iter()
+            .any(|needle| content.contains(needle))
+        })
+}
+
+pub(crate) fn tool_schema_phase(
+    messages: &[Value],
+    workspace_root: Option<&Path>,
+) -> ToolSchemaPhase {
+    if explicitly_requests_codebase_analysis(messages) {
+        return ToolSchemaPhase::Established;
+    }
+    workspace_root
+        .filter(|root| root.is_dir())
+        .map(|root| source_file_count(root) <= BOOTSTRAP_SOURCE_FILE_LIMIT)
+        .map_or(ToolSchemaPhase::Established, |bootstrap| {
+            if bootstrap {
+                ToolSchemaPhase::Bootstrap
+            } else {
+                ToolSchemaPhase::Established
+            }
+        })
+}
+
+fn builtin_tool_is_relevant(
+    name: &str,
+    terms: &std::collections::HashSet<String>,
+    phase: ToolSchemaPhase,
+) -> bool {
+    let coding_tools = match phase {
+        ToolSchemaPhase::Bootstrap => BOOTSTRAP_CODING_TOOLS,
+        ToolSchemaPhase::Established => CORE_CODING_TOOLS,
+    };
+    if coding_tools.contains(&name) {
+        return true;
+    }
+    let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
+    match name {
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "write_file_chunk" => relevant(EDIT_TOOL_TERMS),
+        "delete_file" | "move_file" | "copy_file" => relevant(DELETE_TOOL_TERMS),
+        "find_symbol" | "get_project_map" => {
+            phase == ToolSchemaPhase::Established
+                || relevant(&[
+                    "symbol",
+                    "symbols",
+                    "architecture",
+                    "dependency",
+                    "dependencies",
+                    "impact",
+                    "callers",
+                    "callees",
+                    "trace",
+                ])
+        }
+        "search_web" => relevant(&[
+            "web", "internet", "online", "research", "latest", "docs", "http", "https",
+        ]),
+        "get_time" => relevant(&["time", "timezone", "clock", "date"]),
+        "remember" | "recall_memory" | "forget_memory" => {
+            relevant(&["memory", "remember", "recall", "forget", "preference"])
+        }
+        "generate_sound_effect" | "generate_music" | "inspect_audio" => {
+            relevant(&["audio", "sound", "music", "voice", "song"])
+        }
+        "inspect_media" | "validate_video_project" | "render_video" => {
+            relevant(&["video", "media", "render", "movie", "animation"])
+        }
+        "wait_agent" | "cancel_agent" => relevant(&["agent", "subagent", "delegate", "parallel"]),
+        _ => true,
+    }
+}
+
+fn build_builtin_native_tools_schema(
+    policy: ToolSchemaPolicy,
+    terms: Option<&std::collections::HashSet<String>>,
+    phase: ToolSchemaPhase,
+) -> Vec<Value> {
+    let mut tools = Vec::new();
+    for t in TOOLS {
+        if t.name == "set_session_title" && !policy.include_session_title_tool {
+            continue;
+        }
+        if policy.profile == ToolSchemaProfile::ReadOnlyInspection
+            && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
+        {
+            continue;
+        }
+        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
+        {
+            continue;
+        }
+        if !(policy.include_agent_tools
+            && t.capabilities.contains(&ToolCapability::AgentDelegation))
+            && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms, phase))
+        {
+            continue;
+        }
+        tools.push(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": provider_compatible_schema(schema_for_tool(t.name)),
+            }
+        }));
+    }
+    // Preserve the core menu and deterministic TOOLS order, but drop the last
+    // specialized entries if the measured provider contract exceeds its
+    // budget. This is only schema pruning; execution validation remains based
+    // on the complete authoritative registry.
+    while serialized_schema_bytes(&tools) > MAX_BUILTIN_NATIVE_SCHEMA_BYTES {
+        let removable = tools.iter().rposition(|tool| {
+            tool["function"]["name"]
+                .as_str()
+                .is_some_and(|name| !CORE_CODING_TOOLS.contains(&name))
+        });
+        let Some(index) = removable.or_else(|| (!tools.is_empty()).then_some(tools.len() - 1))
+        else {
+            break;
+        };
+        tools.remove(index);
+    }
+    tools
+}
+
+fn serialized_schema_bytes(schemas: &[Value]) -> usize {
+    serde_json::to_vec(schemas).map_or(0, |bytes| bytes.len())
+}
+
+fn mcp_schema_bytes(name: &str, description: &str, schema: &Value) -> usize {
+    serde_json::to_vec(&mcp_schema_value(name, description, schema)).map_or(0, |bytes| bytes.len())
+}
+
+#[cfg(test)]
+fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+        build_builtin_native_tools_schema(
+            ToolSchemaPolicy::root(false),
+            None,
+            ToolSchemaPhase::Established,
+        )
+    });
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+        build_builtin_native_tools_schema(
+            ToolSchemaPolicy::root(true),
+            None,
+            ToolSchemaPhase::Established,
+        )
+    });
+
+    if include_agent_tools {
+        WITH_AGENT_TOOLS.clone()
+    } else {
+        WITHOUT_AGENT_TOOLS.clone()
+    }
+}
+
+fn build_agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = Vec::new();
+    if include_agent_tools {
+        for (name, desc, _args) in AGENT_TOOL_SPECS {
+            tools.push(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": desc,
+                    "parameters": provider_compatible_schema(schema_for_agent_tool(name)),
+                }
+            }));
+        }
+    }
+    tools
+}
+
+fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(Vec::new);
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_agent_native_tools_schema(true));
+
+    if include_agent_tools {
+        WITH_AGENT_TOOLS.clone()
+    } else {
+        WITHOUT_AGENT_TOOLS.clone()
+    }
+}
+
+fn mcp_schema_value(name: &str, desc: &str, schema: &Value) -> Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": provider_compatible_schema(schema.clone())
+        }
+    })
+}
+
+/// Return a provider-facing copy using the common subset of JSON Schema
+/// accepted by OpenAI-compatible function-calling endpoints. Canonical tool
+/// schemas remain unchanged for RustCode's stricter runtime validation.
+pub(super) fn provider_compatible_schema(mut schema: Value) -> Value {
+    match &mut schema {
+        Value::Object(object) => {
+            object.remove("$schema");
+            object.remove("$id");
+            if let Some(bound) = object.remove("exclusiveMinimum") {
+                object.entry("minimum").or_insert(bound);
+            }
+            for value in object.values_mut() {
+                *value = provider_compatible_schema(value.take());
+            }
+            if object.get("type").is_some_and(Value::is_array) {
+                let Some(Value::Array(types)) = object.remove("type") else {
+                    unreachable!("type was checked as an array");
+                };
+                let branches = types
+                    .into_iter()
+                    .map(|schema_type| {
+                        let mut branch = if schema_type == "null" {
+                            serde_json::Map::new()
+                        } else {
+                            object.clone()
+                        };
+                        branch.insert("type".into(), schema_type);
+                        Value::Object(branch)
+                    })
+                    .collect();
+                object.clear();
+                object.insert("anyOf".into(), Value::Array(branches));
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                *value = provider_compatible_schema(value.take());
+            }
+        }
+        _ => {}
+    }
+    schema
+}
+
+fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "about", "after", "again", "also", "been", "before", "being", "could", "from", "have",
+        "into", "just", "like", "more", "most", "only", "please", "should", "that", "their",
+        "there", "these", "this", "through", "using", "want", "what", "when", "where", "which",
+        "with", "would", "your",
+    ];
+    let mut terms = std::collections::HashSet::new();
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        if !matches!(role, "user" | "assistant") {
+            continue;
+        }
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+        for token in content
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+        {
+            if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
+                terms.insert(token);
+            }
+        }
+        // Structured tool turns often have an empty assistant content field.
+        // Keep their names in the relevance set so the next request retains
+        // the exact schema needed to continue the active tool exchange.
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                if let Some(name) = call
+                    .get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .or_else(|| call.get("name").and_then(Value::as_str))
+                {
+                    terms.insert(name.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    terms
+}
+
+fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
+    let needle = name.to_ascii_lowercase();
+    messages.iter().any(|message| {
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array)
+            && calls.iter().any(|call| {
+                call.get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+                    || call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+            })
+        {
+            return true;
+        }
+        message
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| content.to_ascii_lowercase().contains(&needle))
+    })
+}
+
+fn user_message_mentions_name(messages: &[Value], name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    messages.iter().any(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            return false;
+        }
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut offset = 0;
+        while let Some(found) = content[offset..].find(&name) {
+            let start = offset + found;
+            let end = start + name.len();
+            let before_is_name_char = content[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            let after_is_name_char = content[end..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !before_is_name_char && !after_is_name_char {
+                return true;
+            }
+            offset = end;
+        }
+        false
+    })
+}
+
+fn canonical_mcp_server(name: &str) -> Option<&str> {
+    name.strip_prefix("mcp__")?
+        .split_once("__")
+        .map(|(server, _)| server)
+}
+
+/// Find MCP schemas named by the user, including every tool from a named MCP
+/// server. This intentionally reads user messages only: assistant/tool output
+/// can describe a tool without being an instruction to make its whole server
+/// sticky.
+fn explicitly_requested_mcp_tool_names(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> std::collections::HashSet<String> {
+    let mut requested = std::collections::HashSet::new();
+    for (name, _, _) in tools {
+        if user_message_mentions_name(messages, name)
+            || canonical_mcp_server(name)
+                .is_some_and(|server| user_message_mentions_name(messages, server))
+        {
+            requested.insert(name.clone());
+        }
+    }
+
+    // Unique MCP tool names are intentionally sent without a server prefix.
+    // Recover their server here so an explicit server name still pins them.
+    if let Ok(registry) = crate::mcp::get_mcp_registry().lock() {
+        let mut clients = registry.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|left, right| left.name.cmp(&right.name));
+        for client in &clients {
+            let server_requested = user_message_mentions_name(messages, &client.name)
+                || user_message_mentions_name(
+                    messages,
+                    &client
+                        .name
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                        .collect::<String>(),
+                );
+            if !server_requested {
+                continue;
+            }
+            let Ok(client_tools) = client.get_tools() else {
+                continue;
+            };
+            for tool in client_tools {
+                let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let provider_name =
+                    mcp_canonical_name_for_clients(&client.name, raw_name, &clients);
+                if tools.iter().any(|(name, _, _)| name == &provider_name)
+                    || tools.iter().any(|(name, _, _)| name == raw_name)
+                {
+                    requested.insert(
+                        tools
+                            .iter()
+                            .find(|(name, _, _)| name == &provider_name || name == raw_name)
+                            .map(|(name, _, _)| name.clone())
+                            .unwrap_or(provider_name),
+                    );
+                }
+            }
+        }
+    }
+    requested
+}
+
+fn mcp_tool_relevance(
+    name: &str,
+    description: &str,
+    schema: &Value,
+    terms: &std::collections::HashSet<String>,
+) -> usize {
+    fn token_matches(candidate: &str, term: &str) -> bool {
+        candidate == term
+            || (candidate.len() > 3 && candidate.strip_suffix('s') == Some(term))
+            || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
+    }
+    let name_terms: Vec<String> = name
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let description_terms: Vec<String> = description
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let schema_terms: Vec<String> = serde_json::to_string(schema)
+        .unwrap_or_default()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut score = 0;
+    for term in terms {
+        if name_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
+            score += 8;
+        } else if description_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
+            score += 3;
+        } else if schema_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
+            score += 1;
+        }
+    }
+    score
+}
+
+#[cfg(test)]
+pub(super) fn select_mcp_tools_for_context_in_phase(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+        tools,
+        &[],
+        &[],
+        messages,
+        &[],
+        phase,
+    )
+}
+
+pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+    tools: &[(String, String, Value)],
+    owners: &[String],
+    always_include_servers: &[String],
+    messages: &[Value],
+    sticky_names: &[String],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    let terms = context_terms(messages);
+    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, messages);
+    let mut requested = Vec::new();
+    let mut previous = Vec::new();
+    let mut relevant = Vec::new();
+    for (index, (name, description, schema)) in tools.iter().enumerate() {
+        if explicitly_requested.contains(name) {
+            requested.push(index);
+        } else if tool_name_was_used(name, messages) {
+            previous.push(index);
+        } else {
+            let score = mcp_tool_relevance(name, description, schema, &terms);
+            // A single generic description/schema word such as "result",
+            // "file", or "project" must not pull a large MCP suite into an
+            // unrelated request. Exact name terms score eight; two strong
+            // description matches score six.
+            if score >= MCP_RELEVANCE_THRESHOLD {
+                relevant.push((index, score));
+            }
+        }
+    }
+    requested.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
+    previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
+    relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
+    });
+
+    // Reserve complete configured server toolsets first. A reservation is
+    // all-or-none: if adding the complete set would exceed either hard limit,
+    // the server is reported as rejected and none of its tools are bound for
+    // this request.
+    let mut selected = Vec::new();
+    let mut selected_indices = std::collections::HashSet::new();
+    let mut rejected_indices = std::collections::HashSet::new();
+    let mut selected_schema_bytes: usize = 0;
+    let mut schema_budget_exhausted = false;
+    let mut reserved_servers = Vec::new();
+    let mut rejected_reservations = Vec::new();
+    let mut seen_servers = std::collections::HashSet::new();
+    for server in always_include_servers {
+        if !seen_servers.insert(server.as_str()) {
+            continue;
+        }
+        let group = owners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, owner)| (owner == server).then_some(index))
+            .collect::<Vec<_>>();
+        if group.is_empty() {
+            continue;
+        }
+        let group_bytes = group.iter().fold(0usize, |total, index| {
+            let (name, description, schema) = &tools[*index];
+            total.saturating_add(mcp_schema_bytes(name, description, schema))
+        });
+        let count_fits = selected.len().saturating_add(group.len()) <= MAX_MCP_NATIVE_SCHEMAS;
+        let bytes_fit =
+            selected_schema_bytes.saturating_add(group_bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES;
+        if count_fits && bytes_fit {
+            for index in group {
+                if selected_indices.insert(index) {
+                    selected.push(index);
+                }
+            }
+            selected_schema_bytes = selected_schema_bytes.saturating_add(group_bytes);
+            reserved_servers.push(server.clone());
+        } else {
+            rejected_reservations.push(server.clone());
+            schema_budget_exhausted |= !bytes_fit;
+            rejected_indices.extend(group);
+        }
+    }
+
+    let candidates = requested
+        .iter()
+        .copied()
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(previous.iter().copied())
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(
+            sticky_names
+                .iter()
+                .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky)),
+        )
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(
+            relevant
+                .iter()
+                .map(|(index, _)| *index)
+                .filter(|index| !rejected_indices.contains(index)),
+        );
+    let mut previously_used_count = 0;
+    for index in candidates {
+        if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
+            break;
+        }
+        if !selected_indices.insert(index) {
+            continue;
+        }
+        let (name, description, schema) = &tools[index];
+        let bytes = mcp_schema_bytes(name, description, schema);
+        if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+            selected_indices.remove(&index);
+            schema_budget_exhausted = true;
+            continue;
+        }
+        if previous.contains(&index) {
+            previously_used_count += 1;
+        }
+        selected.push(index);
+        selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+    }
+
+    let relevant_count = selected
+        .iter()
+        .filter(|index| {
+            !explicitly_requested.contains(&tools[**index].0)
+                && !previous.contains(index)
+                && !sticky_names.contains(&tools[**index].0)
+                && !reserved_servers
+                    .iter()
+                    .any(|server| owners.get(**index).is_some_and(|owner| owner == server))
+        })
+        .count();
+
+    let mut fallback_count = 0;
+    if selected.is_empty() && phase == ToolSchemaPhase::Established {
+        for preferred in MCP_DISCOVERY_CORE {
+            if selected.len() >= MCP_DISCOVERY_FALLBACK_COUNT {
+                break;
+            }
+            if let Some(index) = tools.iter().position(|(name, _, _)| name == preferred) {
+                if rejected_indices.contains(&index) {
+                    continue;
+                }
+                if !selected_indices.insert(index) {
+                    continue;
+                }
+                let (name, description, schema) = &tools[index];
+                let bytes = mcp_schema_bytes(name, description, schema);
+                if selected_schema_bytes.saturating_add(bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES {
+                    selected.push(index);
+                    selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+                } else {
+                    selected_indices.remove(&index);
+                    schema_budget_exhausted = true;
+                }
+            }
+        }
+        fallback_count = selected.len();
+    }
+
+    // Sticky and explicit tools can be promoted within the already selected
+    // surface. Reserved server tools stay first so a follow-up cannot break a
+    // complete configured reservation.
+    if !sticky_names.is_empty() {
+        let reserved_indices = owners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, owner)| reserved_servers.contains(owner).then_some(index))
+            .filter(|index| selected_indices.contains(index))
+            .collect::<Vec<_>>();
+        let sticky_indices = sticky_names
+            .iter()
+            .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
+            .collect::<Vec<_>>();
+        let mut prioritized = Vec::with_capacity(selected.len());
+        let mut prioritized_set = std::collections::HashSet::with_capacity(selected.len());
+        for index in reserved_indices
+            .into_iter()
+            .chain(requested.iter().copied())
+            .chain(sticky_indices)
+            .chain(selected.iter().copied())
+        {
+            if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
+                break;
+            }
+            if selected_indices.contains(&index) && prioritized_set.insert(index) {
+                prioritized.push(index);
+            }
+        }
+        selected = prioritized;
+        selected_schema_bytes = 0;
+        let mut within_budget = Vec::with_capacity(selected.len());
+        for index in selected {
+            let (name, description, schema) = &tools[index];
+            let bytes = mcp_schema_bytes(name, description, schema);
+            if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+                schema_budget_exhausted = true;
+                continue;
+            }
+            selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+            within_budget.push(index);
+        }
+        selected = within_budget;
+    }
+
+    selected.sort_unstable();
+    selected.dedup();
+    debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
+    let selected_set = selected
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let selected_names = selected
+        .iter()
+        .map(|index| tools[*index].0.clone())
+        .collect::<Vec<_>>();
+    let omitted_names = tools
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (name, _, _))| {
+            (!selected_set.contains(&index)).then_some(name.clone())
+        })
+        .collect::<Vec<_>>();
+    let stats = McpSchemaSelectionStats {
+        available: tools.len(),
+        selected: selected.len(),
+        relevant: relevant_count,
+        previously_used: previously_used_count,
+        fallback: fallback_count.min(selected.len()),
+        omitted: tools.len().saturating_sub(selected.len()),
+        selected_names,
+        omitted_names,
+        reserved_servers,
+        rejected_reservations,
+        phase,
+        mcp_schema_bytes: selected_schema_bytes,
+        mcp_schema_budget_bytes: MAX_MCP_NATIVE_SCHEMA_BYTES,
+        schema_budget_exhausted,
+        ..Default::default()
+    };
+    (selected, stats)
+}
+
+#[cfg(test)]
+pub(super) fn select_mcp_tools_for_context(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_in_phase(tools, messages, ToolSchemaPhase::Established)
+}
+
+#[cfg(test)]
+pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+    sticky_names: &[String],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+        tools,
+        &[],
+        &[],
+        messages,
+        sticky_names,
+        phase,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn select_mcp_tools_for_context_with_sticky(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+    sticky_names: &[String],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_sticky_in_phase(
+        tools,
+        messages,
+        sticky_names,
+        ToolSchemaPhase::Established,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn native_tools_schema_for_context(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky(policy, messages, &[])
+}
+
+#[cfg(test)]
+pub(crate) fn native_tools_schema_for_context_with_sticky(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky_at(policy, messages, sticky_names, None)
+}
+
+#[cfg(test)]
+pub(crate) fn native_tools_schema_for_context_with_sticky_at(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
+    workspace_root: Option<&Path>,
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
+        policy,
+        messages,
+        sticky_names,
+        workspace_root,
+        &[],
+    )
+}
+
+pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
+    workspace_root: Option<&Path>,
+    always_include_servers: &[String],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    #[cfg(test)]
+    maybe_pause_native_schema_test_gate(messages);
+    let phase = tool_schema_phase(messages, workspace_root);
+    let terms = context_terms(messages);
+    let mut tools = build_builtin_native_tools_schema(policy, Some(&terms), phase);
+    let builtin_schema_bytes = serialized_schema_bytes(&tools);
+    let builtin_available = TOOLS
+        .iter()
+        .filter(|tool| {
+            (policy.include_session_title_tool || tool.name != "set_session_title")
+                && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
+                    && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
+                && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
+                    && !policy.include_agent_tools)
+        })
+        .count();
+    let builtin_selected = tools.len();
+    // MCP tools are selected from the current request context. The registry is
+    // a HashMap, so collection is sorted before scoring and emission to keep
+    // both selection and the provider-facing payload deterministic.
+    let stats = if policy.include_mcp_tools {
+        let collected = collect_mcp_tools_with_servers();
+        let mcp_tools = collected
+            .iter()
+            .map(|(name, _, description, schema)| {
+                (name.clone(), description.clone(), schema.clone())
+            })
+            .collect::<Vec<_>>();
+        let owners = collected
+            .iter()
+            .map(|(_, server, _, _)| server.clone())
+            .collect::<Vec<_>>();
+        let (selected, stats) = select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &mcp_tools,
+            &owners,
+            always_include_servers,
+            messages,
+            sticky_names,
+            phase,
+        );
+        for index in selected {
+            let (name, desc, schema) = &mcp_tools[index];
+            tools.push(mcp_schema_value(name, desc, schema));
+        }
+        stats
+    } else {
+        McpSchemaSelectionStats::default()
+    };
+    tools.extend(agent_native_tools_schema(policy.include_agent_tools));
+    let mut stats = stats;
+    stats.phase = phase;
+    stats.builtin_available = builtin_available;
+    stats.builtin_selected =
+        builtin_selected + usize::from(policy.include_agent_tools) * AGENT_TOOL_SPECS.len();
+    stats.builtin_schema_bytes = builtin_schema_bytes;
+    (tools, stats)
+}
+
+#[cfg(test)]
+pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = builtin_native_tools_schema(include_agent_tools);
+    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
+    // a HashMap, so iterating it directly yields a hash-dependent order that can
+    // shift after a rehash and silently break the provider's prefix cache. A
+    // stable byte-for-byte layout keeps the cached prefix valid across turns.
+    for (name, desc, schema) in collect_mcp_tools() {
+        tools.push(mcp_schema_value(&name, &desc, &schema));
+    }
+    tools.extend(agent_native_tools_schema(include_agent_tools));
+    tools
+}
+/// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
+/// definition. Unknown names fall back to an empty permissive object schema.
+pub(super) fn schema_for_tool(name: &str) -> Value {
+    TOOLS
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| (t.schema)())
+        .unwrap_or_else(|| schema_from_arguments("{}"))
+}
+
+pub(super) fn schema_for_agent_tool(name: &str) -> Value {
+    match name {
+        "spawn_agent" => {
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"}},"required":["task"]})
+        }
+        "send_agent" => {
+            serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
+        }
+        "set_goal" => {
+            serde_json::json!({"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"]})
+        }
+        "todo_write" => serde_json::json!({
+            "type":"object", "properties": {"todos": {"type":"array", "items": {"type":"object", "properties": {
+                "content":{"type":"string"}, "status":{"type":"string","enum":["pending","in_progress","completed"]},
+                "priority":{"type":"string","enum":["high","medium","low"]}
+            }, "required":["content"]}}}, "required":["todos"]
+        }),
+        _ => schema_from_arguments("{}"),
+    }
+}
+
+/// Regression budget for the invariant prompt prefix. Tool schemas are sent
+/// separately for ApiNative requests and are intentionally not counted here.
+#[cfg(test)]
+pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 4_700;
+#[cfg(test)]
+pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
+
+/// Append the resolved execution policy after the cached, profile-independent
+/// prompt so model switches cannot retain another profile's mutation limit.
+pub(crate) fn append_tool_response_limit(prompt: &mut String, max_mutating_calls: usize) {
+    append_tool_response_policy(
+        prompt,
+        crate::config::ToolSchedulingPolicy {
+            max_mutating_calls,
+            ..Default::default()
+        },
+    );
+}
+
+pub(crate) fn append_tool_response_policy(
+    prompt: &mut String,
+    policy: crate::config::ToolSchedulingPolicy,
+) {
+    use std::fmt::Write;
+
+    if policy.allow_batching {
+        write!(
+            prompt,
+            "\n\n# Tool response limit\n\
+This trusted profile permits a bounded batch of up to {} read-only calls and {} workspace-changing calls in one assistant response. \
+Control-plane calls first, reads follow; workspace changes grounded and sequential; never assume an unexecuted call ran. \
+Read-only calls do not consume the workspace-changing limit.\n",
+            policy.max_read_only_calls, policy.max_mutating_calls
+        )
+    } else {
+        write!(
+            prompt,
+            "\n\n# Tool response limit\n\
+The effective max_mutating_calls_per_response is {}. \
+Batch independent read-only calls freely in one assistant response and wait for their results before choosing the next action. \
+Keep workspace-changing calls to one per response: this includes mutating `run_command` calls, file writes/edits, \
+and other tools with side effects. Read-only inspection never consumes this limit. Never assume an unexecuted call ran.\n",
+            policy.max_mutating_calls
+        )
+    }
+    .expect("writing to a String cannot fail");
+}
+
+pub(crate) fn tool_system_prompt_for_policy(
+    policy: ToolSchemaPolicy,
+    protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
+) -> String {
+    let mut p = String::new();
+
+    p.push_str(
+        "\n# Skills\n\
+Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
+If the request context names a skill, load it first. For a likely specialized workflow, call `list_skills` once, then `use_skill` for the exact match. \
+`list_skills` returns metadata only; `use_skill` loads the selected SKILL.md.\n\n",
+    );
+
+    if agent_mode == crate::config::AgentMode::Plan {
+        p.push_str(
+            "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
+             - File writing, deletion, shell commands, delegation, and unknown tools are disabled; you can read, search, ask questions, and design, but CANNOT modify files or execute commands.\n\
+             - Investigate before planning with `grep`, `glob`, and `view_file`: read the manifest, real call sites, crates, and existing patterns.\n\
+             - Make the plan specific to THIS repository: name files, functions/structs, and inspected line ranges; resolve unknowns now, never guess dependencies or module layout, and state verified facts and uncertainties.\n\
+             - Explain the plan and tell the user to switch to Build Mode (press Shift+Tab) to implement it.\n\n"
+        );
+    }
+
+    p.push_str(
+        "You are rustcode, a terminal coding agent.\n\
+# Workflow\n\
+- Act on change requests: locate, inspect, edit, verify. Once grounded, make the smallest change; do not restate the task or narrate tool calls. Finish with changed files, verification, and blockers.\n\
+- Use `sandbox/` for temporary work and `artifacts/` for persistent reports. Run commands expected to exceed 2s in the background; completion notifications are automatic, so never poll them.\n\
+- `run_command` uses the platform shell. Chained shell commands are fine when inspectable: use `&&` for dependent commands, keep destructive operations visible, and never mask required failures. Locate the nearest project manifest and check from its root. If dependencies are missing and installation is in scope, use the lockfile's deterministic install command once, then retry the original check. Never run `cargo check` on a standalone `.rs` file outside a Cargo project.\n\
+- Prefer write tools for file creation; heredoc only for small appends/pipes.\n\
+- If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
+- Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
+- Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
+- Batch independent reads in one response; one mutation per response, control-plane calls first. Wait for results before the next calls.\n\
+- Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; complete results are authoritative, so do not reread them—edit or verify next. For manual previews, use the user's exact port, do not start/probe/fallback, and let them run it after verification; do not start a server merely to inspect a static app.\n\
+- Match neighboring signatures, state/lock, and error conventions.\n\
+- Prefer the smallest focused sequence.\n\
+- Run focused checks and cover boundaries for complex logic.\n\
+- Read-only tools run immediately; modifying/destructive operations require confirmation. Use `ask_question` only for ambiguous requirements or explicit validation, never routine confirmation. The UI supplies the write-in slot; do not include `Other`. Finish with a plain-text summary.\n\n\
+# Avoiding loops\n\
+- Fix compiler/tool errors or warnings before proceeding, then rerun fresh checks.
+- Avoid unchanged rereads; use `view_file` with `start_line`/`end_line`, `grep`/`rg`, or existing evidence. Correct errors and change empty queries.
+- Repeated reads, no-ops, and failed attempts are advisory loop signals, not a hard stop. Avoid endlessly repeating an identical call, but continue when needed with a different `view_file` range, `grep`, edit, or test. Use cached replay content when supplied; if a replayed read is incomplete or unavailable, choose another useful inspection. An edit that reports \"already applied\" changed nothing on disk, so do not re-issue that identical edit without new evidence.
+- Use `todo_write` only for complex 3+ step work, not routine edits, git, or simple questions; update it at milestones.\n\n"
+    );
+
+    p.push_str(
+        "# Delegation Policy\n\\
+- Do not spawn subagents unless the user explicitly requests delegation/parallel agent work or applicable project instructions require it.\n\\
+- Before delegating, identify the critical path and keep blockers in the main agent. Delegate only bounded, self-contained side tasks with clear outputs and disjoint write scopes.\n\\
+- Review every subagent result and inspect its workspace changes before treating the task as complete.\n\\n",
+    );
+
+    p.push_str("# Tool Format\n");
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "Active tool protocol: textual JSON fence. Call tools only as fenced `tool` blocks containing one JSON object; emit no prose before/after.\n\n\
+                ```tool\n\
+                {\"name\": \"tool_name\", \"arguments\": {...}}\n\
+                ```\n\n\
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Batch independent reads as multiple fences; one mutation per response. Wait for results before the next calls.\n\n"
+            );
+        }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "Active tool protocol: textual native tags. Call tools only with native tags; emit no prose before/after.\n\n\
+                [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
+                Rules: batch independent reads as multiple [TOOL_CALLS] markers; one mutation per response, control-plane calls first. Wait for results before the next calls. Arguments must be a valid JSON object matching the tool parameters.\n\n"
+            );
+        }
+        crate::config::ToolProtocol::ApiNative => {
+            p.push_str(
+                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; one mutation per response, control-plane calls first. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
+            );
+        }
+    }
+
+    if policy.include_session_title_tool && agent_mode != crate::config::AgentMode::Plan {
+        p.push_str(
+            "First-turn session title: a concise title is already saved from the user's request. You may call `set_session_title` once to refine it before doing other work. Do not copy the full prompt, transcript, or secrets into the title.\n\n",
+        );
+    }
+
+    // Text protocols enumerate tools in the prompt. ApiNative carries the full
+    // tool schema in the request's `tools` field instead, so listing them here
+    // would only duplicate that and waste context.
+    if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        return p;
+    }
+
+    p.push_str("Available tools:\n");
+    for t in TOOLS {
+        if !text_builtin_is_advertised(t, policy, agent_mode) {
+            continue;
+        }
+        if policy.compact_text_prompt {
+            p.push_str(&format!("- {} | Args: {}\n", t.name, t.arguments));
+        } else {
+            p.push_str(&format!(
+                "- {} | Args: {} | {}\n",
+                t.name, t.arguments, t.description
+            ));
+        }
+    }
+    if policy.include_mcp_tools {
+        for (name, desc, schema) in collect_mcp_tools() {
+            if agent_mode == crate::config::AgentMode::Plan {
+                continue;
+            }
+            if policy.compact_text_prompt {
+                p.push_str(&format!(
+                    "- {} | Args: {}\n",
+                    name,
+                    serde_json::to_string(&schema).unwrap_or_default()
+                ));
+            } else {
+                p.push_str(&format!(
+                    "- {} | Args: {} | {}\n",
+                    name,
+                    serde_json::to_string(&schema).unwrap_or_default(),
+                    desc
+                ));
+            }
+        }
+    }
+    if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
+        p.push_str(
+            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent. Set workspace_mode=isolated with an explicit base_sha for a named branch/worktree.\n\
+            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
+            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
+            - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
+        );
+    }
+
+    if policy.compact_text_prompt {
+        p.push_str("\nUse the exact tool names and JSON argument shapes listed above.\n");
+        return p;
+    }
+
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant:\n\
+```tool\n\
+{\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
+```\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant:\n\
+[TOOL_CALLS]grep[ARGS]{\"pattern\": \"agent loop\", \"include\": \"*.rs\"}\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+        // ApiNative returns early above (tools come from the request schema, not
+        // the prompt), so this arm is unreachable but keeps the match exhaustive.
+        crate::config::ToolProtocol::ApiNative => {}
+    }
+
+    p
+}
+
+pub fn tool_system_prompt(
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
+) -> String {
+    tool_system_prompt_for_policy(
+        ToolSchemaPolicy::root_for_mode(include_agent_tools, agent_mode),
+        protocol,
+        agent_mode,
+    )
+}
+
+#[cfg(test)]
+mod response_limit_tests {
+    use super::*;
+    use crate::config::{AgentMode, ModelProfile, ToolProtocol};
+
+    #[test]
+    fn mutation_guidance_matches_effective_policy_for_every_protocol() {
+        for protocol in [
+            ToolProtocol::ApiNative,
+            ToolProtocol::Json,
+            ToolProtocol::Native,
+        ] {
+            for policy in [
+                ToolSchemaPolicy::root_for_mode(false, AgentMode::Build),
+                ToolSchemaPolicy::subagent(),
+            ] {
+                let base = tool_system_prompt_for_policy(policy, protocol, AgentMode::Build);
+                // Reuse the same base as the root prompt cache does, including
+                // switching back to the default after a profile override.
+                for configured in [None, Some(3), Some(0), Some(usize::MAX), None] {
+                    let profile = ModelProfile {
+                        max_mutating_calls_per_response: configured,
+                        ..ModelProfile::default()
+                    };
+                    let limit = profile.max_mutating_calls_per_response();
+                    let mut prompt = base.clone();
+                    append_tool_response_limit(&mut prompt, limit);
+                    assert!(prompt.contains(&format!(
+                        "effective max_mutating_calls_per_response is {limit}."
+                    )));
+                    assert_eq!(prompt.matches("# Tool response limit").count(), 1);
+                    assert!(prompt.contains("Read-only inspection never consumes this limit"));
+                    assert!(prompt.contains("Never assume an unexecuted call ran"));
+
+                    // The shell guidance must agree with the actual executor:
+                    // mutating commands consume the mutation allowance while
+                    // read-only inspection does not.
+                    let calls = (0..=limit)
+                        .map(|_| crate::tools::ToolCall {
+                            name: "run_command".into(),
+                            arguments: serde_json::json!({"command": "cargo test"}),
+                            call_id: None,
+                        })
+                        .collect();
+                    let (kept, dropped) = crate::tools::partition_tool_batch(calls, limit);
+                    assert_eq!(kept.len(), limit);
+                    assert_eq!(dropped.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_protocol_batches_reads_and_limits_mutations() {
+        let prompt = tool_system_prompt(false, ToolProtocol::Native, AgentMode::Build);
+
+        assert!(prompt.contains("multiple [TOOL_CALLS] markers"));
+        assert!(prompt.contains("one mutation per response"));
+        assert!(!prompt.contains("exactly one [TOOL_CALLS] marker"));
+    }
+}

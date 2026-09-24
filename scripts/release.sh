@@ -1,0 +1,1388 @@
+#!/usr/bin/env bash
+# release.sh — Automated release script for the rustcode workspace.
+#
+# Usage:
+#   scripts/release.sh --version 0.52.0 [--date 2026-09-04] [--category Features] [--notes-file NOTES.md] [--dry-run] [--yes]
+#   scripts/release.sh --patch|--minor|--major [--category Fixes] [--notes-file NOTES.md] [--yes]
+#   scripts/release.sh --version 0.52.0 --from-phase tag [--merge-commit SHA] [--yes]
+#   scripts/release.sh --help
+#
+# This script is intentionally conservative: it never pushes, tags, or merges
+# unless explicitly confirmed. --dry-run prints every command that would run;
+# --yes accepts every confirmation for explicitly authorized automation.
+
+set -euo pipefail
+
+# ── Globals ──────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+VERSION=""
+DATE=""
+CATEGORY="Features"
+NOTES_FILE=""
+DRY_RUN=false
+YES=false
+BUMP_PART=""
+FROM_PHASE=""
+MERGE_COMMIT_OVERRIDE=""
+CI_TIMEOUT=1500
+BUILD_TIMEOUT=1800
+FULL_VERIFY=false
+RELEASE_BRANCH=""
+ORIGINAL_BRANCH=""
+CURRENT_VERSION=""
+RELEASE_TAG_COMMIT=""
+MERGED_COMMIT=""
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
+warn()  { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
+error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
+die()   { error "$*"; exit 1; }
+
+# Print a command before executing it (or the equivalent in dry-run).
+run() {
+    if $DRY_RUN; then
+        info "[dry-run] $*"
+    else
+        info "$*"
+        "$@"
+    fi
+}
+
+# Ask a yes/no question; --yes auto-answers yes.
+ask() {
+    if $YES; then
+        info "[auto-yes] $*"
+        return 0
+    fi
+    printf '%s [y/N] ' "$*"
+    read -r answer
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# Get the editor to use, falling back from EDITOR to VISUAL.
+# Handles commands with arguments (e.g. "code --wait").
+get_editor() {
+    if [[ -n "${EDITOR:-}" ]]; then
+        echo "$EDITOR"
+    elif [[ -n "${VISUAL:-}" ]]; then
+        echo "$VISUAL"
+    else
+        echo "vi"
+    fi
+}
+
+# Cleanup: restore branch if we switched, print recovery instructions.
+# Uses EXIT trap for reliable cleanup on any exit (normal or error).
+cleanup_and_exit() {
+    local code="$1"
+    trap - EXIT INT TERM
+    if [[ -n "${RELEASE_BRANCH:-}" ]] && [[ -n "${ORIGINAL_BRANCH:-}" ]]; then
+        local current_branch
+        current_branch="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
+        if [[ "$current_branch" == "$RELEASE_BRANCH" ]]; then
+            # Check if there are uncommitted changes on the release branch.
+            local dirty
+            dirty="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)"
+            if [[ -z "$dirty" ]]; then
+                # Safe to return to original branch.
+                info "Returning to original branch: $ORIGINAL_BRANCH"
+                run git -C "$REPO_ROOT" checkout "$ORIGINAL_BRANCH" 2>/dev/null || true
+            else
+                # Dirty state — preserve release branch.
+                warn "Release branch $RELEASE_BRANCH has uncommitted changes."
+                warn "Preserving release branch for manual recovery."
+            fi
+            if [[ "$code" -ne 0 ]]; then
+                info "Recovery: fix the reported issue, then resume from $RELEASE_BRANCH or clean up manually."
+            fi
+        fi
+    fi
+    exit "$code"
+}
+trap 'cleanup_and_exit $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# ── Dependency checks ────────────────────────────────────────────────────────
+check_deps() {
+    local missing=()
+    for cmd in git cargo gh jq; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        die "Missing required commands: ${missing[*]}. Install them and retry."
+    fi
+}
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Release automation for the rustcode workspace.
+
+Required:
+  --version VERSION    Semver version to release (e.g. 0.52.0)
+
+Optional:
+  --patch              Derive version: patch bump over max(latest tag, Cargo.toml)
+  --minor              Derive version: minor bump over max(latest tag, Cargo.toml)
+  --major              Derive version: major bump over max(latest tag, Cargo.toml)
+  --date DATE          Release date (YYYY-MM-DD), defaults to today
+  --category CATEGORY  Changelog category (Features|Fixes|Chores|…); default: Features
+  --notes-file FILE    Path to a file containing changelog notes
+  --from-phase PHASE   Resume an interrupted release at PHASE instead of
+                       starting over. One of: branch, versions, lockfile,
+                       changelog, diff, verify, commit, push, pr, merge,
+                       tag, build, release, distribution.
+                       Example: after merging the release PR manually, resume
+                       with --from-phase tag.
+  --merge-commit SHA   Merge commit to tag when resuming at (or after) the
+                       tag phase and it cannot be resolved from the PR.
+  --full-verify        Run the complete local test suite before creating the
+                       release PR. The default relies on required PR checks.
+  --ci-timeout SECS    Max seconds to wait for release-PR CI (default: 1500)
+  --build-timeout SECS Max seconds to wait for the tag build workflow
+                       (default: 1800)
+  --dry-run            Print every command without executing
+  --yes                Skip all interactive prompts
+  --help               Show this help message
+
+Examples:
+  scripts/release.sh --version 0.52.0 --yes
+  scripts/release.sh --patch --category Fixes --notes-file release-notes.md --yes
+  scripts/release.sh --version 0.52.0 --category Fixes --notes-file release-notes.md
+  scripts/release.sh --patch --dry-run
+  scripts/release.sh --version 0.52.0 --from-phase tag --yes
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --version|--date|--category|--notes-file)
+                if [[ $# -lt 2 ]]; then
+                    die "Option $1 requires a value."
+                fi
+                case "$1" in
+                    --version) VERSION="$2" ;;
+                    --date) DATE="$2" ;;
+                    --category) CATEGORY="$2" ;;
+                    --notes-file) NOTES_FILE="$2" ;;
+                esac
+                shift 2
+                ;;
+            --dry-run)    DRY_RUN=true; shift ;;
+            --yes)        YES=true; shift ;;
+            --full-verify) FULL_VERIFY=true; shift ;;
+            --patch|--minor|--major)
+                if [[ -n "$BUMP_PART" ]]; then
+                    die "Only one of --patch, --minor, --major may be given."
+                fi
+                BUMP_PART="${1#--}"; shift ;;
+            --from-phase)
+                if [[ $# -lt 2 ]]; then
+                    die "Option $1 requires a value."
+                fi
+                FROM_PHASE="$2"; shift 2 ;;
+            --merge-commit)
+                if [[ $# -lt 2 ]]; then
+                    die "Option $1 requires a value."
+                fi
+                MERGE_COMMIT_OVERRIDE="$2"; shift 2 ;;
+            --ci-timeout|--build-timeout)
+                if [[ $# -lt 2 ]]; then
+                    die "Option $1 requires a value."
+                fi
+                if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -le 0 ]]; then
+                    die "Option $1 requires a positive number of seconds."
+                fi
+                case "$1" in
+                    --ci-timeout) CI_TIMEOUT="$2" ;;
+                    --build-timeout) BUILD_TIMEOUT="$2" ;;
+                esac
+                shift 2 ;;
+            --help)       usage; exit 0 ;;
+            *) die "Unknown option: $1. Run with --help for usage." ;;
+        esac
+    done
+
+    if [[ -n "$BUMP_PART" && -n "$VERSION" ]]; then
+        die "Cannot combine --version with --$BUMP_PART. Supply one or the other."
+    fi
+
+    # Derive the version from the latest tag / package version.
+    if [[ -z "$VERSION" && -n "$BUMP_PART" ]]; then
+        VERSION="$(derive_bump_version "$BUMP_PART")"
+        info "Derived version: $VERSION (--$BUMP_PART over latest release)"
+    fi
+
+    # Interactive version prompt if not supplied.
+    if [[ -z "$VERSION" ]]; then
+        local current
+        current="$(get_current_version)"
+        printf 'Current version: %s\n' "$current"
+        printf 'Enter next version: '
+        read -r VERSION
+        if [[ -z "$VERSION" ]]; then
+            die "No version supplied."
+        fi
+    fi
+
+    # Default date to today.
+    if [[ -z "$DATE" ]]; then
+        DATE="$(date +%Y-%m-%d)"
+    fi
+
+    # Validate semver (basic check: X.Y.Z with optional pre-release).
+    if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+        die "Invalid semver: $VERSION. Expected format: X.Y.Z (e.g. 0.52.0)"
+    fi
+
+    # Validate the resume phase.
+    if [[ -n "$FROM_PHASE" ]]; then
+        local valid_phases="branch versions lockfile changelog diff verify commit push pr merge tag build release distribution"
+        local valid=false
+        local phase
+        for phase in $valid_phases; do
+            if [[ "$phase" == "$FROM_PHASE" ]]; then
+                valid=true
+                break
+            fi
+        done
+        if ! $valid; then
+            die "Invalid --from-phase: $FROM_PHASE. Expected one of: $valid_phases"
+        fi
+    fi
+}
+
+# ── Version helpers ──────────────────────────────────────────────────────────
+get_current_version() {
+    grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/^version = "\(.*\)"/\1/'
+}
+
+# Compare two semver strings; returns 0 if a > b, 1 otherwise.
+semver_gt() {
+    local sorted last
+    sorted="$(printf '%s\n%s\n' "$1" "$2" | sort -V)"
+    last="$(printf '%s\n' "$sorted" | tail -n1)"
+    [[ "$last" == "$1" && "$1" != "$2" ]]
+}
+
+# Latest released version from tags (without the leading v), or empty.
+latest_tag_version() {
+    git -C "$REPO_ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' |
+        sed 's/^v//' |
+        sort -V |
+        tail -n1
+}
+
+# Bump a base X.Y.Z version; pre-release suffixes are dropped.
+bump_version() {
+    local base="$1" part="$2"
+    local core="${base%%-*}"
+    local major minor patch
+    IFS='.' read -r major minor patch <<< "$core"
+    case "$part" in
+        patch) patch=$((patch + 1)) ;;
+        minor) minor=$((minor + 1)); patch=0 ;;
+        major) major=$((major + 1)); minor=0; patch=0 ;;
+        *) return 1 ;;
+    esac
+    printf '%s.%s.%s\n' "$major" "$minor" "$patch"
+}
+
+# Derive the next version: bump PART over the greater of the latest tag
+# and the current package version.
+derive_bump_version() {
+    local part="$1"
+    local current tag base
+    current="$(get_current_version)"
+    tag="$(latest_tag_version || true)"
+    base="$current"
+    if [[ -n "${tag:-}" ]] && semver_gt "$tag" "$current"; then
+        base="$tag"
+    fi
+    bump_version "$base" "$part"
+}
+
+# ── Validation ───────────────────────────────────────────────────────────────
+# Returns 0 when resuming at or after the given phase, i.e. the phase's
+# work may already be reflected in the checkout. Always false on a fresh run.
+at_or_after_phase() {
+    local target="$1"
+    [[ -n "$FROM_PHASE" ]] || return 1
+    local phase
+    for phase in branch versions lockfile changelog diff verify selftest commit push pr merge tag build release distribution; do
+        if [[ "$phase" == "$target" ]]; then
+            return 0
+        fi
+        if [[ "$phase" == "$FROM_PHASE" ]]; then
+            return 1
+        fi
+    done
+    return 1
+}
+
+validate() {
+    info "Validating release prerequisites…"
+
+    # 1. Version is greater than current (skipped when resuming after the
+    # bump was applied: the checkout may already carry the target version).
+    local current
+    current="$(get_current_version)"
+    CURRENT_VERSION="$current"
+    info "Current version: $current  →  Target: $VERSION"
+    if ! at_or_after_phase versions; then
+        if ! semver_gt "$VERSION" "$current"; then
+            die "Version $VERSION is not greater than current version $current."
+        fi
+    else
+        info "Resume mode: skipping greater-than check (bump may already be applied)."
+    fi
+
+    # 2. Tag does not already exist (local and remote). A tag is expected when
+    # resuming at or after this phase, so it must not block the resume.
+    if ! at_or_after_phase tag && {
+        git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$" || \
+        git -C "$REPO_ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1;
+    }; then
+        die "Tag v$VERSION already exists. Delete it or choose a different version."
+    fi
+
+    # 3. Worktree is clean.
+    local status
+    status="$(git -C "$REPO_ROOT" status --porcelain)"
+    if [[ -n "$status" ]]; then
+        die "Worktree is not clean. Commit or stash changes before releasing:\n$status"
+    fi
+
+    # 4. Current branch is main and exactly matches origin/main. On resume
+    # the checkout may sit on the release branch, so only require a clean
+    # checkout on one of the two branches and a reachable origin/main.
+    local current_branch
+    current_branch="$(git -C "$REPO_ROOT" branch --show-current)"
+    if [[ -z "$FROM_PHASE" ]]; then
+        if [[ "$current_branch" != "main" ]]; then
+            die "Not on main branch (currently on '$current_branch'). Checkout main and retry."
+        fi
+    else
+        RELEASE_BRANCH="chore/release-v$VERSION"
+        ORIGINAL_BRANCH="main"
+        if [[ "$current_branch" != "main" && "$current_branch" != "$RELEASE_BRANCH" ]]; then
+            die "Resume mode: checkout main or $RELEASE_BRANCH first (currently on '$current_branch')."
+        fi
+        info "Resume mode: continuing from phase '$FROM_PHASE'."
+    fi
+
+    # Fetch latest origin/main to ensure accurate comparison.
+    run git -C "$REPO_ROOT" fetch origin main
+
+    local origin_main local_main
+    origin_main="$(git -C "$REPO_ROOT" rev-parse --verify origin/main 2>/dev/null || true)"
+    local_main="$(git -C "$REPO_ROOT" rev-parse --verify main 2>/dev/null || true)"
+
+    if [[ -z "$origin_main" ]]; then
+        die "Could not find origin/main. Is the remote configured?"
+    fi
+
+    if [[ "$local_main" != "$origin_main" ]]; then
+        local ahead behind
+        ahead="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $1}')"
+        behind="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $2}')"
+        if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
+            die "main is ahead of origin/main by $ahead commit(s). Push your changes first: git push origin main"
+        elif [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
+            die "main is behind origin/main by $behind commit(s). Run 'git pull' and retry."
+        else
+            die "main is diverged from origin/main (ahead by $ahead, behind by $behind). Resolve the divergence and retry."
+        fi
+    fi
+
+    info "All validations passed."
+}
+
+# ── Workspace discovery ──────────────────────────────────────────────────────
+get_workspace_crate_paths() {
+    cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq -r '.packages[].manifest_path' |
+        while IFS= read -r manifest_path; do
+            case "$manifest_path" in
+                "$REPO_ROOT/Cargo.toml") ;;
+                "$REPO_ROOT"/*/Cargo.toml)
+                    printf '%s\n' "${manifest_path#"$REPO_ROOT"/}" | sed 's#/Cargo.toml$##'
+                    ;;
+            esac
+        done
+}
+
+# ── Phase 1: Branch & version bump ───────────────────────────────────────────
+phase_branch() {
+    RELEASE_BRANCH="chore/release-v$VERSION"
+    ORIGINAL_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
+    info "Phase 1: Creating release branch $RELEASE_BRANCH"
+    if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
+        local current_branch
+        current_branch="$(git -C "$REPO_ROOT" branch --show-current)"
+        if [[ "$current_branch" == "$RELEASE_BRANCH" ]]; then
+            info "Already on $RELEASE_BRANCH; continuing."
+            return
+        fi
+        if [[ -n "$FROM_PHASE" ]]; then
+            info "Branch exists; checking it out to resume."
+            run git -C "$REPO_ROOT" checkout "$RELEASE_BRANCH"
+            return
+        fi
+        die "Release branch $RELEASE_BRANCH already exists. Pass --from-phase to resume, or remove it manually."
+    fi
+    if $DRY_RUN; then
+        info "[dry-run] git checkout -b $RELEASE_BRANCH"
+    else
+        git -C "$REPO_ROOT" checkout -b "$RELEASE_BRANCH"
+    fi
+}
+
+phase_update_versions() {
+    info "Phase 2: Updating versions to $VERSION"
+
+    # Update root Cargo.toml.
+    local root_toml="$REPO_ROOT/Cargo.toml"
+    local tmp
+    tmp="$(mktemp)"
+    sed 's/^version = ".*"/version = "'"$VERSION"'"/' "$root_toml" > "$tmp"
+    if $DRY_RUN; then
+        info "[dry-run] mv $tmp $root_toml"
+        rm -f -- "$tmp"
+    else
+        mv -- "$tmp" "$root_toml"
+    fi
+
+    # Update each workspace crate's Cargo.toml.
+    local crate_path crate_count=0
+    while IFS= read -r crate_path; do
+        [[ -z "$crate_path" ]] && continue
+        crate_count=$((crate_count + 1))
+        local crate_toml="$REPO_ROOT/$crate_path/Cargo.toml"
+        if [[ ! -f "$crate_toml" ]]; then
+            die "Workspace member manifest not found: $crate_toml"
+        fi
+        tmp="$(mktemp)"
+        sed 's/^version = ".*"/version = "'"$VERSION"'"/' "$crate_toml" > "$tmp"
+        if $DRY_RUN; then
+            info "[dry-run] mv $tmp $crate_toml"
+            rm -f -- "$tmp"
+        else
+            mv -- "$tmp" "$crate_toml"
+        fi
+    done < <(get_workspace_crate_paths)
+    if [[ "$crate_count" -eq 0 ]]; then
+        die "Could not discover any workspace crate manifests."
+    fi
+}
+
+verify_workspace_versions() {
+    local mismatches
+    mismatches="$(cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq -r --arg version "$VERSION" '.packages[] | select(.version != $version) | "\(.name)=\(.version)"')"
+    if [[ -n "$mismatches" ]]; then
+        die "Workspace packages with unexpected versions:\n$mismatches"
+    fi
+}
+
+phase_update_lockfile() {
+    info "Phase 3: Updating Cargo.lock"
+    if $DRY_RUN; then
+        info "[dry-run] (cd $REPO_ROOT && cargo check --manifest-path $REPO_ROOT/Cargo.toml)"
+    else
+        local lockfile="$REPO_ROOT/Cargo.lock"
+        local backup
+        backup="$(mktemp)"
+        cp "$lockfile" "$backup"
+
+        # An unlocked check updates the local workspace package entries while
+        # preserving the existing dependency resolution where possible.
+        if ! (cd "$REPO_ROOT" && cargo check --manifest-path "$REPO_ROOT/Cargo.toml"); then
+            cp "$backup" "$lockfile"
+            rm -f -- "$backup"
+            die "Cargo could not update Cargo.lock for the new workspace version."
+        fi
+
+        local diff_output unexpected
+        diff_output="$(git -C "$REPO_ROOT" diff --unified=0 -- Cargo.lock || true)"
+        unexpected="$(printf '%s\n' "$diff_output" |
+            grep -E '^[+-]' |
+            grep -vE '^(---|\+\+\+)' |
+            grep -vFx -- "-version = \"$CURRENT_VERSION\"" |
+            grep -vFx -- "+version = \"$VERSION\"" || true)"
+        if [[ -n "$unexpected" ]]; then
+            cp "$backup" "$lockfile"
+            rm -f -- "$backup"
+            die "Cargo.lock changed outside the intended workspace version entries:\n$unexpected"
+        fi
+        rm -f -- "$backup"
+    fi
+}
+
+format_changelog_notes() {
+    local notes="$1"
+    local category="$2"
+    local heading="### $category"
+
+    case "$notes" in
+        "$heading") notes="" ;;
+        "$heading"$'\n'*) notes="${notes#"$heading"}"; notes="${notes#$'\n'}" ;;
+    esac
+
+    printf '### %s\n%s' "$category" "$notes"
+}
+
+phase_update_changelog() {
+    info "Phase 4: Updating CHANGELOG.md"
+
+    # Collect changelog notes.
+    local notes=""
+    if [[ -n "$NOTES_FILE" ]]; then
+        if [[ ! -f "$NOTES_FILE" ]]; then
+            die "Notes file not found: $NOTES_FILE"
+        fi
+        notes="$(cat "$NOTES_FILE")"
+    else
+        # Open editor for multiline input.
+        local tmpfile editor
+        tmpfile="$(mktemp /tmp/rustcode-changelog-XXXXXX.md)"
+        editor="$(get_editor)"
+        # The script adds the category heading after editing.
+        printf '%s\n' '-' > "$tmpfile"
+        if $DRY_RUN; then
+            info "[dry-run] Would open editor for changelog notes: $tmpfile"
+            notes="$(cat "$tmpfile")"
+        else
+            local -a editor_command
+            read -r -a editor_command <<< "$editor"
+            "${editor_command[@]}" "$tmpfile"
+            notes="$(cat "$tmpfile")"
+        fi
+        rm -f -- "$tmpfile"
+    fi
+
+    local new_entry
+    new_entry="## [v$VERSION](https://github.com/LHagfoss/rustcode/releases/tag/v$VERSION) - $DATE
+
+$(format_changelog_notes "$notes" "$CATEGORY")
+"
+
+    # Prepend to CHANGELOG.md.
+    local changelog="$REPO_ROOT/CHANGELOG.md"
+    local tmp
+    tmp="$(mktemp)"
+    printf '%s' "$new_entry" > "$tmp"
+    cat "$changelog" >> "$tmp"
+    if $DRY_RUN; then
+        info "[dry-run] mv $tmp $changelog"
+        rm -f -- "$tmp"
+    else
+        mv -- "$tmp" "$changelog"
+    fi
+}
+
+# ── Phase: Show diff & confirm ───────────────────────────────────────────────
+phase_show_diff() {
+    info "Phase 5: Showing proposed changes"
+    run git -C "$REPO_ROOT" diff --stat
+    echo
+    run git -C "$REPO_ROOT" diff
+    echo
+    if ! ask "Confirm these changes and continue?"; then
+        die "Release aborted by user."
+    fi
+}
+
+# ── Phase: Verification ──────────────────────────────────────────────────────
+phase_verify() {
+    info "Phase 6: Running release preflight checks"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would verify every workspace package is version $VERSION"
+    else
+        verify_workspace_versions
+    fi
+
+    local checks=(
+        "cargo fmt --check"
+        "cargo metadata --locked --no-deps --format-version 1 >/dev/null"
+        "git diff --check"
+    )
+    if $FULL_VERIFY; then
+        checks+=("cargo check --tests --locked" "cargo test --locked")
+    fi
+
+    local cmd
+    for cmd in "${checks[@]}"; do
+        info "Running: $cmd"
+        if $DRY_RUN; then
+            info "[dry-run] $cmd"
+        else
+            if ! (cd "$REPO_ROOT" && eval "$cmd"); then
+                die "Verification failed: $cmd
+To resume: fix the reported issues and re-run: scripts/release.sh --version $VERSION --from-phase verify${DRY_RUN:+ --dry-run}"
+            fi
+        fi
+    done
+
+    if $FULL_VERIFY; then
+        info "Full local verification passed."
+    else
+        info "Release preflight passed; required PR checks will run the full test suite."
+    fi
+}
+
+# Files the release is allowed to touch. Everything else must be committed
+# or stashed before releasing, and is never swept into the release commit.
+release_files() {
+    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md"
+    local crate_path
+    while IFS= read -r crate_path; do
+        [[ -z "$crate_path" ]] && continue
+        printf '%s\n' "$crate_path/Cargo.toml"
+    done < <(get_workspace_crate_paths)
+}
+
+# ── Phase: Commit & push ─────────────────────────────────────────────────────
+phase_commit() {
+    info "Phase 7: Committing release changes"
+
+    # Refuse to sweep unrelated edits into the release commit.
+    local changed outside=""
+    changed="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no | sed 's/^...//; s/.* -> //')"
+    local allowed
+    allowed="$(release_files)"
+    local file
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        # Herestring (not a pipe) so grep -q cannot SIGPIPE under pipefail.
+        if ! grep -qxF "$file" <<< "$allowed"; then
+            outside+="$file"$'\n'
+        fi
+    done <<< "$changed"
+    if [[ -n "$outside" ]]; then
+        die "Unrelated changes present; they would leak into the release commit. Commit or stash them first:
+$outside"
+    fi
+
+    if $DRY_RUN; then
+        info "[dry-run] git add only release files and commit"
+    else
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            git -C "$REPO_ROOT" add -- "$file"
+        done <<< "$allowed"
+    fi
+    run git -C "$REPO_ROOT" commit -m "chore: release v$VERSION"
+}
+
+phase_push() {
+    info "Phase 8: Pushing release branch"
+    run git -C "$REPO_ROOT" push -u origin "$RELEASE_BRANCH"
+}
+
+# ── Phase: Pull request ──────────────────────────────────────────────────────
+phase_create_pr() {
+    info "Phase 9: Creating pull request"
+
+    local pr_title="chore: release v$VERSION"
+    local pr_body
+    pr_body="$(cat <<EOF
+## Release v$VERSION
+
+**Date:** $DATE
+**Category:** $CATEGORY
+
+### Changes
+- Bumped workspace version to $VERSION across all crates.
+- Updated CHANGELOG.md with release notes.
+
+### Verification
+Release preflight passed locally:
+- \`cargo fmt --check\`
+- \`cargo metadata --locked --no-deps --format-version 1\`
+- \`git diff --check\`
+
+The required PR checks run the full test suite and correctness lint gate.
+
+### Artifacts
+This release will produce binaries for:
+- Linux x86_64
+- macOS aarch64
+- Windows x86_64
+EOF
+)"
+
+    if $DRY_RUN; then
+        info "[dry-run] gh pr create --title '$pr_title' --body '…'"
+        return
+    fi
+
+    local pr_url
+    pr_url="$(gh pr create \
+        --title "$pr_title" \
+        --body "$pr_body" \
+        --base main \
+        --head "$RELEASE_BRANCH")"
+
+    info "Pull request created: $pr_url"
+}
+
+# ── Phase: Wait for checks & merge ───────────────────────────────────────────
+# Branch protection requires only the fast blocking checks. Poll those checks
+# directly so advisory native-platform jobs cannot delay a merge. The same
+# deadline covers registration and completion; failed checks never pass.
+wait_for_required_pr_checks() {
+    local branch="$1"
+    local max_seconds="${2:-1500}" interval="${3:-5}"
+    local start=$SECONDS output=""
+
+    while (( SECONDS - start < max_seconds )); do
+        if output="$(gh pr checks "$branch" --required \
+            --json name,state,bucket,link 2>&1)"; then
+            :
+        elif [[ "$output" == *"no required checks reported"* ||
+            "$output" == *"no checks reported"* ]]; then
+            # GitHub returns one of these plain-text responses briefly before
+            # workflow check runs have registered on a newly created PR.
+            output='[]'
+        elif ! jq -e . >/dev/null 2>&1 <<<"$output"; then
+            error "Could not query required checks for $branch: $output"
+            return 1
+        fi
+
+        if [[ -n "$output" ]] && jq -e \
+            'length > 0 and any(.[]; .bucket == "fail" or .bucket == "cancel")' \
+            >/dev/null 2>&1 <<<"$output"; then
+            error "A required check failed for $branch: $output"
+            return 1
+        fi
+
+        if [[ -n "$output" ]] && jq -e \
+            'length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' \
+            >/dev/null 2>&1 <<<"$output"; then
+            info "Required PR checks passed for $branch."
+            return 0
+        fi
+
+        info "Waiting for required PR checks on $branch (elapsed $((SECONDS - start))s of ${max_seconds}s)…"
+        sleep "$interval"
+    done
+
+    error "Timed out waiting for required PR checks on $branch after $((SECONDS - start))s."
+    return 1
+}
+
+phase_wait_and_merge() {
+    info "Phase 10: Waiting for PR checks and merging"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would wait for PR checks and merge."
+        return
+    fi
+
+    local pr_number
+    pr_number="$(gh pr view "$RELEASE_BRANCH" --json number --jq '.number')"
+    if [[ -z "$pr_number" ]]; then
+        die "Could not find PR for branch $RELEASE_BRANCH."
+    fi
+
+    local pr_state
+    pr_state="$(gh pr view "$pr_number" --json state --jq '.state')"
+    if [[ "$pr_state" == "MERGED" ]]; then
+        info "PR #$pr_number is already merged; resolving its merge commit."
+        resolve_merged_commit "$pr_number"
+        return
+    fi
+
+    local pr_head
+    pr_head="$(gh pr view "$RELEASE_BRANCH" --json headRefOid --jq '.headRefOid')"
+    if [[ -z "$pr_head" ]] || ! wait_for_required_pr_checks "$RELEASE_BRANCH" "$CI_TIMEOUT" 5; then
+        local pr_url
+        pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
+        die "Required PR checks failed or timed out. Inspect the PR at: $pr_url"
+    fi
+
+    info "All checks passed. Merging PR #${pr_number}…"
+    local merge_err=""
+    if ! merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch --match-head-commit "$pr_head" 2>&1)"; then
+        local pr_url
+        pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
+        die "Merge blocked. Reason:
+$merge_err
+
+To resolve manually:
+  1. Visit the PR: $pr_url
+  2. Address any branch protection requirements
+  3. Merge manually, then resume: scripts/release.sh --version $VERSION --from-phase tag${DRY_RUN:+ --dry-run}"
+    fi
+
+    MERGED_COMMIT="$(gh pr view "$pr_number" --json state,mergeCommit --jq \
+        'select(.state == "MERGED") | .mergeCommit.oid')"
+    if [[ -z "$MERGED_COMMIT" ]]; then
+        die "PR #$pr_number merged, but its merge commit could not be resolved. Tagging aborted."
+    fi
+
+    info "PR merged successfully at $MERGED_COMMIT."
+}
+
+# Resolve the merge commit of an already-merged release PR, for resumes
+# that start at or after the tag phase.
+resolve_merged_commit() {
+    local pr_number="$1"
+    if [[ -n "$MERGE_COMMIT_OVERRIDE" ]]; then
+        MERGED_COMMIT="$MERGE_COMMIT_OVERRIDE"
+        info "Using merge commit from --merge-commit: $MERGED_COMMIT"
+        return
+    fi
+    MERGED_COMMIT="$(gh pr view "$pr_number" --json mergeCommit --jq '.mergeCommit.oid // empty')"
+    if [[ -z "$MERGED_COMMIT" ]]; then
+        die "Could not resolve the merge commit of PR #$pr_number. Pass it explicitly with --merge-commit SHA."
+    fi
+    info "Resolved merge commit: $MERGED_COMMIT"
+}
+
+# ── Phase: Tag & publish ─────────────────────────────────────────────────────
+phase_tag_and_publish() {
+    info "Phase 11: Tagging and publishing"
+
+    # On a resume that starts here, the merge commit was never captured.
+    # Dry runs have no release PR to inspect; continue with a placeholder and
+    # let the remaining phases describe what they would do.
+    if $DRY_RUN; then
+        info "[dry-run] Would resolve the release PR merge commit."
+    elif [[ -z "$MERGED_COMMIT" ]]; then
+        local pr_number
+        pr_number="$(gh pr view "$RELEASE_BRANCH" --json number --jq '.number')"
+        if [[ -z "$pr_number" ]]; then
+            die "Could not find PR for branch $RELEASE_BRANCH. Pass the merge commit with --merge-commit SHA."
+        fi
+        resolve_merged_commit "$pr_number"
+    fi
+
+    # Checkout main and pull.
+    run git -C "$REPO_ROOT" checkout main
+    run git -C "$REPO_ROOT" pull --ff-only origin main
+
+    # Tag only the commit produced by the release PR. This prevents an
+    # unrelated commit that lands immediately afterward from being released.
+    if ! $DRY_RUN; then
+        if [[ -z "$MERGED_COMMIT" ]] || ! git -C "$REPO_ROOT" merge-base --is-ancestor "$MERGED_COMMIT" origin/main; then
+            die "Release merge commit ${MERGED_COMMIT:-unknown} is not on origin/main. Tagging aborted."
+        fi
+    fi
+    info "Release commit on main: ${MERGED_COMMIT:-dry-run}"
+
+    # Verify main contains the release version before tagging.
+    if $DRY_RUN; then
+        info "[dry-run] Would verify main contains version $VERSION"
+    else
+        local main_version
+        main_version="$(git -C "$REPO_ROOT" show "$MERGED_COMMIT:Cargo.toml" | grep -m1 '^version = ' | sed 's/^version = "\(.*\)"/\1/')"
+        if [[ "$main_version" != "$VERSION" ]]; then
+            die "main does not contain version $VERSION (found $main_version). Tagging aborted."
+        fi
+        info "Verified main contains version $VERSION"
+    fi
+
+    # Create annotated tag.
+    if $DRY_RUN; then
+        info "[dry-run] git -C $REPO_ROOT tag -a v$VERSION -m Release v$VERSION <release-merge-commit>"
+    else
+        run git -C "$REPO_ROOT" tag -a "v$VERSION" "$MERGED_COMMIT" -m "Release v$VERSION"
+    fi
+
+    # Capture the tag commit SHA before pushing.
+    if $DRY_RUN; then
+        RELEASE_TAG_COMMIT="$(git -C "$REPO_ROOT" rev-parse main)"
+    else
+        RELEASE_TAG_COMMIT="$(git -C "$REPO_ROOT" rev-parse "v$VERSION^{commit}")"
+    fi
+    info "Tag v$VERSION points to commit: $RELEASE_TAG_COMMIT"
+
+    # Push the tag.
+    run git -C "$REPO_ROOT" push origin "v$VERSION"
+
+    info "Tag v$VERSION pushed."
+}
+
+phase_wait_for_build() {
+    info "Phase 12: Waiting for release build workflow"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would wait for the Build workflow (build.yml) to complete."
+        return
+    fi
+
+    local workflow_name="Build"
+
+    info "Monitoring workflow: $workflow_name (triggered by tag v$VERSION)"
+
+    # Poll for the workflow run associated with the tag SHA.
+    local run_id=""
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        # List runs for the Build workflow, filtering by the exact tag SHA.
+        run_id="$(gh run list \
+            --workflow="$workflow_name" \
+            --commit "$RELEASE_TAG_COMMIT" \
+            --json databaseId,status,conclusion \
+            --jq '.[0].databaseId' \
+            2>/dev/null | head -n1 || true)"
+
+        if [[ -n "$run_id" ]]; then
+            info "Found workflow run ID: $run_id"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        info "Waiting for workflow to start… (attempt $attempt/$max_attempts)"
+        sleep 10
+    done
+
+    if [[ -z "$run_id" ]]; then
+        die "Could not find the Build workflow for tag v$VERSION (SHA: $RELEASE_TAG_COMMIT).
+Check manually: gh run list --workflow='$workflow_name' --commit=$RELEASE_TAG_COMMIT"
+    fi
+
+    info "Waiting for workflow run $run_id to complete (timeout ${BUILD_TIMEOUT}s)…"
+    local deadline=$((SECONDS + BUILD_TIMEOUT)) run_status="" run_conclusion=""
+    while true; do
+        local view
+        if view="$(gh run view "$run_id" --json status,conclusion --jq '{status, conclusion}' 2>/dev/null)"; then
+            run_status="$(printf '%s' "$view" | jq -r '.status')"
+            run_conclusion="$(printf '%s' "$view" | jq -r '.conclusion')"
+            if [[ "$run_status" == "completed" ]]; then
+                break
+            fi
+        fi
+        if [[ $SECONDS -ge $deadline ]]; then
+            die "Build workflow $run_id did not finish within ${BUILD_TIMEOUT}s. Inspect with: gh run view $run_id --log-failed"
+        fi
+        info "Build $run_id: ${run_status:-unknown} (elapsed $((SECONDS - (deadline - BUILD_TIMEOUT)))s of ${BUILD_TIMEOUT}s)…"
+        sleep 30
+    done
+    if [[ "$run_conclusion" != "success" ]]; then
+        die "Workflow run $run_id concluded $run_conclusion. Inspect with: gh run view $run_id --log-failed"
+    fi
+
+    info "Build workflow completed successfully."
+}
+
+phase_verify_release() {
+    info "Phase 13: Verifying GitHub release"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would verify the GitHub release exists and contains artifacts."
+        return
+    fi
+
+    # Poll until the GitHub release exists.
+    local release_info=""
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        # Use supported fields: tagName, name, url, assets.
+        release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
+        if [[ -n "$release_info" ]]; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        info "Waiting for GitHub release to appear… (attempt $attempt/$max_attempts)"
+        sleep 10
+    done
+
+    if [[ -z "$release_info" ]]; then
+        die "GitHub release v$VERSION not found after polling. It may still be processing."
+    fi
+
+    local tag_name release_name asset_count
+    tag_name="$(echo "$release_info" | jq -r '.tagName')"
+    release_name="$(echo "$release_info" | jq -r '.name')"
+    asset_count="$(echo "$release_info" | jq -r '.assets | length')"
+
+    # Verify the tag is exactly v$VERSION.
+    if [[ "$tag_name" != "v$VERSION" ]]; then
+        die "Release tag mismatch: expected v$VERSION, got $tag_name"
+    fi
+
+    info "Release verified:"
+    info "  Tag:      $tag_name"
+    info "  Name:     $release_name"
+    info "  URL:      $(echo "$release_info" | jq -r '.url')"
+    info "  Assets:   $asset_count"
+
+    # Verify expected artifacts.
+    local expected_assets=(
+        "rustcode-linux-x86_64.tar.gz"
+        "rustcode-macos-aarch64.tar.gz"
+        "rustcode-windows-x86_64.zip"
+        "SHA256SUMS"
+    )
+    local asset_names
+    asset_names="$(echo "$release_info" | jq -r '.assets[].name')"
+
+    local missing_assets=()
+    local expected
+    for expected in "${expected_assets[@]}"; do
+        if echo "$asset_names" | grep -qF "$expected"; then
+            info "  ✓ Found: $expected"
+        else
+            warn "  ✗ Missing: $expected"
+            missing_assets+=("$expected")
+        fi
+    done
+
+    # Fail if any expected asset is missing.
+    if [[ ${#missing_assets[@]} -gt 0 ]]; then
+        die "Missing expected assets: ${missing_assets[*]}"
+    fi
+
+}
+
+phase_verify_distribution() {
+    info "Phase 14: Verifying Homebrew metadata and local updater"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would verify the Homebrew formula, run rustcode --update, and check rustcode --version."
+        return
+    fi
+
+    local formula encoded formula_version
+    encoded="$(gh api repos/LHagfoss/homebrew-tap/contents/Formula/rustcode.rb --jq '.content')" || \
+        die "Could not read the published Homebrew formula."
+    if ! formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 --decode 2>/dev/null)"; then
+        formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 -D)" || \
+            die "Could not decode the published Homebrew formula."
+    fi
+    formula_version="$(printf '%s\n' "$formula" | sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n1)"
+    if [[ "$formula_version" != "$VERSION" ]]; then
+        die "Homebrew formula version mismatch: expected $VERSION, found ${formula_version:-none}."
+    fi
+    info "  ✓ Homebrew formula: $formula_version"
+
+    local rustcode_bin installed_version
+    rustcode_bin="$(command -v rustcode || true)"
+    if [[ -z "$rustcode_bin" ]]; then
+        die "rustcode is not installed locally; cannot verify the supported updater."
+    fi
+    "$rustcode_bin" --update
+    installed_version="$("$rustcode_bin" --version | awk '{print $2}')"
+    if [[ "$installed_version" != "$VERSION" ]]; then
+        die "Installed rustcode version mismatch after update: expected $VERSION, found ${installed_version:-none}."
+    fi
+    info "  ✓ Installed rustcode: $installed_version"
+    info "Release v$VERSION complete."
+}
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+run_tests() {
+    info "Running lightweight tests…"
+
+    local failed=0
+
+    # Test 1: Workspace parser returns every non-root metadata package.
+    info "Test 1: Workspace member discovery"
+    local crate_count
+    crate_count="$(get_workspace_crate_paths | wc -l | tr -d ' ')"
+    local expected_crate_count
+    expected_crate_count="$(cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq '[.packages[] | select(.manifest_path != $root)] | length' --arg root "$REPO_ROOT/Cargo.toml")"
+    if [[ "$crate_count" -eq "$expected_crate_count" && "$crate_count" -gt 0 ]]; then
+        info "  ✓ Found $crate_count workspace crates"
+    else
+        error "  ✗ Expected $expected_crate_count crates, found $crate_count"
+        failed=$((failed + 1))
+    fi
+
+    # Test 2: Changelog generation with actual ### Features input.
+    info "Test 2: Changelog category deduplication (with heading)"
+    local test_notes="### Features
+- Added new feature"
+    local test_entry="$(format_changelog_notes "$test_notes" "Features")"
+    local dup_count
+    dup_count="$(printf '%s\n' "$test_entry" | grep -c '^### Features$' || true)"
+    if [[ "$dup_count" -eq 1 ]]; then
+        info "  ✓ Category appears exactly once"
+    else
+        error "  ✗ Category appears $dup_count times (expected 1)"
+        failed=$((failed + 1))
+    fi
+
+    # Test 3: Changelog generation without existing category heading.
+    info "Test 3: Changelog category deduplication (without heading)"
+    local test_notes2="Some changelog notes"
+    local test_entry2="$(format_changelog_notes "$test_notes2" "Features")"
+    local dup_count2
+    dup_count2="$(printf '%s\n' "$test_entry2" | grep -c '^### Features$' || true)"
+    if [[ "$dup_count2" -eq 1 ]]; then
+        info "  ✓ Category appears exactly once"
+    else
+        error "  ✗ Category appears $dup_count2 times (expected 1)"
+        failed=$((failed + 1))
+    fi
+
+    # Test 4: Branch validation logic — ahead state.
+    info "Test 4: Branch validation logic (ahead rejection)"
+    local ahead=2 behind=0
+    if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
+        info "  ✓ Ahead state correctly detected"
+    else
+        error "  ✗ Should detect ahead state"
+        failed=$((failed + 1))
+    fi
+
+    # Test 5: Branch validation logic — behind state.
+    info "Test 5: Branch validation logic (behind rejection)"
+    ahead=0
+    behind=3
+    if [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
+        info "  ✓ Behind state correctly detected"
+    else
+        error "  ✗ Should detect behind state"
+        failed=$((failed + 1))
+    fi
+
+    # Test 6: gh release view JSON fields.
+    info "Test 6: GitHub CLI JSON field validation"
+    local test_json='{"tagName":"v0.52.0","name":"Release v0.52.0","url":"https://github.com/test/test/releases/tag/v0.52.0","assets":[{"name":"test.tar.gz"}]}'
+    local test_tag test_name
+    test_tag="$(echo "$test_json" | jq -r '.tagName')"
+    test_name="$(echo "$test_json" | jq -r '.name')"
+    if [[ "$test_tag" == "v0.52.0" && "$test_name" == "Release v0.52.0" ]]; then
+        info "  ✓ JSON fields are valid"
+    else
+        error "  ✗ JSON field extraction failed"
+        failed=$((failed + 1))
+    fi
+
+    # Test 7: No real GitHub calls: exercise delayed registration, completion,
+    # failed checks, API errors, and the deadline for required checks.
+    info "Test 7: Required PR check gate"
+    if (
+        mock_tick=0 mock_mode=delayed
+        sleep() { mock_tick=$((mock_tick + 1)); }
+        gh() {
+            [[ "$*" == *"pr checks test-branch --required --json name,state,bucket,link"* ]] || return 1
+            case "$mock_mode" in
+                delayed)
+                    case "$mock_tick" in
+                        0) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
+                        *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
+                    esac ;;
+                generic)
+                    case "$mock_tick" in
+                        0) printf '%s' "no checks reported on the 'test-branch' branch"; return 1 ;;
+                        *) printf '%s' '[{"name":"test","state":"SUCCESS","bucket":"pass","link":""}]' ;;
+                    esac ;;
+                failed) printf '%s' '[{"name":"test","state":"FAILURE","bucket":"fail","link":""}]' ;;
+                missing) printf '%s' "no required checks reported on the 'test-branch' branch"; return 1 ;;
+                api_error) printf '%s' 'not-json'; return 1 ;;
+            esac
+        }
+        wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 1 ]] || exit 1
+        mock_mode=generic mock_tick=0
+        wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 1 ]] || exit 1
+        mock_mode=failed
+        if wait_for_required_pr_checks test-branch 3 0 >/dev/null 2>&1; then exit 1; fi
+        mock_mode=missing mock_tick=0
+        if wait_for_required_pr_checks test-branch 0 0 >/dev/null 2>&1; then exit 1; fi
+        [[ "$mock_tick" -eq 0 ]] || exit 1
+        mock_mode=api_error
+        if wait_for_required_pr_checks test-branch 3 0 >/dev/null 2>&1; then exit 1; fi
+    ); then
+        info "  ✓ required checks wait for registration and success, reject failures and time out"
+    else
+        error "  ✗ required check gate regression"
+        failed=$((failed + 1))
+    fi
+
+    # Test 8: Version bump arithmetic (pure function, no git needed).
+    info "Test 8: Version bump arithmetic"
+    if [[ "$(bump_version 0.51.7 patch)" == "0.51.8" ]] && \
+       [[ "$(bump_version 0.51.7 minor)" == "0.52.0" ]] && \
+       [[ "$(bump_version 0.51.7 major)" == "1.0.0" ]] && \
+       [[ "$(bump_version 1.2.3-rc.1 patch)" == "1.2.4" ]] && \
+       ! bump_version 1.2.3 bogus >/dev/null 2>&1; then
+        info "  ✓ patch/minor/major bumps correct, pre-release dropped, invalid rejected"
+    else
+        error "  ✗ bump_version arithmetic wrong"
+        failed=$((failed + 1))
+    fi
+
+    # Test 9: Resume phase ordering (pure function; restores global after).
+    info "Test 9: Resume phase ordering"
+    local saved_from_phase="$FROM_PHASE"
+    FROM_PHASE="tag"
+    if at_or_after_phase versions && at_or_after_phase tag && ! at_or_after_phase build; then
+        info "  ✓ resuming at tag implies versions/tag done, build pending"
+    else
+        error "  ✗ at_or_after_phase ordering wrong"
+        failed=$((failed + 1))
+    fi
+    FROM_PHASE=""
+    if at_or_after_phase versions; then
+        error "  ✗ fresh run must not imply any phase done"
+        failed=$((failed + 1))
+    else
+        info "  ✓ fresh run implies nothing done"
+    fi
+    FROM_PHASE="$saved_from_phase"
+
+    # Test 10: Existing tags reject fresh releases but allow resumes at or
+    # after the tag phase.
+    info "Test 10: Existing tag validation on resume"
+    local existing_tag existing_version
+    existing_tag="$(git -C "$REPO_ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+    if [[ -z "$existing_tag" ]]; then
+        error "  ✗ No existing release tag available for validation test"
+        failed=$((failed + 1))
+    else
+        existing_version="${existing_tag#v}"
+        if (
+            VERSION="$existing_version"
+            get_current_version() { echo "0.0.0"; }
+            run() { :; }
+            git() {
+                if [[ "$*" == "-C $REPO_ROOT status --porcelain" ]]; then
+                    return 0
+                fi
+                if [[ "$*" == "-C $REPO_ROOT branch --show-current" ]]; then
+                    printf '%s\n' main
+                    return 0
+                fi
+                command git "$@"
+            }
+
+            FROM_PHASE=""
+            if (validate >/dev/null 2>&1); then
+                exit 1
+            fi
+
+            for phase in tag build release distribution; do
+                FROM_PHASE="$phase"
+                validate >/dev/null 2>&1 || exit 1
+            done
+        ); then
+            info "  ✓ Existing tags reject fresh releases and allow tag+ resumes"
+        else
+            error "  ✗ Existing tag validation regression"
+            failed=$((failed + 1))
+        fi
+    fi
+
+    # Test 11: Release file scope lists real files only.
+    info "Test 11: Release file scope"
+    local scope scope_missing=0 scope_count=0 scope_file
+    scope="$(release_files)"
+    while IFS= read -r scope_file; do
+        [[ -z "$scope_file" ]] && continue
+        scope_count=$((scope_count + 1))
+        if [[ ! -f "$REPO_ROOT/$scope_file" ]]; then
+            error "  ✗ Missing release file: $scope_file"
+            scope_missing=$((scope_missing + 1))
+        fi
+    done <<< "$scope"
+    # Herestrings (not pipes) so grep -q cannot SIGPIPE under pipefail.
+    if [[ "$scope_missing" -eq 0 && "$scope_count" -gt 3 ]] && \
+       grep -qxF "Cargo.toml" <<< "$scope" && \
+       grep -qxF "Cargo.lock" <<< "$scope" && \
+       grep -qxF "CHANGELOG.md" <<< "$scope"; then
+        info "  ✓ $scope_count release files, all exist"
+    else
+        error "  ✗ release file scope wrong"
+        failed=$((failed + 1))
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        info "All tests passed."
+        return 0
+    else
+        error "$failed test(s) failed."
+        return 1
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+PHASES=(branch versions lockfile changelog diff verify selftest commit push pr merge tag build release distribution)
+
+run_phase() {
+    local name="$1"
+    local t0=$SECONDS
+    case "$name" in
+        branch)       phase_branch ;;
+        versions)     phase_update_versions ;;
+        lockfile)     phase_update_lockfile ;;
+        changelog)    phase_update_changelog ;;
+        diff)         phase_show_diff ;;
+        verify)       phase_verify ;;
+        selftest)
+            if ! run_tests; then
+                die "Tests failed. Fix the issues and retry."
+            fi ;;
+        commit)       phase_commit ;;
+        push)         phase_push ;;
+        pr)           phase_create_pr ;;
+        merge)        phase_wait_and_merge ;;
+        tag)          phase_tag_and_publish ;;
+        build)        phase_wait_for_build ;;
+        release)      phase_verify_release ;;
+        distribution) phase_verify_distribution ;;
+        *) die "Unknown phase: $name" ;;
+    esac
+    info "Phase '$name' finished in $((SECONDS - t0))s."
+}
+
+main() {
+    parse_args "$@"
+    check_deps
+
+    info "═══════════════════════════════════════════════════════"
+    info "  Rustcode Release — v$VERSION  ($DATE)"
+    if $DRY_RUN; then
+        info "  DRY-RUN MODE — no changes will be made."
+    fi
+    if [[ -n "$FROM_PHASE" ]]; then
+        info "  RESUME MODE — starting at phase '$FROM_PHASE'."
+    fi
+    info "═══════════════════════════════════════════════════════"
+    echo
+
+    local run_start=$SECONDS
+    validate
+
+    local start_index=0 i
+    if [[ -n "$FROM_PHASE" ]]; then
+        for i in "${!PHASES[@]}"; do
+            if [[ "${PHASES[$i]}" == "$FROM_PHASE" ]]; then
+                start_index=$i
+                break
+            fi
+        done
+    fi
+
+    for ((i = start_index; i < ${#PHASES[@]}; i++)); do
+        run_phase "${PHASES[$i]}"
+    done
+
+    info "═══════════════════════════════════════════════════════"
+    info "  Release v$VERSION completed successfully! ($((SECONDS - run_start))s total)"
+    info "═══════════════════════════════════════════════════════"
+}
+
+# Allow an interrupted release to resume through these same phase functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

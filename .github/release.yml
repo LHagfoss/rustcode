@@ -1,0 +1,25 @@
+changelog:
+    categories:
+        - title: "### Features"
+          labels:
+              - "enhancement"
+              - "feature"
+        - title: "### Fixes"
+          labels:
+              - "bug"
+              - "fix"
+        - title: "### UI"
+          labels:
+              - "ui"
+              - "design"
+        - title: "### Performance"
+          labels:
+              - "performance"
+              - "speed"
+        - title: "### Chores"
+          labels:
+              - "chore"
+              - "dependencies"
+        - title: "### Other Changes"
+          labels:
+              - "*"

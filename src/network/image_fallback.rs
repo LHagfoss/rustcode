@@ -1,0 +1,658 @@
+use crate::app::ChatMessage;
+use crate::config::ModelProfile;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::future::Future;
+use tokio_util::sync::CancellationToken;
+
+const IMAGE_MARKER: &str = "![image](file://";
+pub(crate) const MAX_IMAGE_ANALYSIS_CACHE_ENTRIES: usize = 128;
+
+pub(crate) fn has_image_markers(history: &[ChatMessage]) -> bool {
+    history
+        .iter()
+        .any(|message| message.role == "user" && message.content.contains(IMAGE_MARKER))
+}
+
+pub(crate) fn extend_bounded_cache(
+    cache: &mut HashMap<String, String>,
+    additions: HashMap<String, String>,
+) {
+    while cache.len() > MAX_IMAGE_ANALYSIS_CACHE_ENTRIES {
+        if let Some(evicted) = cache.keys().next().cloned() {
+            cache.remove(&evicted);
+        }
+    }
+    for (key, value) in additions {
+        if !cache.contains_key(&key) && cache.len() >= MAX_IMAGE_ANALYSIS_CACHE_ENTRIES {
+            if let Some(evicted) = cache.keys().next().cloned() {
+                cache.remove(&evicted);
+            }
+        }
+        cache.insert(key, value);
+    }
+}
+
+pub async fn preprocess_history_with<F, Fut>(
+    history: &mut [ChatMessage],
+    active_profile: &ModelProfile,
+    vision_profile: &ModelProfile,
+    cache: &mut HashMap<String, String>,
+    mut request: F,
+) -> Result<(), String>
+where
+    F: FnMut(&ModelProfile, Vec<u8>) -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
+    if active_profile.image_input_supported() == Some(true) {
+        return Ok(());
+    }
+    if !has_image_markers(history) {
+        return Ok(());
+    }
+
+    let mut rewritten = Vec::new();
+    let mut pending_cache = HashMap::new();
+    let mut image_number = 0usize;
+
+    for (msg_idx, message) in history.iter().enumerate() {
+        let is_latest = msg_idx == history.len() - 1;
+        if message.role != "user" || !message.content.contains(IMAGE_MARKER) {
+            continue;
+        }
+
+        let mut output = String::new();
+        let mut remaining = message.content.as_str();
+        while let Some(start) = remaining.find(IMAGE_MARKER) {
+            output.push_str(&remaining[..start]);
+            let after_marker = &remaining[start + IMAGE_MARKER.len()..];
+            let Some(end) = after_marker.find(')') else {
+                output.push_str(&remaining[start..]);
+                remaining = "";
+                break;
+            };
+            let path = &after_marker[..end];
+            let bytes_res = std::fs::read(path);
+            let bytes = match bytes_res {
+                Ok(b) => b,
+                Err(e) => {
+                    if is_latest {
+                        return Err(format!("image analysis failed: could not read image: {e}"));
+                    } else {
+                        output.push_str("[Attached image analysis unavailable: image missing]");
+                        remaining = &after_marker[end + 1..];
+                        continue;
+                    }
+                }
+            };
+            let hash = image_hash(&bytes);
+            let analysis = if let Some(value) =
+                cache.get(&hash).or_else(|| pending_cache.get(&hash))
+            {
+                value.clone()
+            } else {
+                match request(vision_profile, bytes).await {
+                    Ok(value) if !value.trim().is_empty() => {
+                        pending_cache.insert(hash.clone(), value.clone());
+                        value
+                    }
+                    Ok(_) => {
+                        if is_latest {
+                            return Err(
+                                "image analysis failed: vision model returned empty output"
+                                    .to_string(),
+                            );
+                        } else {
+                            let fallback = "[Attached image analysis unavailable]".to_string();
+                            pending_cache.insert(hash.clone(), fallback.clone());
+                            fallback
+                        }
+                    }
+                    Err(e) => {
+                        if is_latest {
+                            return Err(format!("image analysis failed: {e}"));
+                        } else {
+                            let fallback = format!("[Attached image analysis unavailable: {e}]");
+                            pending_cache.insert(hash.clone(), fallback.clone());
+                            fallback
+                        }
+                    }
+                }
+            };
+            image_number += 1;
+            output.push_str(&format_analysis(image_number, &analysis));
+            remaining = &after_marker[end + 1..];
+        }
+        output.push_str(remaining);
+        rewritten.push((msg_idx, output));
+    }
+
+    extend_bounded_cache(cache, pending_cache);
+    for (message_index, content) in rewritten {
+        history[message_index].content = content;
+    }
+    Ok(())
+}
+
+fn image_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn format_analysis(number: usize, analysis: &str) -> String {
+    format!("[Attached image analysis]\nImage {number}\n\n{analysis}\n\nEnd image analysis.",)
+}
+
+pub const VISION_PROMPT: &str = "Analyze this image for a coding agent. Return concise, information-dense structured text, not a generic caption. Extract exact visible text when readable; UI structure and hierarchy; layout and relative positioning; errors, stack traces, terminal output, code, filenames, buttons, labels, and state; diagrams and relationships; and visual details relevant to reproducing or debugging it. Mark uncertain or unreadable text explicitly. Use short labeled sections such as Visible text, Layout and visual structure, Important details, and Relevant errors/code/UI state.";
+
+pub(crate) async fn request_vision_analysis(
+    client: &reqwest::Client,
+    profile: &ModelProfile,
+    bytes: Vec<u8>,
+    cancel_token: &CancellationToken,
+) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+    let mime = if bytes.starts_with(b"\x89PNG") {
+        "image/png"
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF8") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        "application/octet-stream"
+    };
+    let data_url = format!(
+        "data:{mime};base64,{}",
+        general_purpose::STANDARD.encode(bytes)
+    );
+    // The vision endpoint speaks whatever protocol the profile declares:
+    // sending a chat-completions body to a Responses endpoint fails with
+    // 400 ("Either input or instructions must be provided"), and vice versa.
+    let payload = vision_request_payload(
+        &profile.model,
+        profile.resolved_api_protocol(),
+        profile.resolved_output_token_field().wire_name(),
+        data_url,
+    );
+    let mut request = client.post(profile.endpoint_url()).json(&payload);
+    if let Some(key) = profile.resolved_api_key() {
+        request = request.header("Authorization", format!("Bearer {key}"));
+    }
+    let response = tokio::select! {
+        _ = cancel_token.cancelled() => return Err("cancelled".to_string()),
+        result = request.send() => result.map_err(|e| e.to_string())?,
+    };
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let detail = body
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("provider rejected image analysis");
+        return Err(format!("vision provider returned {status}: {detail}"));
+    }
+    vision_response_text(profile.resolved_api_protocol(), &body)
+}
+
+fn vision_request_payload(
+    model: &str,
+    protocol: crate::config::ApiProtocol,
+    token_field: &str,
+    data_url: String,
+) -> serde_json::Value {
+    match protocol {
+        crate::config::ApiProtocol::Responses => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "model".to_owned(),
+                serde_json::Value::String(model.to_owned()),
+            );
+            map.insert(
+                "input".to_owned(),
+                serde_json::json!([{
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": VISION_PROMPT},
+                        {"type": "input_image", "image_url": data_url},
+                    ]
+                }]),
+            );
+            map.insert("stream".to_owned(), serde_json::Value::Bool(false));
+            map.insert(
+                token_field.to_owned(),
+                serde_json::Value::Number(2048.into()),
+            );
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VISION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ]
+            }],
+            "stream": false,
+            "max_tokens": 2048
+        }),
+    }
+}
+
+fn vision_response_text(
+    protocol: crate::config::ApiProtocol,
+    body: &serde_json::Value,
+) -> Result<String, String> {
+    if matches!(protocol, crate::config::ApiProtocol::Responses) {
+        let mut texts = Vec::new();
+        if let Some(items) = body.get("output").and_then(|o| o.as_array()) {
+            for item in items {
+                if item.get("type").and_then(|t| t.as_str()) != Some("message") {
+                    continue;
+                }
+                if let Some(parts) = item.get("content").and_then(|c| c.as_array()) {
+                    for part in parts {
+                        if part.get("type").and_then(|t| t.as_str()) == Some("output_text")
+                            && let Some(text) = part.get("text").and_then(|t| t.as_str())
+                        {
+                            texts.push(text);
+                        }
+                    }
+                }
+            }
+        }
+        if texts.is_empty() {
+            return Err("vision provider returned no text content".to_string());
+        }
+        return Ok(texts.join("\n"));
+    }
+    body.get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|content| content.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "vision provider returned no text content".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ChatMessage;
+    use crate::config::ModelProfile;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    fn profile(supports_vision: Option<bool>) -> ModelProfile {
+        ModelProfile {
+            name: "main".into(),
+            url: "http://main/v1/chat/completions".into(),
+            model: "main-model".into(),
+            context_window: None,
+            engine: None,
+            api_key: None,
+            env_key: None,
+            tool_protocol: None,
+            enable_thinking: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            supports_vision,
+            ..Default::default()
+        }
+    }
+
+    fn image(dir: &Path, name: &str, bytes: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        format!("![image](file://{})", path.display())
+    }
+
+    #[test]
+    fn vision_payload_matches_profile_protocol() {
+        use crate::config::ApiProtocol;
+
+        let responses = vision_request_payload(
+            "deepseek-flash",
+            ApiProtocol::Responses,
+            "max_output_tokens",
+            "data:image/png;base64,AAA".to_string(),
+        );
+        // Responses shape: input[], never messages[] — the mismatch caused
+        // 400 "Either input or instructions must be provided".
+        assert!(responses.get("messages").is_none(), "{responses}");
+        let input = responses
+            .get("input")
+            .and_then(|i| i.as_array())
+            .expect("input");
+        assert_eq!(input.len(), 1);
+        let content = input[0]
+            .get("content")
+            .and_then(|c| c.as_array())
+            .expect("content");
+        assert!(
+            content
+                .iter()
+                .any(|p| p.get("type").and_then(|t| t.as_str()) == Some("input_text"))
+        );
+        assert!(content.iter().any(|p| {
+            p.get("type").and_then(|t| t.as_str()) == Some("input_image")
+                && p.get("image_url").and_then(|u| u.as_str()) == Some("data:image/png;base64,AAA")
+        }));
+        assert_eq!(
+            responses.get("max_output_tokens").and_then(|v| v.as_u64()),
+            Some(2048)
+        );
+
+        let chat = vision_request_payload(
+            "m",
+            ApiProtocol::ChatCompletions,
+            "max_tokens",
+            "data:image/png;base64,AAA".to_string(),
+        );
+        assert!(chat.get("input").is_none(), "{chat}");
+        assert!(chat.get("messages").and_then(|m| m.as_array()).is_some());
+        assert_eq!(chat.get("max_tokens").and_then(|v| v.as_u64()), Some(2048));
+    }
+
+    #[test]
+    fn vision_response_text_parses_both_protocols() {
+        use crate::config::ApiProtocol;
+
+        let responses_body = serde_json::json!({
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "a rustcode panel"},
+                    {"type": "refusal", "refusal": "no"}
+                ]},
+            ]
+        });
+        assert_eq!(
+            vision_response_text(ApiProtocol::Responses, &responses_body).as_deref(),
+            Ok("a rustcode panel")
+        );
+        assert!(
+            vision_response_text(ApiProtocol::Responses, &serde_json::json!({"output": []}))
+                .is_err()
+        );
+
+        let chat_body = serde_json::json!({
+            "choices": [{"message": {"content": "hello"}}]
+        });
+        assert_eq!(
+            vision_response_text(ApiProtocol::ChatCompletions, &chat_body).as_deref(),
+            Ok("hello")
+        );
+    }
+
+    #[test]
+    fn image_analysis_cache_is_bounded() {
+        let mut cache = HashMap::new();
+        for index in 0..(MAX_IMAGE_ANALYSIS_CACHE_ENTRIES + 10) {
+            extend_bounded_cache(
+                &mut cache,
+                HashMap::from([(format!("hash-{index}"), format!("analysis-{index}"))]),
+            );
+        }
+        assert_eq!(cache.len(), MAX_IMAGE_ANALYSIS_CACHE_ENTRIES);
+    }
+
+    #[tokio::test]
+    async fn vision_capable_model_keeps_native_image_marker() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let mut history = vec![ChatMessage::new("user", format!("Look\n{marker}"))];
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(true)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Ok("should not run".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 0);
+        assert!(history[0].content.contains("![image](file://"));
+    }
+
+    #[tokio::test]
+    async fn text_only_model_uses_vision_and_preserves_original_text() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let main = profile(Some(false));
+        let mut vision = profile(Some(true));
+        vision.model = "vision-model".to_string();
+        let mut history = vec![ChatMessage::new(
+            "user",
+            format!("Please inspect\n{marker}\nThanks"),
+        )];
+        let mut cache = HashMap::new();
+        let mut seen = Vec::new();
+        let mut seen_models = Vec::new();
+
+        preprocess_history_with(
+            &mut history,
+            &main,
+            &vision,
+            &mut cache,
+            |profile, bytes| {
+                seen_models.push(profile.model.clone());
+                seen.push(bytes.clone());
+                async { Ok("Visible text: Save\nLayout: toolbar above editor".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen, vec![b"one".to_vec()]);
+        assert_eq!(seen_models, vec!["vision-model"]);
+        assert!(history[0].content.contains("[Attached image analysis]"));
+        assert!(history[0].content.contains("Visible text: Save"));
+        assert!(history[0].content.contains("Please inspect"));
+        assert!(history[0].content.contains("Thanks"));
+        assert!(!history[0].content.contains("file://"));
+    }
+
+    #[tokio::test]
+    async fn request_preparation_rewrites_a_snapshot_without_replacing_display_history() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let source = vec![ChatMessage::new("user", format!("Look at {marker}"))];
+        let mut cache = HashMap::new();
+
+        let mut prepared = source.clone();
+        preprocess_history_with(
+            &mut prepared,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| async { Ok("snapshot analysis".to_string()) },
+        )
+        .await
+        .unwrap();
+
+        assert!(source[0].content.contains("![image](file://"));
+        assert!(prepared[0].content.contains("snapshot analysis"));
+        assert!(!prepared[0].content.contains("file://"));
+    }
+
+    #[tokio::test]
+    async fn multiple_images_are_analyzed_in_source_order() {
+        let dir = tempdir().unwrap();
+        let first = image(dir.path(), "one.png", b"one");
+        let second = image(dir.path(), "two.png", b"two");
+        let mut history = vec![ChatMessage::new("user", format!("{first}\nthen\n{second}"))];
+        let mut cache = HashMap::new();
+        let mut seen = Vec::new();
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, bytes| {
+                let label = String::from_utf8_lossy(&bytes).to_string();
+                seen.push(label.clone());
+                async move { Ok(format!("analysis {label}")) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen, vec!["one", "two"]);
+        let content = &history[0].content;
+        assert!(content.find("analysis one").unwrap() < content.find("analysis two").unwrap());
+    }
+
+    #[tokio::test]
+    async fn successful_analysis_is_reused_from_hash_cache() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"same");
+        let main = profile(Some(false));
+        let vision = profile(Some(true));
+        let mut cache = HashMap::new();
+        let mut first_history = vec![ChatMessage::new("user", marker.clone())];
+        let mut calls = 0;
+        preprocess_history_with(&mut first_history, &main, &vision, &mut cache, |_, _| {
+            calls += 1;
+            async { Ok("cached analysis".to_string()) }
+        })
+        .await
+        .unwrap();
+        let mut second_history = vec![ChatMessage::new("user", marker)];
+        preprocess_history_with(&mut second_history, &main, &vision, &mut cache, |_, _| {
+            calls += 1;
+            async { Ok("should not run".to_string()) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 1);
+        assert_eq!(first_history[0].content, second_history[0].content);
+    }
+
+    #[tokio::test]
+    async fn vision_failure_does_not_rewrite_history() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let original = format!("before {marker} after");
+        let mut history = vec![ChatMessage::new("user", original.clone())];
+        let mut cache = HashMap::new();
+        let result = preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| async { Err("vision unavailable".to_string()) },
+        )
+        .await;
+
+        assert_eq!(
+            result.unwrap_err(),
+            "image analysis failed: vision unavailable"
+        );
+        assert_eq!(history[0].content, original);
+        assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_image_in_older_history_does_not_abort_the_new_turn() {
+        let missing = std::env::temp_dir().join("rustcode-missing-image.png");
+        let mut history = vec![
+            ChatMessage::new(
+                "user",
+                format!("Earlier attachment: ![image](file://{})", missing.display()),
+            ),
+            ChatMessage::new("user", "What time is it?"),
+        ];
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Ok("unused".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 0);
+        assert!(
+            history[0]
+                .content
+                .contains("[Attached image analysis unavailable: image missing]")
+        );
+        assert_eq!(history[1].content, "What time is it?");
+    }
+
+    #[tokio::test]
+    async fn vision_failure_in_older_history_does_not_abort_the_new_turn() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "older.png", b"older");
+        let mut history = vec![
+            ChatMessage::new("user", marker),
+            ChatMessage::new("user", "What time is it?"),
+        ];
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Err("cancelled".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 1);
+        assert!(
+            history[0]
+                .content
+                .contains("[Attached image analysis unavailable: cancelled]")
+        );
+        assert_eq!(history[1].content, "What time is it?");
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn text_without_images_is_unchanged_and_does_not_call_vision() {
+        let mut history = vec![ChatMessage::new("user", "plain text")];
+        let original = history[0].content.clone();
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Ok("unused".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls, 0);
+        assert_eq!(history[0].content, original);
+    }
+}

@@ -1,0 +1,6913 @@
+use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
+use super::*;
+
+#[test]
+fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
+    let history = vec![
+        ChatMessage::new("user", "first task"),
+        ChatMessage::new("assistant", "older call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "older-call".into(),
+                name: "run_command".into(),
+                arguments: r#"{"command":"npm run build"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "run_command: earlier build output")
+            .answering(Some("older-call".into())),
+        ChatMessage::new("assistant", "first task done"),
+        ChatMessage::new("user", "second task"),
+        ChatMessage::new("assistant", "second task done"),
+        ChatMessage::new("user", "current task"),
+        ChatMessage::new("assistant", "current call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "current-call".into(),
+                name: "view_file".into(),
+                arguments: r#"{"path":"src/lib.rs"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "view_file: current inspection output")
+            .answering(Some("current-call".into())),
+    ];
+    let instructions = history::RequestInstructions::new("base", None);
+    let full = history::to_messages_for_request_with_scope(
+        &history,
+        instructions,
+        history::RequestHistoryScope::Full,
+    );
+    let mut budget = crate::config::ModelProfile {
+        name: "projection-test".into(),
+        model: "projection-test".into(),
+        context_window: Some(100_000),
+        max_output_tokens: Some(1_000),
+        ..Default::default()
+    }
+    .context_budget();
+    budget.soft_context_target = u32::MAX;
+    let full_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+
+    assert_eq!(
+        history_scope_for_preflight(&full_preflight),
+        history::RequestHistoryScope::Full
+    );
+    history::validate_native_tool_messages(&full).expect("full history keeps valid tool pairs");
+    assert!(
+        serde_json::to_string(&full)
+            .unwrap()
+            .contains("earlier build output")
+    );
+
+    budget.soft_context_target = u32::try_from(full_preflight.total_estimated_prompt)
+        .expect("fixture prompt fits in u32")
+        .saturating_sub(1);
+    let pressured_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+    let pressured_scope = history_scope_for_preflight(&pressured_preflight);
+    assert_eq!(pressured_scope, history::RequestHistoryScope::RecentTurns);
+
+    let pressured =
+        history::to_messages_for_request_with_scope(&history, instructions, pressured_scope);
+    history::validate_native_tool_messages(&pressured)
+        .expect("recent-turn projection keeps valid tool pairs");
+    let rendered = serde_json::to_string(&pressured).unwrap();
+    assert!(!rendered.contains("older-call"));
+    assert!(!rendered.contains("earlier build output"));
+    assert!(rendered.contains("current-call"));
+    assert!(rendered.contains("current inspection output"));
+}
+
+#[tokio::test]
+async fn context_detection_does_not_probe_unverified_omlx_endpoints() {
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let chat_url = format!("http://{address}/v1/chat/completions");
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        fetch_context_window(&client, &chat_url, "model", Some("omlx")).await,
+        None
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "oMLX must use an explicit profile/provider context limit"
+    );
+}
+
+#[test]
+fn model_result_contract_distinguishes_read_completeness_states() {
+    let complete = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1, "end_line": 15}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 15 of 15]\n1: fn main() {}".to_string(),
+        ),
+        None,
+    );
+    assert_eq!(
+        complete.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+
+    let user_limited = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1, "end_line": 1}),
+        crate::tools::ToolExecutionOutput {
+            completeness: rustcode_core::ToolResultCompleteness::UserLimited,
+            ..crate::tools::ToolExecutionOutput::success(
+                "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\nunchanged wording"
+                    .to_string(),
+            )
+        },
+        None,
+    );
+    assert_eq!(
+        user_limited.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::UserLimited
+    );
+
+    let line_truncated = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs"}),
+        crate::tools::ToolExecutionOutput {
+            content: "[Truncated: lines 801-1000 of 1000]".to_string(),
+            truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    assert_eq!(
+        line_truncated.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+
+    let byte_truncated = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "yes"}),
+        crate::tools::ToolExecutionOutput {
+            content: "[Output truncated: 100 bytes total]".to_string(),
+            truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::ByteTruncated,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    assert_eq!(
+        byte_truncated.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+}
+
+#[test]
+fn inspection_result_contract_persists_ranges_and_canonical_fingerprint() {
+    let result = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput {
+            content: "[File: src/lib.rs, Lines 1 to 800 of 1000, Bytes offset: 0]\nsource\n[Truncated: lines 801-1000 of 1000]".to_string(),
+            truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    let inspection = result
+        .metadata
+        .inspection
+        .as_ref()
+        .expect("inspection metadata");
+    assert_eq!(inspection.requested_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.requested_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: None,
+        })
+    );
+    assert_eq!(inspection.returned_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.returned_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(800),
+        })
+    );
+    assert!(!inspection.complete);
+    assert_eq!(
+        inspection.next_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(801),
+            end: Some(1000),
+        })
+    );
+    assert_eq!(inspection.fingerprint, "read:src/lib.rs#0");
+
+    let message = tool_result_history_message(result, None);
+    assert!(!message.content.contains("requested_path"));
+    let model = history::to_messages(&[message], "system");
+    let payload = model[1]["content"].as_str().expect("model result");
+    assert!(payload.contains("requested_path"));
+    assert!(payload.contains("next_range"));
+    assert!(payload.contains("fingerprint"));
+}
+
+#[test]
+fn final_truncation_recomputes_mid_file_inspection_ranges() {
+    let args = serde_json::json!({
+        "path": "src/large.ts",
+        "start_line": 1,
+        "end_line": 140
+    });
+    let content = format!(
+        "[File: src/large.ts, Lines 1 to 140 of 140, Bytes offset: 0]\n{}",
+        (1..=140)
+            .map(|line| format!("{line}: {}", "x".repeat(500)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let result = finalize_tool_result(
+        tool_result_from_execution(
+            "view_file",
+            &args,
+            crate::tools::ToolExecutionOutput::success(content),
+            None,
+        ),
+        None,
+    );
+    let inspection = result.metadata.inspection.expect("inspection metadata");
+
+    assert!(result.metadata.truncated);
+    assert!(result.metadata.payload_truncated);
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete,
+        "transport clipping must not overwrite source completeness"
+    );
+    assert!(!inspection.complete);
+    assert!(
+        inspection
+            .delivered_ranges
+            .iter()
+            .any(|range| range.end.unwrap() < 140),
+        "returned metadata must not claim the original range: {inspection:?}"
+    );
+    assert_ne!(
+        inspection.returned_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(140),
+        })
+    );
+    let next = inspection.next_range.expect("actionable omitted range");
+    assert!(next.start.unwrap() <= next.end.unwrap());
+    assert!(next.end.unwrap() < 140);
+}
+
+#[test]
+fn final_truncation_recomputes_mid_line_range_and_survives_replay() {
+    let args = serde_json::json!({"path": "src/long.ts", "start_line": 1});
+    let content = format!(
+        "[File: src/long.ts, Lines 1 to 1 of 1, Bytes offset: 0]\n1: {}",
+        "x".repeat(100_000)
+    );
+    let result = finalize_tool_result(
+        tool_result_from_execution(
+            "view_file",
+            &args,
+            crate::tools::ToolExecutionOutput::success(content),
+            None,
+        ),
+        None,
+    );
+    let inspection = result
+        .metadata
+        .inspection
+        .as_ref()
+        .expect("inspection metadata")
+        .clone();
+
+    assert!(result.metadata.truncated);
+    assert!(result.metadata.payload_truncated);
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+    assert!(!inspection.complete);
+    assert!(
+        inspection.returned_range.is_none(),
+        "a line cut mid-content is not a complete returned range: {inspection:?}"
+    );
+    assert_eq!(
+        inspection.next_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(1),
+        })
+    );
+
+    let artifact = result.metadata.full_output_artifact.clone();
+    if let Some(path) = artifact.as_deref() {
+        assert!(
+            std::fs::metadata(path).is_ok(),
+            "artifact must be preserved"
+        );
+    }
+    let message = tool_result_history_message(result, None);
+    let record = message.tool_result.as_ref().expect("persisted metadata");
+    assert_eq!(record.inspection.as_ref(), Some(&inspection));
+    assert_eq!(record.full_output_artifact, artifact);
+    let replay = history::to_messages(&[message], "system");
+    let payload = replay[1]["content"].as_str().expect("model result");
+    assert!(payload.contains("next_range"));
+    assert!(payload.contains("\"start\":1"));
+}
+
+#[test]
+fn equivalent_inspection_tools_share_a_fingerprint() {
+    let view = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 2 of 2]\ncode".into(),
+        ),
+        None,
+    );
+    let shell = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "sed -n '1,2p' src/lib.rs"}),
+        crate::tools::ToolExecutionOutput::success("code".into()),
+        None,
+    );
+    assert_eq!(
+        view.metadata.inspection.as_ref().unwrap().fingerprint,
+        shell.metadata.inspection.as_ref().unwrap().fingerprint
+    );
+}
+
+#[test]
+fn deterministic_compaction_persists_the_retained_suffix_anchor() {
+    let mut history = vec![
+        ChatMessage::new("user", "old task"),
+        ChatMessage::new("assistant", "old progress ".repeat(300)),
+        ChatMessage::new("user", "recent task"),
+        ChatMessage::new("assistant", "recent progress"),
+    ];
+
+    assert!(compact_history_deterministically(&mut history, 100));
+    assert!(history[0].compaction_boundary.is_some());
+    let expected_anchor = history
+        .get(1)
+        .map(crate::app::CompactionEntry::from_message);
+    assert_eq!(
+        history[0]
+            .compaction_boundary
+            .as_ref()
+            .and_then(|boundary| boundary.first_retained_entry.as_ref()),
+        expected_anchor.as_ref()
+    );
+}
+
+#[test]
+fn structured_tool_replay_keeps_metadata_out_of_ui_content_but_in_model_payload() {
+    let message = tool_result_history_message(
+        ToolResult {
+            tool_name: "view_file".to_string(),
+            content: "[File: x, Lines 1 to 15 of 15]".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                call_id: Some("call-1".to_string()),
+                arguments_hash: "hash".to_string(),
+                success: true,
+                completeness: rustcode_core::ToolResultCompleteness::Complete,
+                ..Default::default()
+            },
+        },
+        Some("call-1".to_string()),
+    );
+    assert!(!message.content.contains("result_metadata"));
+    let history = vec![
+        ChatMessage::new("user", "read x"),
+        ChatMessage::new("assistant", "").with_tool_calls(vec![crate::app::ToolCallRef {
+            id: "call-1".to_string(),
+            name: "view_file".to_string(),
+            arguments: "{\"path\":\"x\"}".to_string(),
+        }]),
+        message,
+    ];
+    let messages = history::to_messages(&history, "system");
+    let model_content = messages[3]["content"].as_str().expect("tool content");
+    assert!(model_content.contains("result_metadata"));
+    assert!(model_content.contains("arguments_hash"));
+}
+
+#[test]
+fn bounded_results_keep_incomplete_marker_and_completeness_through_replay() {
+    let result = finalize_tool_result(
+        ToolResult {
+            tool_name: "view_file".to_string(),
+            content: "partial source range".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                truncated: true,
+                ..Default::default()
+            },
+        },
+        None,
+    );
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+    assert!(result.content.contains("tool_result_incomplete:"));
+
+    let message = tool_result_history_message(result, None);
+    let record = message.tool_result.as_ref().expect("typed metadata");
+    assert!(record.truncated);
+    assert_eq!(
+        record.resolved_completeness(),
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+    let replay = history::to_messages(&[message], "system");
+    let model_content = replay[1]["content"].as_str().expect("model result");
+    assert!(model_content.contains("tool_result_incomplete:"));
+    assert!(model_content.contains("byte_truncated"));
+}
+
+#[test]
+fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
+    let mut state = AppState::new();
+    let mut context = TurnContext::with_max_tool_rounds(7);
+    context.budget.tool_rounds = 4;
+    context.budget.round_budget_notice_sent = true;
+    context.progress.failed_mutations = 2;
+    context.progress.consecutive_failed_mutations = 2;
+    context
+        .progress
+        .changed_paths
+        .insert("README.md".to_string());
+    context.progress.grounded_artifact = Some(super::turn_engine::GroundedArtifactEvidence {
+        path: "README.md".to_string(),
+        write_lines: Some(10),
+        write_bytes: Some(120),
+        read_range: Some((1, 10)),
+        repair_attempts: 1,
+    });
+    context
+        .recovery
+        .loop_detector
+        .record_failed_tool("edit:readme:1", "edit:README.md");
+    context
+        .recovery
+        .loop_detector
+        .check("inspect:README.md", "inspect:README.md");
+    context
+        .recovery
+        .loop_detector
+        .check("inspect:README.md", "inspect:README.md");
+    let progress_observation = loop_detect::ProgressObservation {
+        action: "run_command:markdownlint".to_string(),
+        output_fingerprint: 11,
+        state_fingerprint: None,
+        failure_fingerprint: Some(22),
+        changed_workspace: false,
+        fresh_read: false,
+        search_result: false,
+        no_result: false,
+        verification: true,
+        read_only: true,
+        replayed: false,
+        success: false,
+    };
+    context.progress.ledger.observe(&progress_observation);
+    context.progress.ledger.observe(&progress_observation);
+    context.verification.ledger.record_edit();
+    context
+        .verification
+        .ledger
+        .record_explicit_command("markdownlint README.md", Some(1));
+    context.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+
+    save_turn_context_after_run(&mut state, context, true);
+
+    let mut resumed = take_turn_context_for_prompt(&mut state, true, 99);
+
+    assert_eq!(resumed.budget.max_tool_rounds, 7);
+    assert_eq!(resumed.budget.tool_rounds, 4);
+    assert!(resumed.budget.round_budget_notice_sent);
+    assert_eq!(resumed.progress.failed_mutations, 2);
+    assert_eq!(resumed.progress.consecutive_failed_mutations, 2);
+    assert_eq!(
+        resumed.progress.changed_paths.iter().collect::<Vec<_>>(),
+        ["README.md"]
+    );
+    assert_eq!(
+        resumed
+            .progress
+            .grounded_artifact
+            .as_ref()
+            .map(|evidence| evidence.path.as_str()),
+        Some("README.md")
+    );
+    assert_eq!(
+        resumed
+            .recovery
+            .loop_detector
+            .check("inspect:README.md", "inspect:README.md"),
+        loop_detect::LoopStatus::Warning(3),
+        "ordinary loop history must continue across a background wakeup"
+    );
+    assert_eq!(
+        resumed
+            .recovery
+            .loop_detector
+            .record_failed_tool("edit:readme:2", "edit:README.md"),
+        loop_detect::LoopStatus::Abort(2),
+        "failed-mutation repetition must continue across a background wakeup"
+    );
+    assert_eq!(resumed.progress.ledger.no_progress_streak(), 2);
+    assert_eq!(
+        resumed
+            .verification
+            .ledger
+            .explicit_last_failure()
+            .map(|evidence| evidence.command.as_str()),
+        Some("markdownlint README.md")
+    );
+}
+
+#[test]
+fn new_user_prompt_starts_fresh_turn_context() {
+    let mut state = AppState::new();
+    let mut context = TurnContext::new();
+    context.budget.round_budget_notice_sent = true;
+    context.progress.failed_mutations = 3;
+    context
+        .progress
+        .changed_paths
+        .insert("src/lib.rs".to_string());
+    context.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+    save_turn_context_after_run(&mut state, context, true);
+
+    let fresh = take_turn_context_for_prompt(&mut state, false, 9);
+
+    assert_eq!(fresh.budget.max_tool_rounds, 9);
+    assert_eq!(fresh.budget.tool_rounds, 0);
+    assert!(!fresh.budget.round_budget_notice_sent);
+    assert_eq!(fresh.progress.failed_mutations, 0);
+    assert!(fresh.progress.changed_paths.is_empty());
+    assert!(fresh.verification.ledger.explicit_last_failure().is_none());
+    assert!(state.background_turn_context.is_none());
+}
+
+#[test]
+fn explicit_verification_hydrates_the_terminal_background_result() {
+    let history = vec![
+        ChatMessage::new("user", "Run `custom-tool --strict` and report the result."),
+        ChatMessage::new("tool", "background task failed").with_tool_result(
+            crate::app::ToolResultRecord {
+                tool_name: "background_task".to_string(),
+                pending: false,
+                command: Some("custom-tool --strict".to_string()),
+                success: false,
+                exit_code: Some(7),
+                ..Default::default()
+            },
+        ),
+    ];
+    let mut ledger = verification::VerificationLedger::default();
+
+    crate::network::turn_engine::hydrate_explicit_verification_from_history(
+        &mut ledger,
+        &history,
+        0,
+    );
+
+    assert_eq!(
+        ledger
+            .explicit_last_failure()
+            .map(|evidence| evidence.command.as_str()),
+        Some("custom-tool --strict")
+    );
+}
+
+#[tokio::test]
+async fn request_snapshot_consumes_wakeups_for_background_results_it_observes() {
+    let mut app = AppState::new();
+    app.history.push(ChatMessage::new(
+        "tool",
+        "background_task: Task first completed. Output:\ncheck passed",
+    ));
+    app.history.push(ChatMessage::new(
+        "tool",
+        "background_task: Task second completed. Output:\ntests passed",
+    ));
+    app.pending_queue = vec![
+        "__task_wakeup__:first".to_string(),
+        "queued user prompt".to_string(),
+        "__task_wakeup__:second".to_string(),
+    ];
+    let state = Arc::new(Mutex::new(app));
+
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &state,
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+
+    let request_text = serde_json::to_string(&messages).expect("serialize request");
+    assert!(request_text.contains("check passed"));
+    assert!(request_text.contains("tests passed"));
+    assert_eq!(state.lock().await.pending_queue, ["queued user prompt"]);
+}
+
+#[test]
+fn execution_envelope_keeps_typed_state_separate_from_display_text() {
+    let result = ToolResult {
+        tool_name: "run_command".to_string(),
+        content: "human-facing output that happens to mention error: but succeeded".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            call_id: Some("call_native_7".to_string()),
+            success: true,
+            exit_code: Some(0),
+            changed_paths: vec!["src/main.rs".to_string()],
+            replayed: true,
+            command_status: Some(rustcode_core::CommandResultMetadata {
+                completed: true,
+                exit_code: Some(0),
+                bytes_returned: 12,
+                total_output_bytes: Some(12),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    };
+    let envelope = result.execution_envelope();
+    assert_eq!(envelope.call_id, "call_native_7");
+    assert!(envelope.success);
+    assert_eq!(envelope.exit_code, Some(0));
+    assert!(envelope.replayed);
+    assert_eq!(envelope.changed_paths, ["src/main.rs"]);
+    assert_eq!(envelope.error_kind, None);
+    assert_eq!(
+        envelope
+            .command_status
+            .as_ref()
+            .map(|status| status.bytes_returned),
+        Some(12)
+    );
+}
+
+#[test]
+fn execution_envelope_preserves_authoritative_failure_kind() {
+    let result = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+        crate::tools::ToolExecutionOutput::failure_with_kind(
+            "error: the compiler reported a failure".to_string(),
+            crate::tools::ToolErrorKind::CompilerFailed,
+            true,
+        ),
+        None,
+    );
+
+    let envelope = result.execution_envelope();
+    assert!(!envelope.success);
+    assert_eq!(
+        envelope.error_kind,
+        Some(crate::tools::ToolErrorKind::CompilerFailed)
+    );
+    assert!(envelope.retryable);
+}
+
+#[test]
+fn persisted_tool_error_kind_round_trips_explicitly() {
+    let record = crate::app::ToolResultRecord {
+        error_kind: Some(crate::tools::ToolErrorKind::McpFailed.as_str().to_string()),
+        retryable: true,
+        replayed: true,
+        pending: true,
+        command: Some("long-running-check".to_string()),
+        exit_code: Some(7),
+        changed_paths: vec!["src/mcp.rs".to_string()],
+        ..Default::default()
+    };
+    let reloaded: crate::app::ToolResultRecord =
+        serde_json::from_value(serde_json::to_value(&record).unwrap()).unwrap();
+    assert_eq!(
+        reloaded.parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::McpFailed)
+    );
+    assert!(reloaded.retryable);
+    assert!(reloaded.replayed);
+    assert!(reloaded.pending);
+    assert_eq!(reloaded.command.as_deref(), Some("long-running-check"));
+    assert_eq!(reloaded.exit_code, Some(7));
+    assert_eq!(reloaded.changed_paths, ["src/mcp.rs"]);
+}
+
+#[test]
+fn deferred_tool_calls_are_distinct_and_not_retryable() {
+    let calls = vec![crate::app::ToolCallRef {
+        id: "call_deferred".into(),
+        name: "run_command".into(),
+        arguments: r#"{"command":"echo deferred"}"#.into(),
+    }];
+
+    let deferred = unanswered_call_results_with_kind(
+        &calls,
+        "intentionally deferred by the scheduler",
+        crate::tools::ToolErrorKind::Deferred,
+    );
+    let record = deferred[0].tool_result.as_ref().unwrap();
+
+    assert_eq!(
+        record.parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Deferred)
+    );
+    assert!(!record.retryable);
+    assert!(deferred[0].content.contains("intentionally deferred"));
+
+    let internal = unanswered_call_results(&calls, "harness failure");
+    assert_eq!(
+        internal[0]
+            .tool_result
+            .as_ref()
+            .unwrap()
+            .parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Internal)
+    );
+    assert!(internal[0].tool_result.as_ref().unwrap().retryable);
+}
+
+#[tokio::test]
+async fn denied_tool_batch_records_permission_denied_metadata() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "true"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        false,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::PermissionDenied)
+    );
+    assert!(!results[0].metadata.success);
+}
+
+#[tokio::test]
+async fn session_title_tool_is_rejected_after_first_turn_without_running() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let session_id = state.lock().await.active_session_id.clone();
+    {
+        let mut state = state.lock().await;
+        state.session_title_cache = Some((session_id, Some("existing".to_string())));
+        state.session_title_tool_available = false;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "set_session_title".to_string(),
+        arguments: serde_json::json!({"title": "should not run"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(!results[0].metadata.success);
+    assert_eq!(
+        results[0].metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::UnavailableDependency)
+    );
+    assert!(
+        results[0]
+            .content
+            .contains("only available during the first turn")
+    );
+    assert!(state.lock().await.session_title_cache.is_some());
+}
+
+#[tokio::test]
+async fn successful_first_turn_session_title_invalidates_ui_cache() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let session_id = state.lock().await.active_session_id.clone();
+    {
+        let mut state = state.lock().await;
+        state.session_title_cache = Some((session_id, Some("old title".to_string())));
+        state.session_title_tool_available = true;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "set_session_title".to_string(),
+        arguments: serde_json::json!({"title": "Focused session title"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(results[0].metadata.success, "{results:?}");
+    let state = state.lock().await;
+    assert!(!state.session_title_tool_available);
+    assert!(state.session_title_cache.is_none());
+}
+
+#[tokio::test]
+async fn cancelled_tool_batch_removes_its_live_projection() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let calls = vec![crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "true"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let _ = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(state.lock().await.live_tool_calls.is_empty());
+}
+
+async fn gated_json_server(
+    body: serde_json::Value,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let address = listener.local_addr().expect("test server address");
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        loop {
+            let read = socket.read(&mut buffer).await.expect("read request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+
+        accepted_tx.send(()).ok();
+        release_rx.await.ok();
+
+        let body = body.to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+
+    (format!("http://{address}"), accepted_rx, release_tx)
+}
+
+async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<Vec<u8>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind streaming test server");
+    let address = listener
+        .local_addr()
+        .expect("streaming test server address");
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept streaming request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        loop {
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .expect("read streaming request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        accepted_tx.send(request).ok();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"wakeup request reached provider\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write streaming response");
+    });
+    (format!("http://{address}"), accepted_rx)
+}
+
+struct AcpPromptTestPolicy;
+
+impl policy::TurnPolicy for AcpPromptTestPolicy {
+    async fn should_approve(
+        &self,
+        _state: &Arc<tokio::sync::Mutex<crate::app::AppState>>,
+        _tool_calls: &[crate::tools::ToolCall],
+    ) -> bool {
+        true
+    }
+
+    fn should_verify_completion(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_prompt_turn_releases_state_and_delivers_provider_completion() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::app::AppState::new();
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-prompt-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    app.history
+        .push(ChatMessage::new("user", "Reply with exactly: PONG"));
+    let state = Arc::new(Mutex::new(app));
+    let (sender, mut receiver) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            "Reply with exactly: PONG".to_owned(),
+            sender,
+        ),
+    )
+    .await
+    .expect("ACP prompt must not hold AppState locked while waiting for its turn");
+
+    provider_request
+        .await
+        .expect("mock provider must receive the ACP prompt");
+    assert_eq!(
+        context.response.final_content,
+        "wakeup request reached provider"
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(ui_adapter::AgentUiEvent::PromptStarted { .. })
+    ));
+    let mut completed_content = None;
+    while let Some(event) = receiver.recv().await {
+        if let ui_adapter::AgentUiEvent::TurnFinished { content, .. } = event {
+            completed_content = Some(content);
+            break;
+        }
+    }
+    assert_eq!(
+        completed_content.as_deref(),
+        Some("wakeup request reached provider"),
+        "ACP must emit a terminal event carrying the provider output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_continuation_releases_state_and_delivers_provider_completion() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::app::AppState::new();
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-continuation-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    app.history
+        .push(ChatMessage::new("user", "Continue the existing task"));
+    let state = Arc::new(Mutex::new(app));
+    let (sender, mut receiver) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = TurnContext::with_budgets(8, 16);
+    let context = tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_and_context_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            String::new(),
+            sender,
+            context,
+        ),
+    )
+    .await
+    .expect("ACP continuation must release AppState while waiting for its turn");
+
+    provider_request
+        .await
+        .expect("mock provider must receive the ACP continuation");
+    assert_eq!(
+        context.response.final_content,
+        "wakeup request reached provider"
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(ui_adapter::AgentUiEvent::PromptStarted { prompt }) if prompt.is_empty()
+    ));
+    let mut completed_content = None;
+    while let Some(event) = receiver.recv().await {
+        if let ui_adapter::AgentUiEvent::TurnFinished { content, .. } = event {
+            completed_content = Some(content);
+            break;
+        }
+    }
+    assert_eq!(
+        completed_content.as_deref(),
+        Some("wakeup request reached provider"),
+        "ACP continuation must emit a terminal event carrying the provider output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_loaded_session_continues_with_its_persisted_transcript() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::acp::build_loaded_app_state(
+        "loaded-session-123",
+        &std::env::current_dir().unwrap(),
+        vec![
+            ChatMessage::new("user", "Earlier user request"),
+            ChatMessage::new("assistant", "Earlier assistant answer"),
+        ],
+    );
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-loaded-session-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    let state = Arc::new(Mutex::new(app));
+    let (sender, _) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = TurnContext::with_budgets(8, 16);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_and_context_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            String::new(),
+            sender,
+            context,
+        ),
+    )
+    .await
+    .expect("loaded ACP session prompt must complete");
+    let request = provider_request.await.expect("provider request");
+    let request_text = String::from_utf8(request).expect("HTTP request UTF-8");
+    let body = request_text
+        .split_once("\r\n\r\n")
+        .expect("HTTP request body")
+        .1;
+    let request_json: serde_json::Value = serde_json::from_str(body).expect("provider JSON");
+    let messages = request_json["messages"].as_array().expect("messages");
+    assert!(messages.iter().any(|message| {
+        message["role"] == "user" && message["content"] == "Earlier user request"
+    }));
+    assert!(
+        messages.iter().any(|message| {
+            message["role"] == "assistant"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("Earlier assistant answer"))
+        }),
+        "loaded assistant transcript should be sent to the provider"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_wakeup_releases_state_during_native_schema_selection_and_starts_provider_request()
+ {
+    use crate::app::state::AppState;
+    use crate::config::{ApiProtocol, ModelProfile, ToolProtocol};
+    use crate::network::policy::InteractivePolicy;
+    use crate::tools::install_native_schema_test_gate;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let marker = "issue-1279-native-schema-gate";
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let mut app = AppState::new();
+    app.api_base_url = provider_url.clone();
+    app.model_name = "issue-1279-model".to_string();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: provider_url,
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        tool_protocol: Some(ToolProtocol::ApiNative),
+        context_window: Some(32_768),
+        ..ModelProfile::default()
+    }];
+    app.history.push(ChatMessage::new("user", marker));
+    app.pending_queue = vec!["__task_wakeup__:issue-1279".to_string()];
+    let state = Arc::new(Mutex::new(app));
+    let gate = install_native_schema_test_gate(marker, 3);
+    let lease = state
+        .lock()
+        .await
+        .claim_orchestrator()
+        .expect("test orchestrator lease");
+    let (ui_events, _ui_event_receiver) = ui_adapter::AgentUiEventSender::channel();
+    let task = tokio::spawn(crate::network::process_queue_orchestrator_with_ui_events(
+        reqwest::Client::new(),
+        Arc::clone(&state),
+        CancellationToken::new(),
+        Arc::new(InteractivePolicy),
+        ui_events,
+        lease,
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gate.is_entered() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider-startup schema selection must reach the deterministic gate");
+
+    let lock_acquired = tokio::time::timeout(Duration::from_millis(100), async {
+        let _guard = state.lock().await;
+    })
+    .await
+    .is_ok();
+    gate.release();
+
+    let provider_started = tokio::time::timeout(Duration::from_secs(10), provider_request)
+        .await
+        .is_ok();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("wakeup orchestrator must finish")
+        .expect("wakeup orchestrator must not panic");
+
+    assert!(
+        lock_acquired,
+        "AppState lock remained held while provider schema computation was gated"
+    );
+    assert!(provider_started, "provider must observe the wakeup request");
+    let state = state.lock().await;
+    assert!(state.pending_queue.is_empty());
+    assert!(!state.orchestrator_running);
+}
+
+#[tokio::test]
+async fn gemini_gateway_uses_capability_probe() {
+    let (url, request_accepted, release_response) = gated_json_server(serde_json::json!({})).await;
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let probe_state = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        probe_function_calling(
+            &reqwest::Client::new(),
+            &probe_state,
+            &url,
+            "gemini-3.7-flash",
+        )
+        .await
+    });
+
+    request_accepted
+        .await
+        .expect("Gemini gateway must receive the capability probe");
+    release_response.send(()).expect("release probe response");
+    assert!(task.await.expect("probe task must finish"));
+}
+
+#[tokio::test]
+async fn automatic_compaction_discards_cross_session_result_with_shared_history() {
+    use crate::app::AppState;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (url, request_accepted, release_response) = gated_json_server(serde_json::json!({
+        "choices": [{"message": {"content": "summary of the old session"}}]
+    }))
+    .await;
+    let mut app = AppState::new();
+    app.api_base_url = url;
+    app.active_session_id = "old-session".to_string();
+    for profile in &mut app.config.models {
+        // Leave enough room for the compacted summary and final request so
+        // this test continues to exercise session isolation rather than the
+        // intentional over-budget preflight checkpoint.
+        profile.context_window = Some(2_000);
+    }
+    app.history = (0..(crate::network::compaction::KEEP_RECENT_TURNS + 4))
+        .map(|index| {
+            ChatMessage::new(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                format!("message {index}: {}", "context ".repeat(80)),
+            )
+        })
+        .collect();
+    let new_session_history = app.history.clone();
+    let state = Arc::new(Mutex::new(app));
+    let request_state = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        prepare_turn_request(
+            &reqwest::Client::new(),
+            &request_state,
+            1,
+            &CancellationToken::new(),
+        )
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(10), request_accepted)
+        .await
+        .expect("automatic compaction request must start")
+        .expect("test server must observe the request");
+    {
+        let mut live = tokio::time::timeout(Duration::from_secs(1), state.lock())
+            .await
+            .expect("network I/O must not hold the state lock");
+        live.active_session_id = "new-session".to_string();
+        live.history = new_session_history.clone();
+    }
+    release_response
+        .send(())
+        .expect("release automatic compaction response");
+    let _ = tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("automatic compaction must finish")
+        .expect("automatic compaction task must not panic");
+
+    let live = state.lock().await;
+    assert_eq!(live.active_session_id, "new-session");
+    assert!(live.history == new_session_history);
+}
+
+// Regression: session 1785600273324, msgs 7-18. The repeat guard correctly
+// declined four identical `view_file lines 1-1` calls, but answered each with
+// a notice pointing at earlier context. The model wanted those lines, so it
+// asked again — six turns and four loop warnings before it moved on.
+#[test]
+fn small_reads_are_worth_repeating_verbatim() {
+    let one_line =
+        "[File: src/symbols.rs, Lines 1 to 1 of 408]\n1: use rusqlite::{Connection, params};";
+    assert!(one_line.len() <= REPLAYABLE_READ_LIMIT);
+
+    // A whole file stays behind the notice: repeating it every turn would
+    // cost more than the loop it prevents.
+    let whole_file = "x".repeat(50_000);
+    assert!(whole_file.len() > REPLAYABLE_READ_LIMIT);
+}
+
+// Regression: session 1785595170460, msgs 5-8. Two identical full-file reads
+// ran back to back because the read-dedupe cache was cleared on a sticky
+// task-level "made edits" flag, which stays true for the rest of the task —
+// so after the first edit no read was ever recognised as a repeat.
+#[test]
+fn only_a_batch_that_changed_files_invalidates_the_read_cache() {
+    let applied = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "successfully replaced target_content in 'src/lib.rs'".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            success: true,
+            ..Default::default()
+        },
+    };
+    let failed = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "error: target_content does not match".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            success: false,
+            ..Default::default()
+        },
+    };
+    let read = ToolResult {
+        tool_name: "view_file".to_string(),
+        content: "1: fn main() {}".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            success: true,
+            ..Default::default()
+        },
+    };
+
+    let changed = |results: &[ToolResult]| {
+        results.iter().any(|result| {
+            is_mutating_tool(&result.tool_name)
+                && result.metadata.success
+                && !result
+                    .content
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("error")
+        })
+    };
+
+    assert!(changed(&[applied]));
+    // A failed edit leaves the files exactly as the earlier reads saw them.
+    assert!(!changed(&[failed]));
+    assert!(!changed(&[read]));
+}
+
+// Regression: session 1785595170460. The one edit the model attempted failed,
+// it then read the file, found the line it wanted already present from an
+// earlier run, and reported "I've added the comment" before calling
+// complete_task — which the harness accepted.
+// Regression: session 1785597279144. Blocked with only "make the change" or
+// "say it could not be made" on offer, and looking at a file that already
+// held the requested line, the model cleared the gate by deleting that line
+// — then reported having added and removed it.
+#[test]
+fn the_block_message_sanctions_finishing_without_an_edit() {
+    let message = completion_block_message(1);
+
+    // The branch that fits "it is already how you asked".
+    assert!(
+        message.contains("already in the requested state"),
+        "got: {message}"
+    );
+    assert!(message.contains("requires no edit"), "got: {message}");
+    // And an explicit bar on satisfying the check with any other write.
+    assert!(
+        message.contains("delete existing content"),
+        "got: {message}"
+    );
+    assert!(message.contains("reverse the request"), "got: {message}");
+    assert!(message.contains("1 edit(s)"), "got: {message}");
+}
+
+#[test]
+fn completion_is_blocked_only_when_nothing_was_applied() {
+    // Every edit failed: the workspace is untouched.
+    assert!(completion_claims_unapplied_work(false, 1, 0));
+
+    // An edit landed, so a later failure does not invalidate the work.
+    assert!(!completion_claims_unapplied_work(true, 3, 0));
+
+    // A task with no edits at all — a question — finishes freely.
+    assert!(!completion_claims_unapplied_work(false, 0, 0));
+
+    // The gate stops arguing once it has said its piece twice.
+    assert!(!completion_claims_unapplied_work(
+        false,
+        1,
+        MAX_COMPLETION_BLOCKS
+    ));
+}
+
+// Every id a replayed assistant message announces must have a matching
+// result, or the provider rejects the request and the model is left to
+// assume what happened to the call.
+#[test]
+fn rejected_and_interrupted_calls_still_get_results() {
+    let refs = vec![
+        crate::app::ToolCallRef {
+            id: "call_1".to_string(),
+            name: "grep".to_string(),
+            arguments: "{}".to_string(),
+        },
+        crate::app::ToolCallRef {
+            id: "call_2".to_string(),
+            name: "run_command".to_string(),
+            arguments: "{}".to_string(),
+        },
+    ];
+
+    let answers = unanswered_call_results(&refs, "interrupted by the user");
+
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0].role, "tool");
+    assert_eq!(answers[0].tool_call_id.as_deref(), Some("call_1"));
+    assert!(
+        answers[0]
+            .content
+            .contains("grep: error: interrupted by the user")
+    );
+    assert_eq!(answers[1].tool_call_id.as_deref(), Some("call_2"));
+}
+
+#[test]
+fn output_limited_call_results_are_retryable_and_bounded() {
+    let refs = vec![crate::app::ToolCallRef {
+        id: "call_length".to_string(),
+        name: "write_to_file".to_string(),
+        arguments: "{}".to_string(),
+    }];
+    let answers = unanswered_call_results_with_kind(
+        &refs,
+        "provider stopped at the output limit; the call was not executed",
+        crate::tools::ToolErrorKind::OutputLimit,
+    );
+
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0].tool_call_id.as_deref(), Some("call_length"));
+    assert!(answers[0].tool_result.as_ref().is_some_and(|record| {
+        record.error_kind.as_deref() == Some("OutputLimit") && record.retryable
+    }));
+    assert!(answers[0].content.len() < 200);
+}
+
+#[tokio::test]
+async fn output_truncated_native_response_never_executes_salvaged_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("must-not-exist.txt");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_arguments_limit"),
+        0,
+        None,
+        None,
+        None,
+        vec![crate::tools::ToolCallEnvelope {
+            call_id: "call_partial_write".to_string(),
+            tool_name: "write_to_file".to_string(),
+            arguments: serde_json::json!({
+                "path": target,
+                "content": "this response was truncated"
+            }),
+        }],
+        "",
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert!(
+        !target.exists(),
+        "a salvaged truncated call must not execute"
+    );
+    let history = state.lock().await;
+    let result = history
+        .history
+        .iter()
+        .find_map(|message| message.tool_result.as_ref())
+        .expect("typed not-executed result");
+    assert_eq!(result.error_kind.as_deref(), Some("OutputLimit"));
+    assert!(result.retryable);
+    assert!(
+        history
+            .history
+            .iter()
+            .any(|message| message.content.contains("No tool ran"))
+    );
+}
+
+#[tokio::test]
+async fn output_truncated_text_response_never_executes_salvaged_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("must-not-exist.txt");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, false);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+    ctx.response.final_content = format!(
+        "```tool\n{{\"name\":\"write_to_file\",\"arguments\":{{\"path\":{},\"content\":\"truncated\"}}}}\n```",
+        serde_json::to_string(&target).expect("serialize path")
+    );
+    ctx.response.streamed_call_ids = vec!["text_call_partial".to_string()];
+
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("length"),
+        0,
+        None,
+        None,
+        None,
+        Vec::new(),
+        "",
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert!(
+        !target.exists(),
+        "a salvaged truncated text call must not execute"
+    );
+    let history = state.lock().await;
+    let result = history
+        .history
+        .iter()
+        .find_map(|message| message.tool_result.as_ref())
+        .expect("typed not-executed result");
+    assert_eq!(result.error_kind.as_deref(), Some("OutputLimit"));
+    assert!(result.retryable);
+    assert!(
+        history
+            .history
+            .iter()
+            .any(|message| message.content.contains("No tool ran"))
+    );
+}
+
+#[tokio::test]
+async fn grounded_recovery_targets_failed_repair_after_complete_malformed_write_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("index.html");
+    let content = format!(
+        "{}l.x += l<think>\n",
+        (1..=698)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>()
+    );
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        state.workspace_root = Some(dir.path().to_path_buf());
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+
+    let native_call = |call_id: &str, tool_name: &str, arguments: serde_json::Value| {
+        vec![crate::tools::ToolCallEnvelope {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            arguments,
+        }]
+    };
+
+    ctx.response.final_content = "Writing the artifact.".to_string();
+    super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call(
+            "write-1",
+            "write_to_file",
+            serde_json::json!({"path": target, "content": content}),
+        ),
+        "",
+    )
+    .await;
+
+    ctx.response.final_content =
+        "The complete read shows a malformed artifact at the end.".to_string();
+    super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call("read-1", "view_file", serde_json::json!({"path": target})),
+        "",
+    )
+    .await;
+
+    ctx.response.final_content = "Attempting the repair.".to_string();
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &client,
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        native_call(
+            "repair-1",
+            "replace_file_content",
+            serde_json::json!({
+                "path": target,
+                "old_string": "the malformed suffix",
+                "new_string": "the malformed suffix"
+            }),
+        ),
+        "",
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Continue
+    );
+    assert_eq!(ctx.metrics.grounded_recoveries, 1);
+    assert_eq!(ctx.progress.failed_mutations, 1);
+    assert_eq!(ctx.progress.consecutive_no_progress, 1);
+    let history = state.lock().await;
+    let recovery = history
+        .history
+        .iter()
+        .find(|message| message.content.starts_with("[Evidence-based recovery:"))
+        .expect("grounded recovery notice");
+    assert!(recovery.content.contains("index.html"));
+    assert!(
+        recovery
+            .content
+            .contains(&format!("699 lines / {} bytes", content.len()))
+    );
+    assert!(recovery.content.contains("complete read of lines 1-699"));
+    assert!(
+        recovery
+            .content
+            .contains("last repair attempt made no change")
+    );
+    assert!(
+        recovery
+            .content
+            .contains("old_string and new_string are identical")
+    );
+    assert!(
+        recovery
+            .content
+            .contains("exactly one narrow replace_file_content")
+    );
+    assert!(recovery.content.contains("Do not reread the whole file"));
+    assert_eq!(std::fs::read_to_string(&target).expect("artifact"), content);
+}
+
+#[tokio::test]
+async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        vec![
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_invalid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_valid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "TODO"}),
+            },
+        ],
+        "",
+    )
+    .await;
+
+    let history = state.lock().await;
+    let tool_results = history
+        .history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(
+        tool_results[0].tool_call_id.as_deref(),
+        Some("call_invalid")
+    );
+    assert!(
+        tool_results[0]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
+    assert_eq!(tool_results[1].tool_call_id.as_deref(), Some("call_valid"));
+    assert!(
+        !tool_results[1]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
+}
+
+#[tokio::test]
+async fn multi_call_response_executes_all_valid_reads() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        vec![
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_first".to_string(),
+                tool_name: "get_time".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_second".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "Cargo.toml"}),
+            },
+        ],
+        "",
+    )
+    .await;
+
+    let state = state.lock().await;
+    assert_eq!(ctx.metrics.tool_calls, 2);
+    let assistant = state
+        .history
+        .iter()
+        .find(|message| message.role == "assistant" && !message.tool_calls.is_empty())
+        .expect("the complete model call list is persisted");
+    assert_eq!(
+        assistant
+            .tool_calls
+            .iter()
+            .map(|call| call.id.as_str())
+            .collect::<Vec<_>>(),
+        ["call_first", "call_second"]
+    );
+
+    let results = state
+        .history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].tool_call_id.as_deref(), Some("call_first"));
+    assert!(
+        results[0]
+            .tool_result
+            .as_ref()
+            .is_some_and(|result| result.success)
+    );
+    assert_eq!(results[1].tool_call_id.as_deref(), Some("call_second"));
+    let second = results[1].tool_result.as_ref().expect("second result");
+    assert!(
+        second.success,
+        "both valid reads execute: {:?}",
+        results[1].content
+    );
+
+    let messages = history::to_messages(&state.history, "system");
+    let rendered_ids = messages
+        .iter()
+        .filter_map(|message| message.get("tool_call_id").and_then(|id| id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered_ids, ["call_first", "call_second"]);
+}
+
+#[tokio::test]
+async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
+    // Search an empty directory so the outputs are hermetic: the pattern can
+    // never match the test source itself (which contains the pattern text).
+    let dir = tempfile::tempdir().expect("temp search root");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+    let root = dir.path().to_string_lossy().to_string();
+
+    // Four no-match searches with the same pattern but alternating flags:
+    // same call category (pre-execution repetition warning parks) and same
+    // stagnant output, while the progress ledger hits its recovery streak.
+    // The evidence round must speak once, not stack both warnings with it.
+    for round in 0..4 {
+        super::turn_engine::tools::handle_tool_response(
+            &client,
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            vec![crate::tools::ToolCallEnvelope {
+                call_id: format!("call-nomatch-{round}"),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({
+                    "pattern": "zzz-no-match-xyz-123",
+                    "path": root,
+                    "ignore_case": round % 2 == 0,
+                }),
+            }],
+            "",
+        )
+        .await;
+        ctx.response.final_content = "Searching for references.".to_string();
+    }
+
+    let history = state.lock().await;
+    let bodies: Vec<&str> = history
+        .history
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("[Evidence-based recovery:")),
+        "expected evidence recovery after repeated no-progress searches: {bodies:?}"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("has repeated 4 times")),
+        "parked call-repetition warning must not stack with recovery: {bodies:?}"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("last 4 tool results")),
+        "output-stagnation warning must not stack with recovery: {bodies:?}"
+    );
+}
+
+#[test]
+fn call_refs_are_empty_without_provider_ids() {
+    let calls = vec![crate::tools::ToolCall {
+        name: "grep".to_string(),
+        arguments: serde_json::json!({"pattern": "x"}),
+        call_id: None,
+    }];
+
+    // Text protocols supply no ids, so nothing structured is recorded.
+    assert!(call_refs_for(&calls, &[]).is_empty());
+
+    let refs = call_refs_for(&calls, &["call_9".to_string()]);
+    assert_eq!(refs[0].id, "call_9");
+    assert_eq!(refs[0].name, "grep");
+}
+
+#[test]
+fn call_refs_prefer_the_embedded_provider_id() {
+    let calls = vec![crate::tools::ToolCall {
+        name: "grep".to_string(),
+        arguments: serde_json::json!({"pattern": "x"}),
+        call_id: Some("native-call-1".to_string()),
+    }];
+
+    let refs = call_refs_for(&calls, &["positional-fallback".to_string()]);
+    assert_eq!(refs[0].id, "native-call-1");
+}
+
+// Regression: an oversized batch used to be replayed into history verbatim,
+// so the next turn read the model's imagined tool results ("the grep
+// confirms...") as if they had actually happened.
+#[test]
+fn truncated_batch_summary_keeps_shape_and_drops_prose() {
+    let kept = vec![
+        crate::tools::ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "duct::cmd"}),
+            call_id: None,
+        },
+        crate::tools::ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": "cargo check"}),
+            call_id: None,
+        },
+    ];
+
+    let summary = truncated_batch_summary(&kept, 14);
+
+    assert!(summary.contains("first 2 tool calls"), "got: {summary}");
+    assert!(summary.contains("grep, run_command"), "got: {summary}");
+    assert!(summary.contains("14 more were dropped"), "got: {summary}");
+    assert!(summary.contains("imagined"), "got: {summary}");
+    // Nothing from the arguments or the surrounding narration survives.
+    assert!(!summary.contains("cargo check"), "got: {summary}");
+}
+
+#[test]
+fn truncated_batch_summary_names_selectively_dropped_calls_without_arguments() {
+    let kept = vec![crate::tools::ToolCall {
+        name: "grep".to_owned(),
+        arguments: serde_json::json!({"pattern": "needle"}),
+        call_id: None,
+    }];
+    let dropped = vec![crate::tools::ToolCall {
+        name: "write_to_file".to_owned(),
+        arguments: serde_json::json!({"path": "secret.txt", "content": "secret"}),
+        call_id: None,
+    }];
+
+    let summary = super::truncated_batch_summary_with_dropped(&kept, &dropped);
+
+    assert!(
+        summary.contains("1 were dropped (write_to_file)"),
+        "got: {summary}"
+    );
+    assert!(!summary.contains("secret.txt"), "got: {summary}");
+    assert!(!summary.contains("secret"), "got: {summary}");
+}
+
+#[test]
+fn oversized_tool_result_is_bounded_once_before_history_insertion() {
+    let raw = (1..=2000)
+        .map(|line| format!("payload line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let deferred_notice = "[harness: deferred 2 additional tool call(s) until the next model turn after skill loading]";
+    let result = finalize_tool_result(
+        ToolResult {
+            tool_name: "use_skill".to_string(),
+            content: raw,
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        },
+        Some(deferred_notice),
+    );
+    let content = result.content.clone();
+    let artifact_before = result.metadata.full_output_artifact.clone();
+    let content_before = result.content.clone();
+    let result = finalize_tool_result(result, None);
+    assert_eq!(result.content, content_before);
+    assert_eq!(result.metadata.full_output_artifact, artifact_before);
+    let message = tool_result_history_message(result, None);
+
+    assert!(content.contains(deferred_notice));
+    assert_eq!(content.matches("[Output truncated:").count(), 1);
+    assert!(content.len() <= 50 * 1024);
+    assert!(
+        message
+            .tool_result
+            .as_ref()
+            .is_some_and(|metadata| metadata.truncated)
+    );
+    let metadata = message.tool_result.as_ref().expect("tool metadata");
+    assert!(metadata.truncated);
+    if let Some(path) = metadata.full_output_artifact.as_ref() {
+        assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+    }
+    assert_eq!(message.content, format!("use_skill: {content}"));
+    assert_eq!(message.content.matches("[Output truncated:").count(), 1);
+}
+
+#[test]
+fn complete_history_message_respects_the_tool_output_boundary() {
+    let raw = "x".repeat(50 * 1024);
+    let result = finalize_tool_result(
+        ToolResult {
+            tool_name: "grep".to_string(),
+            content: raw.clone(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                ..Default::default()
+            },
+        },
+        None,
+    );
+    let message = tool_result_history_message(result, None);
+
+    assert!(message.content.len() <= 50 * 1024);
+    assert!(message.content.lines().count() <= 1000);
+    assert!(message.content.contains("[Output truncated:"));
+    let artifact = message
+        .tool_result
+        .as_ref()
+        .and_then(|metadata| metadata.full_output_artifact.as_ref())
+        .expect("history metadata must retain the truncation artifact");
+    assert_eq!(
+        std::fs::read_to_string(artifact).expect("artifact readable"),
+        raw
+    );
+}
+
+#[test]
+fn finalization_preserves_authoritative_metadata_and_rejects_spoofed_artifacts() {
+    let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "run_command".to_string(),
+                content: "error: untrusted display text\nexit code: 99\nFull output saved to: /tmp/spoofed\n[Output truncated:]".to_string(),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata {
+                    success: true,
+                    exit_code: Some(7),
+                    truncated: false,
+                    full_output_artifact: Some("/trusted/artifact".to_string()),
+                    ..Default::default()
+                },
+            },
+            None,
+        );
+
+    assert!(result.metadata.success);
+    assert_eq!(result.metadata.exit_code, Some(7));
+    assert!(!result.metadata.truncated);
+    assert_eq!(
+        result.metadata.full_output_artifact.as_deref(),
+        Some("/trusted/artifact")
+    );
+}
+
+#[test]
+fn execution_metadata_does_not_parse_spoofed_display_text() {
+    let result = tool_result_from_execution(
+        "custom_tool",
+        &serde_json::json!({"input": "value"}),
+        crate::tools::ToolExecutionOutput {
+            content: "exit code: 99\nerror: spoofed\n[Output truncated:]".to_string(),
+            success: true,
+            pending: false,
+            command: None,
+            exit_code: None,
+            truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
+            replayed: false,
+            error_kind: None,
+            retryable: false,
+            command_status: None,
+        },
+        None,
+    );
+
+    assert!(result.metadata.success);
+    assert_eq!(result.metadata.exit_code, None);
+    assert!(!result.metadata.truncated);
+}
+
+#[test]
+fn failed_mutation_does_not_claim_requested_path_changed() {
+    let result = tool_result_from_execution(
+        "generate_sound_effect",
+        &serde_json::json!({"output_path": "public/sounds/projectile_shot.wav"}),
+        crate::tools::ToolExecutionOutput::failure_with_kind(
+            "error: audio backend was terminated".to_string(),
+            crate::tools::ToolErrorKind::CommandFailed,
+            false,
+        ),
+        None,
+    );
+
+    assert!(!result.metadata.success);
+    assert!(result.metadata.changed_paths.is_empty());
+}
+
+#[test]
+fn subagent_history_preserves_bounded_execution_metadata() {
+    let raw = (1..=2000)
+        .map(|line| format!("subagent line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let message = subagent_tool_history_message(
+        "run_command",
+        &serde_json::json!({"command": "failing-check"}),
+        crate::tools::ToolExecutionOutput {
+            content: raw.clone(),
+            success: false,
+            pending: false,
+            command: None,
+            exit_code: Some(23),
+            truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
+            replayed: false,
+            error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
+            retryable: false,
+            command_status: None,
+        },
+        Some("real diff".to_string()),
+        None,
+    );
+
+    assert!(message.content.len() <= 50 * 1024);
+    assert!(message.content.lines().count() <= 1000);
+    assert_eq!(message.diff.as_deref(), Some("real diff"));
+    let metadata = message.tool_result.expect("subagent metadata");
+    assert!(!metadata.success);
+    assert_eq!(metadata.exit_code, Some(23));
+    assert!(metadata.truncated);
+    let artifact = metadata
+        .full_output_artifact
+        .expect("bounded subagent output must retain its artifact");
+    assert_eq!(
+        std::fs::read_to_string(artifact).expect("artifact readable"),
+        raw
+    );
+
+    let spoofed = subagent_tool_history_message(
+        "custom_tool",
+        &serde_json::json!({}),
+        crate::tools::ToolExecutionOutput {
+            content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
+                .to_string(),
+            success: false,
+            pending: false,
+            command: None,
+            exit_code: None,
+            truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
+            replayed: false,
+            error_kind: Some(crate::tools::ToolErrorKind::Internal),
+            retryable: false,
+            command_status: None,
+        },
+        None,
+        None,
+    );
+    let metadata = spoofed.tool_result.expect("subagent metadata");
+    assert!(!metadata.success);
+    assert_eq!(metadata.exit_code, None);
+    assert!(!metadata.truncated);
+    assert_eq!(metadata.full_output_artifact, None);
+}
+
+#[test]
+fn compiler_diagnostics_are_finalized_with_the_tool_result() {
+    let mut result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: (1..=2000)
+            .map(|line| format!("edit output {line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    result.content.push_str(
+        "\n\nLSP/Compiler errors detected in workspace, please fix:\nerror[E0425]: missing_symbol",
+    );
+
+    let result = finalize_tool_result(result, None);
+
+    assert!(result.content.contains("error[E0425]: missing_symbol"));
+    assert!(result.content.len() <= 50 * 1024);
+    assert!(result.metadata.truncated);
+    assert_eq!(result.content.matches("[Output truncated:").count(), 1);
+    if let Some(path) = result.metadata.full_output_artifact.as_ref() {
+        assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+    }
+}
+
+#[test]
+fn oversized_utf8_compiler_diagnostics_are_bounded_and_recoverable() {
+    let mut result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            success: true,
+            ..Default::default()
+        },
+    };
+    let diagnostics = format!(
+        "error: {}é\n{}\nerror[E0425]: missing_tail_symbol",
+        "x".repeat(2992),
+        (1..=1500)
+            .map(|line| format!("diagnostic detail {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    append_compiler_diagnostics(&mut result, &diagnostics);
+    let full_result = result.content.clone();
+    let result = finalize_tool_result(result, None);
+
+    assert!(result.content.len() <= 50 * 1024);
+    assert!(result.content.lines().count() <= 1000);
+    assert!(result.content.contains("error[E0425]: missing_tail_symbol"));
+    assert_eq!(
+        result.metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::CompilerFailed)
+    );
+    assert!(result.metadata.retryable);
+    let artifact = result
+        .metadata
+        .full_output_artifact
+        .as_ref()
+        .expect("oversized diagnostics must have a recovery artifact");
+    assert_eq!(
+        std::fs::read_to_string(artifact).expect("artifact readable"),
+        full_result
+    );
+}
+
+#[test]
+fn history_uses_the_bounded_tool_result_without_retruncating_it() {
+    let result = finalize_tool_result(
+        ToolResult {
+            tool_name: "grep".to_string(),
+            content: (1..=2000)
+                .map(|line| format!("match {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        },
+        None,
+    );
+    let bounded = result.content.clone();
+
+    let message = tool_result_history_message(result, None);
+
+    assert_eq!(message.content, format!("grep: {bounded}"));
+    assert_eq!(message.content.matches("[Output truncated:").count(), 1);
+}
+
+#[test]
+fn malformed_native_arguments_are_bounded_for_validation() {
+    let raw = format!("{{\"pattern\":\"{}", "repeat/".repeat(4_000));
+    let value = parse_native_tool_arguments(&raw);
+    let invalid = &value["_invalid_arguments"];
+    assert_eq!(invalid["original_bytes"], raw.len());
+    assert_eq!(invalid["truncated"], true);
+    assert!(invalid["preview"].as_str().unwrap().len() <= 1024);
+    assert!(value.to_string().len() < 2_000);
+    assert!(value.get("_parse_error").is_some());
+}
+
+#[test]
+fn test_context_length_from_model_info() {
+    let info = serde_json::json!({
+        "general.architecture": "llama",
+        "llama.context_length": 262144,
+        "llama.embedding_length": 8192,
+    });
+    assert_eq!(context_length_from_model_info(&info), Some(262144));
+    assert_eq!(context_length_from_model_info(&serde_json::json!({})), None);
+}
+
+#[test]
+fn test_trim_msgs_keeps_system_and_latest() {
+    let big = "x".repeat(4000); // ~1000 tokens
+    let mut msgs: Vec<serde_json::Value> = vec![
+        serde_json::json!({"role": "system", "content": "sys"}),
+        serde_json::json!({"role": "user", "content": big.clone()}),
+        serde_json::json!({"role": "assistant", "content": big.clone()}),
+        serde_json::json!({"role": "user", "content": big.clone()}),
+    ];
+    // budget fits only ~1 big message
+    let dropped = trim_msgs_to_budget(&mut msgs, 1100);
+    assert_eq!(dropped, 2);
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["role"], "system");
+    // huge budget: nothing dropped
+    let mut msgs2: Vec<serde_json::Value> = vec![
+        serde_json::json!({"role": "system", "content": "sys"}),
+        serde_json::json!({"role": "user", "content": "hi"}),
+    ];
+    assert_eq!(trim_msgs_to_budget(&mut msgs2, 8192), 0);
+    assert_eq!(msgs2.len(), 2);
+}
+
+#[test]
+fn test_inject_system_reminder_logic() {
+    // Less than 4 messages: no reminder injected
+    let mut msgs: Vec<serde_json::Value> = vec![
+        serde_json::json!({"role": "system", "content": "sys"}),
+        serde_json::json!({"role": "user", "content": "hello"}),
+        serde_json::json!({"role": "assistant", "content": "hi"}),
+    ];
+    inject_system_reminder(&mut msgs);
+    assert_eq!(msgs.len(), 3);
+
+    // 4 or more messages: reminder is appended to the last message
+    let mut msgs2: Vec<serde_json::Value> = vec![
+        serde_json::json!({"role": "system", "content": "sys"}),
+        serde_json::json!({"role": "user", "content": "hello"}),
+        serde_json::json!({"role": "assistant", "content": "hi"}),
+        serde_json::json!({"role": "user", "content": "tell me a story"}),
+    ];
+    inject_system_reminder(&mut msgs2);
+    assert_eq!(msgs2.len(), 4);
+    assert!(
+        msgs2[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("REMINDER: Follow the configured tool protocol")
+    );
+    assert!(
+        msgs2[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("tell me a story")
+    );
+}
+
+#[test]
+fn test_parse_multimodal_content_plain() {
+    let val = parse_multimodal_content("Hello world");
+    assert_eq!(val, serde_json::Value::String("Hello world".to_string()));
+}
+
+#[test]
+fn test_parse_multimodal_content_expands_complete_paste_payload_once() {
+    let payload = "first --> second";
+    let marker = format!(
+        "before <!--PASTE:{}:{}--> after",
+        payload.chars().count(),
+        payload
+    );
+    let val = parse_multimodal_content(&marker);
+    assert_eq!(
+        val,
+        serde_json::Value::String("before first --> second after".to_string())
+    );
+}
+
+#[test]
+fn test_parse_multimodal_content_with_image_nonexistent() {
+    let val = parse_multimodal_content(
+        "Look at this: ![image](file:///nonexistent/path.png) interesting!",
+    );
+    assert!(val.is_array());
+    let arr = val.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    assert_eq!(arr[0]["type"], "text");
+    assert_eq!(arr[0]["text"], "Look at this: ");
+    assert_eq!(arr[1]["type"], "text");
+    assert_eq!(arr[1]["text"], "![image](file:///nonexistent/path.png)");
+    assert_eq!(arr[2]["type"], "text");
+    assert_eq!(arr[2]["text"], " interesting!");
+}
+
+#[tokio::test]
+async fn test_confirm_and_execute_bypassed() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.agent_mode = crate::config::AgentMode::Build;
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let args = serde_json::json!({
+        "path": "sandbox/test_bypass.txt",
+        "content": "bypassed content",
+        "overwrite": true
+    });
+
+    let (result, _, _) = confirm_and_execute(
+        &client,
+        &state,
+        &cancel_token,
+        "write_to_file",
+        &args,
+        "write_to_file",
+        true,
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        result.content.contains("wrote")
+            || result.content.contains("created")
+            || result.content.contains("test_bypass.txt"),
+        "got result: {}",
+        result.content
+    );
+
+    let _ = std::fs::remove_file("sandbox/test_bypass.txt");
+}
+
+#[tokio::test]
+async fn question_prompt_transitions_invalidate_render_metrics_once() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let state_for_task = Arc::clone(&state);
+    let cancel_for_task = cancel_token.clone();
+    let task = tokio::spawn(async move {
+        super::tool_exec::ask_user_question(
+            &state_for_task,
+            &cancel_for_task,
+            &serde_json::json!({
+                "question": "Continue?",
+                "options": ["Proceed", "Cancel"]
+            }),
+        )
+        .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_question.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("question prompt should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a question should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .question_response
+        .take()
+        .expect("question response channel");
+    response
+        .send("Proceed".to_owned())
+        .expect("question task alive");
+    task.await.expect("question task should finish");
+
+    let s = state.lock().await;
+    assert!(s.pending_question.is_none());
+    assert_eq!(s.status, AppStatus::Streaming);
+    assert_eq!(
+        s.render_snapshot().revision(),
+        awaiting_revision.wrapping_add(1),
+        "clearing a question should invalidate one additional render revision"
+    );
+}
+
+#[tokio::test]
+async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    let state = Arc::new(Mutex::new(app));
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let state_for_task = Arc::clone(&state);
+    let cancel_for_task = cancel_token.clone();
+    let task = tokio::spawn(async move {
+        super::tool_exec::confirm_and_execute(
+            &client,
+            &state_for_task,
+            &cancel_for_task,
+            "write_to_file",
+            &serde_json::json!({
+                "path": "sandbox/render-metrics-confirmation.txt",
+                "content": "content"
+            }),
+            "write_to_file",
+            false,
+            None,
+            None,
+        )
+        .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_tool_confirmation.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("confirmation should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a tool confirmation should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("confirmation response channel");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("confirmation task alive");
+    let _ = task.await.expect("confirmation task should finish");
+
+    let s = state.lock().await;
+    assert!(s.pending_tool_confirmation.is_none());
+    assert_eq!(s.status, AppStatus::Streaming);
+    assert_eq!(
+        s.render_snapshot().revision(),
+        awaiting_revision.wrapping_add(1),
+        "clearing a tool confirmation should invalidate one additional render revision"
+    );
+}
+
+#[tokio::test]
+async fn interactive_confirmation_publication_invalidates_render_metrics_once() {
+    use crate::network::policy::TurnPolicy;
+
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    let state = Arc::new(Mutex::new(app));
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let calls = vec![crate::tools::ToolCall {
+        name: "write_to_file".to_owned(),
+        arguments: serde_json::json!({
+            "path": "sandbox/render-metrics.txt",
+            "content": "content"
+        }),
+        call_id: None,
+    }];
+    let state_for_task = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        super::policy::InteractivePolicy
+            .should_approve(&state_for_task, &calls)
+            .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_tool_confirmation.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("confirmation should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a confirmation should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("confirmation response channel");
+    response
+        .send(crate::app::ToolConfirmationResponse::Deny)
+        .expect("confirmation task alive");
+    assert!(!task.await.expect("confirmation task should finish"));
+}
+
+#[tokio::test]
+async fn test_compact_history_strips_thinking_blocks() {
+    // #985 immutable-history contract: `<think>` blocks stay verbatim in
+    // storage and are stripped only at request-render time
+    // (`history::to_messages`), so compaction must not rewrite them.
+    let mut history = vec![
+        crate::app::ChatMessage::new(
+            "assistant",
+            "<think>\nThinking about files...\n</think>\nHere is the answer",
+        ),
+        crate::app::ChatMessage::new("tool", "tool output"),
+    ];
+    compact_history_to_budget(&mut history, 5000).await;
+    assert_eq!(
+        history[0].content,
+        "<think>\nThinking about files...\n</think>\nHere is the answer"
+    );
+    assert_eq!(history[1].content, "tool output");
+    let rendered = history::to_messages(&history, "system");
+    assert!(
+        rendered
+            .iter()
+            .any(|m| m.get("content").and_then(|c| c.as_str()) == Some("Here is the answer")),
+        "rendered request must strip the think block without touching storage"
+    );
+}
+
+#[test]
+fn test_classify_tool_msg() {
+    assert_eq!(
+        classify_tool_msg(&ChatMessage::new("tool", "run_command: done")),
+        Some("throwaway")
+    );
+    assert_eq!(
+        classify_tool_msg(&ChatMessage::new("tool", "grep: match")),
+        Some("throwaway")
+    );
+    assert_eq!(
+        classify_tool_msg(&ChatMessage::new("tool", "view_file: [File: x]")),
+        Some("file")
+    );
+    assert_eq!(
+        classify_tool_msg(&ChatMessage::new("tool", "get_weather: sunny")),
+        Some("other")
+    );
+    assert_eq!(
+        classify_tool_msg(&ChatMessage::new("assistant", "hi")),
+        None
+    );
+}
+
+#[test]
+fn test_tool_signature_buckets_full_reads() {
+    let full_default = serde_json::json!({"path": "src/main.rs"});
+    let full_start1 = serde_json::json!({"path": "src/main.rs", "start_line": 1});
+    let paged = serde_json::json!({"path": "src/main.rs", "start_line": 500, "end_line": 1000});
+    let other = serde_json::json!({"path": "src/other.rs"});
+    // Two full/default reads of the same file collapse to one signature.
+    assert_eq!(
+        tool_signature("view_file", &full_default),
+        tool_signature("view_file", &full_start1)
+    );
+    // A distinct explicit page is its own signature.
+    assert_ne!(
+        tool_signature("view_file", &full_default),
+        tool_signature("view_file", &paged)
+    );
+    assert_ne!(
+        tool_signature("view_file", &full_default),
+        tool_signature("view_file", &other)
+    );
+}
+
+#[test]
+fn test_tool_signature_normalizes_equivalent_shell_reads() {
+    let view = serde_json::json!({"path": "js/main.js", "start_line": 1, "end_line": 40});
+    let sed = serde_json::json!({"command": "sed -n '1,40p' js/main.js"});
+    let awk = serde_json::json!({"command": "awk 'NR>=1 && NR<=40' js/main.js"});
+    let unrelated = serde_json::json!({"command": "sed -n '41,80p' js/main.js"});
+
+    assert_eq!(
+        tool_signature("view_file", &view),
+        tool_signature("run_command", &sed)
+    );
+    assert_eq!(
+        tool_signature("run_command", &sed),
+        tool_signature("run_command", &awk)
+    );
+    assert_ne!(
+        tool_signature("run_command", &sed),
+        tool_signature("run_command", &unrelated)
+    );
+}
+
+#[test]
+fn shell_file_reads_are_repeatable_read_only_calls() {
+    for command in [
+        "cat js/main.js",
+        "sed -n '1,40p' js/main.js",
+        "awk 'NR>=1 && NR<=40' js/main.js",
+    ] {
+        let args = serde_json::json!({"command": command});
+        assert!(
+            loop_detect::is_read_only_call("run_command", &args),
+            "expected read-only classification for {command}"
+        );
+    }
+}
+
+#[test]
+fn test_is_read_only_tool() {
+    assert!(is_read_only_tool("view_file"));
+    assert!(is_read_only_tool("grep"));
+    assert!(!is_read_only_tool("write_to_file"));
+    assert!(!is_read_only_tool("run_command"));
+    assert!(!is_read_only_tool("todo_write"));
+}
+
+#[test]
+fn test_delegation_is_checked_as_potentially_mutating() {
+    assert!(is_mutating_tool("spawn_agent"));
+    assert!(is_mutating_tool("send_agent"));
+    assert!(is_mutating_tool("write_file_chunk"));
+    assert!(!is_mutating_tool("todo_write"));
+}
+
+// --- Feature 3: loop-detector reset only on real mutation progress ---
+
+#[test]
+fn mutation_made_progress_true_for_real_change() {
+    // A genuine successful edit is progress: content doesn't start with
+    // "error" and doesn't report a no-op.
+    assert!(mutation_made_progress(true, "Applied edit to src/main.rs"));
+}
+
+#[test]
+fn mutation_made_progress_false_for_failure() {
+    assert!(!mutation_made_progress(
+        false,
+        "Applied edit to src/main.rs"
+    ));
+    assert!(!mutation_made_progress(
+        true,
+        "Error: no match found for old_string"
+    ));
+}
+
+#[test]
+fn mutation_made_progress_false_for_already_applied_noop() {
+    // PR #306: replace_file_content is idempotent and reports success
+    // with "already applied" when nothing changed. That must NOT count
+    // as progress, or a repeated no-op edit could reset every budget
+    // and the loop detector forever.
+    assert!(!mutation_made_progress(
+        true,
+        "Edit already applied — no changes made"
+    ));
+    // Case-insensitive, per PR #306's contract.
+    assert!(!mutation_made_progress(
+        true,
+        "ALREADY APPLIED: no-op, file unchanged"
+    ));
+}
+
+#[test]
+fn failure_replan_message_preserves_workspace_safety_and_requests_different_approach() {
+    let message = failure_replan_message("replace_file_content", "edit:src/GameScene.ts", 2);
+    assert!(message.contains("2 equivalent mutation attempts"));
+    assert!(message.contains("changed no files"));
+    assert!(message.contains("Do not retry the same edit"));
+    assert!(message.contains("materially different safe approach"));
+    assert!(message.contains("explain the exact blocker"));
+}
+
+#[test]
+fn benchmark_summary_includes_failure_replan_metric() {
+    let mut ctx = TurnContext::new();
+    ctx.metrics.failure_replans = 1;
+    let summary = ctx.benchmark_summary();
+    assert_eq!(summary["failure_replans"], 1);
+    assert!(mutation_made_progress(
+        true,
+        "Applied edit to src/GameScene.ts"
+    ));
+}
+
+#[test]
+fn repeated_compiler_diagnostics_increment_and_reset_their_streak() {
+    let mut ctx = TurnContext::new();
+    let first = "edit applied\n\nLSP/Compiler errors detected in workspace, please fix:\nsrc/GameScene.ts(89,5): error TS2554: Expected 1 arguments, but got 2.";
+    let changed = "edit applied\n\nLSP/Compiler errors detected in workspace, please fix:\nsrc/GameScene.ts(95,5): error TS2339: Property 'unsubscribe' does not exist.";
+
+    update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
+    update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
+    update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(changed));
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
+    update_compiler_diagnostic_streak(&mut ctx, None);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+    assert!(ctx.compiler.last_diagnostic_fingerprint.is_none());
+}
+
+#[test]
+fn repeated_compiler_diagnostics_trigger_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.compiler.consecutive_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
+            assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
+        }
+        other => panic!("expected CompilerDiagnostics limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn benchmark_summary_contains_metrics_and_stop_reason() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tool_rounds = 7;
+    ctx.budget.tokens_used = 1234;
+    ctx.metrics.tool_calls = 9;
+    ctx.metrics.malformed_calls = 2;
+    ctx.metrics.no_progress_results = 3;
+    ctx.metrics.grounded_recoveries = 1;
+    ctx.metrics.provider_errors = 1;
+    ctx.metrics.provider_429s = 1;
+    ctx.progress
+        .changed_paths
+        .insert("src/GameScene.ts".to_string());
+    ctx.progress.phase_checkpoint = Some("Phase 3: verify placement".to_string());
+    ctx.response.last_stream_termination = Some(lifecycle::StreamTermination::ClientBudget);
+    ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
+
+    let summary = ctx.benchmark_summary();
+    assert_eq!(summary["tool_rounds"], 7);
+    assert_eq!(summary["tokens_used"], 1234);
+    assert_eq!(summary["tool_calls"], 9);
+    assert_eq!(summary["provider_429s"], 1);
+    assert_eq!(summary["grounded_recoveries"], 1);
+    assert_eq!(summary["changed_paths"][0], "src/GameScene.ts");
+    assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
+    assert_eq!(summary["last_stream_termination"], "client_budget");
+    assert_eq!(summary["stop_reason"], "provider_error:429");
+    assert_eq!(summary["segment_count"], 1);
+    assert_eq!(summary["segment_rounds"], 7);
+    assert!(summary["effective_segment_limit"].is_null());
+    assert!(summary["effective_total_round_limit"].is_null());
+    // Provider cache telemetry rides along so long-task prefix stability
+    // (cold vs reused) is visible per turn without extra logging.
+    assert_eq!(summary["prefix_cache"], "cold");
+    assert_eq!(summary["prefix_context_updates"], 0);
+}
+
+#[test]
+fn provider_error_metrics_distinguish_quota_exhaustion() {
+    let mut ctx = TurnContext::new();
+    record_provider_error(&mut ctx, "429 Too Many Requests");
+    record_provider_error(&mut ctx, "502 Bad Gateway");
+    assert_eq!(ctx.metrics.provider_errors, 2);
+    assert_eq!(ctx.metrics.provider_429s, 1);
+    assert_eq!(
+        ctx.lifecycle
+            .stop_reason
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("provider_error:429")
+    );
+}
+
+#[test]
+fn active_todo_is_the_current_phase_checkpoint() {
+    let todos = vec![
+        crate::app::TodoItem {
+            content: "Scaffold".to_string(),
+            status: "completed".to_string(),
+            priority: "high".to_string(),
+        },
+        crate::app::TodoItem {
+            content: "Verify placement".to_string(),
+            status: "in_progress".to_string(),
+            priority: "high".to_string(),
+        },
+    ];
+    assert_eq!(
+        active_todo_checkpoint(&todos).as_deref(),
+        Some("Verify placement")
+    );
+}
+
+#[test]
+fn real_edit_resets_loop_detector() {
+    // Regression guard for existing behavior: a genuine successful edit
+    // must still be able to reset the detector so post-edit re-reads
+    // start with a clean slate (test 1 + test 4 from the task spec).
+    let mut d = loop_detect::LoopDetector::new(4);
+    for start in [250, 260, 250] {
+        let (e, c) = loop_detect::signatures(
+            "view_file",
+            &serde_json::json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+        );
+        d.check(&e, &c);
+    }
+    assert!(mutation_made_progress(true, "Applied edit to src/big.rs"));
+    d.reset();
+    // A follow-up read cycle (read/edit/read) starts clean, not carrying
+    // over the pre-edit repeat history.
+    let (e, c) = loop_detect::signatures(
+        "view_file",
+        &serde_json::json!({"path": "src/big.rs", "start_line": 255, "end_line": 305}),
+    );
+    assert_eq!(
+        d.check(&e, &c),
+        loop_detect::LoopStatus::Ok,
+        "genuine progress must still reset the detector"
+    );
+}
+
+#[test]
+fn noop_edit_does_not_reset_loop_detector() {
+    // Core regression test: a successful but no-op edit (already
+    // applied) must NOT reset the detector, matching how a failed edit
+    // is treated — otherwise a model resubmitting the same already-
+    // applied edit forever would never trip the detector.
+    assert!(!mutation_made_progress(
+        true,
+        "already applied: no changes made"
+    ));
+
+    let mut d = loop_detect::LoopDetector::new(4);
+    for start in [250, 260, 250] {
+        let (e, c) = loop_detect::signatures(
+            "view_file",
+            &serde_json::json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+        );
+        d.check(&e, &c);
+    }
+    // A no-op "success" must not clear the accumulated repeat state.
+    // (mutation_made_progress being false is exactly what gates the
+    // reset call in run_single_turn.)
+    let (e, c) = loop_detect::signatures(
+        "view_file",
+        &serde_json::json!({"path": "src/big.rs", "start_line": 255, "end_line": 305}),
+    );
+    // Without a reset, this repeat continues to accumulate toward abort
+    // rather than starting over at Ok.
+    assert_ne!(
+        d.check(&e, &c),
+        loop_detect::LoopStatus::Ok,
+        "no-op edit must not have cleared prior repeat state"
+    );
+}
+
+#[test]
+fn repeated_noop_edits_accumulate_toward_abort_instead_of_resetting() {
+    // Core regression test for the bug: a model that keeps re-sending
+    // the identical edit request, which now no-ops via PR #306's
+    // idempotency, must still trip the loop detector because
+    // mutation_made_progress gates the reset — no-op "successes" are
+    // never allowed to reset it.
+    let mut d = loop_detect::LoopDetector::new(4); // warn at 2, abort at 4
+    let mut last = loop_detect::LoopStatus::Ok;
+    for _ in 0..4 {
+        let (e, c) = loop_detect::signatures(
+            "replace_file_content",
+            &serde_json::json!({"path": "src/main.rs", "old_string": "foo", "new_string": "bar"}),
+        );
+        last = d.check(&e, &c);
+        // Simulate the harness: each round reports success with
+        // "already applied", so mutation_made_progress is false and the
+        // detector is never reset between iterations of this loop.
+        assert!(!mutation_made_progress(
+            true,
+            "already applied: no changes made"
+        ));
+    }
+    assert_eq!(
+        last,
+        loop_detect::LoopStatus::Abort(4),
+        "identical no-op edits must accumulate to abort, not reset every round"
+    );
+}
+
+#[test]
+fn alternating_failed_and_noop_edits_never_reset_and_eventually_abort() {
+    // Neither a failed edit nor a no-op edit is progress, so alternating
+    // between two distinct edit attempts (one that fails, one that
+    // no-ops as already-applied) must still accumulate toward the
+    // detector's abort threshold via the frequency signal — since
+    // neither outcome ever calls reset(), unlike a real change would.
+    let mut d = loop_detect::LoopDetector::new(4); // frequency window = 8
+    let mut last = loop_detect::LoopStatus::Ok;
+    let outcomes = [
+        (
+            false,
+            "Error: no match found for old_string",
+            "old_string_a",
+        ),
+        (true, "already applied: no changes made", "old_string_b"),
+        (
+            false,
+            "Error: no match found for old_string",
+            "old_string_a",
+        ),
+        (true, "already applied: no changes made", "old_string_b"),
+        (
+            false,
+            "Error: no match found for old_string",
+            "old_string_a",
+        ),
+        (true, "already applied: no changes made", "old_string_b"),
+        (
+            false,
+            "Error: no match found for old_string",
+            "old_string_a",
+        ),
+        (true, "already applied: no changes made", "old_string_b"),
+    ];
+    for (success, content, old_string) in outcomes {
+        assert!(
+            !mutation_made_progress(success, content),
+            "neither failure nor no-op should count as progress"
+        );
+        let (e, c) = loop_detect::signatures(
+            "replace_file_content",
+            &serde_json::json!({"path": "src/main.rs", "old_string": old_string, "new_string": "bar"}),
+        );
+        last = d.check(&e, &c);
+        // The harness only calls reset() when mutation_made_progress is
+        // true; since it never is here, the detector state must survive
+        // every round instead of restarting from Ok.
+    }
+    assert_eq!(
+        last,
+        loop_detect::LoopStatus::Abort(8),
+        "alternating failure/no-op must eventually abort since neither resets"
+    );
+}
+
+#[test]
+fn test_view_file_repeat_is_mtime_aware() {
+    let t0 = std::time::SystemTime::now();
+    let t1 = t0 + std::time::Duration::from_secs(30);
+    // Never read before -> not a repeat (allow the first read).
+    assert!(!view_file_unchanged_since_last_read(None, Some(t0)));
+    // Read before, unchanged -> repeat (block redundant re-read).
+    assert!(view_file_unchanged_since_last_read(Some(t0), Some(t0)));
+    // Read before, file changed on disk -> not a repeat (allow refresh).
+    assert!(!view_file_unchanged_since_last_read(Some(t0), Some(t1)));
+    // File gone/unstatable after a read -> not a repeat (let it proceed/error naturally).
+    assert!(!view_file_unchanged_since_last_read(Some(t0), None));
+}
+
+#[tokio::test]
+async fn test_compact_prunes_throwaway_before_file_contents() {
+    // #985 immutable-history contract: stored messages are append-only.
+    // Context pressure is absorbed by FIFO head compaction (the head becomes
+    // a deterministic record) — never by rewriting retained tool outputs in
+    // place. The retained tail must stay byte-identical.
+    let big_cmd = format!(
+        "run_command: {}",
+        (0..60)
+            .map(|i| format!("output line number {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let file = "view_file: [File: src/main.rs, Lines 1 to 5 of 5]\n1: a\n2: b\n3: c\n4: d\n5: e";
+    let mut history = vec![
+        ChatMessage::new("user", "original goal: keep working on src/main.rs"),
+        ChatMessage::new("assistant", "plan: inspect the build output first"),
+        ChatMessage::new("tool", big_cmd),
+        ChatMessage::new("user", "noted; now check the current file contents"),
+        ChatMessage::new("assistant", "reading the file"),
+        ChatMessage::new("tool", file.to_string()),
+        ChatMessage::new("assistant", "working from the file contents"),
+        ChatMessage::new("user", "current follow-up: continue"),
+    ];
+    let original = history.clone();
+    // Budget forces compaction; the head absorbs the cut so the retained
+    // tail survives byte-identical.
+    assert!(compact_history_to_budget(&mut history, 80).await);
+    assert!(
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
+        history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
+    );
+}
+
+#[tokio::test]
+async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
+    // #985 immutable-history contract: same-class outputs are never excerpted
+    // in place. Pressure is absorbed by the head record; whatever tail is
+    // retained keeps its exact original bytes.
+    let old = format!(
+        "run_command: old output\n{}",
+        (0..80)
+            .map(|i| format!("old diagnostic line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let new = format!(
+        "grep: new output\n{}",
+        (0..80)
+            .map(|i| format!("new diagnostic line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut history = vec![
+        ChatMessage::new("user", "original goal: diagnose the failure"),
+        ChatMessage::new("assistant", "plan: collect diagnostics"),
+        ChatMessage::new("tool", old),
+        ChatMessage::new("user", "noted; now check the newer result"),
+        ChatMessage::new("assistant", "reading the latest output"),
+        ChatMessage::new("tool", new),
+        ChatMessage::new("assistant", "analyzing the latest diagnostics"),
+        ChatMessage::new("user", "current follow-up: report findings"),
+    ];
+    let original = history.clone();
+
+    assert!(compact_history_to_budget(&mut history, 70).await);
+
+    assert!(
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
+        history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
+    );
+}
+
+#[tokio::test]
+async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
+    let mut history = Vec::new();
+    for round in 0..10 {
+        history.push(ChatMessage::new(
+            "user",
+            if round == 0 {
+                "original goal: repair the parser without changing the public API".to_string()
+            } else {
+                format!("follow-up {round}: continue the parser repair")
+            },
+        ));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!(
+                "Decision {round}: inspect the parser state and preserve the existing error contract. {}",
+                "architecture detail ".repeat(40)
+            ),
+        ));
+        history.push(
+            ChatMessage::new(
+                "tool",
+                format!(
+                    "run_command: compiler failure round {round}\n{}",
+                    "diagnostic ".repeat(120)
+                ),
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "run_command".to_string(),
+                success: false,
+                error_kind: Some("CompilerFailed".to_string()),
+                changed_paths: vec!["src/parser.rs".to_string()],
+                ..Default::default()
+            }),
+        );
+    }
+
+    compact_history_to_budget(&mut history, 500).await;
+
+    let record = history
+        .iter()
+        .find(|message| {
+            message
+                .content
+                .starts_with("[Deterministic context record]")
+        })
+        .expect("over-budget local history should get a deterministic record");
+    assert!(record.content.contains("original goal: repair the parser"));
+    assert!(record.content.contains("src/parser.rs"));
+    assert!(record.content.contains("CompilerFailed"));
+    assert!(
+        history
+            .iter()
+            .any(|message| message.content.contains("follow-up 9"))
+    );
+
+    let mut provider_messages = history::to_messages(&history, "system prompt");
+    trim_msgs_to_budget(&mut provider_messages, 500);
+    assert!(provider_messages.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(|content| content.as_str())
+            .is_some_and(|content| content.contains("original goal: repair the parser"))
+    }));
+}
+
+#[tokio::test]
+async fn local_context_preserves_task_state_across_model_window_sizes() {
+    for budget in [4_096, 8_192, 32_768, 128_000, 262_144] {
+        let mut history = vec![ChatMessage::new(
+            "system",
+            "# Project instructions\nRun cargo test after edits; do not change the public API.",
+        )];
+        for round in 0..18 {
+            history.push(ChatMessage::new(
+                "user",
+                if round == 0 {
+                    "original task: repair the parser while preserving the public API".to_string()
+                } else if round == 17 {
+                    "current follow-up: resolve the remaining parser compiler error and verify it"
+                        .to_string()
+                } else {
+                    format!("inspect parser phase {round}")
+                },
+            ));
+            history.push(ChatMessage::new(
+                "assistant",
+                format!("decision {round}: keep the parser architecture and inspect diagnostics"),
+            ));
+            let result = if round == 17 {
+                "run_command: cargo test --lib\nverification succeeded after the latest parser edit"
+            } else {
+                "run_command: cargo test\nerror: unresolved parser diagnostic\ncompiler output follows\n"
+            };
+            history.push(
+                ChatMessage::new(
+                    "tool",
+                    if round == 17 {
+                        result.to_string()
+                    } else {
+                        format!("{result}{}", "diagnostic detail ".repeat(500))
+                    },
+                )
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: "run_command".to_string(),
+                    success: round == 17,
+                    error_kind: (!round.eq(&17)).then(|| "CompilerFailed".to_string()),
+                    exit_code: Some(if round == 17 { 0 } else { 1 }),
+                    changed_paths: vec!["src/parser.rs".to_string()],
+                    ..Default::default()
+                }),
+            );
+        }
+
+        compact_history_to_budget(&mut history, budget).await;
+        let mut messages = history::to_messages(&history, "system prompt");
+        inject_system_reminder(&mut messages);
+        trim_msgs_to_budget(&mut messages, budget);
+        let request_tokens = messages
+            .iter()
+            .map(crate::network::messages::estimate_msg_tokens)
+            .sum::<u32>();
+        assert!(
+            request_tokens <= budget,
+            "budget={budget}, tokens={request_tokens}"
+        );
+        let rendered = messages
+            .iter()
+            .filter_map(|message| message.get("content").and_then(|content| content.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("original task: repair the parser"),
+            "budget={budget}"
+        );
+        assert!(
+            rendered.contains("current follow-up: resolve"),
+            "budget={budget}"
+        );
+        assert!(rendered.contains("Project instructions"), "budget={budget}");
+        assert!(
+            rendered.contains("do not change the public API"),
+            "budget={budget}"
+        );
+        assert!(rendered.contains("src/parser.rs"), "budget={budget}");
+        assert!(
+            rendered.contains("verification succeeded"),
+            "budget={budget}"
+        );
+    }
+}
+
+#[test]
+fn cancellation_persists_completed_results_and_typed_missing_results() {
+    let calls = vec![
+        crate::app::ToolCallRef {
+            id: "call_done".to_string(),
+            name: "grep".to_string(),
+            arguments: "{}".to_string(),
+        },
+        crate::app::ToolCallRef {
+            id: "call_cancelled".to_string(),
+            name: "run_command".to_string(),
+            arguments: "{}".to_string(),
+        },
+    ];
+    let mut history =
+        vec![ChatMessage::new("assistant", "native calls").with_tool_calls(calls.clone())];
+    turn_engine::append_cancelled_batch_results(
+        &mut history,
+        vec![ToolResult {
+            tool_name: "grep".to_string(),
+            content: "grep: found".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                ..Default::default()
+            },
+        }],
+        &calls,
+    );
+
+    assert_eq!(history[1].tool_call_id.as_deref(), Some("call_done"));
+    assert!(history[1].tool_result.as_ref().unwrap().success);
+    assert_eq!(history[2].tool_call_id.as_deref(), Some("call_cancelled"));
+    assert_eq!(
+        history[2].tool_result.as_ref().unwrap().parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Cancelled)
+    );
+
+    let messages = history::to_messages(&history, "system");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_done");
+    assert_eq!(messages[2]["tool_call_id"], "call_done");
+    assert_eq!(messages[3]["tool_call_id"], "call_cancelled");
+}
+
+#[tokio::test]
+async fn test_run_compiler_check_success() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let check = run_compiler_check(&cwd, &tokio_util::sync::CancellationToken::new()).await;
+    assert!(check.is_none());
+}
+
+#[test]
+fn proactive_history_budget_leaves_soft_target_headroom() {
+    let profile = crate::config::ModelProfile {
+        name: "local".to_string(),
+        url: "http://example.test/v1".to_string(),
+        model: "model".to_string(),
+        context_window: Some(32_768),
+        soft_context_target: Some(24_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(1_024),
+        ..Default::default()
+    };
+    let budget = profile.context_budget();
+    let proactive = super::proactive_history_budget(&budget);
+
+    assert!(proactive < budget.history_tokens);
+    assert_eq!(
+        proactive,
+        (24_000 - budget.tool_reserve - 1_024 - 2_048)
+            .min(budget.history_tokens.saturating_sub(1).max(1))
+    );
+}
+
+#[test]
+fn project_root_from_relative_file_is_a_real_directory() {
+    let root = get_tool_project_root("delete_file", &serde_json::json!({"path": "src/temp.rs"}))
+        .expect("should find project root for workspace file");
+    assert!(root.is_absolute());
+    assert!(root.is_dir());
+    assert!(root.join("Cargo.toml").exists());
+
+    let tmp_root = get_tool_project_root(
+        "write_to_file",
+        &serde_json::json!({"path": "/tmp/scratch.py"}),
+    );
+    assert!(tmp_root.is_none());
+}
+
+// Regression: session 1785600769226. 25 loop warnings were written to
+// history and none reached the model — the request filter kept only
+// user/assistant/tool. The harness spent the session correcting a model that
+// could not hear it.
+#[test]
+fn harness_notes_reach_the_model_but_session_chatter_does_not() {
+    let warning = ChatMessage::new(
+        "system",
+        "[Loop warning: this action has repeated 5 times.]",
+    );
+    let summary = ChatMessage::new(
+        "system",
+        format!("{}earlier work", crate::network::compaction::SUMMARY_MARKER),
+    );
+    let chatter = ChatMessage::new("system", "Switched to model profile 'gemini-3.6-flash'");
+
+    assert!(is_model_directed_note(&warning));
+    assert!(is_model_directed_note(&summary));
+    // TUI-only noise stays out of the prompt.
+    assert!(!is_model_directed_note(&chatter));
+    assert!(!is_model_directed_note(&ChatMessage::new(
+        "user",
+        "[not a system note]"
+    )));
+}
+
+#[test]
+fn validation_rejection_keeps_detailed_history_and_model_diagnostics() {
+    let detail = "[Tool call rejected before execution: invalid arguments for 'reply_to_chat_message'. Schema path: $.message_id is required. Expected arguments for 'reply_to_chat_message' use these keys: [\"chat_name\", \"confirm\", \"message\", \"message_id\"]. Example: {...}] Emit one corrected tool call.";
+    let history = vec![ChatMessage::new("system", detail)];
+
+    assert_eq!(history[0].content, detail);
+    assert!(is_model_directed_note(&history[0]));
+    let provider_messages = history::to_messages(&history, "system prompt");
+    assert!(provider_messages.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| content.contains("$.message_id is required"))
+    }));
+}
+
+#[test]
+fn loop_abort_allows_bounded_recoveries_before_forced_final() {
+    // #984: the harness offers several guided nudges with tools enabled
+    // before the terminal lockout, instead of disabling tools after one strike.
+    assert_eq!(loop_recovery_action(0), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(1), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(2), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(3), LoopRecoveryAction::ForceFinal);
+    assert_eq!(
+        loop_recovery_action(u8::MAX),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert!(LOOP_RECOVERY_PROMPT.contains("Tools remain enabled"));
+    assert!(!LOOP_RECOVERY_PROMPT.contains("```tool"));
+    assert_eq!(
+        loop_recovery_action_for(3, false),
+        LoopRecoveryAction::ForceFinal,
+        "non-read-only loop recovery keeps its existing escalation"
+    );
+}
+
+#[test]
+fn repeated_read_only_inspection_has_a_larger_but_finite_recovery_budget() {
+    let call = crate::tools::ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({
+            "path": "src/network.rs",
+            "start_line": 1,
+            "end_line": 20
+        }),
+        call_id: None,
+    };
+    let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
+    let read_only_batch = loop_detect::is_read_only_call(&call.name, &call.arguments);
+    assert!(read_only_batch);
+    let mut detector = loop_detect::LoopDetector::new(6);
+    for _ in 0..6 {
+        let _ = detector.check_tool(&call.name, &exact, &category);
+    }
+
+    assert!(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS > MAX_LOOP_RECOVERY_ROUNDS);
+    assert_eq!(
+        loop_recovery_action_for(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS - 1, read_only_batch),
+        LoopRecoveryAction::Recover,
+        "a detected read loop gets one more chance than a mutating loop"
+    );
+    assert_eq!(
+        loop_recovery_action_for(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS, read_only_batch),
+        LoopRecoveryAction::ForceFinal,
+        "detector resets must not make read-only recovery unbounded"
+    );
+    assert_eq!(
+        loop_recovery_action_for(u8::MAX, read_only_batch),
+        LoopRecoveryAction::ForceFinal
+    );
+}
+
+#[test]
+fn canonical_structured_read_only_classification_beats_name_only_fallback() {
+    let call = crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "git status --short"}),
+        call_id: Some("alias-regression".to_string()),
+    };
+    assert!(crate::tools::is_read_only_call(&call));
+    assert!(!loop_detect::is_read_only(&call.name));
+}
+
+#[test]
+fn loop_warnings_are_coalesced_within_a_user_turn() {
+    let mut history = vec![
+        ChatMessage::new("user", "do it"),
+        ChatMessage::new("system", "[Loop warning: first]"),
+        ChatMessage::new("assistant", "trying again"),
+        ChatMessage::new("tool", "same output"),
+    ];
+
+    push_or_replace_loop_warning(&mut history, "[Loop warning: updated]".to_string());
+
+    let warnings = history
+        .iter()
+        .filter(|message| message.content.starts_with("[Loop warning:"))
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].content, "[Loop warning: updated]");
+}
+
+#[test]
+fn recovery_notices_are_coalesced_without_dropping_tool_history() {
+    let mut history = vec![ChatMessage::new("user", "inspect and fix")];
+    for round in 0..100 {
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("tool call round {round}"),
+        ));
+        history.push(ChatMessage::new("tool", format!("result {round}")));
+        push_or_replace_recovery_notice(
+            &mut history,
+            format!("[Evidence-based recovery: round {round}]\nUse a different step."),
+        );
+    }
+
+    let recovery_count = history
+        .iter()
+        .filter(|message| message.content.starts_with("[Evidence-based recovery:"))
+        .count();
+    assert_eq!(recovery_count, 1);
+    assert_eq!(history.len(), 202, "assistant/tool evidence remains intact");
+    assert!(history.last().unwrap().content.contains("result 99"));
+    assert!(
+        history.iter().any(|message| message.content
+            == "[Evidence-based recovery: round 99]\nUse a different step.")
+    );
+}
+
+// Regression: hoisting every system message into the prompt filed each loop
+// warning 12k characters away from the call it was about.
+#[test]
+fn a_mid_conversation_note_keeps_its_place() {
+    let raw = vec![
+        serde_json::json!({"role": "system", "content": "the prompt"}),
+        serde_json::json!({"role": "user", "content": "do it"}),
+        serde_json::json!({"role": "assistant", "content": "reading"}),
+        serde_json::json!({"role": "system", "content": "[Loop warning: repeated 5 times.]"}),
+    ];
+
+    let aligned = align_alternating_messages(raw);
+
+    assert_eq!(aligned[0]["role"], "system");
+    assert_eq!(aligned[0]["content"], "the prompt");
+    // The note stays after the turn it is about, carried as user text so
+    // providers that demand strict alternation still accept it.
+    let last = aligned.last().expect("note survives");
+    assert_eq!(last["role"], "user");
+    assert!(last["content"].as_str().unwrap().contains("Loop warning"));
+}
+
+#[test]
+fn structured_tool_calls_survive_alignment() {
+    let raw = vec![
+        serde_json::json!({"role": "user", "content": "find it"}),
+        serde_json::json!({
+            "role": "assistant",
+            "content": serde_json::Value::Null,
+            "tool_calls": [{"id": "call_1", "type": "function",
+                            "function": {"name": "grep", "arguments": "{}"}}],
+        }),
+        serde_json::json!({"role": "assistant", "content": "on it"}),
+    ];
+
+    let aligned = align_alternating_messages(raw);
+
+    // The call-carrying message is never folded into its neighbour.
+    assert_eq!(aligned[1]["tool_calls"][0]["id"], "call_1");
+    assert_eq!(aligned[2]["content"], "on it");
+}
+
+#[test]
+fn test_align_alternating_messages() {
+    let raw = vec![
+        serde_json::json!({"role": "system", "content": "Prompt"}),
+        serde_json::json!({"role": "system", "content": "Summary"}),
+        serde_json::json!({"role": "assistant", "content": "Grep"}),
+        serde_json::json!({"role": "user", "content": "Result"}),
+    ];
+    let aligned = align_alternating_messages(raw);
+    assert_eq!(aligned.len(), 4);
+    assert_eq!(aligned[0]["role"], "system");
+    assert_eq!(aligned[0]["content"], "Prompt\n\nSummary");
+    assert_eq!(aligned[1]["role"], "user");
+    assert_eq!(aligned[1]["content"], "[Context initialization]");
+    assert_eq!(aligned[2]["role"], "assistant");
+    assert_eq!(aligned[3]["role"], "user");
+}
+
+#[test]
+fn typed_instruction_prefix_survives_provider_alignment() {
+    let raw = vec![
+        serde_json::json!({"role": "system", "content": "base"}),
+        serde_json::json!({"role": "developer", "content": "project"}),
+        serde_json::json!({"role": "user", "content": "task"}),
+    ];
+
+    let aligned = align_alternating_messages(raw);
+
+    assert_eq!(
+        aligned[0],
+        serde_json::json!({"role": "system", "content": "base"})
+    );
+    assert_eq!(
+        aligned[1],
+        serde_json::json!({"role": "developer", "content": "project"})
+    );
+    assert_eq!(
+        aligned[2],
+        serde_json::json!({"role": "user", "content": "task"})
+    );
+}
+
+#[test]
+fn test_build_dynamic_context_tail() {
+    let todo = |content: &str, status: &str| crate::app::TodoItem {
+        content: content.to_string(),
+        status: status.to_string(),
+        priority: "high".to_string(),
+    };
+
+    // No files and no todos: the context section is returned untouched.
+    assert_eq!(
+        build_dynamic_context_tail("# Env".to_string(), &[], &[]),
+        "# Env"
+    );
+
+    // Files-in-context section lists each file as a bullet.
+    let with_files = build_dynamic_context_tail(
+        "# Env".to_string(),
+        &["src/a.rs".to_string(), "src/b.rs".to_string()],
+        &[],
+    );
+    assert!(with_files.contains("# Files already in context"));
+    assert!(with_files.contains("re-read files marked stale"));
+    assert!(with_files.contains("- src/a.rs"));
+    assert!(with_files.contains("- src/b.rs"));
+
+    // Files-in-context section bounds oversized file lists.
+    let many_files: Vec<String> = (0..50)
+        .map(|i| {
+            if i == 0 {
+                "src/stale.rs (STALE — changed on disk; re-read before editing)".to_string()
+            } else {
+                format!("src/file_{i}.rs (snapshot current)")
+            }
+        })
+        .collect();
+    let bounded = build_dynamic_context_tail("# Env".to_string(), &many_files, &[]);
+    assert!(bounded.contains("src/stale.rs (STALE"));
+    assert!(bounded.contains("more unchanged files omitted from context tail"));
+
+    // Task plan renders status markers and 1-based ordering.
+    let with_todos = build_dynamic_context_tail(
+        String::new(),
+        &[],
+        &[
+            todo("done thing", "completed"),
+            todo("active thing", "in_progress"),
+            todo("later thing", "pending"),
+        ],
+    );
+    assert!(with_todos.contains("# Your current task plan"));
+    assert!(with_todos.contains("1. [x] done thing (high)"));
+    assert!(with_todos.contains("2. [~] active thing (high)"));
+    assert!(with_todos.contains("3. [ ] later thing (high)"));
+}
+
+#[test]
+fn file_context_marks_fresh_and_stale_snapshots() {
+    let snapshot = std::time::SystemTime::UNIX_EPOCH;
+    let fresh = format_read_file_context_entry("src/a.rs", Some(snapshot), Some(snapshot));
+    assert!(fresh.contains("snapshot current"));
+
+    let changed = snapshot + std::time::Duration::from_secs(1);
+    let stale = format_read_file_context_entry("src/a.rs", Some(snapshot), Some(changed));
+    assert!(stale.contains("STALE"));
+    assert!(stale.contains("re-read before editing"));
+}
+
+#[test]
+fn compiler_diagnostics_include_bounded_source_context_for_known_locations() {
+    let diagnostics = "src/network.rs(1,1): error TS2554: Expected 1 arguments, but got 2.";
+    let enriched = compiler_diagnostics_with_snippets(diagnostics);
+    assert!(enriched.contains(diagnostics));
+    assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
+    assert!(enriched.contains("use crate::app::{AppState"));
+}
+
+#[test]
+fn compiler_diagnostics_preserve_missing_file_output() {
+    let diagnostics = "src/does-not-exist.ts(4,2): error TS2339: Missing property";
+    assert_eq!(compiler_diagnostics_with_snippets(diagnostics), diagnostics);
+}
+
+// Regression: the benchmark session ran 106 tool rounds with no hard
+// stop because the only guard was the loop detector, and a mutation that
+// reports success while duplicating content resets it every round. These
+// tests exercise the safety budgets directly against a constructed
+// TurnContext so they run without a mock server.
+
+#[test]
+fn healthy_progress_does_not_trigger_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tool_rounds = 12;
+    ctx.budget.tokens_used = 40_000;
+    ctx.progress.consecutive_no_progress = 0;
+    ctx.progress.consecutive_failed_mutations = 0;
+    ctx.compiler.consecutive_error_gates = 0;
+    assert!(turn_budget_exceeded(&ctx).is_none());
+}
+
+#[test]
+fn max_tool_rounds_triggers_the_budget() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.budget.max_tool_rounds),
+        other => panic!("expected ToolRounds limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn productive_persisted_40_round_segments_continue_without_replaying_history() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut s = state.lock().await;
+        s.history
+            .push(ChatMessage::new("user", "complete the long task"));
+        s.history.push(
+            ChatMessage::new("tool", "completed call-1").with_tool_result(
+                crate::app::ToolResultRecord {
+                    tool_name: "write_file_chunk".to_string(),
+                    success: true,
+                    ..Default::default()
+                },
+            ),
+        );
+    }
+
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 40;
+    ctx.progress.meaningful_events = 1;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ProductiveSegment {
+            used: 40,
+            maximum: 40
+        })
+    ));
+
+    let limit = turn_budget_exceeded(&ctx).expect("productive segment should yield");
+    assert!(!stop_turn_for_budget(&state, &mut ctx, limit).await);
+    assert!(ctx.budget.continuation_pending);
+    assert!(ctx.budget.budget_stopped.is_none());
+    assert!(ctx.response.final_content.contains("without replaying"));
+
+    {
+        let mut s = state.lock().await;
+        save_turn_context_after_run(&mut s, ctx, true);
+    }
+    let history_len = state.lock().await.history.len();
+    let mut resumed = {
+        let mut s = state.lock().await;
+        take_turn_context_for_prompt(&mut s, true, 40)
+    };
+    assert_eq!(resumed.budget.tool_rounds, 40);
+    assert_eq!(resumed.budget.segment_count, 2);
+    assert_eq!(resumed.segment_rounds(), 0);
+    assert_eq!(state.lock().await.history.len(), history_len);
+
+    // A second productive segment takes the logical task beyond the legacy
+    // 40-round ceiling while retaining the same context and completed call.
+    resumed.budget.tool_rounds = 80;
+    resumed.progress.meaningful_events = 2;
+    assert!(matches!(
+        turn_budget_exceeded(&resumed),
+        Some(TurnBudgetLimit::ProductiveSegment {
+            used: 40,
+            maximum: 40
+        })
+    ));
+}
+
+#[test]
+fn productive_segment_requires_new_progress_after_each_boundary() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 40;
+    ctx.progress.meaningful_events = 1;
+    let first = turn_budget_exceeded(&ctx).expect("first segment should end");
+    assert!(matches!(first, TurnBudgetLimit::ProductiveSegment { .. }));
+    ctx.budget.continuation_pending = true;
+    ctx.begin_next_segment();
+    ctx.budget.tool_rounds = 80;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(40))
+    ));
+}
+
+#[test]
+fn explicit_total_round_limit_stops_productive_continuation() {
+    let mut ctx = TurnContext::with_budgets(40, 80);
+    ctx.budget.tool_rounds = 80;
+    ctx.progress.meaningful_events = 2;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::TotalToolRounds(80))
+    ));
+}
+
+#[test]
+fn default_turn_allows_productive_work_past_previous_round_ceiling() {
+    let mut ctx = TurnContext::new();
+    for round in 0..64 {
+        ctx.budget.tool_rounds = round;
+        ctx.budget.tokens_used = round as u64 * 100;
+        ctx.progress.consecutive_no_progress = 0;
+        ctx.progress.consecutive_failed_mutations = 0;
+        ctx.compiler.consecutive_error_gates = 0;
+        assert!(turn_budget_exceeded(&ctx).is_none(), "round {round}");
+    }
+}
+
+#[test]
+fn round_budget_notice_warns_once_before_the_hard_stop() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 31;
+    assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+    ctx.budget.tool_rounds = 32;
+    let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+    assert!(notice.contains("32/40"));
+    assert!(notice.contains("8 rounds remain at this checkpoint"));
+    assert!(notice.contains("required validation"));
+    assert!(notice.contains("Do not claim success without evidence"));
+    for used in 32..40 {
+        ctx.budget.tool_rounds = used;
+        assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+        assert!(turn_budget_exceeded(&ctx).is_none());
+    }
+    ctx.budget.tool_rounds = 40;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(40))
+    ));
+    assert!(!ctx.lifecycle.task_completed);
+}
+
+#[test]
+fn round_budget_notice_respects_small_custom_and_exhausted_budgets() {
+    for maximum in [1, 3, 7, 100] {
+        let mut ctx = TurnContext::with_max_tool_rounds(maximum);
+        let threshold = maximum - maximum.div_ceil(5).min(8);
+        for used in 0..threshold {
+            ctx.budget.tool_rounds = used;
+            assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+        }
+        ctx.budget.tool_rounds = threshold;
+        let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+        assert!(notice.contains(&format!("{threshold}/{maximum}")));
+        assert!(turn_budget_exceeded(&ctx).is_none());
+
+        let mut exhausted = TurnContext::with_max_tool_rounds(maximum);
+        exhausted.budget.tool_rounds = maximum;
+        assert!(turn_engine::take_round_budget_notice(&mut exhausted).is_none());
+        assert!(
+            matches!(turn_budget_exceeded(&exhausted), Some(TurnBudgetLimit::ToolRounds(n)) if n == maximum)
+        );
+    }
+}
+
+#[tokio::test]
+async fn round_budget_notice_reaches_the_provider_request() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 32;
+    let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+    let mut app = AppState::new();
+    app.history
+        .push(ChatMessage::new("user", "Fix the compiler errors"));
+    app.history.push(ChatMessage::new("system", notice.clone()));
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &Arc::new(Mutex::new(app)),
+        ctx.budget.tool_rounds,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+    assert!(messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains(&notice))
+    }));
+}
+
+#[tokio::test]
+async fn request_assembly_separates_project_instructions_from_runtime_notices() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::write(root.path().join("AGENTS.md"), "DEVELOPER-PROVENANCE-RULE")
+        .expect("write instructions fixture");
+    let mut app = AppState::new();
+    app.workspace_root = Some(root.path().to_path_buf());
+    app.history
+        .push(ChatMessage::new("user", "inspect the workspace"));
+    app.history.push(ChatMessage::new(
+        "system",
+        "[Loop warning: RUNTIME-PROVENANCE-GUIDANCE]",
+    ));
+
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &Arc::new(Mutex::new(app)),
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+    let rendered = serde_json::to_string(&messages).unwrap();
+
+    assert_eq!(rendered.matches("DEVELOPER-PROVENANCE-RULE").count(), 1);
+    assert_eq!(rendered.matches("RUNTIME-PROVENANCE-GUIDANCE").count(), 1);
+    assert!(messages.iter().any(|message| {
+        message["role"] == "developer"
+            && message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("DEVELOPER-PROVENANCE-RULE"))
+    }));
+    assert!(messages.iter().any(|message| {
+        message["role"] == "user"
+            && message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("provenance=\"lifecycle\""))
+    }));
+}
+
+#[test]
+fn custom_tool_round_limit_triggers_at_the_configured_round() {
+    let mut ctx = TurnContext::with_max_tool_rounds(3);
+    ctx.budget.tool_rounds = 3;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, 3),
+        other => panic!("expected configured ToolRounds limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn loop_recovery_nudges_do_not_cap_the_turn_before_its_round_budget() {
+    // #984: autonomous turns are budgeted by max_tool_rounds (and the other
+    // safety budgets), not by recovery state. A turn mid-recovery keeps its
+    // tools until the bounded recovery budget is exhausted or a real budget
+    // trips — there is no artificial progress cap on top.
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 12;
+    ctx.recovery.loop_recovery_attempts = 2;
+    ctx.recovery.reasoning_recovery_attempts = 2;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(ctx.recovery.reasoning_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+
+    // Exhausted recovery still escalates to a final answer, and the round
+    // budget remains the hard backstop for autonomous execution.
+    ctx.recovery.loop_recovery_attempts = 3;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(_))
+    ));
+}
+
+#[test]
+fn per_round_usage_sums_across_rounds_instead_of_being_overwritten() {
+    // Simulates three rounds each reporting the provider's per-response
+    // usage. If usage were cumulative-not-per-response, or accidentally
+    // overwritten instead of summed, this would land on the last round's
+    // figure (30_000) instead of the true total (90_000).
+    let mut tokens_used = 0u64;
+    for reported in [40_000u64, 30_000, 20_000] {
+        tokens_used = accumulate_tokens_used(tokens_used, Some(reported), "");
+    }
+    assert_eq!(tokens_used, 90_000);
+}
+
+#[test]
+fn missing_provider_usage_falls_back_to_a_content_estimate_without_double_counting() {
+    let after_first = accumulate_tokens_used(0, None, "hello world");
+    assert!(
+        after_first > 0,
+        "fallback estimate must contribute something"
+    );
+    let after_second = accumulate_tokens_used(after_first, Some(500), "ignored");
+    assert_eq!(
+        after_second,
+        after_first + 500,
+        "second round must add, not replace"
+    );
+}
+
+#[test]
+fn a_genuinely_oversized_turn_trips_the_token_budget() {
+    let mut ctx = TurnContext::new();
+    for _ in 0..200 {
+        ctx.budget.tokens_used = accumulate_tokens_used(ctx.budget.tokens_used, Some(30_000), "");
+    }
+    assert!(
+        ctx.budget.tokens_used >= MAX_TURN_TOKEN_BUDGET,
+        "200 rounds of 30k tokens each must exceed the {MAX_TURN_TOKEN_BUDGET} budget"
+    );
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::Tokens(_)) => {}
+        other => panic!("expected the token budget to trip, got {other:?}"),
+    }
+}
+
+#[test]
+fn normal_multi_round_work_is_not_stopped_prematurely() {
+    // A healthy session doing real work across many rounds, well under
+    // every budget, must not trip any safety limit.
+    let mut ctx = TurnContext::new();
+    for _ in 0..10 {
+        ctx.budget.tokens_used = accumulate_tokens_used(ctx.budget.tokens_used, Some(5_000), "");
+        ctx.budget.tool_rounds += 1;
+    }
+    assert!(
+        turn_budget_exceeded(&ctx).is_none(),
+        "10 rounds of light, real work must not trip a safety budget"
+    );
+}
+
+#[test]
+fn token_budget_triggers_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tokens_used = MAX_TURN_TOKEN_BUDGET;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::Tokens(n)) => assert_eq!(n, MAX_TURN_TOKEN_BUDGET),
+        other => panic!("expected Tokens limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn repeated_malformed_tool_calls_trigger_the_budget_and_leave_it_idle() {
+    let mut ctx = TurnContext::new();
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::MalformedCalls(n)) => {
+            assert_eq!(n, MAX_CONSECUTIVE_MALFORMED_CALLS)
+        }
+        other => panic!("expected MalformedCalls limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn identical_malformed_tool_calls_are_counted_as_repeats() {
+    let mut ctx = TurnContext::new();
+    let call = crate::tools::ToolCall {
+        name: "replace_file_content".to_string(),
+        arguments: serde_json::json!({"path":"src/store.ts","edits":"[]"}),
+        call_id: None,
+    };
+
+    assert!(!super::turn_engine::record_malformed_call(
+        &mut ctx,
+        "ignored for parsed calls",
+        std::slice::from_ref(&call)
+    ));
+    assert!(super::turn_engine::record_malformed_call(
+        &mut ctx,
+        "ignored for parsed calls",
+        std::slice::from_ref(&call)
+    ));
+    assert_eq!(ctx.recovery.consecutive_malformed_calls, 2);
+    assert_eq!(ctx.metrics.malformed_calls, 2);
+    assert!(ctx.recovery.last_malformed_call.as_ref().unwrap().len() < 64);
+    assert!(!super::turn_engine::record_malformed_call(
+        &mut ctx,
+        "ignored for parsed calls",
+        &[crate::tools::ToolCall {
+            name: "replace_file_content".to_string(),
+            arguments: serde_json::json!({"path":"src/other.ts","edits":"[]"}),
+            call_id: None,
+        }]
+    ));
+    assert_eq!(ctx.recovery.consecutive_malformed_calls, 1);
+}
+
+#[test]
+fn below_the_malformed_call_budget_does_not_trip() {
+    let mut ctx = TurnContext::new();
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS - 1;
+    assert!(turn_budget_exceeded(&ctx).is_none());
+}
+
+#[test]
+fn repeated_failed_edits_trigger_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.progress.consecutive_failed_mutations = MAX_CONSECUTIVE_FAILED_MUTATIONS;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::FailedMutations(n)) => {
+            assert_eq!(n, MAX_CONSECUTIVE_FAILED_MUTATIONS)
+        }
+        other => panic!("expected FailedMutations limit, got {other:?}"),
+    }
+}
+
+// The exact benchmark shape: a mutation reports success but changed
+// nothing (already applied), round after round.
+#[test]
+fn repeated_noop_edits_trigger_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.progress.consecutive_no_progress = MAX_CONSECUTIVE_NO_PROGRESS;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::NoProgress(n)) => assert_eq!(n, MAX_CONSECUTIVE_NO_PROGRESS),
+        other => panic!("expected NoProgress limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn repeated_compiler_error_gates_trigger_the_budget() {
+    let mut ctx = TurnContext::new();
+    ctx.compiler.consecutive_error_gates = MAX_CONSECUTIVE_COMPILER_ERROR_GATES;
+    match turn_budget_exceeded(&ctx) {
+        Some(TurnBudgetLimit::CompilerErrorGates(n)) => {
+            assert_eq!(n, MAX_CONSECUTIVE_COMPILER_ERROR_GATES)
+        }
+        other => panic!("expected CompilerErrorGates limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stopping_for_budget_never_falsely_reports_completion() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    ctx.lifecycle.task_completed = false;
+    ctx.response.final_content = "Applying the last edit".to_string();
+    ctx.response.final_content_persisted = true;
+
+    let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
+    let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
+
+    assert!(!should_continue, "a budget stop must end the loop");
+    let transcript = lifecycle::final_transcript_content(
+        ctx.lifecycle.task_completed,
+        &ctx.response.final_content,
+        ctx.response.final_content_persisted,
+        ctx.lifecycle.stop_reason.as_ref().unwrap(),
+    )
+    .expect("the new budget explanation must be persisted");
+    assert_eq!(transcript, ctx.response.final_content);
+    assert!(transcript.contains("resume it in a new turn"));
+    assert!(
+        !ctx.lifecycle.task_completed,
+        "a budget stop must never claim completion"
+    );
+    assert!(
+        ctx.budget.budget_stopped.is_some(),
+        "the exact limit reached must be recorded"
+    );
+    assert!(
+        ctx.response.final_content.contains("stopped"),
+        "the summary must explain the stop: {}",
+        ctx.response.final_content
+    );
+    assert!(
+        ctx.response
+            .final_content
+            .to_ascii_lowercase()
+            .contains("not complete"),
+        "the summary must be explicit that the task is unfinished: {}",
+        ctx.response.final_content
+    );
+}
+
+#[tokio::test]
+async fn stopping_for_a_malformed_call_streak_leaves_the_app_idle_and_preserves_history() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut s = state.lock().await;
+        s.status = AppStatus::Streaming;
+        s.history.push(ChatMessage::new("user", "do the thing"));
+    }
+    let mut ctx = TurnContext::new();
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+
+    let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
+    assert!(matches!(limit, TurnBudgetLimit::MalformedCalls(_)));
+    let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
+
+    assert!(!should_continue, "a budget stop must end the loop");
+    assert!(
+        !ctx.lifecycle.task_completed,
+        "must never claim completion after a parse-failure streak"
+    );
+    let s = state.lock().await;
+    assert_eq!(
+        s.status,
+        AppStatus::Idle,
+        "must leave the app in Idle, not stuck streaming"
+    );
+    assert_eq!(
+        s.history.len(),
+        1,
+        "the transcript must be preserved, not cleared"
+    );
+}
+
+#[tokio::test]
+async fn cancellation_is_checked_before_the_budget_at_round_start() {
+    // A cancelled turn must not be intercepted by the budget-stop
+    // summary; the request layer's own cancellation handling owns that
+    // path. This only exercises the ordering guard used at the top of
+    // run_single_turn, not the full network round.
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    cancel_token.cancel();
+    let mut ctx = TurnContext::new();
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+
+    let budget_should_fire = !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
+    assert!(
+        !budget_should_fire,
+        "cancellation must suppress the budget-stop path"
+    );
+}
+
+#[test]
+fn request_log_summary_reports_shape_not_content() {
+    let summary = request_log_summary("gpt-oss-120b", 42, 7, 123_456);
+    assert!(summary.contains("gpt-oss-120b"));
+    assert!(summary.contains("messages=42"));
+    assert!(summary.contains("tools=7"));
+    assert!(summary.contains("payload_bytes=123456"));
+}
+
+#[test]
+fn request_log_summary_identifies_textual_tool_contracts() {
+    let summary = super::stream_request::request_log_summary_with_protocol(
+        "local-model",
+        3,
+        18,
+        4096,
+        "textual",
+        "json",
+        18,
+        142,
+        142,
+    );
+
+    assert!(summary.contains("tool_mode=textual"));
+    assert!(summary.contains("tool_protocol=json"));
+    assert!(summary.contains("tools=18"));
+    assert!(summary.contains("available_builtin_tools=18"));
+    assert!(summary.contains("tool_schema_tokens=142"));
+    assert!(summary.contains("textual_contract_tokens=142"));
+}
+
+#[test]
+fn default_debug_log_line_never_contains_full_payload_content() {
+    // A marker that would only ever appear if the actual message content
+    // (e.g. a file's source text pulled into context by a prior tool
+    // call) leaked into the log line.
+    const FILE_CONTENT_MARKER: &str = "fn super_secret_business_logic_marker() {}";
+    let payload = serde_json::json!({
+        "model": "gpt-oss-120b",
+        "messages": [
+            {"role": "user", "content": FILE_CONTENT_MARKER},
+        ],
+        "tools": [{"type": "function", "function": {"name": "read_file"}}],
+    });
+    let summary = request_log_summary("gpt-oss-120b", 1, 1, 999);
+
+    let default_line = request_debug_log_line(false, &summary, &payload);
+    assert!(
+        !default_line.contains(FILE_CONTENT_MARKER),
+        "default (non-verbose) log line must not contain full message content: {default_line}"
+    );
+    assert_eq!(
+        default_line, summary,
+        "default log line should be exactly the structured summary"
+    );
+}
+
+#[test]
+fn verbose_flag_gates_full_payload_logging() {
+    // This is the config-flag gate for opt-in full-payload logging
+    // (`AppConfig::debug_verbose_network_logging`): false -> structured
+    // summary only, true -> full serialized payload including content.
+    const FILE_CONTENT_MARKER: &str = "fn super_secret_business_logic_marker() {}";
+    let payload = serde_json::json!({
+        "model": "gpt-oss-120b",
+        "messages": [
+            {"role": "user", "content": FILE_CONTENT_MARKER},
+        ],
+    });
+    let summary = request_log_summary("gpt-oss-120b", 1, 0, 999);
+
+    let quiet_line = request_debug_log_line(false, &summary, &payload);
+    let verbose_line = request_debug_log_line(true, &summary, &payload);
+
+    assert!(!quiet_line.contains(FILE_CONTENT_MARKER));
+    assert!(
+        verbose_line.contains(FILE_CONTENT_MARKER),
+        "verbose mode must still support full-payload debugging: {verbose_line}"
+    );
+}
+
+#[test]
+fn debug_verbose_network_logging_defaults_to_off() {
+    // The config flag must default to false so full-payload logging
+    // (and the debug.log growth it causes) stays opt-in.
+    let config = crate::config::AppConfig::default();
+    assert!(!config.debug_verbose_network_logging);
+}
+
+// --- extract_diff_block: pull the real diff out of a tool result ---
+
+#[test]
+fn extract_diff_block_finds_a_normal_replacement_diff() {
+    let content = "successfully replaced target_content in 'src/lib.rs'\n\n\
+```diff\n@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO\n line three\n```\n";
+    let diff = extract_diff_block(content).expect("diff fence should be found");
+    assert!(diff.contains("@@ -1,3 +1,3 @@"), "got: {diff}");
+    assert!(diff.contains("-line two"), "got: {diff}");
+    assert!(diff.contains("+line TWO"), "got: {diff}");
+}
+
+#[test]
+fn extract_diff_block_finds_a_multi_replace_diff() {
+    let content = "successfully applied 2 replacements to 'src/lib.rs'\n\n\
+```diff\n@@ -1,4 +1,4 @@\n a\n-b\n+B\n c\n-d\n+D\n```\n";
+    let diff = extract_diff_block(content).expect("diff fence should be found");
+    assert!(diff.contains("-b"), "got: {diff}");
+    assert!(diff.contains("+D"), "got: {diff}");
+}
+
+#[test]
+fn extract_diff_block_returns_none_for_a_noop_already_applied_result() {
+    // PR #306: a repeated edit that's already applied reports success
+    // with no diff fence at all. There must be nothing to show — a
+    // stale argument-only preview must not fill this gap.
+    let content = "already applied; no changes made to 'src/lib.rs' \
+(target_content already reflects replacement_content)";
+    assert!(extract_diff_block(content).is_none());
+}
+
+#[test]
+fn extract_diff_block_returns_none_for_a_failed_edit() {
+    let content = "Error: target_content not found in 'src/lib.rs'.";
+    assert!(extract_diff_block(content).is_none());
+}
+
+#[test]
+fn extract_diff_block_returns_none_for_content_with_no_fence() {
+    let content = "wrote 'src/new.rs' (10 lines, 120 bytes)";
+    assert!(extract_diff_block(content).is_none());
+}
+
+// --- Feature 2 integration: ToolResult.diff must be the real diff ---
+
+fn test_tool_call(name: &str, args: serde_json::Value) -> crate::tools::ToolCall {
+    crate::tools::ToolCall {
+        name: name.to_string(),
+        arguments: args,
+        call_id: None,
+    }
+}
+
+async fn run_one_tool_with_state(
+    state: &Arc<Mutex<AppState>>,
+    call: crate::tools::ToolCall,
+) -> ToolResult {
+    let client = reqwest::Client::new();
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut compile_dirty = false;
+    let mut compile_cache = None;
+    let mut user_wait = std::time::Duration::ZERO;
+    let mut results = execute_tool_batch(
+        &client,
+        state,
+        &cancel_token,
+        &[call],
+        true,
+        &None,
+        &mut compile_dirty,
+        &mut compile_cache,
+        &mut user_wait,
+        None,
+    )
+    .await;
+    results.remove(0)
+}
+
+async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    run_one_tool_with_state(&state, call).await
+}
+
+#[derive(Debug, Clone)]
+struct ReplayCall {
+    id: &'static str,
+    call: crate::tools::ToolCall,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayStep {
+    label: &'static str,
+    calls: Vec<ReplayCall>,
+}
+
+#[derive(Debug, Default)]
+struct ReplayReport {
+    tool_order: Vec<String>,
+    paired_results: Vec<(String, String, bool)>,
+    lifecycle: Vec<events::TurnState>,
+    warnings: Vec<String>,
+    changed_paths: std::collections::BTreeSet<String>,
+    recovery_attempts: u8,
+    forced_stop: bool,
+    termination_reason: String,
+}
+
+fn replay_call(id: &'static str, name: &str, arguments: serde_json::Value) -> ReplayCall {
+    ReplayCall {
+        id,
+        call: test_tool_call(name, arguments),
+    }
+}
+
+fn replay_step(label: &'static str, calls: Vec<ReplayCall>) -> ReplayStep {
+    ReplayStep { label, calls }
+}
+
+/// Drive the real local tool executor with scripted model steps. This is
+/// deliberately below the provider request layer: replay tests exercise
+/// tool ordering, result pairing, loop recovery, and workspace effects
+/// without opening a socket or depending on a model response format.
+async fn replay_steps(root: &std::path::Path, steps: &[ReplayStep]) -> ReplayReport {
+    let mut app = AppState::new();
+    app.workspace_root = Some(root.to_path_buf());
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut machine = events::TurnMachine::new();
+    let mut detector = loop_detect::LoopDetector::new(4);
+    let mut report = ReplayReport {
+        lifecycle: vec![machine.state()],
+        ..Default::default()
+    };
+    let mut compile_dirty = false;
+    let mut compile_cache = None;
+    let mut user_wait = std::time::Duration::ZERO;
+
+    'steps: for step in steps {
+        if step.calls.is_empty() {
+            machine
+                .model_finished(false, false, false, false)
+                .unwrap_or_else(|error| panic!("{}: {error}", step.label));
+            report.lifecycle.push(machine.state());
+            report.termination_reason = "completed".to_string();
+            break;
+        }
+
+        machine
+            .model_finished(false, false, true, false)
+            .unwrap_or_else(|error| panic!("{}: {error}", step.label));
+        report.lifecycle.push(machine.state());
+
+        for scripted in &step.calls {
+            let (exact, category) =
+                loop_detect::signatures(&scripted.call.name, &scripted.call.arguments);
+            let status = detector.check_tool(&scripted.call.name, &exact, &category);
+            match status {
+                loop_detect::LoopStatus::Warning(repeats) => {
+                    report.warnings.push(format!(
+                        "{}: {} warning at repeat {repeats}",
+                        step.label, scripted.call.name
+                    ));
+                }
+                loop_detect::LoopStatus::Abort(repeats) => {
+                    report.warnings.push(format!(
+                        "{}: {} abort at repeat {repeats}",
+                        step.label, scripted.call.name
+                    ));
+                    machine.abandon_tool_phase();
+                    if report.recovery_attempts < 1 {
+                        report.recovery_attempts += 1;
+                        detector.reset();
+                        report.warnings.push(format!(
+                            "{}: bounded recovery attempt {}",
+                            step.label, report.recovery_attempts
+                        ));
+                        continue 'steps;
+                    }
+                    report.forced_stop = true;
+                    report.termination_reason = "forced_loop_stop".to_string();
+                    machine
+                        .model_finished(false, true, false, false)
+                        .unwrap_or_else(|error| panic!("forced wrap-up: {error}"));
+                    report.lifecycle.push(machine.state());
+                    break 'steps;
+                }
+                loop_detect::LoopStatus::Ok => {}
+            }
+        }
+
+        machine
+            .approval_granted()
+            .unwrap_or_else(|error| panic!("{} approval: {error}", step.label));
+        report.lifecycle.push(machine.state());
+
+        let calls = step
+            .calls
+            .iter()
+            .map(|scripted| scripted.call.clone())
+            .collect::<Vec<_>>();
+        let mut results = execute_tool_batch(
+            &client,
+            &state,
+            &cancel_token,
+            &calls,
+            true,
+            &Some(root.to_path_buf()),
+            &mut compile_dirty,
+            &mut compile_cache,
+            &mut user_wait,
+            None,
+        )
+        .await;
+        if results.len() != step.calls.len() {
+            panic!(
+                "{}: expected {} results, got {}",
+                step.label,
+                step.calls.len(),
+                results.len()
+            );
+        }
+        for (scripted, result) in step.calls.iter().zip(results.drain(..)) {
+            if result.tool_name != scripted.call.name {
+                panic!(
+                    "{}: result for {} was paired with {}",
+                    step.label, scripted.call.name, result.tool_name
+                );
+            }
+            report.tool_order.push(result.tool_name.clone());
+            report.paired_results.push((
+                scripted.id.to_string(),
+                result.tool_name,
+                result.metadata.success,
+            ));
+            report.changed_paths.extend(result.metadata.changed_paths);
+        }
+        machine
+            .tools_finished()
+            .unwrap_or_else(|error| panic!("{} tools: {error}", step.label));
+        report.lifecycle.push(machine.state());
+    }
+
+    report
+}
+
+#[tokio::test]
+async fn failed_session_replay_is_bounded_and_keeps_workspace_safe() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.ts");
+    let original = "const status = 'idle';\n";
+    std::fs::write(&file, original).expect("write fixture");
+    let path = file.to_string_lossy().to_string();
+    let failed_edit = || {
+        replay_call(
+            "failed-edit",
+            "replace_file_content",
+            serde_json::json!({
+                "path": path,
+                "old_string": "const missing = true;",
+                "new_string": "const missing = false;",
+            }),
+        )
+    };
+    let read = || {
+        replay_call(
+            "read-state",
+            "view_file",
+            serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+        )
+    };
+    let steps = vec![
+        replay_step("failed edit", vec![failed_edit()]),
+        replay_step(
+            "state edit",
+            vec![replay_call(
+                "state-edit",
+                "replace_file_content",
+                serde_json::json!({
+                    "path": path,
+                    "old_string": "const status = 'idle';",
+                    "new_string": "const status = 'active';",
+                }),
+            )],
+        ),
+        replay_step(
+            "restore state",
+            vec![replay_call(
+                "restore-state",
+                "replace_file_content",
+                serde_json::json!({
+                    "path": path,
+                    "old_string": "const status = 'active';",
+                    "new_string": "const status = 'idle';",
+                }),
+            )],
+        ),
+        replay_step("repeated read one", vec![read()]),
+        replay_step("repeated read two", vec![read()]),
+        replay_step("failed retry one", vec![failed_edit()]),
+        replay_step("failed retry two", vec![failed_edit()]),
+        replay_step("failed retry three", vec![failed_edit()]),
+        replay_step("failed retry four", vec![failed_edit()]),
+        replay_step("failed retry five", vec![failed_edit()]),
+        replay_step("failed retry six", vec![failed_edit()]),
+    ];
+
+    let report = replay_steps(dir.path(), &steps).await;
+    assert!(report.forced_stop, "replay did not stop: {report:?}");
+    assert_eq!(report.termination_reason, "forced_loop_stop");
+    assert_eq!(report.recovery_attempts, 1, "report: {report:?}");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("repeated read two")),
+        "replay warnings lacked the read loop: {report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read fixture"),
+        original,
+        "failed edits and restore loop must not leave a workspace mutation"
+    );
+    assert_eq!(
+        report.tool_order.first().map(String::as_str),
+        Some("replace_file_content")
+    );
+    assert_eq!(
+        report.tool_order.last().map(String::as_str),
+        Some("replace_file_content")
+    );
+    assert_eq!(report.tool_order.len(), report.paired_results.len());
+    assert_eq!(
+        report.lifecycle.first(),
+        Some(&events::TurnState::AwaitingModel)
+    );
+    assert_eq!(
+        report.lifecycle.last(),
+        Some(&events::TurnState::Completed),
+        "forced wrap-up must complete the lifecycle: {report:?}"
+    );
+}
+
+#[tokio::test]
+async fn successful_session_replay_pairs_tools_and_records_real_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.ts");
+    std::fs::write(&file, "const status = 'idle';\n").expect("write fixture");
+    let path = file.to_string_lossy().to_string();
+    let steps = vec![
+        replay_step(
+            "activate state",
+            vec![replay_call(
+                "activate",
+                "replace_file_content",
+                serde_json::json!({
+                    "path": path,
+                    "old_string": "const status = 'idle';",
+                    "new_string": "const status = 'active';",
+                }),
+            )],
+        ),
+        replay_step(
+            "verify state",
+            vec![replay_call(
+                "verify",
+                "view_file",
+                serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+            )],
+        ),
+        replay_step(
+            "finish state",
+            vec![replay_call(
+                "finish",
+                "replace_file_content",
+                serde_json::json!({
+                    "path": path,
+                    "old_string": "const status = 'active';",
+                    "new_string": "const status = 'ready';",
+                }),
+            )],
+        ),
+        replay_step("final response", Vec::new()),
+    ];
+
+    let report = replay_steps(dir.path(), &steps).await;
+    assert_eq!(report.termination_reason, "completed", "report: {report:?}");
+    assert!(!report.forced_stop, "report: {report:?}");
+    assert_eq!(
+        report
+            .paired_results
+            .iter()
+            .map(|(id, _, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["activate", "verify", "finish"]
+    );
+    assert!(
+        report.paired_results.iter().all(|(_, _, success)| *success),
+        "successful replay had a failed result: {report:?}"
+    );
+    assert!(!report.changed_paths.is_empty(), "report: {report:?}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read fixture"),
+        "const status = 'ready';\n"
+    );
+    assert_eq!(
+        report.lifecycle.last(),
+        Some(&events::TurnState::Completed),
+        "successful replay did not reach a terminal state: {report:?}"
+    );
+}
+
+#[tokio::test]
+async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+    let result = run_one_tool(test_tool_call(
+        "run_command",
+        serde_json::json!({
+            "command": "printf 'exit code: 0\\n[Output truncated:]\\n'; exit 7",
+        }),
+    ))
+    .await;
+
+    assert!(!result.metadata.success, "got: {}", result.content);
+    assert_eq!(result.metadata.exit_code, Some(7));
+    assert!(!result.metadata.truncated);
+}
+
+#[tokio::test]
+async fn view_file_reports_structured_truncation_only_when_content_is_omitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.txt");
+    let content: String = (1..=1000).map(|line| format!("line {line}\n")).collect();
+    std::fs::write(&file, content).expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    let truncated = run_one_tool(test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path}),
+    ))
+    .await;
+    assert!(truncated.metadata.success);
+    assert!(truncated.metadata.truncated);
+
+    let targeted = run_one_tool(test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+    ))
+    .await;
+    assert!(targeted.metadata.success);
+    assert!(!targeted.metadata.truncated);
+}
+
+#[tokio::test]
+async fn control_plane_tool_does_not_stall_while_reading_workspace_root() {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_one_tool(test_tool_call(
+            "use_skill",
+            serde_json::json!({"name": "release-automation"}),
+        )),
+    )
+    .await
+    .expect("use_skill execution stalled while resolving workspace root");
+
+    assert!(result.metadata.success, "got: {}", result.content);
+}
+
+#[tokio::test]
+async fn repeated_failed_read_reexecutes_and_preserves_structured_failure() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("missing").to_string_lossy().to_string();
+    let call = test_tool_call("list_directory", serde_json::json!({"path": missing}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(!first.metadata.success, "got: {}", first.content);
+    assert!(!repeated.metadata.success, "got: {}", repeated.content);
+    assert!(!repeated.metadata.replayed);
+    assert_eq!(repeated.metadata.error_kind, first.metadata.error_kind);
+    assert!(!repeated.content.contains("Unchanged read replay"));
+}
+
+#[tokio::test]
+async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.txt");
+    let content: String = (1..=850).map(|line| format!("{line}\n")).collect();
+    std::fs::write(&file, content).expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.truncated, "got: {}", first.content);
+    assert!(!repeated.metadata.replayed);
+    assert!(
+        repeated.metadata.truncated,
+        "replay lost structured truncation: {}",
+        repeated.content
+    );
+    assert!(!repeated.content.contains("Unchanged read replay"));
+    assert!(repeated.content.contains("[tool_result_incomplete:"));
+    assert_eq!(repeated.metadata.completeness, first.metadata.completeness);
+}
+
+#[tokio::test]
+async fn repeated_unchanged_small_view_file_replays_cached_body() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("small.txt");
+    std::fs::write(&file, "first line\nrecoverable body\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(!first.metadata.replayed);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed);
+    assert!(!repeated.content.contains("recoverable body"));
+    assert!(repeated.content.contains("Unchanged read replay"));
+    assert!(repeated.content.len() <= 50 * 1024);
+    assert_eq!(repeated.metadata.inspection, first.metadata.inspection);
+}
+
+#[tokio::test]
+async fn view_file_subrange_reuses_complete_cached_read() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let subrange = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 2}),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, subrange).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("Lines 1 to 2 of 3"));
+    assert!(repeated.content.contains("2: second"));
+    assert!(!repeated.content.contains("Unchanged read replay"));
+    assert!(!repeated.content.contains("3: third"));
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.requested_range.clone()),
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(2),
+        })
+    );
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone()),
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(2),
+        })
+    );
+}
+
+#[tokio::test]
+async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let through_end = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 2}),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, through_end).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(!repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("2: second"));
+    assert!(repeated.content.contains("3: third"));
+}
+
+#[tokio::test]
+async fn view_file_subrange_with_different_content_offset_reexecutes() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.js");
+    std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let full = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 3}),
+    );
+    let offset = test_tool_call(
+        "view_file",
+        serde_json::json!({
+            "path": path,
+            "content_offset": 6,
+            "start_line": 2,
+            "end_line": 3
+        }),
+    );
+
+    let first = run_one_tool_with_state(&state, full).await;
+    let repeated = run_one_tool_with_state(&state, offset).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(!repeated.metadata.replayed, "got: {}", repeated.content);
+    assert!(repeated.content.contains("2: second"));
+    assert!(repeated.content.contains("3: third"));
+}
+
+#[tokio::test]
+async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.rs");
+    let content: String = (1..=800)
+        .map(|line| format!("line {line}: {}\n", "x".repeat(13)))
+        .collect();
+    std::fs::write(&file, content).expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 800}),
+    );
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(!first.metadata.replayed);
+    assert!(
+        first.content.len() > 20_000,
+        "fixture did not exercise the regression"
+    );
+    assert!(
+        first.content.len() <= REPLAYABLE_READ_LIMIT,
+        "fixture must remain cacheable: {} bytes",
+        first.content.len()
+    );
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed);
+    assert!(
+        repeated.content.len() <= 50 * 1024,
+        "replayed read exceeded the context limit: {} bytes",
+        repeated.content.len()
+    );
+    assert!(!repeated.content.contains("line 200:"));
+    assert!(repeated.content.contains("fingerprint="));
+    assert!(repeated.content.contains("Lines 1 to 800"));
+    assert!(repeated.content.contains("earlier result"));
+    assert!(repeated.content.contains("start_line/end_line"));
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone()),
+        first
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone())
+    );
+
+    // History stores the original body and the compact replay as separate
+    // durable results; request rendering must retain the canonical first body
+    // and the replay metadata.
+    let first_history = tool_result_history_message(first.clone(), None);
+    let repeated_history = tool_result_history_message(repeated.clone(), None);
+    assert!(first_history.content.contains("line 200:"));
+    assert!(!repeated_history.content.contains("line 200:"));
+    assert!(
+        repeated_history
+            .tool_result
+            .as_ref()
+            .expect("metadata")
+            .replayed
+    );
+    let rendered = history::to_messages(&[first_history, repeated_history], "system");
+    let rendered = serde_json::to_string(&rendered).expect("render history");
+    assert!(rendered.contains("line 200:"));
+    assert!(rendered.contains("Unchanged read replay"));
+}
+
+#[tokio::test]
+async fn repeated_over_limit_failed_read_reexecutes() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let invalid_pattern = "(".repeat(REPLAYABLE_READ_LIMIT + 1);
+    let call = test_tool_call("grep", serde_json::json!({"pattern": invalid_pattern}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(!first.metadata.success, "got: {}", first.content);
+    assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+    assert!(!repeated.metadata.success, "got: {}", repeated.content);
+    assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+    assert_eq!(repeated.metadata.truncated, first.metadata.truncated);
+    assert!(!repeated.metadata.replayed);
+    assert!(!repeated.content.contains("Unchanged read replay"));
+}
+
+#[tokio::test]
+async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.txt");
+    let content: String = (1..=850)
+        .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
+        .collect();
+    std::fs::write(&file, content).expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+    assert!(first.metadata.truncated, "got: {}", first.content);
+    let artifact = first
+        .metadata
+        .full_output_artifact
+        .as_deref()
+        .expect("bounded read must retain its recovery artifact");
+    assert!(std::fs::metadata(artifact).is_ok());
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(
+        repeated.metadata.truncated,
+        "replay lost structured truncation: {}",
+        repeated.content
+    );
+    assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+    assert!(!repeated.metadata.replayed);
+    assert!(repeated.metadata.full_output_artifact.is_some());
+    assert!(!repeated.content.contains("Unchanged read replay"));
+}
+
+#[tokio::test]
+async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    // The edit lands at line 50, not line 1 — the old argument-only
+    // preview always reported line 1 because it had no idea where in
+    // the file the match actually was.
+    let mut lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
+    lines[49] = "let target = 1;".to_string();
+    std::fs::write(&file, lines.join("\n") + "\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    let call = test_tool_call(
+        "replace_file_content",
+        serde_json::json!({
+            "path": path,
+            "old_string": "let target = 1;",
+            "new_string": "let target = 100;",
+        }),
+    );
+    let result = run_one_tool(call).await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    let diff = result.diff.expect("a real edit must produce a diff");
+    assert!(
+        diff.contains("@@ -47,"),
+        "expected the real line number (~50), got: {diff}"
+    );
+    assert!(diff.contains("-let target = 1;"), "got: {diff}");
+    assert!(diff.contains("+let target = 100;"), "got: {diff}");
+}
+
+#[tokio::test]
+async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
+    // The classic insert shape: replacement_content contains the full
+    // target_content as a suffix. The old argument-only preview and the
+    // real file-content diff would look identical here in isolation,
+    // but this proves the diff still comes from the actual file (one
+    // inserted line as `+`, the anchor line as unchanged context) —
+    // not a side-by-side line-for-line replacement of the whole block.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    let call = test_tool_call(
+        "replace_file_content",
+        serde_json::json!({
+            "path": path,
+            "old_string": "    s.discord_rpc.set_activity(\"Idle\", ...);",
+            "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
+        }),
+    );
+    let result = run_one_tool(call).await;
+
+    let diff = result.diff.expect("an insertion must still produce a diff");
+    assert!(diff.contains("+    let model_name = ...;"), "got: {diff}");
+    assert!(
+        !diff.contains("-    s.discord_rpc.set_activity"),
+        "the untouched anchor line must be context, not a fabricated deletion: {diff}"
+    );
+}
+
+#[tokio::test]
+async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
+    // Core regression for the bug this feature fixes: before this fix,
+    // ToolResult.diff came from get_diff_preview(name, args), which is
+    // computed purely from the call's arguments and therefore looked
+    // identical on every call — including a second, no-op call after
+    // PR #306 made the edit itself idempotent. A stale diff on a no-op
+    // result would tell the user something changed when nothing did.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    std::fs::write(&file, "let status = Idle;\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let args = serde_json::json!({
+        "path": path,
+        "old_string": "let status = Idle;",
+        "new_string": "let status = Active;",
+    });
+
+    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    assert!(
+        first.diff.is_some(),
+        "the first, real change must have a diff"
+    );
+
+    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    assert!(
+        second
+            .content
+            .to_ascii_lowercase()
+            .contains("already applied"),
+        "got: {}",
+        second.content
+    );
+    assert!(
+        second.diff.is_none(),
+        "a no-op repeat must not carry a stale diff: {:?}",
+        second.diff
+    );
+}
+
+#[tokio::test]
+async fn multi_replacement_final_diff_is_real() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    let call = test_tool_call(
+        "multi_replace_file_content",
+        serde_json::json!({
+            "path": path,
+            "replacements": [
+                { "start_line": 1, "end_line": 1, "target_content": "let a = 1;", "replacement_content": "let a = 100;" },
+                { "start_line": 3, "end_line": 3, "target_content": "let c = 3;", "replacement_content": "let c = 300;" },
+            ],
+        }),
+    );
+    let result = run_one_tool(call).await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    let diff = result
+        .diff
+        .expect("a multi-replace edit must produce a diff");
+    assert!(
+        diff.contains("-let a = 1;") && diff.contains("+let a = 100;"),
+        "got: {diff}"
+    );
+    assert!(
+        diff.contains("-let c = 3;") && diff.contains("+let c = 300;"),
+        "got: {diff}"
+    );
+    // Unrelated middle line stays as untouched context, not a
+    // fabricated change.
+    assert!(diff.contains(" let b = 2;"), "got: {diff}");
+}
+
+// --- Confirmation preview: unchanged, provisional, and separate ---
+
+#[test]
+fn confirmation_preview_is_unaffected_and_stays_provisional() {
+    // get_diff_preview is the confirmation-modal preview path — it must
+    // keep working exactly as before (best-effort, argument-only,
+    // computed before the edit runs). This is deliberately NOT what
+    // ends up in ToolResult.diff for the final transcript entry
+    // (see the tests above); it's a distinct, provisional artifact.
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "target_content": "old line",
+            "replacement_content": "new line",
+        }),
+    )
+    .expect("a preview should be computed from the arguments alone");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+    // The confirmation preview format is the side-by-side \0-delimited
+    // one, not a unified diff — asserting that pins the distinction
+    // between the two mechanisms so a future change can't quietly
+    // merge them back together.
+    assert!(preview.contains('\0'), "got: {preview:?}");
+}
+
+// get_diff_preview must recognize every alias the edit tools themselves
+// accept (see `crate::tools::filesystem::EDIT_TARGET_ALIASES` /
+// `EDIT_REPLACEMENT_ALIASES`), not just target_content/replacement_content
+// — a legacy or differently-shaped call must still get a real,
+// non-empty provisional preview instead of silently falling through to
+// an empty one.
+#[test]
+fn confirmation_preview_supports_old_string_new_string_alias() {
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "old_string": "old line",
+            "new_string": "new line",
+        }),
+    )
+    .expect("a preview should be computed from old_string/new_string");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+}
+
+#[test]
+fn confirmation_preview_supports_old_text_new_text_alias() {
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "old_text": "old line",
+            "new_text": "new line",
+        }),
+    )
+    .expect("a preview should be computed from old_text/new_text");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+}
+
+#[test]
+fn confirmation_preview_supports_camel_case_old_string_alias() {
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "oldString": "old line",
+            "newString": "new line",
+        }),
+    )
+    .expect("a preview should be computed from oldString/newString");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+}
+
+#[test]
+fn confirmation_preview_supports_camel_case_old_text_alias() {
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "oldText": "old line",
+            "newText": "new line",
+        }),
+    )
+    .expect("a preview should be computed from oldText/newText");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+}
+
+#[test]
+fn confirmation_preview_supports_target_replacement_alias() {
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "target": "old line",
+            "replacement": "new line",
+        }),
+    )
+    .expect("a preview should be computed from target/replacement");
+    assert!(preview.contains("old line"));
+    assert!(preview.contains("new line"));
+}
+
+#[test]
+fn confirmation_preview_prefers_target_content_when_multiple_aliases_present() {
+    // target_content/replacement_content are first in priority order —
+    // a call that (unusually) carries both the canonical keys and an
+    // alias must use the canonical ones, matching extract_edit_chunks's
+    // own priority order exactly.
+    let preview = get_diff_preview(
+        "replace_file_content",
+        &serde_json::json!({
+            "target_content": "canonical old",
+            "replacement_content": "canonical new",
+            "old_string": "alias old",
+            "new_string": "alias new",
+        }),
+    )
+    .expect("a preview should be computed");
+    assert!(preview.contains("canonical old"));
+    assert!(preview.contains("canonical new"));
+    assert!(!preview.contains("alias old"));
+    assert!(!preview.contains("alias new"));
+}
+
+// Regression uncovered by fixing get_diff_preview's alias support: once
+// it correctly computes a real, non-empty preview for old_string/
+// new_string calls (not just target_content/replacement_content), that
+// preview must still never leak through as a fallback for a no-op or
+// failed edit — only extract_diff_block's real, post-execution diff (or
+// no diff at all) may represent those outcomes.
+#[test]
+fn tool_result_precludes_preview_fallback_for_noop_and_failure() {
+    assert!(tool_result_precludes_preview_fallback(
+        "already applied; no changes made to 'x.rs'"
+    ));
+    assert!(tool_result_precludes_preview_fallback(
+        "Error: target_content not found in 'x.rs'."
+    ));
+    assert!(!tool_result_precludes_preview_fallback(
+        "wrote 'x.rs' (3 lines, 20 bytes)"
+    ));
+}
+
+#[tokio::test]
+async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
+    // The exact end-to-end shape of the regression: old_string/new_string
+    // args (not target_content/replacement_content), repeated after the
+    // edit already landed. Before this fix's tool_result_precludes_
+    // preview_fallback guard, get_diff_preview's now-correct alias
+    // support would have handed the pre-execution preview to
+    // final_tool_diff as a non-empty fallback, showing a diff for a
+    // no-op that changed nothing.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    std::fs::write(&file, "let status = Idle;\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let args = serde_json::json!({
+        "path": path,
+        "old_string": "let status = Idle;",
+        "new_string": "let status = Active;",
+    });
+
+    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    assert!(
+        first.diff.is_some(),
+        "the first, real change must have a diff"
+    );
+
+    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    assert!(
+        second
+            .content
+            .to_ascii_lowercase()
+            .contains("already applied"),
+        "got: {}",
+        second.content
+    );
+    assert!(
+        second.diff.is_none(),
+        "a no-op repeat must not carry a stale diff, even with a now-working alias preview: {:?}",
+        second.diff
+    );
+}
+
+// Regression this feature fixes: `get_diff_preview` previously only read
+// the `target_content`/`replacement_content` keys, so a call built with
+// the (equally valid, alias-supported) `old_string`/`new_string` keys
+// got an empty preview — `Some("")`, not `None`. `final_tool_diff` must
+// still guard against an empty fallback regardless (defense in depth):
+#[test]
+fn final_tool_diff_ignores_an_empty_fallback_preview() {
+    assert_eq!(
+        final_tool_diff("already applied; no changes made", None),
+        None
+    );
+    assert_eq!(
+        final_tool_diff("already applied; no changes made", Some(String::new())),
+        None,
+        "an empty fallback preview must not surface as a diff"
+    );
+    assert_eq!(
+        final_tool_diff(
+            "already applied; no changes made",
+            Some("   \n".to_string())
+        ),
+        None,
+        "a whitespace-only fallback preview must not surface as a diff"
+    );
+}
+
+#[test]
+fn final_tool_diff_prefers_the_real_diff_over_a_nonempty_fallback() {
+    let result =
+        "successfully replaced target_content in 'x.rs'\n\n```diff\n@@ -1,1 +1,1 @@\n-a\n+b\n```\n";
+    let stale_fallback = Some("-old\x00+new\n".to_string());
+    let diff = final_tool_diff(result, stale_fallback).expect("real diff must win");
+    assert!(diff.contains("-a") && diff.contains("+b"), "got: {diff}");
+    assert!(
+        !diff.contains("old") && !diff.contains("new"),
+        "got: {diff}"
+    );
+}
+
+#[test]
+fn final_tool_diff_uses_the_fallback_only_when_it_has_real_content() {
+    let result = "wrote 'x.rs' (3 lines, 20 bytes)"; // no ```diff fence
+    let legacy_preview = Some("-old line\x00+new line\n".to_string());
+    let diff = final_tool_diff(result, legacy_preview).expect("fallback should be used");
+    assert!(diff.contains("old line") && diff.contains("new line"));
+}
+
+#[test]
+fn consecutive_turn_provider_payloads_have_identical_historical_prefix() {
+    // Turn 1: user says hello
+    let history_turn_1 = vec![ChatMessage::new("user", "Hello, assistant!")];
+    let mut msgs_1 = history::to_messages(&history_turn_1, "You are a helpful assistant.");
+    messages::attach_request_context_tail(&mut msgs_1, "time: 12:00:00\ncwd: /tmp");
+
+    // Turn 2: assistant answered, user asks follow-up
+    let history_turn_2 = vec![
+        ChatMessage::new("user", "Hello, assistant!"),
+        ChatMessage::new("assistant", "Hello! How can I help you today?"),
+        ChatMessage::new("user", "What is 2 + 2?"),
+    ];
+    let mut msgs_2 = history::to_messages(&history_turn_2, "You are a helpful assistant.");
+    messages::attach_request_context_tail(&mut msgs_2, "time: 12:01:00\ncwd: /tmp");
+
+    // Turn 1 had [system, user1, context_tail_1]
+    // Turn 2 has [system, user1, assistant1, user2, context_tail_2]
+    // The prefix [system, user1] must be EXACTLY byte-identical between Turn 1 and Turn 2.
+    assert_eq!(msgs_1[0], msgs_2[0], "system prompt must be identical");
+    assert_eq!(
+        msgs_1[1], msgs_2[1],
+        "user 1 message must be completely stable and unmutated"
+    );
+}
+
+#[test]
+fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt() {
+    let skills = [crate::skills::SkillMetadata {
+        name: "solidtime".to_string(),
+        description: "Solidtime workflow".to_string(),
+        path: std::path::PathBuf::from("/skills/solidtime"),
+        triggers: Vec::new(),
+        keywords: Vec::new(),
+        priority: 0,
+    }];
+    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills, &[])
+        .expect("named skill route");
+    let mut dynamic_context = "# Environment\nworkspace".to_string();
+    prepend_skill_routing_hint(&mut dynamic_context, Some(&hint));
+
+    let mut messages = history::to_messages(
+        &[ChatMessage::new("user", "Check Solidtime this week.")],
+        "static system prompt",
+    );
+    messages::attach_request_context_tail(&mut messages, &dynamic_context);
+
+    assert_eq!(messages[0]["content"], "static system prompt");
+    let tail = messages.last().expect("dynamic context tail")["content"]
+        .as_str()
+        .expect("tail text");
+    assert!(tail.contains("use_skill"));
+    assert!(tail.find("Priority skill route") < tail.find("# Environment"));
+}
+
+#[tokio::test]
+async fn repeated_use_skill_returns_actionable_success_after_same_turn_load() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state
+            .history
+            .push(ChatMessage::new("user", "Use synthetic-skill"));
+        state.history.push(
+            ChatMessage::new(
+                "tool",
+                "use_skill: <skill_content name=\"synthetic-skill\">\ninstructions",
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "use_skill".to_string(),
+                success: true,
+                ..Default::default()
+            }),
+        );
+    }
+
+    let result = run_one_tool_with_state(
+        &state,
+        test_tool_call("use_skill", serde_json::json!({"name": "synthetic-skill"})),
+    )
+    .await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    assert!(!result.metadata.replayed);
+    assert!(result.metadata.inspection.is_none());
+    assert!(result.content.contains("already loaded and active"));
+    assert!(result.content.contains("do not call `use_skill` again"));
+}
+
+#[test]
+fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
+    let history = vec![
+        ChatMessage::new("user", "Calculate fibonacci"),
+        ChatMessage::new(
+            "assistant",
+            "<think>\nLet me think through recursion vs dynamic programming...\n100 lines of reasoning\n</think>\n\nHere is the Fibonacci function:\n```rust\nfn fib(n: u32) -> u32 { ... }\n```",
+        ),
+        ChatMessage::new("user", "Now write tests for it"),
+    ];
+
+    let messages = history::to_messages(&history, "system prompt");
+    let assistant_msg = &messages[2];
+    assert_eq!(
+        assistant_msg.get("role").and_then(|r| r.as_str()),
+        Some("assistant")
+    );
+    let content = assistant_msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap();
+    assert!(
+        !content.contains("<think>"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        content.contains("Here is the Fibonacci function"),
+        "visible answer must be preserved"
+    );
+}
+
+#[test]
+fn compaction_prunes_massive_historical_reasoning() {
+    let history = vec![
+        ChatMessage::new("user", "Prompt 1"),
+        ChatMessage::new(
+            "assistant",
+            format!(
+                "<think>\n{}\n</think>\nShort answer 1",
+                "deep thoughts ".repeat(5000)
+            ),
+        ),
+        ChatMessage::new("user", "Prompt 2"),
+        ChatMessage::new(
+            "assistant",
+            format!(
+                "<think>\n{}\n</think>\nShort answer 2",
+                "more thoughts ".repeat(5000)
+            ),
+        ),
+        ChatMessage::new("user", "Prompt 3 (recent)"),
+        ChatMessage::new("assistant", "Recent answer"),
+    ];
+
+    let before_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(before_tokens > 10000, "initial tokens should be large");
+    let before = serde_json::to_string(&history).unwrap();
+
+    // #985: storage is append-only — the pass reports no storage change and
+    // every retained message stays byte-identical.
+    let pruned = compaction::prune_historical_reasoning(&history, 2);
+    assert_eq!(pruned, 0, "storage must not be rewritten");
+    assert_eq!(serde_json::to_string(&history).unwrap(), before);
+
+    // The request render still excludes the scratchpads while preserving the
+    // visible answers, so provider pressure is handled without touching
+    // history.
+    let messages = crate::network::history::to_messages(&history, "system");
+    let rendered = serde_json::to_string(&messages).unwrap();
+    assert!(
+        !rendered.contains("deep thoughts"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        !rendered.contains("more thoughts"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        rendered.contains("Short answer 1") && rendered.contains("Short answer 2"),
+        "visible answers must be preserved"
+    );
+    assert!(
+        history[1].content.contains("<think>") && history[3].content.contains("<think>"),
+        "stored scratchpads stay verbatim for the transcript"
+    );
+}
+
+#[test]
+fn model_profile_is_local_classification() {
+    use crate::config::ModelProfile;
+
+    let omlx_profile = ModelProfile {
+        name: "local-qwen".to_string(),
+        url: "http://127.0.0.1:8000/v1".to_string(),
+        engine: Some("omlx".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(
+        omlx_profile.is_local(),
+        "omlx engine must be classified as local"
+    );
+
+    let ollama_profile = ModelProfile {
+        name: "ollama-model".to_string(),
+        url: "http://127.0.0.1:11434".to_string(),
+        engine: Some("ollama".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(
+        ollama_profile.is_local(),
+        "ollama must be classified as local"
+    );
+
+    let lmstudio_profile = ModelProfile {
+        name: "lmstudio-model".to_string(),
+        url: "http://localhost:1234/v1".to_string(),
+        engine: Some("lmstudio".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(
+        lmstudio_profile.is_local(),
+        "lmstudio must be classified as local"
+    );
+
+    let remote_openai = ModelProfile {
+        name: "gpt-4o".to_string(),
+        url: "https://api.openai.com/v1".to_string(),
+        engine: Some("openai".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(
+        !remote_openai.is_local(),
+        "remote OpenAI endpoint must not be classified as local"
+    );
+}
+
+#[test]
+fn model_profile_reasoning_effort() {
+    use crate::config::ModelProfile;
+
+    let profile = ModelProfile {
+        name: "qwen-3.8".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
+        reasoning_effort: Some("low".to_string()),
+        thinking_budget: Some(4096),
+        supports_reasoning_effort: Some(true),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(profile.thinking_budget, Some(4096));
+    let budget = profile.context_budget();
+    assert!(budget.thinking_reserve > 0);
+}
+
+#[test]
+fn stress_test_long_agent_loop_20_turns_with_prefix_stability() {
+    let mut history: Vec<ChatMessage> = Vec::new();
+    let mut previous_provider_messages: Option<Vec<serde_json::Value>> = None;
+    let system_prompt = "You are RustCode, an autonomous coding agent.";
+
+    for turn in 1..=20 {
+        // User instruction / tool feedback
+        history.push(ChatMessage::new(
+            "user",
+            format!("Turn {turn}: Inspect and modify module {turn}"),
+        ));
+
+        // Generate provider messages for this turn
+        let mut provider_msgs = history::to_messages(&history, system_prompt);
+        let dynamic_ctx = format!("time: 12:{turn:02}:00\ncwd: /workspace\ntodos: []");
+        messages::attach_request_context_tail(&mut provider_msgs, &dynamic_ctx);
+
+        // Verify prefix stability: every message from turn N-1 (except its trailing synthetic context tail)
+        // must be IDENTICAL in turn N.
+        if let Some(prev) = &previous_provider_messages {
+            let stable_prefix_len = prev.len().saturating_sub(1);
+            for i in 0..stable_prefix_len {
+                assert_eq!(
+                    prev[i],
+                    provider_msgs[i],
+                    "Message index {i} mutated between turn {} and turn {}",
+                    turn - 1,
+                    turn
+                );
+            }
+        }
+
+        // Assistant responds with huge reasoning and a tool call
+        let reasoning = format!(
+            "<think>\nAnalyzing module {turn} in depth...\n{}\n</think>",
+            "reasoning details ".repeat(200)
+        );
+        let tool_call = crate::app::ToolCallRef {
+            id: format!("call_{turn}"),
+            name: "view_file".to_string(),
+            arguments: serde_json::json!({"path": format!("src/mod_{turn}.rs")}).to_string(),
+        };
+        let assistant_msg =
+            ChatMessage::new("assistant", &reasoning).with_tool_calls(vec![tool_call]);
+        history.push(assistant_msg);
+
+        // Tool output arrives
+        let tool_output =
+            format!("src/mod_{turn}.rs contents:\npub fn run_{turn}() {{ println!(\"ok\"); }}");
+        let mut tool_msg = ChatMessage::new("tool", format!("view_file: {tool_output}"));
+        tool_msg.tool_call_id = Some(format!("call_{turn}"));
+        history.push(tool_msg);
+
+        // Save current provider messages for next turn's prefix comparison
+        let mut current_turn_msgs = history::to_messages(&history, system_prompt);
+        messages::attach_request_context_tail(&mut current_turn_msgs, &dynamic_ctx);
+        previous_provider_messages = Some(current_turn_msgs);
+    }
+
+    // Verify final state:
+    // 1. History has 60 messages (20 turns * 3 messages per turn)
+    assert_eq!(history.len(), 60);
+
+    // 2. When converted to provider messages, all historical assistant reasoning was stripped!
+    let final_provider_msgs = history::to_messages(&history, system_prompt);
+    for msg in &final_provider_msgs {
+        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+            if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                assert!(
+                    !content.contains("<think>"),
+                    "Provider message must not contain raw <think> reasoning!"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn stress_test_compaction_under_massive_context_pressure() {
+    let mut history = Vec::new();
+
+    // Create 30 turns of large history (~120k tokens total)
+    for i in 0..30 {
+        history.push(ChatMessage::new("user", format!("Task step {i}")));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!(
+                "<think>\n{}\n</think>\nHere is the plan for step {i}.",
+                "extensive reasoning trace ".repeat(300)
+            ),
+        ));
+        let mut tool_res = ChatMessage::new(
+            "tool",
+            format!(
+                "run_command: output for step {i}:\n{}",
+                "data row\n".repeat(200)
+            ),
+        );
+        tool_res.tool_call_id = Some(format!("call_{i}"));
+        history.push(tool_res);
+    }
+
+    let initial_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(
+        initial_tokens > 20000,
+        "Initial tokens should be very high, got: {initial_tokens}"
+    );
+
+    let budget = 15000;
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // Run deterministic local compaction
+    let compacted = compaction::maybe_compact_with_local_policy(
+        &reqwest::Client::new(),
+        "http://localhost:11434",
+        "qwen:32b",
+        &mut history,
+        budget,
+        &cancel,
+        true,
+    )
+    .await;
+    assert!(compacted, "Compaction must report success");
+
+    let post_compaction_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(
+        post_compaction_tokens <= budget,
+        "Post compaction tokens ({post_compaction_tokens}) must be within budget ({budget})"
+    );
+
+    // Verify structured integrity of history after compaction
+    let provider_msgs = history::to_messages(&history, "system prompt");
+    assert!(
+        !provider_msgs.is_empty(),
+        "Provider messages must be non-empty"
+    );
+}
+
+#[test]
+fn session_interruption_and_recovery_safety() {
+    let mut state = crate::app::AppState::new();
+    state.active_session_id = "test-recovery-session".to_string();
+    state
+        .history
+        .push(ChatMessage::new("user", "Write a function"));
+    state.replace_current_response("<think>\nThinking about function...");
+    state.current_thought_started_at = Some(std::time::Instant::now());
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+        "call-temp",
+        None,
+        "run_command",
+        "Bash",
+        "cargo check",
+    ));
+
+    // Simulate killing/stopping turn: live tool calls & transient thought buffer are cleared
+    state.clear_live_tool_calls();
+    state.clear_current_response();
+    state.current_thought_started_at = None;
+    state.status = crate::app::AppStatus::Idle;
+
+    assert!(state.live_tool_calls.is_empty());
+    assert!(state.current_response.is_empty());
+    assert_eq!(state.status, crate::app::AppStatus::Idle);
+    assert_eq!(state.history.len(), 1);
+}
+
+#[test]
+fn test_continuation_assistant_message_strips_massive_think_traces() {
+    use super::text::format_continuation_assistant_message;
+
+    // 1. Completed massive reasoning trace followed by visible prose
+    let massive_think = format!(
+        "<think>\n{}\n</think>\nI will now run the test suite.\n```tool\n{{\"name\": \"run_command\"}}\n```",
+        "deep reasoning ".repeat(2000)
+    );
+    let continuation = format_continuation_assistant_message(&massive_think);
+    assert!(
+        !continuation.contains("<think>"),
+        "Completed think blocks must be stripped from continuation assistant message"
+    );
+    assert!(continuation.contains("I will now run the test suite."));
+    assert!(continuation.contains("```tool"));
+    assert!(
+        continuation.len() < 500,
+        "Continuation assistant message must be bounded and compact"
+    );
+
+    // 2. Pure reasoning (no visible text outside think)
+    let pure_think = format!("<think>\n{}\n</think>", "planning ".repeat(1500));
+    let continuation_pure = format_continuation_assistant_message(&pure_think);
+    assert_eq!(continuation_pure, "(completed reasoning scratchpad)");
+
+    // 3. Unclosed think trace that was cut off mid-thought
+    let cut_off_think = format!(
+        "<think>\n{}\nThinking about line 42",
+        "thinking ".repeat(1000)
+    );
+    let continuation_cut_off = format_continuation_assistant_message(&cut_off_think);
+    assert!(continuation_cut_off.contains("<think>"));
+    assert!(continuation_cut_off.contains("Thinking about line 42"));
+    assert!(
+        continuation_cut_off.len() <= 1200,
+        "Unclosed think block tail must be bounded"
+    );
+}
+
+#[test]
+fn test_continuation_nudges_are_category_aware() {
+    use super::text::continuation_nudge_for_category;
+
+    // Length cutoff
+    assert_eq!(
+        continuation_nudge_for_category("Some partial text", Some("length")),
+        "Your previous response was cut off by the token limit. Continue directly from where you left off."
+    );
+
+    // Reasoning only
+    assert_eq!(
+        continuation_nudge_for_category("<think>Planning step 1...</think>", None),
+        "Stop planning and do not restate your plan again. Call the tool now."
+    );
+
+    // Incomplete tool call
+    assert_eq!(
+        continuation_nudge_for_category("```tool\n{\"name\": \"view_file\"", None),
+        "Your tool call syntax was incomplete, so no tool was executed. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
+    );
+
+    // Stated intent without tool call
+    assert_eq!(
+        continuation_nudge_for_category("I will read the file `src/main.rs` now to verify.", None),
+        "You stated your intended action. Please execute the tool call now."
+    );
+
+    // Normal prose
+    assert_eq!(
+        continuation_nudge_for_category("Here is the explanation of the bug:", None),
+        "continue"
+    );
+}
+
+#[test]
+fn test_structured_session_memory_semantic_continuity_across_compactions() {
+    use super::compaction::{StructuredSessionMemory, compact_with_structured_memory};
+
+    let mut history = Vec::new();
+
+    // Turn 1: User specifies critical constraints
+    history.push(ChatMessage::new(
+        "user",
+        "Implement feature X. Rule: Never modify files under src/generated/! Always use cargo check."
+    ));
+    history.push(ChatMessage::new(
+        "assistant",
+        "Understood. I will not touch generated files.",
+    ));
+
+    // Turn 5: Discovered architecture & failed approach
+    history.push(ChatMessage::new(
+        "user",
+        "Check if we can use the old parser.",
+    ));
+    history.push(ChatMessage::new(
+        "assistant",
+        "Decision: Found parser in `src/parser/legacy.rs`. It does not support async.",
+    ));
+    let mut failed_tool = ChatMessage::new(
+        "tool",
+        "run_command: cargo test\nerror: compilation failed\nexit code: 1",
+    );
+    failed_tool.tool_result = Some(crate::app::ToolResultRecord {
+        tool_name: "run_command".to_string(),
+        arguments_hash: "hash".to_string(),
+        success: false,
+        pending: false,
+        command: None,
+        exit_code: Some(1),
+        error_kind: Some("command_failed".to_string()),
+        changed_paths: vec!["src/parser/legacy.rs".to_string()],
+        truncated: false,
+        payload_truncated: false,
+        completeness: rustcode_core::ToolResultCompleteness::Complete,
+        full_output_artifact: None,
+        replayed: false,
+        retryable: false,
+        inspection: None,
+        command_status: None,
+    });
+    history.push(failed_tool);
+
+    // Add multiple subsequent turns to trigger compaction
+    for i in 6..=35 {
+        history.push(ChatMessage::new(
+            "user",
+            format!("Step {i} working on alternative parser"),
+        ));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("Working on step {i} implementation"),
+        ));
+    }
+
+    // Extract structured session memory
+    let memory = StructuredSessionMemory::extract_from_history(&history);
+    let record = memory.format_record(4000);
+
+    // Verify key constraints and facts are preserved
+    assert!(
+        record.contains("Never modify files under src/generated/!"),
+        "User constraint must be captured in memory"
+    );
+    assert!(
+        record.contains("src/parser/legacy.rs"),
+        "Modified/inspected file must be captured"
+    );
+    assert!(
+        record.contains("Goal: Implement feature X"),
+        "Initial goal must be captured"
+    );
+
+    // Perform structured compaction
+    let initial_len = history.len();
+    let compacted = compact_with_structured_memory(&mut history, 10, 4000);
+    assert!(compacted, "Compaction should succeed");
+    assert!(history.len() < initial_len);
+
+    // Verify the compacted history retains the structured memory block at message 0
+    assert_eq!(history[0].role, "system");
+    assert!(
+        history[0]
+            .content
+            .contains("Never modify files under src/generated/!")
+    );
+
+    // Simulate another 10 turns and a SECOND compaction pass (Turn 45)
+    for i in 36..=45 {
+        history.push(ChatMessage::new("user", format!("Follow up step {i}")));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("Follow up step {i} completed"),
+        ));
+    }
+    let second_compacted = compact_with_structured_memory(&mut history, 10, 4000);
+    assert!(second_compacted, "Second compaction should succeed");
+
+    // Verify the constraint from Turn 1 is STILL preserved after multiple compaction passes!
+    assert!(
+        history[0]
+            .content
+            .contains("Never modify files under src/generated/!"),
+        "Turn 1 constraint must survive multiple compaction passes!"
+    );
+}
+
+#[test]
+fn test_preflight_budget_calculation_and_limits() {
+    use super::compaction::calculate_preflight_budget;
+    use crate::config::ModelProfile;
+
+    let profile = ModelProfile {
+        name: "local-qwen".to_string(),
+        url: "http://localhost:11434/v1/chat/completions".to_string(),
+        model: "qwen:32b".to_string(),
+        context_window: Some(32768),
+        soft_context_target: Some(24000),
+        hard_effective_limit: Some(30000),
+        provider_overhead_margin: Some(1024),
+        ..ModelProfile::default()
+    };
+    let budget = profile.context_budget();
+
+    let history = vec![
+        ChatMessage::new("user", "Hello! Write a small parser."),
+        ChatMessage::new("assistant", "Here is the plan for the parser."),
+    ];
+
+    let preflight = calculate_preflight_budget(
+        "You are RustCode.",
+        &[],
+        &history,
+        "# Runtime Context\n- cwd: /code\n",
+        0,
+        &budget,
+    );
+
+    assert_eq!(preflight.soft_context_target, 24000);
+    assert_eq!(preflight.hard_effective_limit, 30000);
+    assert!(preflight.fits_soft_target());
+    assert!(preflight.fits_hard_limit());
+    assert!(preflight.total_estimated_prompt > 0);
+}
+
+#[test]
+fn test_preflight_budget_accounts_for_native_tool_schemas_once() {
+    use super::compaction::{calculate_preflight_budget, estimate_tool_schema_tokens};
+    use crate::config::ModelProfile;
+
+    let budget = ModelProfile {
+        context_window: Some(32768),
+        ..ModelProfile::default()
+    }
+    .context_budget();
+    let history = vec![ChatMessage::new("user", "Use the available tool.")];
+    let schema = vec![serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "inspect_workspace",
+            "description": "Inspect files in the workspace",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+        }
+    })];
+
+    let without_schema = calculate_preflight_budget(
+        "You are RustCode.",
+        &[],
+        &history,
+        "# Runtime Context\n",
+        0,
+        &budget,
+    );
+    let with_schema = calculate_preflight_budget(
+        "You are RustCode.",
+        &schema,
+        &history,
+        "# Runtime Context\n",
+        0,
+        &budget,
+    );
+
+    assert_eq!(without_schema.tool_schema_tokens, 0);
+    assert_eq!(
+        with_schema.tool_schema_tokens,
+        estimate_tool_schema_tokens(&schema)
+    );
+    assert!(with_schema.tool_schema_tokens > 0);
+    assert_eq!(
+        with_schema.total_estimated_prompt - without_schema.total_estimated_prompt,
+        with_schema.tool_schema_tokens
+    );
+}
+
+#[test]
+fn test_text_protocol_preflight_does_not_double_count_tool_definitions() {
+    use super::compaction::calculate_preflight_budget;
+    use crate::config::ModelProfile;
+
+    let budget = ModelProfile {
+        context_window: Some(32768),
+        ..ModelProfile::default()
+    }
+    .context_budget();
+    let schema = vec![serde_json::json!({
+        "type": "function",
+        "function": {"name": "inspect_workspace", "parameters": {"type": "object"}}
+    })];
+    let history = vec![ChatMessage::new("user", "Use the available tool.")];
+    let text_prompt = "You are RustCode.\nTool: inspect_workspace (text protocol)";
+
+    let preflight = calculate_preflight_budget(text_prompt, &[], &history, "", 0, &budget);
+    let incorrectly_double_counted =
+        calculate_preflight_budget(text_prompt, &schema, &history, "", 0, &budget);
+
+    assert_eq!(preflight.tool_schema_tokens, 0);
+    assert!(incorrectly_double_counted.total_estimated_prompt > preflight.total_estimated_prompt);
+}
+
+#[test]
+fn test_local_model_profile_completion_reserve_defaults() {
+    use crate::config::ModelProfile;
+
+    // Local profile without explicit max_tokens defaults to a safe 4k-8k completion cap
+    let local_profile = ModelProfile {
+        name: "local-ollama".to_string(),
+        url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
+        model: "qwen2.5:32b".to_string(),
+        context_window: Some(128000),
+        ..ModelProfile::default()
+    };
+    let local_budget = local_profile.context_budget();
+    assert!(
+        local_budget.completion_reserve <= 8192,
+        "Local profile completion reserve must be capped at 8192, got: {}",
+        local_budget.completion_reserve
+    );
+    assert!(
+        local_budget.soft_context_target < local_budget.context_window,
+        "Local profile must have a realistic soft context target below the theoretical context window"
+    );
+}
+
+#[test]
+fn test_reasoning_loop_recovery_is_bounded() {
+    assert_eq!(
+        reasoning_loop_recovery_action(0),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(1),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(3),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS),
+        LoopRecoveryAction::ForceFinal
+    );
+}
+
+#[test]
+fn test_reasoning_loop_is_cut_off_behavior() {
+    // When finish_reason is "reasoning_loop", is_cut_off must be false so runner returns collected response
+    assert!(!is_cut_off(
+        "<think>repetitive thoughts",
+        Some("reasoning_loop")
+    ));
+    assert!(!is_cut_off(
+        "<think>thoughts</think>",
+        Some("reasoning_loop")
+    ));
+    assert!(!is_cut_off(
+        "<think>reasoning reached its client budget</think>",
+        Some("reasoning_budget")
+    ));
+}
+
+#[test]
+fn test_turn_context_reasoning_benchmark_summary() {
+    let mut ctx = TurnContext::new();
+    assert_eq!(ctx.recovery.reasoning_loops_detected, 0);
+    assert_eq!(ctx.recovery.reasoning_recovery_attempts, 0);
+
+    ctx.recovery.reasoning_loops_detected = 1;
+    ctx.recovery.reasoning_recovery_attempts = 1;
+
+    let summary = ctx.benchmark_summary();
+    assert_eq!(summary["reasoning_loops_detected"], 1);
+    assert_eq!(summary["reasoning_recovery_attempts"], 1);
+}
+
+#[test]
+fn test_reasoning_loop_detector_integration_and_resets() {
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+
+    // 1. Pathological consecutive loop
+    let s = "We should inspect the configuration file in src/config.rs to verify settings.\n";
+    assert_eq!(detector.feed_chunk(s), loop_detect::ReasoningLoopStatus::Ok);
+    assert_eq!(detector.feed_chunk(s), loop_detect::ReasoningLoopStatus::Ok);
+    assert!(matches!(
+        detector.feed_chunk(s),
+        loop_detect::ReasoningLoopStatus::LoopDetected(_)
+    ));
+
+    // Reset clears state
+    detector.reset();
+
+    // 2. Legitimate long reasoning with varied sentences
+    for step in 0..50 {
+        let sentence = format!(
+            "Analyzing architectural step {step} with specialized component handler_{step}.\n"
+        );
+        assert_eq!(
+            detector.feed_chunk(&sentence),
+            loop_detect::ReasoningLoopStatus::Ok
+        );
+    }
+
+    // 3. Cross-turn plan repetition with confirmed ledger stagnation.
+    // A bare repeated plan without stagnation is legitimate re-inspection
+    // (#984), so this path goes through evidence with streaks.
+    let plan = "Plan: Inspect all routes in src/routes.rs and verify handler types.";
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+    assert!(matches!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        loop_detect::ReasoningLoopStatus::LoopDetected(_)
+    ));
+
+    // 4. Progress resets cross-turn plan
+    detector.record_turn_reasoning(plan, true);
+    assert_eq!(
+        detector.record_turn_reasoning(plan, false),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
+fn reasoning_loop_detector_treats_a_multi_tool_batch_as_one_turn() {
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let plan = "I will inspect the repository history and verify the changelog entries.";
+
+    // A single model response can contain several independent read-only
+    // calls. They must contribute one cross-turn record, not one record per
+    // tool result, or the batch will look like an immediate repeated plan.
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 2,
+            no_progress_streak: 0,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
+fn test_adversarial_1_paraphrased_same_plan_same_files_no_edits_interrupts() {
+    // Scenario 1: Model understands architecture, repeatedly reads the same file,
+    // paraphrases the same plan with different wording, and never edits.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/network/turn_engine.rs";
+
+    let turn1 = "I have analyzed the engine. I will edit src/network/turn_engine.rs to add the new loop recovery mechanism.";
+    let res1 = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+        reasoning: turn1,
+        target_files: &[file],
+        made_progress: false,
+        had_edits: false,
+        tool_count: 1,
+        no_progress_streak: 1,
+    });
+    assert_eq!(res1, loop_detect::ReasoningLoopStatus::Ok);
+
+    let turn2 = "The architecture is clear. We are ready to modify src/network/turn_engine.rs to include the new loop recovery behavior.";
+    let res2 = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+        reasoning: turn2,
+        target_files: &[file],
+        made_progress: false,
+        had_edits: false,
+        tool_count: 1,
+        no_progress_streak: 2,
+    });
+    assert_eq!(
+        res2,
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_CROSS_TURN_SAME_PLAN)
+    );
+}
+
+#[test]
+fn test_adversarial_2_broad_investigation_across_files_does_not_interrupt() {
+    // Scenario 2: Agent investigates many different files and continuously discovers
+    // new information without editing -> must NOT interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let files = [
+        "src/app/actions.rs",
+        "src/network/loop_detect.rs",
+        "src/network/turn_engine.rs",
+        "src/tools/exec.rs",
+        "src/ui/mod.rs",
+        "src/config.rs",
+        "src/main.rs",
+        "src/memory.rs",
+    ];
+
+    for (i, file) in files.iter().enumerate() {
+        let thought = format!(
+            "Step {i}: Inspecting module {file} to understand its public API and dependencies."
+        );
+        let status = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: &thought,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: i + 1,
+        });
+        assert_eq!(
+            status,
+            loop_detect::ReasoningLoopStatus::Ok,
+            "Broad investigation across {file} must not be interrupted"
+        );
+    }
+}
+
+#[test]
+fn test_adversarial_3_long_advancing_reasoning_does_not_interrupt() {
+    // Scenario 3: Agent spends a long time reasoning, but reasoning continues
+    // materially advancing -> must NOT interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    for step in 0..100 {
+        let advance = match step % 4 {
+            0 => format!(
+                "Phase {step}: Evaluating caching layer invariants in src/cache/storage_{step}.rs.\n\n"
+            ),
+            1 => format!(
+                "Phase {step}: Analyzing thread pool scheduler policies for runtime_{step}.\n\n"
+            ),
+            2 => format!(
+                "Phase {step}: Reviewing serialization schema definitions in src/proto/message_{step}.rs.\n\n"
+            ),
+            _ => format!(
+                "Phase {step}: Verifying cryptographic checksum verification logic in src/crypto/auth_{step}.rs.\n\n"
+            ),
+        };
+        let status = detector.feed_chunk(&advance);
+        assert_eq!(
+            status,
+            loop_detect::ReasoningLoopStatus::Ok,
+            "Advancing reasoning step {step} must not trigger loop detector"
+        );
+    }
+}
+
+#[test]
+fn test_adversarial_4_ready_to_implement_hesitation_reads_interrupts() {
+    // Scenario 4: Agent says it is ready to implement several times but repeatedly
+    // performs equivalent verification reads without editing -> should interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/tools/filesystem.rs";
+
+    let turn1 = "Everything is mapped out. I am ready to implement the changes in src/tools/filesystem.rs. Let's do one more check on the view_file signature.";
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: turn1,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    let turn2 = "Signature is confirmed. Now proceed with implementation in src/tools/filesystem.rs. Let me do a quick check on start_line handling first.";
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: turn2,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_SEMANTIC_NO_PROGRESS)
+    );
+}
+
+#[test]
+fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
+    // Scenario 5: Loop detector fires, recovery succeeds and an edit occurs -> state resets correctly.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/network/loop_detect.rs";
+
+    let plan1 = "We will modify src/network/loop_detect.rs to add new loop signals.";
+    let plan2 = "We are ready to modify src/network/loop_detect.rs to add new loop signals.";
+
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan1,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan2,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_CROSS_TURN_SAME_PLAN)
+    );
+
+    // Recovery succeeds: edit occurs and makes progress
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: "Applied the edit to src/network/loop_detect.rs successfully.",
+            target_files: &[file],
+            made_progress: true,
+            had_edits: true,
+            tool_count: 1,
+            no_progress_streak: 0,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    // Subsequent normal inspection starts from clean state
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: "Now reading src/network/loop_detect.rs to verify compiler output.",
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
+fn test_adversarial_6_reasoning_recovery_eventually_forces_final() {
+    assert_eq!(
+        reasoning_loop_recovery_action(0),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(1),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(3),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(u8::MAX),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("safe read-only tool"));
+    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("trustworthy target"));
+}
+
+#[test]
+fn test_adversarial_7_file_reread_after_change_is_fresh_not_stale() {
+    // Scenario 7: Same file is reread because it changed on disk -> must NOT be treated as stale repetition.
+    let mut ledger = loop_detect::ProgressLedger::default();
+
+    // 1. Initial read
+    let obs1 = loop_detect::ProgressObservation {
+        action: "view_file:src/lib.rs#0".to_string(),
+        output_fingerprint: loop_detect::stable_hash("initial content"),
+        state_fingerprint: None,
+        failure_fingerprint: None,
+        changed_workspace: false,
+        fresh_read: true,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: true,
+        replayed: false,
+        success: true,
+    };
+    let a1 = ledger.observe(&obs1);
+    assert_eq!(a1.reason, loop_detect::ProgressReason::FreshRead);
+    assert!(a1.meaningful);
+
+    // 2. Edit occurs
+    let obs2 = loop_detect::ProgressObservation {
+        action: "edit:src/lib.rs".to_string(),
+        output_fingerprint: loop_detect::stable_hash("applied"),
+        state_fingerprint: Some(loop_detect::stable_hash("src/lib.rs\n+new line")),
+        failure_fingerprint: None,
+        changed_workspace: true,
+        fresh_read: false,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: false,
+        replayed: false,
+        success: true,
+    };
+    let a2 = ledger.observe(&obs2);
+    assert_eq!(a2.reason, loop_detect::ProgressReason::WorkspaceChanged);
+    assert!(a2.meaningful);
+
+    // 3. Post-edit re-read with updated content (replayed is false)
+    let obs3 = loop_detect::ProgressObservation {
+        action: "view_file:src/lib.rs#0".to_string(),
+        output_fingerprint: loop_detect::stable_hash("new updated content"),
+        state_fingerprint: None,
+        failure_fingerprint: None,
+        changed_workspace: false,
+        fresh_read: true,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: true,
+        replayed: false,
+        success: true,
+    };
+    let a3 = ledger.observe(&obs3);
+    assert_eq!(a3.reason, loop_detect::ProgressReason::FreshRead);
+    assert!(a3.meaningful);
+    assert_eq!(ledger.no_progress_streak(), 0);
+}
+
+#[test]
+fn test_adversarial_8_readonly_analysis_task_does_not_false_positive() {
+    // Scenario 8: Read-only/analysis task with no expected workspace edits ->
+    // no-progress-by-no-edit must not create false positives.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let mut ledger = loop_detect::ProgressLedger::default();
+
+    let analysis_steps = [
+        (
+            "src/network/stream_request.rs",
+            "Examining stream_request for SSE chunk parsing and backpressure.",
+        ),
+        (
+            "src/network/runner.rs",
+            "Checking how runner collects chunks and manages timeouts.",
+        ),
+        (
+            "src/network/turn_engine.rs",
+            "Synthesizing turn execution lifecycle for final explanation.",
+        ),
+    ];
+
+    for (file, reasoning) in analysis_steps {
+        let obs = loop_detect::ProgressObservation {
+            action: format!("view_file:{file}#0"),
+            output_fingerprint: loop_detect::stable_hash(file),
+            state_fingerprint: None,
+            failure_fingerprint: None,
+            changed_workspace: false,
+            fresh_read: true,
+            search_result: false,
+            no_result: false,
+            verification: false,
+            read_only: true,
+            replayed: false,
+            success: true,
+        };
+        let assessment = ledger.observe(&obs);
+        assert!(assessment.meaningful);
+
+        let status = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: ledger.no_progress_streak(),
+        });
+        assert_eq!(status, loop_detect::ReasoningLoopStatus::Ok);
+    }
+}
+
+#[test]
+fn vision_profile_error_names_bad_value_and_options() {
+    let available = vec![
+        "deepseek-v4.1-flash".to_string(),
+        "gemini-3.6-flash".to_string(),
+    ];
+    let stale = super::vision_profile_missing_error(Some("qwen-3.8:27b-3bit"), &available);
+    assert!(stale.contains("qwen-3.8:27b-3bit"), "{stale}");
+    assert!(stale.contains("deepseek-v4.1-flash"), "{stale}");
+    assert!(stale.contains("gemini-3.6-flash"), "{stale}");
+
+    let missing = super::vision_profile_missing_error(None, &available);
+    assert!(
+        missing.contains("no vision_model is configured"),
+        "{missing}"
+    );
+
+    let empty = super::vision_profile_missing_error(Some(""), &available);
+    assert!(empty.contains("no vision_model is configured"), "{empty}");
+}

@@ -1,0 +1,1945 @@
+#[cfg(test)]
+use crate::app::AppStatus;
+use crate::app::{AppState, ChatMessage};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Stable marker used internally when the final request projection cannot
+/// retain the configured completion reserve.  The turn layer turns this into
+/// an actionable persisted checkpoint instead of sending a provider request
+/// that is known to exceed the context budget.
+pub(crate) const CONTEXT_PREFLIGHT_STOP_PREFIX: &str = "context_budget_exceeded:";
+
+pub(crate) fn context_preflight_checkpoint_notice(
+    preflight: &compaction::PreflightBudget,
+) -> String {
+    format!(
+        concat!(
+            "[Context checkpoint: the final request was not sent because its estimated prompt ",
+            "({prompt} tokens) plus the completion reserve ({completion}) exceeds the ",
+            "effective context limit ({limit}). The current turn checkpoint is preserved. ",
+            "Run /compact, start /new, or continue with a narrower request before retrying.]"
+        ),
+        prompt = preflight.total_estimated_prompt,
+        completion = preflight.completion_reserve,
+        limit = preflight.hard_effective_limit,
+    )
+}
+
+#[path = "network/context/mod.rs"]
+pub(crate) mod compaction;
+
+#[path = "network/retry.rs"]
+pub(crate) mod retry;
+
+#[path = "network/loop_detect.rs"]
+pub(crate) mod loop_detect;
+
+#[path = "network/helpers.rs"]
+pub(crate) mod helpers;
+#[cfg(test)]
+pub(crate) use helpers::classify_tool_msg;
+pub(crate) use helpers::{count_tokens, parse_sse_line};
+
+#[path = "network/messages.rs"]
+pub(crate) mod messages;
+pub(crate) use messages::{
+    PrefixCacheDecision, RequestPrefixCache, attach_request_context_tail,
+    inject_bootstrap_action_nudge, inject_system_reminder, replace_request_context_tail,
+    trim_msgs_to_budget, truncate_context_tail_to_tokens,
+};
+
+#[path = "network/text.rs"]
+pub(crate) mod text;
+use text::is_cut_off;
+
+#[path = "network/stream.rs"]
+pub(crate) mod stream;
+pub(crate) use stream::StreamBuffer;
+
+#[path = "network/stream_request.rs"]
+pub(crate) mod stream_request;
+pub use stream_request::stream_request;
+#[cfg(test)]
+pub(crate) use stream_request::{
+    parse_native_tool_arguments, request_debug_log_line, request_log_summary,
+};
+
+#[path = "network/output.rs"]
+pub(crate) mod output;
+
+#[path = "network/events.rs"]
+pub(crate) mod events;
+pub(crate) use events::{ToolResult, ToolResultMetadata};
+
+#[path = "network/ui_adapter.rs"]
+pub(crate) mod ui_adapter;
+pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
+
+#[path = "network/tool_exec.rs"]
+pub(crate) mod tool_exec;
+pub(crate) use tool_exec::{
+    bounded_tool_result_history_message, confirm_and_execute, final_tool_diff, get_diff_preview,
+    subagent_tool_history_message, tool_result_precludes_preview_fallback,
+};
+#[cfg(test)]
+pub(crate) use tool_exec::{
+    execute_tool_batch, extract_diff_block, finalize_tool_result, get_tool_project_root,
+    tool_result_from_execution, tool_result_history_message,
+};
+
+#[path = "network/turn/mod.rs"]
+pub(crate) mod turn_engine;
+pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
+pub(crate) use turn_engine::run_agent_turn_with_context;
+pub use turn_engine::{SegmentCheckpoint, TurnContext, run_agent_turn};
+
+#[path = "network/lifecycle.rs"]
+pub(crate) mod lifecycle;
+
+#[path = "network/history.rs"]
+pub(crate) mod history;
+
+#[path = "network/runner.rs"]
+pub(crate) mod runner;
+
+#[path = "network/policy.rs"]
+pub(crate) mod policy;
+
+#[path = "network/verification.rs"]
+pub(crate) mod verification;
+
+#[path = "network/image_fallback.rs"]
+pub(crate) mod image_fallback;
+
+#[path = "network/payload.rs"]
+pub(crate) mod payload;
+pub use payload::{fetch_model_quota, parse_multimodal_content};
+
+#[path = "network/compiler.rs"]
+pub(crate) mod compiler;
+#[cfg(test)]
+pub(crate) use compiler::{
+    append_compiler_diagnostics, compiler_diagnostics_with_snippets, run_compiler_check,
+};
+pub(crate) use compiler::{
+    cached_compiler_check, compiler_diagnostic_fingerprint, update_compiler_diagnostic_streak,
+};
+
+#[path = "network/subagents.rs"]
+pub(crate) mod subagents;
+#[allow(unused_imports)]
+pub(crate) use subagents::{handle_agent_tool, run_subagent, set_subagent_status};
+
+#[path = "network/title.rs"]
+pub(crate) mod title;
+#[allow(unused_imports)]
+pub(crate) use title::record_prompt_to_history;
+
+#[path = "network/context_tail.rs"]
+pub(crate) mod context_tail;
+#[cfg(test)]
+pub(crate) use context_tail::build_dynamic_context_tail;
+pub(crate) use context_tail::{
+    ContextCheckpoint, build_dynamic_context_tail_with_checkpoint, build_volatile_context_block,
+    format_read_file_context_entry, prepend_skill_routing_hint,
+};
+
+/// Injected as a system directive for the final wrap-up turn after a loop is
+/// detected. Disables tools and forces a prose answer so the user gets a
+/// summary instead of a silently aborted session. Ported from opencode's
+/// `MAX_STEPS_PROMPT`.
+pub(crate) const FORCE_ANSWER_PROMPT: &str = "CRITICAL — you are stuck in a loop. Tools are now DISABLED for this turn. \
+Do NOT emit any tool calls (no reads, writes, edits, searches). Respond with TEXT ONLY, and include: \
+a short statement that you stopped to avoid looping, a summary of what you found or accomplished so far, \
+any remaining tasks, and a recommendation for what to do next. This overrides all other instructions.";
+
+/// Low-bit local models can return an empty completion after a successful tool
+/// call. Give the model one concise answer-only retry before treating the turn
+/// as unrecoverable.
+pub(crate) const EMPTY_RESPONSE_RECOVERY_PROMPT: &str = "The previous model response was empty. Use the tool result already provided and answer the user's request now. Do not call tools unless the answer truly requires another tool call. Be concise.";
+
+pub(crate) const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for bounded recovery attempts. \
+Do not repeat the same tool call or the same exact edit. Re-read a broader file region or use grep to verify exact target content, \
+then use a grounded approach. Use the active tool interface directly; never print tool-call syntax as prose. \
+If the requested change is already present or cannot be applied safely, explain that instead of retrying. Repeated stagnation consumes the bounded recovery budget, after which the harness requests a final text answer.";
+
+pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. This is an advisory recovery message; tools remain enabled. Do not restate the requirements or repeat the same unchanged action. Take one bounded, evidence-producing step: use a safe read-only tool when more evidence is genuinely needed, mutate only when you have a trustworthy target and the user authorized the change, or give a clear diagnostic/final response.]";
+
+/// Select native tool schemas without holding the application state mutex over
+/// synchronous MCP/filesystem work. Cache metadata is snapshotted before the
+/// computation and sticky names are committed only if that snapshot is still
+/// current when the computation finishes.
+pub(crate) async fn prepare_native_tool_schemas(
+    state: &Arc<Mutex<AppState>>,
+    policy: crate::tools::ToolSchemaPolicy,
+    messages: &[serde_json::Value],
+    workspace_root: Option<&std::path::Path>,
+) -> (
+    Vec<serde_json::Value>,
+    crate::tools::McpSchemaSelectionStats,
+) {
+    let (snapshot, always_include_servers) = {
+        let mut s = state.lock().await;
+        let session_id = s.active_session_id.clone();
+        let snapshot = s
+            .prompt_cache
+            .native_tool_schema_snapshot(policy, messages, &session_id);
+        let always_include_servers = s
+            .config
+            .mcp_servers
+            .iter()
+            .filter(|server| server.enabled && server.always_include)
+            .map(|server| server.name.clone())
+            .collect::<Vec<_>>();
+        (snapshot, always_include_servers)
+    };
+    let result = crate::tools::native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
+        snapshot.policy,
+        messages,
+        &snapshot.sticky_names,
+        workspace_root,
+        &always_include_servers,
+    );
+    {
+        let mut s = state.lock().await;
+        let _ = s
+            .prompt_cache
+            .commit_native_tool_schema_selection(&snapshot, &result.1.selected_names);
+    }
+    result
+}
+
+/// Bounded recovery nudges before the harness asks for a final text answer for
+/// a mutating or otherwise unsafe loop.
+pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 3;
+
+/// Read-only work gets one extra recovery because a changed query or broader
+/// inspection can legitimately uncover new evidence. This is still finite:
+/// resetting the detectors after a recovery must not reset the turn-wide
+/// recovery budget and permit an endless search/read cycle.
+pub(crate) const MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS: u8 = 4;
+
+/// Safety budgets for a single agent turn. These are deliberately generous —
+/// the goal is to catch a runaway session (the benchmark that motivated this
+/// hit 106 rounds with no hard stop), not to cut off healthy long-running
+/// work. Any one signal firing is enough: a session that is genuinely
+/// healthy on every other axis but has spent 500k tokens or 40 rounds has
+/// stopped being worth running unattended.
+const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
+/// A tool that reports success without changing anything (already-applied
+/// edits, no-op runs) does not count as progress, so this escalates much
+/// faster than the round budget when the agent is just spinning.
+const MAX_CONSECUTIVE_NO_PROGRESS: usize = 6;
+const MAX_CONSECUTIVE_FAILED_MUTATIONS: usize = 5;
+const MAX_CONSECUTIVE_COMPILER_ERROR_GATES: usize = 5;
+const MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS: usize = 4;
+/// A malformed tool-call block is a protocol error, not a failed mutation —
+/// the model tried to call a tool and produced text the harness couldn't
+/// parse at all. Retrying blindly forever wastes rounds and tokens on a
+/// model that isn't going to self-correct, so this budget trips much faster
+/// than the general round cap.
+const MAX_CONSECUTIVE_MALFORMED_CALLS: usize = 4;
+
+/// Which safety budget stopped the turn, with enough detail for the final
+/// summary to name the exact limit that was hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TurnBudgetLimit {
+    /// A productive segment ended and can be resumed with the existing
+    /// transcript and progress ledger.
+    ProductiveSegment {
+        used: usize,
+        maximum: usize,
+    },
+    ToolRounds(usize),
+    TotalToolRounds(usize),
+    Tokens(u64),
+    NoProgress(usize),
+    FailedMutations(usize),
+    CompilerErrorGates(usize),
+    CompilerDiagnostics(usize),
+    MalformedCalls(usize),
+}
+
+impl std::fmt::Display for TurnBudgetLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TurnBudgetLimit::ProductiveSegment { used, maximum } => write!(
+                f,
+                "productive segment limit reached ({used}/{maximum} rounds); continuation queued"
+            ),
+            TurnBudgetLimit::ToolRounds(n) => write!(f, "maximum tool rounds reached ({n})"),
+            TurnBudgetLimit::TotalToolRounds(n) => {
+                write!(f, "maximum total tool rounds reached ({n})")
+            }
+            TurnBudgetLimit::Tokens(n) => write!(f, "maximum token budget reached (~{n} tokens)"),
+            TurnBudgetLimit::NoProgress(n) => write!(
+                f,
+                "{n} consecutive tool results with no meaningful progress (no-op or unchanged edits)"
+            ),
+            TurnBudgetLimit::FailedMutations(n) => {
+                write!(f, "{n} consecutive failed edits")
+            }
+            TurnBudgetLimit::CompilerErrorGates(n) => {
+                write!(
+                    f,
+                    "{n} consecutive completion attempts with the build still broken"
+                )
+            }
+            TurnBudgetLimit::CompilerDiagnostics(n) => {
+                write!(
+                    f,
+                    "{n} consecutive edits left the same compiler diagnostics unchanged"
+                )
+            }
+            TurnBudgetLimit::MalformedCalls(n) => {
+                write!(
+                    f,
+                    "{n} consecutive malformed tool-call blocks the harness could not parse"
+                )
+            }
+        }
+    }
+}
+
+/// Adds this round's token usage onto the turn's running total. The
+/// provider's `usage` field is per-response (this round's full prompt +
+/// completion), not a cumulative conversation total, so it is correct to sum
+/// it round over round rather than overwrite — overwriting would let a
+/// 30-round turn look like it spent only what the last round used, silently
+/// defeating the token safety budget. Falls back to a character-based
+/// estimate for providers that don't report usage.
+pub(crate) fn accumulate_tokens_used(
+    current: u64,
+    reported_this_round: Option<u64>,
+    content: &str,
+) -> u64 {
+    current.saturating_add(reported_this_round.unwrap_or_else(|| count_tokens(content) as u64))
+}
+
+/// Checks every budget signal and returns the first one that has been
+/// exceeded, if any. Order matters only for which reason is reported when
+/// several trip on the same round — all are equally terminal.
+pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
+    if ctx.budget.tokens_used >= MAX_TURN_TOKEN_BUDGET {
+        return Some(TurnBudgetLimit::Tokens(ctx.budget.tokens_used));
+    }
+    if ctx.progress.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS {
+        return Some(TurnBudgetLimit::NoProgress(
+            ctx.progress.consecutive_no_progress,
+        ));
+    }
+    if ctx.progress.consecutive_failed_mutations >= MAX_CONSECUTIVE_FAILED_MUTATIONS {
+        return Some(TurnBudgetLimit::FailedMutations(
+            ctx.progress.consecutive_failed_mutations,
+        ));
+    }
+    if ctx.compiler.consecutive_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
+        return Some(TurnBudgetLimit::CompilerErrorGates(
+            ctx.compiler.consecutive_error_gates,
+        ));
+    }
+    if ctx.compiler.consecutive_diagnostics >= MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+        return Some(TurnBudgetLimit::CompilerDiagnostics(
+            ctx.compiler.consecutive_diagnostics,
+        ));
+    }
+    if ctx.recovery.consecutive_malformed_calls >= MAX_CONSECUTIVE_MALFORMED_CALLS {
+        return Some(TurnBudgetLimit::MalformedCalls(
+            ctx.recovery.consecutive_malformed_calls,
+        ));
+    }
+    // The total-round count is intentionally after the specific guards. It is
+    // an explicit unattended/CI ceiling across all segments.
+    if ctx.budget.max_total_tool_rounds != usize::MAX
+        && ctx.budget.tool_rounds >= ctx.budget.max_total_tool_rounds
+    {
+        return Some(TurnBudgetLimit::TotalToolRounds(ctx.budget.tool_rounds));
+    }
+    // A configured round count is a segment backstop. Productive work gets a
+    // fresh segment with the same progress ledger; work with no progress
+    // stops here rather than opening an unattended continuation loop.
+    if ctx.budget.max_tool_rounds != usize::MAX
+        && ctx.segment_rounds() >= ctx.budget.max_tool_rounds
+    {
+        if ctx.has_progress_in_current_segment() {
+            return Some(TurnBudgetLimit::ProductiveSegment {
+                used: ctx.segment_rounds(),
+                maximum: ctx.budget.max_tool_rounds,
+            });
+        }
+        return Some(TurnBudgetLimit::ToolRounds(ctx.segment_rounds()));
+    }
+    None
+}
+
+/// Stop the turn safely when a budget has been exceeded: never claim
+/// completion, leave the transcript intact, and explain exactly which limit
+/// was hit so the user can decide whether to resume.
+pub(crate) async fn stop_turn_for_budget(
+    _state: &Arc<Mutex<AppState>>,
+    ctx: &mut TurnContext,
+    limit: TurnBudgetLimit,
+) -> bool {
+    let productive_segment = matches!(limit, TurnBudgetLimit::ProductiveSegment { .. });
+    dbg_log!("Turn budget exceeded: {}", limit);
+    crate::logger::operational_event(
+        "turn.budget_exceeded",
+        serde_json::json!({
+            "limit": limit.to_string(),
+            "tool_rounds": ctx.budget.tool_rounds,
+            "elapsed_secs": ctx.lifecycle.turn_started_at.elapsed().as_secs(),
+            "tokens_used": ctx.budget.tokens_used,
+            "failed_mutations": ctx.progress.failed_mutations,
+            "segment_rounds": ctx.segment_rounds(),
+            "segment_limit": (ctx.budget.max_tool_rounds != usize::MAX)
+                .then_some(ctx.budget.max_tool_rounds),
+            "total_round_limit": (ctx.budget.max_total_tool_rounds != usize::MAX)
+                .then_some(ctx.budget.max_total_tool_rounds),
+            "continuation": productive_segment,
+        }),
+    );
+    let summary = if productive_segment {
+        format!(
+            "[harness: completed a productive segment after {} tool round(s) — {limit}. \
+             The task is NOT complete. Successful tool results are preserved and the next \
+             segment will continue from this checkpoint without replaying completed calls. \
+             Total rounds so far: {}; token safety budget: {MAX_TURN_TOKEN_BUDGET} tokens.]",
+            ctx.segment_rounds(),
+            ctx.budget.tool_rounds,
+        )
+    } else {
+        format!(
+            "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
+             Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
+            ctx.budget.tool_rounds
+        )
+    };
+    ctx.response.final_content = summary;
+    // The preceding tool response may already be persisted, but this new
+    // stop explanation still needs to reach the final transcript.
+    ctx.response.final_content_persisted = false;
+    ctx.lifecycle.task_completed = false;
+    ctx.budget.continuation_pending = productive_segment;
+    ctx.budget.budget_stopped = (!productive_segment).then(|| limit.to_string());
+    ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
+    let mut s = _state.lock().await;
+    s.continuous_mode = false;
+    s.enter_idle();
+    drop(s);
+    false
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LoopRecoveryAction {
+    Recover,
+    ForceFinal,
+}
+
+#[cfg(test)]
+pub(crate) fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
+    if attempts < MAX_LOOP_RECOVERY_ROUNDS {
+        LoopRecoveryAction::Recover
+    } else {
+        LoopRecoveryAction::ForceFinal
+    }
+}
+
+/// Healthy reads never reach this policy; it is consulted only after loop or
+/// stagnation detection aborts a batch. Give detected read-only/reasoning
+/// loops a slightly more permissive, but still deterministic, recovery budget.
+pub(crate) fn loop_recovery_action_for(
+    attempts: u8,
+    read_only_or_reasoning: bool,
+) -> LoopRecoveryAction {
+    let max_attempts = if read_only_or_reasoning {
+        MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS
+    } else {
+        MAX_LOOP_RECOVERY_ROUNDS
+    };
+    if attempts < max_attempts {
+        LoopRecoveryAction::Recover
+    } else {
+        LoopRecoveryAction::ForceFinal
+    }
+}
+
+pub(crate) fn reasoning_loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
+    loop_recovery_action_for(attempts, true)
+}
+
+/// Keep at most one loop warning in the current user turn. Tool results land
+/// after the warning, so checking only the final history entry still allowed
+/// near-identical warnings to crowd out useful context.
+pub(crate) fn push_or_replace_loop_warning(history: &mut Vec<ChatMessage>, text: String) {
+    let warning = history
+        .iter_mut()
+        .rev()
+        .take_while(|message| message.role != "user")
+        .find(|message| message.role == "system" && message.content.starts_with("[Loop warning:"));
+    if let Some(warning) = warning {
+        warning.content = text;
+    } else {
+        history.push(ChatMessage::new("system", text));
+    }
+}
+
+/// Recovery guidance is a current-state hint, not durable task evidence. Keep
+/// only the latest hint for this logical user turn so repeated recovery cannot
+/// grow every subsequent request while assistant/tool history remains intact.
+pub(crate) fn push_or_replace_recovery_notice(history: &mut Vec<ChatMessage>, text: String) {
+    let is_recovery_notice = |content: &str| {
+        content.starts_with("[Evidence-based recovery:")
+            || content.starts_with("The previous tool action repeated")
+            || content.starts_with("[Your reasoning became repetitive")
+            || content.starts_with("[Replan required:")
+    };
+    let notice = history
+        .iter_mut()
+        .rev()
+        .take_while(|message| message.role != "user")
+        .find(|message| message.role == "system" && is_recovery_notice(&message.content));
+    if let Some(notice) = notice {
+        notice.content = text;
+    } else {
+        history.push(ChatMessage::new("system", text));
+    }
+}
+
+pub(crate) fn log_recovery_decision(ctx: &TurnContext, source: &str, decision: &str, reason: &str) {
+    crate::logger::operational_event(
+        "turn.recovery_decision",
+        serde_json::json!({
+            "round": ctx.budget.tool_rounds,
+            "source": source,
+            "decision": decision,
+            "reason": reason,
+            "loop_recovery_attempts": ctx.recovery.loop_recovery_attempts,
+            "reasoning_recovery_attempts": ctx.recovery.reasoning_recovery_attempts,
+            "no_progress_streak": ctx.progress.consecutive_no_progress,
+        }),
+    );
+}
+
+/// True when a mutating tool's result reflects real forward progress —
+/// not merely a reported success. A failed edit changed nothing, and
+/// neither did an idempotent no-op (PR #306's "already applied" signal
+/// for an edit that was already applied). Both cases must be treated the
+/// same by every consumer that gates on "did this round move the task
+/// forward": the no-progress safety budget, and the loop detector's
+/// reset-on-progress rule. Otherwise a model that keeps re-submitting an
+/// already-applied edit gets a "success" every round that resets the loop
+/// detector, so it never trips — defeating the detector entirely.
+pub(crate) fn mutation_made_progress(success: bool, content: &str) -> bool {
+    if !success {
+        return false;
+    }
+    let lower = content.trim_start().to_ascii_lowercase();
+    !lower.starts_with("error") && !lower.contains("already applied")
+}
+
+pub(crate) fn failure_replan_message(tool: &str, category: &str, repeats: usize) -> String {
+    format!(
+        "[Replan required: {repeats} equivalent mutation attempts for '{tool}' ({category}) failed. These failed attempts changed no files. Do not retry the same edit. Inspect the current workspace and use a materially different safe approach. If inspection shows the change still cannot be applied safely, explain the exact blocker to the user.]"
+    )
+}
+
+/// #985 immutable-history contract: the in-place tool-output rewrite path
+/// (`reduce_tool_msg` / `prune_class` excerpting retained messages, plus the
+/// `<think>`-strip loop in `compact_history_to_budget`) is retired from the
+/// default turn path. Rewriting retained messages churns the prompt prefix on
+/// every turn, defeating KV-cache reuse and risking silent evidence loss.
+/// Under pressure, relief comes from FIFO head compaction
+/// (`compact_history_deterministically`: head replaced by a fixed record,
+/// retained tail stays byte-identical) plus request-time trimming of the
+/// rendered payload (`trim_msgs_to_budget`). Request rendering already strips
+/// `<think>` blocks (`history::to_messages`) without touching storage.
+
+const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
+
+fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
+    if history.len() < 4 {
+        return false;
+    }
+
+    let keep_target = (budget / 3).max(64);
+    let mut suffix_tokens = 0u32;
+    let mut suffix_messages = 0usize;
+    let mut suffix_start = history.len();
+    for index in (0..history.len()).rev() {
+        let message_tokens = u32::try_from(crate::network::compaction::estimate_message_tokens(
+            &history[index],
+        ))
+        .unwrap_or(u32::MAX);
+        if suffix_messages == 0 || suffix_tokens.saturating_add(message_tokens) <= keep_target {
+            suffix_start = index;
+            suffix_tokens = suffix_tokens.saturating_add(message_tokens);
+            suffix_messages += 1;
+        } else {
+            break;
+        }
+    }
+    if suffix_start == 0 {
+        return false;
+    }
+
+    // Never split an old conversation in the middle of a user turn or a
+    // structured tool transaction. The retained suffix therefore keeps the
+    // current follow-up and its recent tool activity together.
+    let boundary = crate::network::compaction::valid_compaction_boundary(history, suffix_start);
+    if boundary == 0 {
+        return false;
+    }
+
+    let record_limit = budget
+        .saturating_mul(3)
+        .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
+    let record = deterministic_context_record(&history[..boundary], record_limit);
+    let retained_tail = history[boundary..].to_vec();
+    let record_message =
+        crate::network::compaction::durable_compaction_record_message(&record, &retained_tail);
+    history.splice(0..boundary, [record_message]);
+    true
+}
+
+fn deterministic_context_record(history: &[ChatMessage], max_chars: usize) -> String {
+    crate::network::compaction::StructuredSessionMemory::extract_from_history(history)
+        .format_record(max_chars)
+}
+
+pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
+    if history.is_empty() {
+        return false;
+    }
+    let before = history.clone();
+
+    // Observe-only pass (never rewrites storage under #985; returns 0).
+    // Kept for the compaction metric below.
+    let duplicate_reads = crate::network::compaction::prune_duplicate_tool_results(
+        history.as_slice(),
+        crate::network::compaction::KEEP_RECENT_TURNS,
+    );
+
+    let total: u32 = history
+        .iter()
+        .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
+        .sum();
+    if total <= budget {
+        return *history != before;
+    }
+
+    dbg_log!(
+        "History tokens ({}) exceed budget ({}). Applying head-record compaction; retained tail stays byte-identical.",
+        total,
+        budget
+    );
+
+    // Sole pressure relief on the default turn path: FIFO head compaction.
+    // The head is replaced by a fixed deterministic record while the retained
+    // tail is spliced verbatim. Any residual over-budget remainder is absorbed
+    // at request time by `trim_msgs_to_budget` over the rendered payload —
+    // never by editing stored messages.
+    let deterministic_record = compact_history_deterministically(history, budget);
+
+    let new_total: u32 = history
+        .iter()
+        .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
+        .sum();
+    dbg_log!(
+        "Compact finished. New history tokens: {} (deterministic_record={})",
+        new_total,
+        deterministic_record
+    );
+    crate::logger::operational_event(
+        "context.compaction",
+        serde_json::json!({
+            "history_tokens": new_total,
+            "budget": budget,
+            "duplicate_reads_collapsed": duplicate_reads,
+            "summary_generated": false,
+            "deterministic_record": deterministic_record,
+            "hard_trim": false,
+        }),
+    );
+    *history != before
+}
+
+/// Extract a context length from ollama's /api/show `model_info` blob;
+/// the key is architecture-prefixed, e.g. "llama.context_length".
+fn context_length_from_model_info(info: &serde_json::Value) -> Option<u32> {
+    info.as_object()?
+        .iter()
+        .find(|(k, _)| k.ends_with(".context_length"))
+        .and_then(|(_, v)| v.as_u64())
+        .map(|n| n as u32)
+}
+
+/// Ask a provider's introspection endpoint for a model's context window.
+///
+/// Only explicitly supported engines are probed. In particular, oMLX and
+/// generic OpenAI-compatible endpoints do not currently expose a verified
+/// context-limit endpoint, so callers must use the profile's explicit limit
+/// instead of treating an incidental `/props` or `/api/show` response as an
+/// automatic detection.
+pub async fn fetch_context_window(
+    client: &reqwest::Client,
+    chat_url: &str,
+    model: &str,
+    engine: Option<&str>,
+) -> Option<u32> {
+    let base = chat_url.strip_suffix("/v1/chat/completions")?;
+
+    match engine.map(|value| value.to_ascii_lowercase())?.as_str() {
+        "ollama" => {
+            let show_url = format!("{base}/api/show");
+            let resp = client
+                .post(&show_url)
+                .json(&serde_json::json!({"model": model}))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await.ok()?;
+                context_length_from_model_info(body.get("model_info")?)
+            } else {
+                None
+            }
+        }
+        "llamacpp" | "llama.cpp" | "llama" => {
+            let props_url = format!("{base}/props");
+            let resp = client.get(&props_url).send().await.ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            let body: serde_json::Value = resp.json().await.ok()?;
+            body.get("default_generation_settings")
+                .and_then(|v| v.get("n_ctx"))
+                .and_then(|v| v.as_u64())
+                .or_else(|| body.get("n_ctx").and_then(|v| v.as_u64()))
+                .map(|n| n as u32)
+        }
+        _ => None,
+    }
+}
+
+/// Read-only tools whose results can be safely short-circuited by the repeat guard.
+pub(crate) fn is_read_only_tool(name: &str) -> bool {
+    matches!(
+        crate::tools::tool_safety(name),
+        crate::tools::ToolSafety::ReadOnly
+    )
+}
+
+pub(crate) fn is_mutating_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "write_file_chunk"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+            | "generate_sound_effect"
+            | "generate_music"
+            | "render_video"
+            | "spawn_agent"
+            | "send_agent"
+            | "cancel_agent"
+    )
+}
+
+/// True only if we have read this file before AND its mtime is unchanged since.
+/// A re-read is allowed whenever the file is new, missing, or modified on disk —
+/// so the agent can always refresh after a (possibly partial) edit.
+pub(crate) fn view_file_unchanged_since_last_read(
+    stored: Option<std::time::SystemTime>,
+    current: Option<std::time::SystemTime>,
+) -> bool {
+    matches!((stored, current), (Some(a), Some(b)) if a == b)
+}
+
+/// Best-effort mtime of the resolved tool path (None if it can't be stat'd).
+pub(crate) fn path_mtime(raw_path: &str) -> Option<std::time::SystemTime> {
+    std::fs::metadata(crate::tools::resolve_tool_path(raw_path))
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+/// A canonical key identifying "the same call" for the repeat guard.
+pub(crate) fn tool_signature(name: &str, args: &serde_json::Value) -> String {
+    if let Some(target) = crate::network::loop_detect::inspection_target(name, args) {
+        return format!("inspection:{target}");
+    }
+    if crate::network::loop_detect::is_read_only_call(name, args) {
+        let (_, category) = crate::network::loop_detect::signatures(name, args);
+        return format!("inspection:{category}");
+    }
+    let key = match name {
+        // Bucket full/default reads together so paging can't bypass the guard.
+        "view_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1);
+            let end_str = args
+                .get("end_line")
+                .and_then(|v| v.as_u64())
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "end".to_string());
+            format!("{path}|{start}-{end_str}")
+        }
+        _ => serde_json::to_string(args).unwrap_or_default(),
+    };
+    format!("{name}:{key}")
+}
+
+pub(crate) fn align_alternating_messages(
+    raw_msgs: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    if raw_msgs.is_empty() {
+        return raw_msgs;
+    }
+
+    let mut msgs = Vec::new();
+    let mut instruction_prefix: Vec<serde_json::Value> = Vec::new();
+
+    // 1. Preserve leading base/developer instructions as distinct typed inputs,
+    //    and keep any later system entry where it happened, as a user turn.
+    //
+    //    A harness note earns its meaning from its position: "this action has
+    //    repeated 5 times" answers the call above it. Hoisting it into the
+    //    system prompt files it 12k characters away from the thing it is about,
+    //    behind the skill catalogue, where it reads as a standing instruction
+    //    rather than a response. Providers that demand strict alternation reject
+    //    a mid-conversation system role, so it is carried as user text instead.
+    let mut still_leading = true;
+    for msg in raw_msgs {
+        if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
+            if role == "system" && still_leading {
+                if let Some(previous) = instruction_prefix.last_mut()
+                    && previous.get("role").and_then(|value| value.as_str()) == Some("system")
+                {
+                    let content = msg
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
+                    if let Some(previous_content) = previous
+                        .get_mut("content")
+                        .and_then(|value| value.as_str().map(str::to_string))
+                    {
+                        previous["content"] = format!("{previous_content}\n\n{content}").into();
+                    }
+                } else {
+                    instruction_prefix.push(msg);
+                }
+            } else if role == "developer" && still_leading {
+                instruction_prefix.push(msg);
+            } else if role == "system" {
+                let content = msg
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                msgs.push(serde_json::json!({ "role": "user", "content": content }));
+            } else {
+                still_leading = false;
+                msgs.push(msg);
+            }
+        }
+    }
+
+    let mut final_msgs = instruction_prefix;
+
+    if msgs.is_empty() {
+        return final_msgs;
+    }
+
+    // 2. Ensure the first message is a "user" message
+    let first_role = msgs[0]
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("user");
+    if first_role != "user" {
+        final_msgs.push(serde_json::json!({
+            "role": "user",
+            "content": "[Context initialization]",
+        }));
+    }
+
+    // 3. Alternate roles, merging consecutive same-role non-tool messages
+    for msg in msgs {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let content = msg
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // A message carrying structured tool calls can never be merged: the
+        // merge keeps only text, so folding it into a neighbour would silently
+        // drop the calls and leave the following tool results answering nothing.
+        let carries_calls = msg.get("tool_calls").is_some();
+        if let Some(last) = final_msgs.last_mut() {
+            let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            let last_carries_calls = last.get("tool_calls").is_some();
+            if last_role == role && role != "tool" && !carries_calls && !last_carries_calls {
+                if let Some(last_content) = last.get_mut("content") {
+                    let mut new_content = last_content.as_str().unwrap_or("").to_string();
+                    new_content.push_str("\n\n");
+                    new_content.push_str(&content);
+                    *last_content = serde_json::Value::String(new_content);
+                }
+                continue;
+            }
+        }
+        final_msgs.push(msg);
+    }
+
+    final_msgs
+}
+
+/// Ask an endpoint whether it implements OpenAI-style function calling.
+///
+/// Hostnames cannot answer this: a gateway on `localhost:3000` may front a
+/// model with full tool support, and an endpoint at a well-known provider's
+/// address may be a proxy that strips the field. So the endpoint is asked
+/// directly, once, with the smallest request that still carries a tool schema.
+/// Anything other than a clean acceptance counts as unsupported — staying on
+/// the text protocol costs quality, while wrongly assuming tool support breaks
+/// every turn.
+pub async fn probe_function_calling(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    url: &str,
+    model: &str,
+) -> bool {
+    let resolved_url = {
+        let trimmed = url.trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/chat/completions")
+        }
+    };
+    let (api_key, responses_api) = {
+        let s = state.lock().await;
+        let profile = s
+            .config
+            .models
+            .iter()
+            .find(|m| m.url == url || m.endpoint_url() == resolved_url);
+        (
+            profile.and_then(|m| m.resolved_api_key()),
+            profile.is_some_and(|m| {
+                m.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+            }),
+        )
+    };
+    if responses_api {
+        dbg_log!(
+            "probe_function_calling: {} uses Responses function calling; skipping chat probe",
+            resolved_url
+        );
+        return true;
+    }
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": false,
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "probe",
+                "description": "capability probe",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }],
+        "tool_choice": "none",
+    });
+
+    let mut req = client
+        .post(&resolved_url)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(ref key) = api_key {
+        req = req
+            .header("Authorization", format!("Bearer {key}"))
+            .header("X-Api-Key", key);
+    }
+
+    match req.send().await {
+        Ok(response) if response.status().is_success() => {
+            dbg_log!(
+                "probe_function_calling: {} accepts tool schemas",
+                resolved_url
+            );
+            true
+        }
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            dbg_log!(
+                "probe_function_calling: {} rejected tool schema ({}): {}",
+                resolved_url,
+                status,
+                body
+            );
+            false
+        }
+        Err(error) => {
+            dbg_log!(
+                "probe_function_calling: {} probe failed: {}",
+                resolved_url,
+                error
+            );
+            false
+        }
+    }
+}
+
+fn push_status_line(s: &mut AppState, text: String) {
+    s.history.push(ChatMessage::new("system", text));
+    crate::config::save_history(&s.history);
+}
+
+fn history_scope_for_preflight(
+    preflight: &compaction::PreflightBudget,
+) -> history::RequestHistoryScope {
+    if preflight.fits_soft_target() {
+        history::RequestHistoryScope::Full
+    } else {
+        history::RequestHistoryScope::RecentTurns
+    }
+}
+
+/// Reserve the known non-history portions of the soft target so compaction
+/// happens before request assembly reaches the provider's target. The final
+/// preflight still accounts for the exact system prompt, schemas, and dynamic
+/// context; this is the early, history-only trigger used before those pieces
+/// are assembled.
+fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
+    const SYSTEM_PROMPT_HEADROOM: u32 = 2_048;
+    budget
+        .soft_context_target
+        .saturating_sub(budget.tool_reserve)
+        .saturating_sub(budget.provider_overhead_margin)
+        .saturating_sub(SYSTEM_PROMPT_HEADROOM)
+        .max(1)
+        .min(budget.history_tokens.saturating_sub(1).max(1))
+}
+
+/// Actionable error when image input needs a vision profile that is not
+/// configured or no longer matches any model profile (e.g. a renamed model).
+/// Names the bad value and lists valid options so config is fixed in one edit.
+fn vision_profile_missing_error(configured: Option<&str>, available: &[String]) -> String {
+    match configured.filter(|name| !name.is_empty()) {
+        None => "image analysis failed: no vision_model is configured and the active model profile does not declare image input support. Set the vision model in config, or enable supports_vision on the active profile".to_string(),
+        Some(wanted) => format!(
+            "image analysis failed: vision_model '{wanted}' matches no configured model profile. Available profiles: {}. Update the vision model name in config.",
+            available.join(", ")
+        ),
+    }
+}
+
+/// Assemble the full provider request for one agent turn.
+///
+/// Runs AI compaction if the history is long enough, snapshots the eligible
+/// history, then builds the message array: a static system prefix (tool
+/// protocol + agent mode + resolved mutation limit, stable across rounds) plus
+/// the conversation, with all turn-varying context (environment delta,
+/// files-in-context, task plan) appended to the last message. Finally trims to
+/// the context-window budget and injects the system reminder. `tool_rounds` is
+/// only used to decide whether a one-time "context window full" notice is shown.
+#[cfg(test)]
+pub(crate) async fn prepare_turn_request(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+) -> Result<Vec<serde_json::Value>, String> {
+    prepare_turn_request_with_checkpoint(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        ContextCheckpoint::default(),
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn prepare_turn_request_with_checkpoint(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+) -> Result<Vec<serde_json::Value>, String> {
+    prepare_turn_request_with_checkpoint_and_prefix_cache(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        checkpoint,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+    mut prefix_cache: Option<&mut RequestPrefixCache>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let request_session_id = state.lock().await.active_session_id.clone();
+    // Try AI-driven compaction if history is long enough.
+    //
+    // The summarizer is a network round-trip, so the AppState mutex must NOT be
+    // held while it runs: the TUI draw loop locks the same mutex every frame and
+    // would freeze for the whole call. Instead we take a snapshot of the history
+    // under a short lock, compact the owned copy with the lock released, then
+    // re-acquire and merge the result back in.
+    {
+        let (
+            api_url,
+            model_name,
+            budget,
+            local_model,
+            active_session_id,
+            captured_history,
+            provider_usage,
+        ) = {
+            let s = state.lock().await;
+            let local_model = s.active_model_is_local();
+            let context_budget = s.active_context_budget();
+            (
+                s.api_base_url.clone(),
+                s.model_name.clone(),
+                proactive_history_budget(&context_budget) as usize,
+                local_model,
+                s.active_session_id.clone(),
+                s.history.clone(),
+                s.current_token_usage.clone(),
+            )
+        };
+        let pre_len = captured_history.len();
+        let captured_revision = captured_history.revision();
+        let mut working_history = captured_history;
+
+        // Lock released here: this await performs I/O.
+        let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage(
+            client,
+            &api_url,
+            &model_name,
+            working_history.as_mut_vec(),
+            budget,
+            cancel_token,
+            local_model,
+            provider_usage.as_ref(),
+        )
+        .await;
+        // Run the deterministic safety reduction in the same canonical
+        // pipeline and persist it. Request assembly should consume history,
+        // not silently rewrite a second throwaway copy on every tool round.
+        let deterministically_compacted =
+            compact_history_to_budget(working_history.as_mut_vec(), budget as u32).await;
+        let compacted = summarized_or_pruned || deterministically_compacted;
+
+        // Merge policy for history appended while the lock was down (a tool
+        // result or a user message can land mid-compaction):
+        //
+        //  - unchanged history  -> write the compacted copy back wholesale;
+        //  - history grew, and the prefix we compacted is still intact -> keep
+        //    the compacted prefix and re-append the new tail verbatim. Nothing
+        //    that arrived during the call is lost;
+        //  - anything else (history shrank or was rewritten underneath us, e.g.
+        //    /new, /compact, a rollback) -> discard our copy entirely and log
+        //    the miss. Compaction is best-effort and will retry on the next
+        //    turn; clobbering the live history is not an acceptable trade.
+        //
+        // Note that `maybe_compact` also performs local tool-output pruning even
+        // when it returns false, so the write-back is attempted regardless of
+        // the return value; the flag only gates the cache invalidation below.
+        let mut s = state.lock().await;
+        let live_session_id = s.active_session_id.clone();
+        let prefix_intact = live_session_id == active_session_id
+            && s.history.len() >= pre_len
+            && s.history.is_append_only_since(captured_revision);
+        if prefix_intact {
+            if s.history.len() > pre_len {
+                working_history.extend(s.history[pre_len..].iter().cloned());
+            }
+            let history_changed = working_history.revision() != captured_revision;
+            if history_changed {
+                s.history.replace(working_history.into_vec());
+            }
+            if compacted {
+                dbg_log!("History compacted. Clearing read/dedup cache.");
+                s.recent_read_calls.clear();
+                s.recent_read_outputs.clear();
+                s.read_file_mtimes.clear();
+                crate::config::save_history(&s.history);
+            } else if history_changed {
+                // Deterministic pruning can change the request history without
+                // invoking the summarizer. Persist that rewrite as well, but
+                // keep the read cache: no filesystem state changed.
+                crate::config::save_history(&s.history);
+            }
+        } else {
+            dbg_log!(
+                "Skipping automatic compaction write-back: active session or history changed underneath the summarizer (captured session '{}', live session '{}', {} messages before, {} now). Live history kept as-is.",
+                active_session_id,
+                live_session_id,
+                pre_len,
+                s.history.len()
+            );
+        }
+        drop(s);
+    }
+
+    // Everything the request needs from AppState is read in one guarded block so
+    // the lock is taken a couple of times instead of once per field. The
+    // environment snapshot is captured first because it touches the filesystem.
+    let (workspace_root, task_working_directory) = {
+        let s = state.lock().await;
+        let workspace_root = s
+            .workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        let task_working_directory = s
+            .task_working_directory
+            .clone()
+            .or_else(|| workspace_root.clone());
+        (workspace_root, task_working_directory)
+    };
+    let current_snapshot = match (workspace_root.as_deref(), task_working_directory.as_deref()) {
+        (Some(workspace_root), Some(task_working_directory)) => {
+            crate::context::ContextSnapshot::capture_at_scope(
+                workspace_root,
+                task_working_directory,
+            )
+        }
+        _ => crate::context::ContextSnapshot::capture(),
+    };
+    let (
+        mut history_snapshot,
+        budget_token_limit,
+        read_files,
+        todos,
+        volatile_usage,
+        volatile_quota,
+        volatile_window,
+        context_section,
+        system_prompt,
+        skill_metadata,
+        native_schema_policy,
+        active_profile,
+        vision_profile,
+    ) = {
+        let mut s = state.lock().await;
+        let history_snapshot = s.history.clone();
+        let consumed_wakeups = s.consume_observed_background_wakeups();
+        if consumed_wakeups > 0 {
+            dbg_log!(
+                "Consumed {} background wakeup(s) already present in the request history snapshot",
+                consumed_wakeups
+            );
+        }
+        let budget_token_limit = s.get_history_token_budget();
+        let mut read_files: Vec<String> = s
+            .read_file_mtimes
+            .iter()
+            .map(|(path, snapshot_mtime)| {
+                format_read_file_context_entry(path, Some(*snapshot_mtime), path_mtime(path))
+            })
+            .collect();
+        read_files.sort();
+        let todos = s.todos.clone();
+        let volatile_usage = s.current_token_usage.clone();
+        let volatile_quota = s.model_quota_remaining;
+        let volatile_window = s.active_context_window();
+        let context_section = match &s.context_snapshot {
+            Some(prev) => prev
+                .diff(&current_snapshot)
+                .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
+            None => match (workspace_root.as_deref(), task_working_directory.as_deref()) {
+                (Some(workspace_root), Some(task_working_directory)) => {
+                    crate::context::environment_context_without_instructions_for_scope(
+                        workspace_root,
+                        task_working_directory,
+                    )
+                }
+                _ => crate::context::environment_context(),
+            },
+        };
+        let protocol = s.active_tool_protocol();
+        let agent_mode = s.agent_mode;
+        let delegation_active = s.delegation_active;
+        let local_model = s.active_model_is_local();
+        let compact_tool_prompt = s
+            .active_model_profile()
+            .as_ref()
+            .map(|profile| profile.compact_tool_prompt.unwrap_or(local_model))
+            .unwrap_or(local_model)
+            && !matches!(protocol, crate::config::ToolProtocol::ApiNative);
+        let session_title_tool_available =
+            s.session_title_tool_available && agent_mode != crate::config::AgentMode::Plan;
+        let mut schema_policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+            delegation_active,
+            agent_mode,
+            compact_tool_prompt,
+        );
+        if session_title_tool_available {
+            schema_policy = schema_policy.with_session_title_tool();
+        }
+        let mut system_prompt = if compact_tool_prompt || session_title_tool_available {
+            crate::tools::tool_system_prompt_for_policy(schema_policy, protocol, agent_mode)
+        } else {
+            s.prompt_cache
+                .system_prompt(delegation_active, protocol, agent_mode)
+                .to_string()
+        };
+        let tool_scheduling_policy = s
+            .active_model_profile()
+            .as_ref()
+            .map(|profile| profile.tool_scheduling_policy())
+            .unwrap_or_default();
+        crate::tools::append_tool_response_policy(&mut system_prompt, tool_scheduling_policy);
+        let skill_metadata = s.prompt_cache.skill_metadata();
+        let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+            Some(schema_policy)
+        } else {
+            None
+        };
+        // Store the snapshot if this is the first turn.
+        if s.context_snapshot.is_none() {
+            s.context_snapshot = Some(current_snapshot.clone());
+        }
+        (
+            history_snapshot,
+            budget_token_limit,
+            read_files,
+            todos,
+            volatile_usage,
+            volatile_quota,
+            volatile_window,
+            context_section,
+            system_prompt,
+            skill_metadata,
+            native_schema_policy,
+            s.active_model_profile(),
+            s.vision_model_profile(),
+        )
+    };
+
+    // Project instructions are immutable developer input for this request,
+    // not volatile environment context and not persisted lifecycle history.
+    // Reconstructing them here makes retries, compaction, and resume inject
+    // exactly one current copy.
+    let developer_instructions = current_snapshot.project_instructions();
+
+    if image_fallback::has_image_markers(&history_snapshot) {
+        let active_profile = active_profile.ok_or_else(|| {
+            "image analysis failed: active model profile is not configured".to_string()
+        })?;
+        if active_profile.image_input_supported() != Some(true) {
+            let Some(vision_profile) = vision_profile else {
+                // Issue: a stale vision_model name (or none at all) used to
+                // fail with a generic "configure a dedicated vision_model
+                // profile" that named neither the bad value nor the valid
+                // options. Say both so the user can fix config in one edit.
+                let guard = state.lock().await;
+                let wanted = guard.config.vision_model.clone();
+                let available: Vec<String> = guard
+                    .config
+                    .models
+                    .iter()
+                    .map(|profile| profile.name.clone())
+                    .collect();
+                drop(guard);
+                return Err(vision_profile_missing_error(wanted.as_deref(), &available));
+            };
+            let request_client = client.clone();
+            let request_cancel = cancel_token.clone();
+            let mut image_cache = {
+                let mut guard = state.lock().await;
+                std::mem::take(&mut guard.image_analysis_cache)
+            };
+            let preprocessing = image_fallback::preprocess_history_with(
+                history_snapshot.as_mut_vec(),
+                &active_profile,
+                &vision_profile,
+                &mut image_cache,
+                |profile, bytes| {
+                    let profile = profile.clone();
+                    let request_client = request_client.clone();
+                    let request_cancel = request_cancel.clone();
+                    async move {
+                        image_fallback::request_vision_analysis(
+                            &request_client,
+                            &profile,
+                            bytes,
+                            &request_cancel,
+                        )
+                        .await
+                    }
+                },
+            )
+            .await;
+            let mut guard = state.lock().await;
+            image_fallback::extend_bounded_cache(&mut guard.image_analysis_cache, image_cache);
+            let session_id = guard.active_session_id.clone();
+            let current_cache = guard.image_analysis_cache.clone();
+            drop(guard);
+            crate::config::save_session_image_cache(&session_id, &current_cache);
+            preprocessing?;
+        }
+    }
+
+    history_snapshot.retain(|m| {
+        (matches!(m.role.as_str(), "user" | "assistant" | "tool") && !m.content.starts_with('/'))
+            || is_model_directed_note(m)
+    });
+
+    let loaded_skills = crate::skills::loaded_skills_since_latest_user(&history_snapshot);
+    let skill_hint = if let Some(latest_user_prompt) = history_snapshot
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_str())
+    {
+        let explicit = crate::skills::skill_routing_hint(
+            latest_user_prompt,
+            skill_metadata.as_slice(),
+            &loaded_skills,
+        );
+        // Explicit name mentions win; otherwise fall back to trigger/keyword
+        // relevance so `triggers:`/`keywords:` frontmatter still routes.
+        explicit.or_else(|| {
+            crate::skills::relevant_skills_hint(
+                latest_user_prompt,
+                skill_metadata.as_slice(),
+                &loaded_skills,
+            )
+        })
+    } else {
+        None
+    };
+
+    // The base system prompt is kept STATIC across turns (it only depends on
+    // the tool protocol and agent mode, which don't change mid-task). The
+    // priority skill route and other turn-varying context are appended to the
+    // LAST message instead, so they never invalidate the cached system prompt.
+    //
+    // The static system prompt is served from AppState's PromptCache: it's only
+    // rebuilt when the protocol, agent mode, or MCP tool set changes, not on
+    // every turn. Skill metadata is also loaded lazily once by PromptCache and
+    // remains separate from the fresh list_skills/use_skill discovery paths.
+    //
+    // Build the turn-varying context tail (appended to the last message
+    // after the history is assembled, to preserve the cached prefix). The
+    // volatile runtime block (clock/cwd/quota) goes last, as the explicit cache
+    // divider at the very end of the payload.
+    let memory_query = history_snapshot
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| crate::paste::compact_for_context(&message.content))
+        .unwrap_or_default();
+    let project_memory = crate::memory::render_relevant_async(
+        task_working_directory.clone(),
+        memory_query.clone(),
+        (budget_token_limit / 16).min(192) as usize,
+    )
+    .await;
+    let mut dynamic_context = build_dynamic_context_tail_with_checkpoint(
+        context_section,
+        &read_files,
+        &todos,
+        project_memory,
+        &checkpoint,
+        Some(memory_query.as_str()),
+    );
+    prepend_skill_routing_hint(&mut dynamic_context, skill_hint.as_deref());
+    let volatile_block =
+        build_volatile_context_block(volatile_usage.as_ref(), volatile_quota, volatile_window);
+    if !dynamic_context.is_empty() {
+        dynamic_context.push_str("\n\n");
+    }
+    dynamic_context.push_str(&volatile_block);
+    let instructions =
+        history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref());
+    let context_budget = state.lock().await.active_context_budget();
+    let mut history_scope = history::RequestHistoryScope::Full;
+    let mut rendered_history = history::to_messages_for_request(&history_snapshot, instructions);
+
+    // Preserve the complete previous request before appending newly rendered
+    // assistant/tool messages. A fresh runtime snapshot remains at the tail.
+    // The checkpoint is per-turn and automatically falls back after compaction
+    // or any other rewrite of the provider-rendered history.
+    let mut msgs = prefix_cache
+        .as_deref_mut()
+        .map(|cache| cache.compose(&rendered_history, &dynamic_context))
+        .unwrap_or_else(|| {
+            let mut messages = rendered_history.clone();
+            attach_request_context_tail(&mut messages, &dynamic_context);
+            messages
+        });
+
+    // These are request-local instructions and must be included before the
+    // final projection is measured. The context tail is a separate synthetic
+    // message, so the helpers deliberately target the last non-context entry.
+    inject_system_reminder(&mut msgs);
+    let bootstrap_phase = native_schema_policy.is_some_and(|_| {
+        crate::tools::tool_schema_phase(&msgs, task_working_directory.as_deref())
+            == crate::tools::ToolSchemaPhase::Bootstrap
+    });
+    inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
+
+    let mut native_tool_schemas = match native_schema_policy {
+        Some(policy) => {
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0
+        }
+        None => Vec::new(),
+    };
+    let prompt_budget = (context_budget.hard_effective_limit as usize)
+        .saturating_sub(context_budget.completion_reserve as usize)
+        .min(context_budget.soft_context_target as usize);
+    let mut initial_preflight = compaction::calculate_preflight_budget_for_projection(
+        &msgs,
+        &native_tool_schemas,
+        0,
+        &context_budget,
+    );
+    if history_scope_for_preflight(&initial_preflight) == history::RequestHistoryScope::RecentTurns
+    {
+        history_scope = history::RequestHistoryScope::RecentTurns;
+        rendered_history = history::to_messages_for_request_with_scope(
+            &history_snapshot,
+            instructions,
+            history_scope,
+        );
+        msgs = prefix_cache
+            .as_deref_mut()
+            .map(|cache| cache.compose(&rendered_history, &dynamic_context))
+            .unwrap_or_else(|| {
+                let mut messages = rendered_history.clone();
+                attach_request_context_tail(&mut messages, &dynamic_context);
+                messages
+            });
+        inject_system_reminder(&mut msgs);
+        let bootstrap_phase = native_schema_policy.is_some_and(|_| {
+            crate::tools::tool_schema_phase(&msgs, task_working_directory.as_deref())
+                == crate::tools::ToolSchemaPhase::Bootstrap
+        });
+        inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
+        native_tool_schemas = match native_schema_policy {
+            Some(policy) => {
+                prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                    .await
+                    .0
+            }
+            None => Vec::new(),
+        };
+        initial_preflight = compaction::calculate_preflight_budget_for_projection(
+            &msgs,
+            &native_tool_schemas,
+            0,
+            &context_budget,
+        );
+    }
+    let rendered_history_messages = rendered_history.len();
+    // Native schemas are not messages, so leave their exact measured cost out
+    // of the message trim allowance. Provider overhead is already represented
+    // by hard_effective_limit and is not subtracted a second time here.
+    let mut message_budget = prompt_budget
+        .saturating_sub(initial_preflight.tool_schema_tokens)
+        .saturating_sub(initial_preflight.continuation_overhead_tokens);
+    let mut dropped = trim_msgs_to_budget(&mut msgs, message_budget.min(u32::MAX as usize) as u32);
+
+    // History projection can affect relevance-based native schema selection.
+    // Rebuild once after the first trim so the schema cost and selected set
+    // describe the same request that will be sent, rather than the raw
+    // pre-trim projection.
+    if let Some(policy) = native_schema_policy {
+        native_tool_schemas =
+            prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                .await
+                .0;
+        let schema_preflight = compaction::calculate_preflight_budget_for_projection(
+            &msgs,
+            &native_tool_schemas,
+            0,
+            &context_budget,
+        );
+        message_budget = prompt_budget
+            .saturating_sub(schema_preflight.tool_schema_tokens)
+            .saturating_sub(schema_preflight.continuation_overhead_tokens);
+        dropped += trim_msgs_to_budget(&mut msgs, message_budget.min(u32::MAX as usize) as u32);
+    }
+
+    let mut preflight = compaction::calculate_preflight_budget_for_projection(
+        &msgs,
+        &native_tool_schemas,
+        0,
+        &context_budget,
+    );
+    let mut dynamic_context_omitted = false;
+    if preflight.total_estimated_prompt > prompt_budget {
+        let fixed_prompt = preflight
+            .total_estimated_prompt
+            .saturating_sub(preflight.dynamic_tail_tokens);
+        let dynamic_budget = prompt_budget.saturating_sub(fixed_prompt);
+        let (reduced_context, omitted) =
+            truncate_context_tail_to_tokens(&dynamic_context, dynamic_budget);
+        if omitted {
+            dynamic_context = reduced_context;
+            dynamic_context_omitted = replace_request_context_tail(&mut msgs, &dynamic_context);
+            preflight = compaction::calculate_preflight_budget_for_projection(
+                &msgs,
+                &native_tool_schemas,
+                0,
+                &context_budget,
+            );
+            crate::logger::operational_event(
+                "context.dynamic_tail_trim",
+                serde_json::json!({
+                    "reason": "final_projection_exceeded_prompt_budget",
+                    "dynamic_tail_tokens_before": initial_preflight.dynamic_tail_tokens,
+                    "dynamic_tail_tokens_after": preflight.dynamic_tail_tokens,
+                    "dynamic_tail_budget": dynamic_budget,
+                    "omission_marker": true,
+                }),
+            );
+        }
+    }
+    crate::logger::operational_event(
+        "context.preflight_budget",
+        serde_json::to_value(&preflight).unwrap_or_default(),
+    );
+    if dropped > 0 {
+        dbg_log!(
+            "context budget {} tokens exceeded: dropped {} oldest message(s)",
+            message_budget,
+            dropped
+        );
+        crate::logger::operational_event(
+            "context.hard_trim",
+            serde_json::json!({
+                "reason": "final_projection_budget_after_deterministic_pruning",
+                "budget": message_budget,
+                "dropped_messages": dropped,
+                "preflight": preflight,
+            }),
+        );
+        if tool_rounds == 0 {
+            let mut s = state.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                format!(
+                    "context window full: dropped {} oldest message(s) from the request. Use /new to start fresh.",
+                    dropped
+                ),
+            ));
+        }
+    }
+
+    if let Some(cache) = prefix_cache.as_deref_mut() {
+        if dropped == 0 {
+            cache.record(rendered_history, &msgs, &dynamic_context);
+        } else {
+            cache.clear();
+        }
+    }
+
+    let cache_decision = prefix_cache
+        .as_deref()
+        .map(RequestPrefixCache::last_decision)
+        .unwrap_or(PrefixCacheDecision::Cold);
+
+    let prompt_bytes = serde_json::to_vec(&msgs).map_or(0, |payload| payload.len());
+    let runtime_tail_count = msgs
+        .iter()
+        .filter(|message| {
+            message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        })
+        .count();
+    crate::logger::operational_event(
+        "turn.context_diagnostics",
+        serde_json::json!({
+            "round": tool_rounds,
+            "prompt_bytes": prompt_bytes,
+            "prompt_messages": msgs.len(),
+            "rendered_history_messages": rendered_history_messages,
+            "runtime_tail_bytes": dynamic_context.len(),
+            "runtime_tail_count": runtime_tail_count,
+            "estimated_prompt_tokens": preflight.total_estimated_prompt,
+            "prompt_with_provider_overhead": preflight.prompt_with_provider_overhead,
+            "projected_message_tokens": preflight.projected_message_tokens,
+            "system_tokens": preflight.system_tokens,
+            "projected_history_tokens": preflight.history_tokens,
+            "dynamic_tail_tokens": preflight.dynamic_tail_tokens,
+            "tool_schema_tokens": preflight.tool_schema_tokens,
+            "metadata_tokens": preflight.metadata_tokens,
+            "completion_reserve": preflight.completion_reserve,
+            "hard_effective_limit": preflight.hard_effective_limit,
+            "context_window": preflight.context_window,
+            "fits_hard_limit": preflight.fits_hard_limit(),
+            "fits_soft_target": preflight.fits_soft_target(),
+            "dynamic_context_omitted": dynamic_context_omitted,
+            "cache_decision": cache_decision.label(),
+            "cache_reused": cache_decision == PrefixCacheDecision::Reused,
+            "cache_context_updates": prefix_cache
+                .as_deref()
+                .map(RequestPrefixCache::context_updates)
+                .unwrap_or_default(),
+            "history_projection": match history_scope {
+                history::RequestHistoryScope::Full => "full",
+                history::RequestHistoryScope::RecentTurns => "recent_turns",
+            },
+            "hard_trimmed": dropped > 0,
+        }),
+    );
+
+    if !preflight.fits_hard_limit() {
+        let notice = context_preflight_checkpoint_notice(&preflight);
+        let mut s = state.lock().await;
+        if s.active_session_id == request_session_id {
+            s.history.push(ChatMessage::new("system", notice.clone()));
+            crate::config::save_session_history(&request_session_id, &s.history);
+        }
+        return Err(format!("{CONTEXT_PREFLIGHT_STOP_PREFIX}{notice}"));
+    }
+
+    if native_schema_policy.is_some()
+        && let Err(diagnostic) = history::validate_native_tool_messages(&msgs)
+    {
+        crate::logger::operational_event(
+            "turn.native_history_validation_failed",
+            serde_json::json!({
+                "round": tool_rounds,
+                "message_count": msgs.len(),
+                "diagnostic": diagnostic,
+            }),
+        );
+        return Err(format!(
+            "Native tool history is incomplete before sending the provider request: {diagnostic}. The request was stopped locally; resume the session after reviewing its recent tool activity."
+        ));
+    }
+
+    Ok(msgs)
+}
+
+/// Execute a batch of tool calls and return `(name, result, diff)` per call.
+///
+/// When `approved` is false every call resolves to a denial message. Otherwise
+/// calls execute in model order. Read-only calls could be parallelized safely,
+/// but preserving one ordering rule for every batch prevents edits, commands,
+/// and reads from racing each other or hiding dependencies. If any mutating
+/// tool ran, a single cached compiler check is appended to the first mutating
+/// tool's result so build errors surface inline.
+
+/// One result message per call that will never run, so no call is left
+/// unanswered.
+///
+/// A structured transcript replays an assistant message together with the calls
+/// it made; a call with no matching result is a protocol violation the provider
+/// rejects, and — worse — leaves the model free to assume whatever it likes
+/// about what happened. Answering with the failure keeps the record honest.
+/// What to tell a model whose completion claim wrote nothing.
+///
+/// The branch that matters is the second one. A model whose edits all failed is
+/// often looking at a workspace that already holds the requested state — left
+/// from an earlier run — and if the only sanctioned ways out are "make the
+/// change" or "it cannot be made", neither fits, so it manufactures a mutation
+/// to satisfy the check. In one session the cheapest mutation available was
+/// deleting the very line it had been asked to add, which it then reported as
+/// having added and removed.
+pub(crate) fn completion_block_message(failed: usize) -> String {
+    format!(
+        "[Finish blocked — {failed} edit(s) were attempted in this task and every one failed, so this task \
+wrote nothing. Exactly one of these is true; establish which from a fresh read, then act.\n\
+ 1. The change still needs making — make it, verify it, then finish.\n\
+ 2. The workspace is already in the requested state, possibly from before this task began — say exactly \
+that and finish. This is a valid outcome and requires no edit.\n\
+ 3. The change cannot be made — finish by stating why.\n\
+Do NOT edit something else, delete existing content, or reverse the request in order to clear this check. \
+An edit that moves the workspace further from what was asked is worse than writing nothing.]"
+    )
+}
+
+/// Whether a `system` history entry is something the model must actually read.
+///
+/// Everything the harness tells the model — loop warnings, rejected tool calls,
+/// blocked completions, compaction summaries — is written into history as a
+/// system message. Those were filtered out of the request, so the harness spent
+/// entire sessions correcting a model that never received a word of it: one
+/// session issued 25 loop warnings while the model repeated the same read 25
+/// times, having been told nothing.
+///
+/// Session chatter that only makes sense in the TUI (command output, model
+/// switches) stays out: it is noise in the prompt and was never meant for the
+/// model. Harness notes are bracketed; compaction summaries carry their marker.
+pub(crate) fn is_model_directed_note(message: &ChatMessage) -> bool {
+    message.role == "system"
+        && (message.content.starts_with('[')
+            || message
+                .content
+                .starts_with(crate::network::compaction::SUMMARY_MARKER))
+}
+
+/// Largest read output kept for replay to an identical repeat call. Small reads
+/// are cheaper to repeat than to argue about; large ones stay behind a notice so
+/// a loop cannot re-send a whole file every turn. Sized to hold up to an 800-line
+/// view_file window.
+pub(crate) const REPLAYABLE_READ_LIMIT: usize = 24_576;
+
+/// How many times the completion gate argues before letting a claim through.
+const MAX_COMPLETION_BLOCKS: u8 = 2;
+
+/// Whether a `complete_task` claim describes work that never reached disk.
+///
+/// True when every mutating call in the task failed: the workspace is untouched,
+/// yet the model is reporting the job done — usually because it read the file,
+/// found the state it wanted already there for some unrelated reason, and took
+/// that as proof of its own edit. Capped so the gate cannot argue forever with a
+/// model that insists.
+pub(crate) fn completion_claims_unapplied_work(
+    made_edits: bool,
+    failed: usize,
+    blocks: u8,
+) -> bool {
+    !made_edits && failed > 0 && blocks < MAX_COMPLETION_BLOCKS
+}
+
+pub(crate) fn record_provider_error(ctx: &mut TurnContext, error: &str) {
+    ctx.metrics.provider_errors += 1;
+    let is_quota =
+        error.contains("429") || error.to_ascii_lowercase().contains("too many requests");
+    if is_quota {
+        ctx.metrics.provider_429s += 1;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
+    } else if ctx.lifecycle.stop_reason.is_none() {
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(None));
+    }
+}
+
+pub(crate) fn active_todo_checkpoint(todos: &[crate::app::TodoItem]) -> Option<String> {
+    todos
+        .iter()
+        .find(|todo| todo.status == "in_progress")
+        .map(|todo| todo.content.clone())
+}
+
+/// Pair calls with provider ids. Native calls carry their id directly; the
+/// positional fallback covers the older stream bookkeeping path.
+pub(crate) fn call_refs_for(
+    calls: &[crate::tools::ToolCall],
+    ids: &[String],
+) -> Vec<crate::app::ToolCallRef> {
+    calls
+        .iter()
+        .enumerate()
+        .filter_map(|(position, call)| {
+            let id = call
+                .call_id
+                .clone()
+                .or_else(|| ids.get(position).cloned())?;
+            Some(crate::app::ToolCallRef {
+                id,
+                name: call.name.clone(),
+                arguments: call.arguments.to_string(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn unanswered_call_results(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+) -> Vec<ChatMessage> {
+    unanswered_call_results_with_kind(calls, reason, crate::tools::ToolErrorKind::Internal)
+}
+
+pub(crate) fn unanswered_call_results_with_kind(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+    error_kind: crate::tools::ToolErrorKind,
+) -> Vec<ChatMessage> {
+    calls
+        .iter()
+        .map(|call| {
+            ChatMessage::new("tool", format!("{}: error: {reason}", call.name))
+                .answering(Some(call.id.clone()))
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: call.name.clone(),
+                    success: false,
+                    error_kind: Some(format!("{error_kind:?}")),
+                    retryable: matches!(
+                        error_kind,
+                        crate::tools::ToolErrorKind::Cancelled
+                            | crate::tools::ToolErrorKind::Internal
+                            | crate::tools::ToolErrorKind::OutputLimit
+                    ),
+                    ..Default::default()
+                })
+        })
+        .collect()
+}
+
+/// Replacement transcript text for a response whose tool batch was truncated.
+/// Records only which tools survived, never the model's prose: a response that
+/// plans a whole session ahead also narrates results for calls that never ran,
+/// and replaying that text lets the next turn treat its own fiction as
+/// observed fact.
+#[cfg(test)]
+pub(crate) fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: usize) -> String {
+    let names = kept
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "[Oversized response: only the first {} tool calls were kept ({names}); {dropped} more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]",
+        kept.len()
+    )
+}
+
+/// Replacement transcript text for a response whose batch was selectively
+/// truncated. Unlike the legacy count-only form, this preserves the names of
+/// the calls that did not run without replaying their arguments or prose.
+#[cfg(test)]
+pub(crate) fn truncated_batch_summary_with_dropped(
+    kept: &[crate::tools::ToolCall],
+    dropped: &[crate::tools::ToolCall],
+) -> String {
+    let names = kept
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let dropped_names = dropped
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "[Oversized response: {} tool calls were kept ({names}); {} were dropped ({dropped_names}). Anything the response claimed about dropped results was imagined — continue from the real results below.]",
+        kept.len(),
+        dropped.len(),
+    )
+}
+
+#[cfg(test)]
+#[path = "network/tests.rs"]
+mod tests;

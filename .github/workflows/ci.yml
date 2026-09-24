@@ -1,0 +1,257 @@
+name: CI
+
+on:
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+    # CI does not archive debug symbols. Avoid spending time generating and
+    # linking them for ephemeral checks and test binaries.
+    CARGO_PROFILE_DEV_DEBUG: "0"
+    CARGO_PROFILE_TEST_DEBUG: "0"
+    SCCACHE_GHA_ENABLED: "true"
+    RUSTC_WRAPPER: "sccache"
+
+permissions:
+    contents: read
+
+jobs:
+    changes:
+        name: detect relevant changes
+        runs-on: ubuntu-24.04
+        outputs:
+            code: ${{ steps.filter.outputs.code }}
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Check changed paths
+              id: filter
+              shell: bash
+              env:
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+              run: |
+                  if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+                      echo "code=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+
+                  changed_files="$(git diff --name-only "$BASE_SHA...HEAD")"
+                  if printf '%s\n' "$changed_files" | bash scripts/ci-relevant-changes.sh; then
+                      echo "Relevant code or build files changed"
+                      echo "code=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "No relevant code or build files changed"
+                      echo "code=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+    test:
+        # Keep this context name stable: main branch protection requires `test`.
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: test
+        runs-on: ubuntu-24.04
+        env:
+            RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  # Share dependency and native build-script artifacts between
+                  # the Linux test and lint jobs. The test-only FFmpeg flag is
+                  # read at runtime, so it must not split this compile cache.
+                  shared-key: linux
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Install FFmpeg
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --no-install-recommends -y ffmpeg bubblewrap
+
+            - name: Verify FFmpeg tools
+              run: |
+                  ffmpeg -version
+                  ffprobe -version
+
+            - name: Run tests
+              # These tests depend on user-installed skills or runner-specific
+              # ripgrep output. Keep them in the local suite, but exclude them
+              # from the clean-runner gate until they have portable fixtures.
+              run: >-
+                  cargo test --locked --
+                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
+                  --skip grep_stops_at_byte_cap_for_large_matching_lines
+
+    lint:
+        # Keep linting separate from the required test job so the expensive
+        # compiler work runs in parallel. This context is required alongside
+        # `test` by main branch protection.
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: lint
+        runs-on: ubuntu-24.04
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: linux
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check formatting
+              run: cargo fmt --all -- --check
+
+            - name: Check shell installer syntax
+              run: bash -n scripts/install.sh
+
+            - name: Check CI change matcher
+              run: bash scripts/test-ci-relevant-changes.sh
+
+            - name: Clippy correctness gate
+              # The codebase has an established warning baseline. Keep those
+              # warnings visible locally while denying only correctness lints.
+              run: cargo clippy --locked -- -A warnings -D clippy::correctness
+
+    macos-seatbelt:
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: macOS Seatbelt
+        runs-on: macos-15
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-seatbelt
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check test targets
+              run: cargo check --locked --tests
+
+            - name: Test command status metadata
+              run: cargo test --locked -p rustcode-command
+
+            - name: Test Seatbelt enforcement
+              run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
+
+    macos-app:
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: macOS native app
+        runs-on: macos-15
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-app
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check native app test targets
+              run: cargo check --locked -p rustcode-app --tests
+
+            - name: Test native app
+              run: cargo test --locked -p rustcode-app
+
+            - name: Build native app
+              run: cargo build --locked -p rustcode-app
+
+    portability:
+        name: ${{ matrix.name }} portability coverage
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        # Linux is the required quality gate. Native platform checks remain
+        # visible and actionable without delaying or blocking a merge.
+        continue-on-error: true
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: macOS
+                      os: macos-latest
+                      cache_key: macos
+                    - name: Windows
+                      os: windows-latest
+                      cache_key: windows
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Check PowerShell installer syntax
+              if: runner.os == 'Windows'
+              shell: pwsh
+              run: |
+                  $tokens = $null
+                  $errors = $null
+                  $path = Join-Path $PWD "scripts/install.ps1"
+                  $null = [System.Management.Automation.Language.Parser]::ParseFile(
+                      $path,
+                      [ref]$tokens,
+                      [ref]$errors
+                  )
+                  if ($errors.Count -gt 0) {
+                      $errors | ForEach-Object { Write-Error $_.Message }
+                      exit 1
+                  }
+                  Write-Output "PowerShell syntax OK"
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: ${{ matrix.cache_key }}
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check platform compilation
+              # Linux runs the behavioral suite. These advisory jobs verify the
+              # shipped binary's native macOS/Windows cfg without compiling or
+              # linking the test harness again.
+              run: cargo check --locked
