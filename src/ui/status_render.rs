@@ -628,6 +628,20 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         ),
     ]));
 
+    let sandbox_display = fit_to_width(
+        state.config().sandbox_mode.effective_description(),
+        inner_w.saturating_sub(label_w),
+    )
+    .trim_end()
+    .to_owned();
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width(&label("OS sandbox"), label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(sandbox_display, Style::default().fg(text_c).bg(reset_bg)),
+    ]));
+
     // Help gets its own row because it explains the command interface rather
     // than changing one of the values above.
     // Start the explanatory help copy immediately after its label. Unlike the

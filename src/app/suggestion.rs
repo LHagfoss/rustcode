@@ -181,6 +181,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show or set automatic tool confirmation (on|off|toggle)",
     },
     CommandInfo {
+        name: "/sandbox",
+        desc: "Show or set OS sandbox mode (read_only|workspace_write|workspace_write_network)",
+    },
+    CommandInfo {
         name: "/effort",
         desc: "Show or set model reasoning effort (low|medium|high|off)",
     },

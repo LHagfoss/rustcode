@@ -308,6 +308,21 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
         async move {
             let s = s_clone.lock().await;
             for call in &calls {
+                if call.name == "run_command"
+                    && (call
+                        .arguments
+                        .get("network_access")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                        || call.arguments.get("filesystem_write_path").is_some())
+                {
+                    if !quiet {
+                        println!(
+                            "[Headless] Rejected: one-shot sandbox permissions need interactive approval"
+                        );
+                    }
+                    return false;
+                }
                 if !quiet {
                     println!("\n[Headless] Executing Tool: {}", call.name);
                 }
@@ -586,6 +601,42 @@ mod tests {
             .should_approve(&state, &[call("write_file")])
             .await;
         assert!(!approved, "plan mode must reject mutating tools headlessly");
+    }
+
+    #[tokio::test]
+    async fn headless_policy_rejects_one_shot_network_escalation() {
+        let state = Arc::new(Mutex::new(build_state("network access", None)));
+        let call = ToolCall {
+            name: "run_command".to_owned(),
+            arguments: serde_json::json!({
+                "command": "curl https://example.com",
+                "network_access": true
+            }),
+            call_id: None,
+        };
+        assert!(
+            !HeadlessPolicy { quiet: true }
+                .should_approve(&state, &[call])
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_policy_rejects_one_shot_filesystem_escalation() {
+        let state = Arc::new(Mutex::new(build_state("filesystem access", None)));
+        let call = ToolCall {
+            name: "run_command".to_owned(),
+            arguments: serde_json::json!({
+                "command": "touch /tmp/release.txt",
+                "filesystem_write_path": "/tmp"
+            }),
+            call_id: None,
+        };
+        assert!(
+            !HeadlessPolicy { quiet: true }
+                .should_approve(&state, &[call])
+                .await
+        );
     }
 
     #[test]

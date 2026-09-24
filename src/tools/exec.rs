@@ -234,6 +234,8 @@ fn run_command_schema() -> Value {
             "timeout_ms": { "type": "integer", "minimum": 1 },
             "background": { "type": "boolean", "default": false },
             "detached": { "type": "boolean", "default": false },
+            "network_access": { "type": "boolean", "default": false },
+            "filesystem_write_path": { "type": "string", "description": "Request one-command write access to this existing absolute directory" },
             "env": { "type": "object", "additionalProperties": { "type": "string" } }
         }, "required": ["command"]
     })
@@ -241,8 +243,8 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. On Linux, shell execution requires bubblewrap and an active workspace; RustCode fails closed if sandbox setup is unavailable. The Linux sandbox allows writes only in the active workspace and session scratch directory, and blocks IP networking with a private network namespace or seccomp fallback. macOS and Windows native sandbox backends are not implemented yet. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never create or switch task branches in the active user checkout, including `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`, or `git switch -C`; do not run `git rebase` or `git reset --hard` there. Keep the user's checkout on its original branch throughout the task. Create task branches and do branch/merge work only inside an isolated worktree under /tmp, created with `git worktree add`. When repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead. After merging, never checkout or pull `main` by moving the original active checkout; keep the user's checkout on its original branch and update `main` only in a separate clone or isolated checkout. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
-    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both always require user confirmation, including in YOLO mode, and reusable command approvals cannot grant them. filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never create or switch task branches in the active user checkout, including `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`, or `git switch -C`; do not run `git rebase` or `git reset --hard` there. Keep the user's checkout on its original branch throughout the task. Create task branches and do branch/merge work only inside an isolated worktree under /tmp, created with `git worktree add`. When repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead. After merging, never checkout or pull `main` by moving the original active checkout; keep the user's checkout on its original branch and update `main` only in a separate clone or isolated checkout. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "network_access": "optional bool requesting one-shot network access; always requires user confirmation", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; always requires user confirmation"}"#,
     handler: run_command,
     requires_confirmation: true,
     schema: run_command_schema,
@@ -591,6 +593,27 @@ fn run_command_output_inner(
     let mut writable_roots = workspace_root.iter().cloned().collect::<Vec<_>>();
     let session_scratch_roots = session_scratch.iter().cloned().collect::<Vec<_>>();
     writable_roots.extend(session_scratch_roots.iter().cloned());
+    let sandbox_mode = super::active_sandbox_mode();
+    let one_shot_network_access = args
+        .get("network_access")
+        .and_then(parse_json_bool)
+        .unwrap_or(false);
+    let one_shot_writable_roots = if args.get("filesystem_write_path").is_some() {
+        let path = args
+            .get("filesystem_write_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                "filesystem_write_path must be an absolute directory string".to_string()
+            })?;
+        vec![sandbox::resolve_scoped_writable_root(
+            path,
+            workspace_root.as_deref().ok_or_else(|| {
+                "one-shot filesystem permission requires an active workspace".to_string()
+            })?,
+        )?]
+    } else {
+        Vec::new()
+    };
     let sandboxed = sandbox::command(
         &shell_command,
         sandbox::SandboxPolicy {
@@ -598,7 +621,9 @@ fn run_command_output_inner(
             workspace_root: workspace_root.as_deref(),
             writable_roots: &writable_roots,
             session_scratch_roots: &session_scratch_roots,
-            network_access: false,
+            one_shot_writable_roots: &one_shot_writable_roots,
+            write_access: sandbox_mode.allows_workspace_write(),
+            network_access: sandbox_mode.allows_network() || one_shot_network_access,
         },
     )?;
     let command_request = rustcode_command::CommandRequest {
@@ -1816,11 +1841,34 @@ mod tests {
         let command = "git status --short; git restore -- src/GameScene.ts";
         let scope = command_confirmation_scope(command).expect("restore segment is destructive");
         assert!(scope.contains("git restore"), "scope: {scope}");
-        let preview = command_confirmation_preview(command);
+        let preview = command_confirmation_preview(
+            command,
+            crate::config::SandboxMode::WorkspaceWrite,
+            true,
+            None,
+        );
         assert!(
             preview.contains("resolved command: git status"),
             "preview: {preview}"
         );
+        assert!(
+            preview.contains("effective OS permissions:"),
+            "preview: {preview}"
+        );
+        assert!(
+            preview.contains("network access (one time)"),
+            "preview: {preview}"
+        );
+        let scoped_preview = command_confirmation_preview(
+            command,
+            crate::config::SandboxMode::ReadOnly,
+            false,
+            Some("/private/tmp/generated-assets"),
+        );
+        assert!(
+            scoped_preview.contains("write access to '/private/tmp/generated-assets' (one time)")
+        );
+        assert!(scoped_preview.contains("effective OS permissions: read-only"));
         assert!(preview.contains("scope: git restore"), "preview: {preview}");
     }
 
