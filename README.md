@@ -81,6 +81,19 @@ cd rustcode
 cargo install --path .
 ```
 
+### Native desktop app
+
+The native GPUI app is a separate executable from the terminal UI. Build and
+run it with Cargo, optionally passing a project directory (the current
+directory is used by default):
+
+```bash
+cargo build -p rustcode-app
+cargo run -p rustcode-app -- /path/to/project
+```
+
+Build the terminal executable separately with `cargo build --bin rustcode`.
+
 ## Keeping it upgraded
 
 RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows.

@@ -8,10 +8,7 @@ use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::StreamBuffer;
 use super::super::title::record_prompt_to_history;
-use super::{
-    run_agent_turn_with_context_for_session, save_turn_context_after_run,
-    take_turn_context_for_prompt_with_limits,
-};
+use super::{save_turn_context_after_run, take_turn_context_for_prompt_with_limits};
 
 fn configure_turn_steerability(
     state: &mut AppState,
@@ -98,16 +95,6 @@ impl Drop for OrchestratorLeaseGuard {
     }
 }
 
-pub(crate) async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
-    client: reqwest::Client,
-    state: Arc<Mutex<AppState>>,
-    cancel_token: tokio_util::sync::CancellationToken,
-    policy: Arc<P>,
-    lease: OrchestratorLease,
-) {
-    process_queue_orchestrator_inner(client, state, cancel_token, policy, None, lease).await;
-}
-
 pub(crate) async fn process_queue_orchestrator_with_ui_events<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -116,8 +103,7 @@ pub(crate) async fn process_queue_orchestrator_with_ui_events<P: policy::TurnPol
     ui_events: super::super::ui_adapter::AgentUiEventSender,
     lease: OrchestratorLease,
 ) {
-    process_queue_orchestrator_inner(client, state, cancel_token, policy, Some(ui_events), lease)
-        .await;
+    process_queue_orchestrator_inner(client, state, cancel_token, policy, ui_events, lease).await;
 }
 
 async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
@@ -125,7 +111,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
     policy: Arc<P>,
-    ui_events: Option<super::super::ui_adapter::AgentUiEventSender>,
+    ui_events: super::super::ui_adapter::AgentUiEventSender,
     lease: OrchestratorLease,
 ) {
     dbg_log!("Orchestrator started");
@@ -215,7 +201,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             }),
         );
 
-        let completed_context = if let Some(sender) = ui_events.clone() {
+        let completed_context =
             super::super::ui_adapter::run_agent_turn_with_events_and_context_for_session(
                 &client,
                 &state,
@@ -223,23 +209,11 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 &policy,
                 &stream_buffer,
                 next_prompt.clone(),
-                sender,
+                ui_events.clone(),
                 turn_context,
                 turn_session_id.clone(),
             )
-            .await
-        } else {
-            run_agent_turn_with_context_for_session(
-                &client,
-                &state,
-                &cancel_token,
-                &policy,
-                &stream_buffer,
-                turn_context,
-                turn_session_id.clone(),
-            )
-            .await
-        };
+            .await;
 
         let mut s = state.lock().await;
         if s.active_session_id != turn_session_id {
@@ -522,5 +496,146 @@ mod tests {
             guard.disarm();
         }
         assert!(!state.blocking_lock().orchestrator_running);
+    }
+}
+
+#[cfg(test)]
+mod enter_event_tests {
+    use super::*;
+    use crate::network::ui_adapter::AgentUiEvent;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn local_streaming_provider() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local provider");
+        let address = listener.local_addr().expect("provider address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept provider request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let read = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read provider request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            let first =
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hello from provider\"}}]}\n\n";
+            let second = concat!(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            );
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+                .await
+                .expect("write provider headers");
+            socket
+                .write_all(format!("{:X}\r\n{}\r\n", first.len(), first).as_bytes())
+                .await
+                .expect("write provider text delta");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            socket
+                .write_all(format!("{:X}\r\n{}\r\n0\r\n\r\n", second.len(), second).as_bytes())
+                .await
+                .expect("write provider terminal event");
+        });
+        format!("http://{address}/v1/chat/completions")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enter_started_turn_publishes_prompt_text_and_terminal_events() {
+        use crate::config::{ApiProtocol, ModelProfile};
+        use std::time::Duration;
+
+        let endpoint = local_streaming_provider().await;
+        let mut app = AppState::new();
+        app.api_base_url = endpoint.clone();
+        app.model_name = "enter-event-test".into();
+        app.config.models = vec![ModelProfile {
+            name: app.model_name.clone(),
+            url: endpoint.clone(),
+            model: app.model_name.clone(),
+            api_protocol: Some(ApiProtocol::ChatCompletions),
+            context_window: Some(8_192),
+            ..ModelProfile::default()
+        }];
+        app.record_function_calling_support(&endpoint, false);
+        app.input_buffer = "say hello".into();
+        app.cursor_position = app.input_buffer.len();
+        let state = Arc::new(Mutex::new(app));
+        let (sender, mut receiver) = crate::network::ui_adapter::AgentUiEventSender::channel();
+        let client = reqwest::Client::new();
+        let mut cancellation = tokio_util::sync::CancellationToken::new();
+
+        crate::app::handle_enter_with_ui_events(&state, &client, &mut cancellation, sender).await;
+        assert!(
+            state.lock().await.orchestrator_running,
+            "Enter should claim the queue lease"
+        );
+
+        let mut saw_prompt = false;
+        let mut text_deltas = String::new();
+        let mut saw_terminal = false;
+        let mut received_events = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = receiver.recv().await {
+                received_events.push(format!("{event:?}"));
+                match event {
+                    AgentUiEvent::PromptStarted { prompt } if prompt == "say hello" => {
+                        saw_prompt = true
+                    }
+                    AgentUiEvent::TextDelta { text } => text_deltas.push_str(&text),
+                    AgentUiEvent::TurnFinished {
+                        completed: true, ..
+                    } => {
+                        saw_terminal = true;
+                        break;
+                    }
+                    AgentUiEvent::TurnFinished { .. } | AgentUiEvent::Cancelled { .. } => {
+                        saw_terminal = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("Enter-started turn should emit terminal event");
+
+        assert!(
+            saw_prompt,
+            "Enter-started turn should publish PromptStarted"
+        );
+        assert!(
+            text_deltas.contains("hello from provider"),
+            "Enter-started turn should publish TextDelta: {text_deltas:?}; events={received_events:?}"
+        );
+        assert!(
+            saw_terminal,
+            "Enter-started turn should publish a terminal event"
+        );
     }
 }

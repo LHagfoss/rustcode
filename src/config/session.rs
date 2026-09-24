@@ -195,8 +195,13 @@ fn redact_session_config(value: &mut serde_json::Value) {
     }
 }
 
-fn session_settings_snapshot(config: &AppConfig) -> Option<SessionSettingsSnapshot> {
-    let active_profile = config.default.big().to_string();
+fn session_settings_snapshot(
+    config: &AppConfig,
+    active_profile: Option<&str>,
+) -> Option<SessionSettingsSnapshot> {
+    let active_profile = active_profile
+        .unwrap_or_else(|| config.default.big())
+        .to_owned();
     let mut serialized = serde_json::to_value(config).ok()?;
     if let Some(object) = serialized.as_object_mut() {
         // These are process/session pointers, not settings used by the model.
@@ -215,13 +220,29 @@ fn session_settings_snapshot(config: &AppConfig) -> Option<SessionSettingsSnapsh
 /// Record the current redacted runtime configuration for a session. Repeated
 /// saves of an unchanged configuration do not create duplicate entries.
 pub fn record_session_settings(session_id: &str, config: &AppConfig) {
+    record_session_settings_inner(session_id, config, None);
+}
+
+pub(crate) fn record_session_settings_for_profile(
+    session_id: &str,
+    config: &AppConfig,
+    active_profile: &str,
+) {
+    record_session_settings_inner(session_id, config, Some(active_profile));
+}
+
+fn record_session_settings_inner(
+    session_id: &str,
+    config: &AppConfig,
+    active_profile: Option<&str>,
+) {
     if session_id.is_empty() || !config.is_valid {
         return;
     }
     let Some(store) = store() else {
         return;
     };
-    let Some(snapshot) = session_settings_snapshot(config) else {
+    let Some(snapshot) = session_settings_snapshot(config, active_profile) else {
         return;
     };
 
@@ -276,9 +297,13 @@ mod tests {
             always_include: false,
         });
 
-        let snapshot = session_settings_snapshot(&config).expect("config should serialize");
+        let snapshot = session_settings_snapshot(&config, Some("selected-profile"))
+            .expect("config should serialize");
+        assert_eq!(snapshot.active_profile, "selected-profile");
+        let default_snapshot =
+            session_settings_snapshot(&config, None).expect("default config should serialize");
+        assert_eq!(default_snapshot.active_profile, config.default.big());
         let json = snapshot.config.to_string();
-        assert_eq!(snapshot.active_profile, config.default.big());
         assert!(json.contains("api_key_configured"), "snapshot: {json}");
         assert!(json.contains("<redacted>"));
         assert!(!json.contains("model-secret"));

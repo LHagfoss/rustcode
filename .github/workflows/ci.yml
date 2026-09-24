@@ -59,6 +59,9 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         name: test
         runs-on: ubuntu-24.04
+        # Healthy runs finish in ~6min. A hung runner or wedged test must
+        # fail fast instead of burning the 6h default (seen 20min+ stuck).
+        timeout-minutes: 20
         env:
             RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
         steps:
@@ -94,8 +97,12 @@ jobs:
               # These tests depend on user-installed skills or runner-specific
               # ripgrep output. Keep them in the local suite, but exclude them
               # from the clean-runner gate until they have portable fixtures.
+              # Scope to the root `rustcode` package: the native GPUI app has
+              # macOS-only UI dependencies and is covered by the macOS job.
+              # Sandbox-gated tests skip themselves when bubblewrap cannot run
+              # (GitHub runners block unprivileged user namespaces).
               run: >-
-                  cargo test --locked --
+                  cargo test --locked -p rustcode --
                   --skip control_plane_tool_does_not_stall_while_reading_workspace_root
                   --skip grep_stops_at_byte_cap_for_large_matching_lines
 
@@ -168,6 +175,39 @@ jobs:
 
             - name: Test Seatbelt enforcement
               run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
+
+    macos-app:
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: macOS native app
+        runs-on: macos-15
+        # The GPUI dependency tree compiles from scratch on a cold cache
+        # (~15min+); fail fast instead of hanging for the 6h default.
+        timeout-minutes: 60
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-app
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check native app test targets
+              run: cargo check --locked -p rustcode-app --tests
+
+            - name: Test native app
+              run: cargo test --locked -p rustcode-app
+
+            - name: Build native app
+              run: cargo build --locked -p rustcode-app
 
     portability:
         name: ${{ matrix.name }} portability coverage

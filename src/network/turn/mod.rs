@@ -9,7 +9,6 @@ pub use context::{GroundedArtifactEvidence, SegmentCheckpoint, TurnContext};
 pub use finish::run_agent_turn;
 pub(crate) use finish::run_agent_turn_with_context;
 pub(crate) use finish::run_agent_turn_with_context_for_session;
-pub(crate) use queue::process_queue_orchestrator;
 pub(crate) use queue::process_queue_orchestrator_with_ui_events;
 #[cfg(test)]
 use recovery::reasoning_loop_final_response;

@@ -1,8 +1,27 @@
 use super::*;
+#[allow(dead_code)]
 pub async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     cancel_token: &mut tokio_util::sync::CancellationToken,
+) -> bool {
+    handle_enter_inner(state, client, cancel_token, None).await
+}
+
+pub(crate) async fn handle_enter_with_ui_events(
+    state: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+    cancel_token: &mut tokio_util::sync::CancellationToken,
+    ui_events: crate::network::ui_adapter::AgentUiEventSender,
+) -> bool {
+    handle_enter_inner(state, client, cancel_token, Some(ui_events)).await
+}
+
+async fn handle_enter_inner(
+    state: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+    cancel_token: &mut tokio_util::sync::CancellationToken,
+    ui_events: Option<crate::network::ui_adapter::AgentUiEventSender>,
 ) -> bool {
     let mut s = state.lock().await;
     s.reset_suggestion_cycle();
@@ -1091,46 +1110,26 @@ pub async fn handle_enter(
         return false;
     }
 
-    if s.can_accept_steer()
-        && s.draft_submit_mode == crate::app::state::DraftSubmitMode::Steer
-        && s.queue_steer(raw_input.clone())
-    {
-        s.input_buffer.clear();
-        s.cursor_position = 0;
-        s.draft_submit_mode = crate::app::state::DraftSubmitMode::Steer;
-        s.request_redraw();
+    let submit_outcome = super::submit_plain_prompt(&mut s, raw_input);
+    if submit_outcome != super::SubmitOutcome::Queued {
         return false;
     }
 
-    s.delegation_active = s.delegation_armed;
-    s.delegation_armed = false;
-    s.pending_queue.push(raw_input);
-    s.input_buffer.clear();
-    s.cursor_position = 0;
-    // Every submitted draft is complete. A new draft defaults back to
-    // steering when the current turn accepts it; otherwise Enter still uses
-    // the ordinary FIFO path.
-    s.draft_submit_mode = crate::app::state::DraftSubmitMode::Steer;
-    s.request_redraw();
-
-    if let Some(orchestrator_lease) = s.claim_orchestrator() {
-        s.status = AppStatus::Queued;
-        let client_clone = client.clone();
-        let state_clone = Arc::clone(state);
-        let token_clone = cancel_token.clone();
-        drop(s);
-
-        tokio::spawn(async move {
-            crate::network::process_queue_orchestrator(
-                client_clone,
-                state_clone,
-                token_clone,
-                Arc::new(crate::network::policy::InteractivePolicy),
-                orchestrator_lease,
-            )
-            .await;
-        });
-    }
+    let token_clone = cancel_token.clone();
+    let client_clone = client.clone();
+    let state_clone = Arc::clone(state);
+    drop(s);
+    let ui_events = ui_events.unwrap_or_else(|| {
+        let (sender, _receiver) = crate::network::ui_adapter::AgentUiEventSender::channel();
+        sender
+    });
+    crate::app::runtime::spawn_observed_orchestrator(
+        client_clone,
+        state_clone,
+        token_clone,
+        ui_events,
+    )
+    .await;
     false
 }
 

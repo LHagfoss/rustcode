@@ -10,7 +10,7 @@ use crate::app::AppEvent;
 #[cfg(test)]
 use crate::ui::TuiEvent;
 
-pub(super) async fn apply_approval_decision(
+pub(crate) async fn apply_approval_decision(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut CancellationToken,
     decision: ApprovalDecision,
@@ -70,7 +70,7 @@ pub(super) async fn apply_approval_decision(
     state.request_redraw();
 }
 
-pub(super) async fn apply_question_answer(
+pub(crate) async fn apply_question_answer(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut CancellationToken,
     answer: QuestionAnswer,

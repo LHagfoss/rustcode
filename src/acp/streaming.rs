@@ -161,6 +161,7 @@ impl AcpEventStream {
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
+            | crate::network::AgentUiEvent::QuestionRequested { .. }
             | crate::network::AgentUiEvent::Cancelled { .. } => Vec::new(),
             #[cfg(test)]
             crate::network::AgentUiEvent::Error { .. } => Vec::new(),

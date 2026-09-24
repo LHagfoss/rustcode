@@ -30,6 +30,9 @@ pub(crate) enum AgentUiEvent {
     ApprovalRequested {
         calls: Vec<ToolCall>,
     },
+    QuestionRequested {
+        prompt: crate::controller::QuestionPrompt,
+    },
     ToolFinished {
         id: String,
         result: ToolResult,
@@ -174,6 +177,7 @@ async fn publish_snapshot(
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
     approval_sent: &mut bool,
+    previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
 ) {
     publish_snapshot_with_mode(
@@ -184,6 +188,7 @@ async fn publish_snapshot(
         started_tools,
         finished_tools,
         approval_sent,
+        previous_question,
         previous_subagents,
         false,
     )
@@ -198,6 +203,7 @@ async fn publish_snapshot_with_mode(
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
     approval_sent: &mut bool,
+    previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
     suppress_synthetic_background_completion: bool,
 ) {
@@ -207,6 +213,7 @@ async fn publish_snapshot_with_mode(
         response_last_rewrite_revision,
         live_tools,
         pending_approval,
+        pending_question,
         protocol,
         history,
         history_len,
@@ -219,6 +226,14 @@ async fn publish_snapshot_with_mode(
             state.current_response_last_rewrite_revision,
             Arc::clone(&state.live_tool_calls),
             state.pending_tool_confirmation.is_some(),
+            state
+                .pending_question
+                .as_ref()
+                .map(|question| crate::controller::QuestionPrompt {
+                    text: question.question.clone(),
+                    options: question.options.clone(),
+                    multiple: question.is_multi_select,
+                }),
             state.active_tool_protocol(),
             state
                 .history
@@ -294,6 +309,15 @@ async fn publish_snapshot_with_mode(
         }
     } else if !pending_approval {
         *approval_sent = false;
+    }
+
+    if *previous_question != pending_question {
+        if let Some(prompt) = pending_question.as_ref() {
+            sender.send(AgentUiEvent::QuestionRequested {
+                prompt: prompt.clone(),
+            });
+        }
+        *previous_question = pending_question;
     }
 
     for message in history {
@@ -422,6 +446,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();
     let mut approval_sent = false;
+    let mut previous_question = None;
     let mut previous_subagents = std::collections::HashMap::new();
 
     let context = loop {
@@ -436,6 +461,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
                     &mut started_tools,
                     &mut finished_tools,
                     &mut approval_sent,
+                    &mut previous_question,
                     &mut previous_subagents,
                     suppress_synthetic_background_completion,
                 ).await;
@@ -451,6 +477,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
         &mut started_tools,
         &mut finished_tools,
         &mut approval_sent,
+        &mut previous_question,
         &mut previous_subagents,
         suppress_synthetic_background_completion,
     )
@@ -572,6 +599,7 @@ mod tests {
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
         let mut approval_sent = false;
+        let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
         publish_snapshot(
@@ -582,6 +610,7 @@ mod tests {
             &mut started_tools,
             &mut finished_tools,
             &mut approval_sent,
+            &mut previous_question,
             &mut previous_subagents,
         )
         .await;
@@ -607,6 +636,7 @@ mod tests {
             &mut started_tools,
             &mut finished_tools,
             &mut approval_sent,
+            &mut previous_question,
             &mut previous_subagents,
         )
         .await;
@@ -632,6 +662,7 @@ mod tests {
             &mut started_tools,
             &mut finished_tools,
             &mut approval_sent,
+            &mut previous_question,
             &mut previous_subagents,
         )
         .await;
@@ -655,6 +686,7 @@ mod tests {
             &mut started_tools,
             &mut finished_tools,
             &mut approval_sent,
+            &mut previous_question,
             &mut previous_subagents,
         )
         .await;
@@ -664,6 +696,58 @@ mod tests {
             Some(AgentUiEvent::TextDelta {
                 text: "final response".to_owned()
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_question_is_published_while_its_response_channel_waits() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let (response, mut waiting) = tokio::sync::oneshot::channel();
+        {
+            let mut state = state.lock().await;
+            state.pending_question = Some(crate::app::PendingQuestion::new(
+                "Choose a direction".to_owned(),
+                vec!["Left".to_owned(), "Right".to_owned()],
+                false,
+            ));
+            state.question_response = Some(response);
+            state.status = crate::app::AppStatus::AwaitingQuestion;
+        }
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut approval_sent = false;
+        let mut previous_question = None;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_question,
+            &mut previous_subagents,
+        )
+        .await;
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(AgentUiEvent::QuestionRequested {
+                prompt: crate::controller::QuestionPrompt {
+                    text: "Choose a direction".to_owned(),
+                    options: vec!["Left".to_owned(), "Right".to_owned()],
+                    multiple: false,
+                },
+            })
+        );
+        assert!(
+            waiting.try_recv().is_err(),
+            "the turn must still be waiting"
         );
     }
 

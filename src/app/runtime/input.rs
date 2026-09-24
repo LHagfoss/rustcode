@@ -15,6 +15,7 @@ pub(super) struct InputContext<'a> {
     pub(super) terminal_focused: &'a mut bool,
     pub(super) transcript_state: &'a mut TranscriptState,
     pub(super) app_event_sender: &'a AppEventSender,
+    pub(super) agent_ui_event_sender: &'a AgentUiEventSender,
     pub(super) composer: &'a ui::Composer,
 }
 
@@ -36,6 +37,7 @@ pub(super) async fn handle_app_event(
         terminal_focused,
         transcript_state,
         app_event_sender,
+        agent_ui_event_sender,
         composer,
     } = ctx;
     match app_event {
@@ -1324,7 +1326,13 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                     ui::ComposerAction::Submit => {
-                        if crate::app::handle_enter(&app_state, &client, current_cancel_token).await
+                        if crate::app::handle_enter_with_ui_events(
+                            &app_state,
+                            &client,
+                            current_cancel_token,
+                            agent_ui_event_sender.clone(),
+                        )
+                        .await
                         {
                             return Ok(InputFlow::Exit { update: false });
                         }
@@ -1459,8 +1467,13 @@ pub(super) async fn handle_app_event(
                             s.insert_char('\n');
                             s.reset_suggestion_cycle();
                         } else {
-                            if crate::app::handle_enter(&app_state, &client, current_cancel_token)
-                                .await
+                            if crate::app::handle_enter_with_ui_events(
+                                &app_state,
+                                &client,
+                                current_cancel_token,
+                                agent_ui_event_sender.clone(),
+                            )
+                            .await
                             {
                                 return Ok(InputFlow::Exit { update: false });
                             }
