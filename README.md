@@ -172,17 +172,16 @@ approve tool confirmations. Background commands started by the turn are
 tracked until their terminal result is delivered; unrelated tasks already
 running in the same session do not delay the turn.
 
-Interactive shell confirmations offer a one-time approval and, for eligible
-plain test/build commands, an action-scoped reusable approval. The eligible
-actions are deliberately limited to Cargo test/build/format operations and
-`python -m pytest` / `python -m unittest`; package installers, publishers, and
-other command families remain one-time approvals. Reusable approvals are
-stored in `~/.config/rustcode/config.toml` as `approved_command_prefixes` and
-match complete command tokens. Shell operators, expansions, redirections,
-network commands, privilege escalation, and known destructive command families
-still require a fresh confirmation. RustCode does not isolate shell commands
-with an operating-system sandbox, so approved commands still run with the
-permissions of the RustCode process. See
+Interactive shell confirmations offer one-time approval, reusable allows for
+the exact normalized command argv, and reusable token-sequence denies. An
+allow for `git add src/main.rs` does not also allow extra operands such as
+`git add src/main.rs .`; deny rules take precedence over allows and session
+auto-confirm. Shell composition, dynamic shell syntax, environment or
+background overrides, privileged/network commands, package
+installation/publication, deployment/release actions, and known destructive
+commands remain ineligible for reusable allows. RustCode does not isolate
+shell commands with an operating-system sandbox, so approved commands still
+run with the permissions of the RustCode process. See
 [docs/shell-approvals.md](docs/shell-approvals.md).
 
 ## Background commands

@@ -19,10 +19,15 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     let mut lines = Vec::new();
     let single = confirmations.len() == 1;
     let first = &confirmations[0];
-    let is_command =
-        single && (first.tool_name == "run_command" || first.rememberable_prefix.is_some());
+    let is_command = single
+        && (first.tool_name == "run_command"
+            || first.rememberable_prefix.is_some()
+            || first.forbidden_prefix.is_some());
     let rememberable_prefix = is_command
         .then_some(first.rememberable_prefix.as_deref())
+        .flatten();
+    let forbidden_prefix = is_command
+        .then_some(first.forbidden_prefix.as_deref())
         .flatten();
     let heading = if is_command {
         "Would you like to run the following command?".to_owned()
@@ -94,7 +99,9 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                 ),
                 Span::raw(" "),
             ];
-            if confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some()
+            if confirmation.tool_name == "run_command"
+                || confirmation.rememberable_prefix.is_some()
+                || confirmation.forbidden_prefix.is_some()
             {
                 spans.push(Span::styled(
                     "$ ",
@@ -185,7 +192,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
         ),
         Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
     ]));
-    if let Some(prefix) = rememberable_prefix.as_deref() {
+    if rememberable_prefix.is_some() {
         let selected = state.tool_confirmation_selected() == 2;
         lines.push(Line::from(vec![
             Span::styled(
@@ -203,7 +210,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     }),
             ),
             Span::styled(
-                format!("3. Always allow `{prefix}…`"),
+                "3. Always allow this exact command".to_owned(),
                 Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
                     Modifier::BOLD
                 } else {
@@ -213,16 +220,69 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             Span::styled(" (r)", Style::default().fg(COLOR_MUTED())),
         ]));
     }
+    if let Some(prefix) = forbidden_prefix.as_deref() {
+        let row_index = 2 + usize::from(rememberable_prefix.is_some());
+        let selected = state.tool_confirmation_selected() == row_index;
+        lines.push(Line::from(vec![
+            Span::styled(
+                if selected { "› " } else { "  " },
+                Style::default()
+                    .fg(if selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_MUTED()
+                    })
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+            Span::styled(
+                format!(
+                    "{}. Always forbid literal tokens `{prefix}…`",
+                    row_index + 1
+                ),
+                Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(" (f)", Style::default().fg(COLOR_MUTED())),
+        ]));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!(
-            "  Press enter to confirm · r allows prefix · tab to {} auto-confirm",
-            if state.auto_confirm() {
-                "disable"
-            } else {
-                "enable"
-            }
-        ),
+        if rememberable_prefix.is_some() && forbidden_prefix.is_some() {
+            format!(
+                "  Press enter to confirm · r always allows exact command · f blocks literal tokens · tab to {} auto-confirm",
+                if state.auto_confirm() {
+                    "disable"
+                } else {
+                    "enable"
+                }
+            )
+        } else if rememberable_prefix.is_some() {
+            format!(
+                "  Press enter to confirm · r always allows exact command · tab to {} auto-confirm",
+                if state.auto_confirm() { "disable" } else { "enable" }
+            )
+        } else if forbidden_prefix.is_some() {
+            format!(
+                "  Press enter to confirm · f blocks literal tokens · tab to {} auto-confirm",
+                if state.auto_confirm() { "disable" } else { "enable" }
+            )
+        } else {
+            format!(
+                "  Press enter to confirm · tab to {} auto-confirm",
+                if state.auto_confirm() {
+                    "disable"
+                } else {
+                    "enable"
+                }
+            )
+        },
         Style::default().fg(COLOR_MUTED()),
     )));
 
@@ -240,7 +300,14 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             .unwrap_or_default();
         let remember = lines
             .iter()
-            .find(|line| line.to_string().contains("3. Always allow"))
+            .find(|line| {
+                line.to_string()
+                    .contains("3. Always allow this exact command")
+            })
+            .cloned();
+        let forbid = lines
+            .iter()
+            .find(|line| line.to_string().contains("Always forbid"))
             .cloned();
         let target = lines
             .iter()
@@ -250,6 +317,8 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                 !text.trim().is_empty()
                     && !text.contains("1. Yes")
                     && !text.contains("2. No")
+                    && !text.contains("3. Always allow")
+                    && !text.contains("Always forbid")
                     && !text.contains("Press enter")
             })
             .cloned();
@@ -266,6 +335,11 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             && let Some(remember) = remember
         {
             compact.push(remember);
+        }
+        if content_area.height >= 6
+            && let Some(forbid) = forbid
+        {
+            compact.push(forbid);
         }
         if content_area.height >= 5
             && let Some(footer) = footer
@@ -377,8 +451,9 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             "run_command" => "Run command",
             _ => "Execute tool",
         };
-        let is_command =
-            confirmation.tool_name == "run_command" || confirmation.rememberable_prefix.is_some();
+        let is_command = confirmation.tool_name == "run_command"
+            || confirmation.rememberable_prefix.is_some()
+            || confirmation.forbidden_prefix.is_some();
         let action_label = if is_command {
             "Run command"
         } else {
@@ -636,8 +711,10 @@ pub(super) fn render_tool_confirmation_modal_legacy(
             };
 
             let marker = if i == 0 { "›" } else { " " };
-            let command_prefix =
-                (c.tool_name == "run_command" || c.rememberable_prefix.is_some()).then_some("$ ");
+            let command_prefix = (c.tool_name == "run_command"
+                || c.rememberable_prefix.is_some()
+                || c.forbidden_prefix.is_some())
+            .then_some("$ ");
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} {}. ", marker, i + 1),

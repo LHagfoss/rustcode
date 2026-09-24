@@ -79,6 +79,7 @@ fn test_config_save_load() {
     let config = AppConfig {
         default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
         approved_command_prefixes: vec!["cargo test".to_string()],
+        denied_command_prefixes: vec!["make clean".to_string()],
         ..AppConfig::default()
     };
     save_config_to(&dir, &config);
@@ -93,6 +94,7 @@ fn test_config_save_load() {
     assert_eq!(url, expected.url);
     assert_eq!(model, expected.model);
     assert_eq!(loaded.approved_command_prefixes, ["cargo test"]);
+    assert_eq!(loaded.denied_command_prefixes, ["make clean"]);
 }
 
 #[test]
@@ -1224,6 +1226,22 @@ fn project_overrides_are_not_persisted_into_global_config() {
 
     assert_eq!(merged.default.big(), global.default.big());
     assert_eq!(merged.default.small(), global.default.small());
+}
+
+#[test]
+fn project_config_cannot_grant_or_forbid_user_command_rules() {
+    let mut merged = AppConfig::default();
+    let project: TomlConfig = toml::from_str(
+        "version = 1\napproved_command_prefixes = [\"cargo test\"]\ndenied_command_prefixes = [\"git push\"]",
+    )
+    .unwrap();
+    apply_project_toml_config(&mut merged, project.clone());
+    assert!(merged.approved_command_prefixes.is_empty());
+    assert!(merged.denied_command_prefixes.is_empty());
+
+    preserve_project_overrides(&mut merged, &AppConfig::default(), &project);
+    assert!(merged.approved_command_prefixes.is_empty());
+    assert!(merged.denied_command_prefixes.is_empty());
 }
 
 #[test]

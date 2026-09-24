@@ -144,6 +144,7 @@ fn render_snapshot_preserves_existing_ui_output() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: None,
     }]);
     states.push(approval);
 
@@ -296,6 +297,7 @@ fn acceptance_tool_confirmation_replaces_composer_with_actions() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: None,
     }]);
 
     let rendered = render_state_to_text(&mut state, 100, 14);

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 pub(crate) enum ApprovalDecision {
     Approve,
     ApproveAndRemember(String),
+    ForbidAndRemember(String),
     Deny,
     ApproveAll,
     Custom(String),

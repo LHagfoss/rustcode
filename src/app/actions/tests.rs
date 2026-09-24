@@ -607,6 +607,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
             content_preview: String::new(),
             content_bytes: 0,
             rememberable_prefix: None,
+            forbidden_prefix: None,
         }]);
         app.input_buffer = "pending confirmation".to_owned();
         app.cursor_position = app.input_buffer.len();

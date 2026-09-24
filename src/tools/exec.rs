@@ -22,7 +22,8 @@ mod policy;
 pub(crate) use policy::command_confirmation_scope;
 pub(crate) use policy::{
     approved_command_prefix_covers_call, command_confirmation_preview,
-    command_requires_confirmation, pull_request_base, reject_broad_git_stage,
+    command_requires_confirmation, denied_command_prefix_covers_call, pull_request_base,
+    reject_broad_git_stage, rememberable_command_forbid_prefix_for_call,
     rememberable_command_prefix_for_call,
 };
 use policy::{has_interactive_sudo, is_short_discovery_command};
