@@ -256,6 +256,58 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn working_directory_symlink_cannot_escape_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let cwd_link = workspace.path().join("outside-link");
+        symlink(outside.path(), &cwd_link).unwrap();
+        let roots = vec![workspace.path().to_path_buf()];
+        let error = command(
+            "id",
+            SandboxPolicy {
+                command_cwd: Some(&cwd_link),
+                workspace_root: Some(workspace.path()),
+                writable_roots: &roots,
+                session_scratch_roots: &[],
+                network_access: false,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("outside its writable roots"));
+        assert!(error.contains("command was not run"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn session_scratch_symlink_redirection_fails_closed() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let session = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let scratch_link = session.path().join("sandbox");
+        symlink(outside.path(), &scratch_link).unwrap();
+        let roots = vec![workspace.path().to_path_buf(), scratch_link.clone()];
+        let scratch_roots = vec![scratch_link];
+        let error = command(
+            "id",
+            SandboxPolicy {
+                command_cwd: Some(workspace.path()),
+                workspace_root: Some(workspace.path()),
+                writable_roots: &roots,
+                session_scratch_roots: &scratch_roots,
+                network_access: false,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid session scratch directory"));
+        assert!(error.contains("command was not run"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn sandbox_command_contains_private_network_and_read_only_host_mounts() {
         let workspace = tempfile::tempdir().unwrap();
         let roots = vec![workspace.path().to_path_buf()];
