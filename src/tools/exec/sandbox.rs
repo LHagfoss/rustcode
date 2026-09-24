@@ -207,6 +207,7 @@ pub(crate) fn runtime_tests_available() -> bool {
                 timeout: std::time::Duration::from_secs(5),
                 process_group: true,
                 inherited_fds: prepared.inherited_fds,
+                status_command: None,
             };
             let output = rustcode_command::run_with_timeout(&request, None)
                 .map_err(|error| format!("sandbox execution probe failed: {error}"))?;
