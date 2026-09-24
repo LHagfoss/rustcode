@@ -45,6 +45,12 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             .fg(COLOR_TEXT())
             .add_modifier(Modifier::BOLD),
     )));
+    if is_command {
+        lines.push(Line::from(Span::styled(
+            "  Approval controls prompts; OS isolation is separate.",
+            Style::default().fg(COLOR_MUTED()),
+        )));
+    }
     lines.push(Line::from(""));
 
     if single {
@@ -210,7 +216,10 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     }),
             ),
             Span::styled(
-                "3. Always allow this exact command".to_owned(),
+                format!(
+                    "3. Always allow plain token prefix `{}`",
+                    rememberable_prefix.unwrap_or_default()
+                ),
                 Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
                     Modifier::BOLD
                 } else {
@@ -256,7 +265,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
     lines.push(Line::from(Span::styled(
         if rememberable_prefix.is_some() && forbidden_prefix.is_some() {
             format!(
-                "  Press enter to confirm · r always allows exact command · f blocks literal tokens · tab to {} auto-confirm",
+                "  Press enter to confirm · r allows this token prefix · f blocks literal tokens · tab to {} auto-confirm",
                 if state.auto_confirm() {
                     "disable"
                 } else {
@@ -265,7 +274,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             )
         } else if rememberable_prefix.is_some() {
             format!(
-                "  Press enter to confirm · r always allows exact command · tab to {} auto-confirm",
+                "  Press enter to confirm · r allows this token prefix · tab to {} auto-confirm",
                 if state.auto_confirm() { "disable" } else { "enable" }
             )
         } else if forbidden_prefix.is_some() {
@@ -302,7 +311,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
             .iter()
             .find(|line| {
                 line.to_string()
-                    .contains("3. Always allow this exact command")
+                    .contains("3. Always allow plain token prefix")
             })
             .cloned();
         let forbid = lines
@@ -320,6 +329,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
                     && !text.contains("3. Always allow")
                     && !text.contains("Always forbid")
                     && !text.contains("Press enter")
+                    && !text.contains("Approval controls prompts")
             })
             .cloned();
         let footer = lines.last().cloned();

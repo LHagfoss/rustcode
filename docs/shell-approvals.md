@@ -2,21 +2,28 @@
 
 RustCode checks `run_command` calls before they execute. Known read-only
 commands may run without a prompt. Mutating, unclassified, or shell-composed
-commands ask for confirmation. A user can approve a command once, save an
-exact-command allow rule, or forbid a matching token sequence from the
-confirmation panel.
+commands ask for confirmation. A user can approve a command once, save a
+reusable plain-token command-prefix rule, or forbid a matching token sequence
+from the confirmation panel.
 
-Reusable allow rules cover only the same normalized argv the user approved.
-For example, approving `git add src/main.rs` does not allow
-`git add src/main.rs .`, and approving `make test` does not allow
-`make test upload-prod`. Whitespace differences are normalized. Shell syntax,
-quotes, substitutions, redirections, globs, tilde expansion, and environment
-or background overrides are ineligible for reusable allow rules. Privilege
-escalation, network clients, package installation/publication,
+Newly saved reusable allow rules match complete leading tokens, so
+`cargo test` covers `cargo test --lib` but not `cargo testing`. Existing saved
+entries without a prefix marker continue to match only the exact normalized
+command the user approved. Whitespace differences are normalized. A new prefix
+rule intentionally covers plain arguments after the approved prefix; choose a
+narrow prefix when extra arguments could widen the action.
+Shell syntax, quotes, substitutions, redirections, globs, tilde expansion, and
+environment or background overrides are ineligible for reusable allow rules.
+Privilege escalation, network clients, package installation/publication,
 deployment/release actions, and known destructive commands are also ineligible.
-The config field `approved_command_prefixes` is retained for compatibility,
-but its entries are treated as exact normalized argv. Parent and subagent
-shell calls use the same saved rules.
+Forbid rules take precedence over allows and session auto-confirm. Parent and
+subagent shell calls use the same saved rules.
+
+Approval rules decide when RustCode asks the user. They do not provide
+operating-system isolation or change the shell process's permissions. OS
+permissions are enforced separately only on platforms with a supported
+sandbox backend. On unsupported platforms such as Windows, commands run with
+the RustCode process's permissions.
 
 Forbid rules persist in `~/.config/rustcode/config.toml` as
 `denied_command_prefixes`, are user-level only, and take precedence over saved
