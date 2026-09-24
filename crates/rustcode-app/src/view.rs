@@ -343,6 +343,10 @@ fn render_message(row: ProjectionRow) -> impl IntoElement {
     }
 }
 
+fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
+    !snapshot.is_some_and(|snapshot| snapshot.session_id.is_some())
+}
+
 impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let launch_dir = self.launch_dir.display().to_string();
@@ -371,7 +375,7 @@ impl Render for AppView {
             )
             .child(self.render_model_buttons(cx));
 
-        let shell = if workspace.is_none() {
+        let shell = if should_show_start_screen(self.snapshot.as_ref()) {
             let sessions = self
                 .snapshot
                 .as_ref()
@@ -522,9 +526,46 @@ impl Render for AppView {
 
 #[cfg(test)]
 mod tests {
-    use rustcode::controller::ControllerError;
+    use std::path::PathBuf;
 
-    use super::{ChatViewState, ControllerUpdate};
+    use rustcode::controller::{ControllerError, ControllerSnapshot, SessionChoice};
+
+    use super::{ChatViewState, ControllerUpdate, should_show_start_screen};
+
+    #[test]
+    fn list_sessions_snapshot_with_launch_workspace_keeps_start_screen_visible() {
+        let initial = ControllerSnapshot {
+            generation: 0,
+            workspace: Some(PathBuf::from("/launch")),
+            session_id: None,
+            sessions: Vec::new(),
+            models: Vec::new(),
+            selected_model: None,
+            transcript: Vec::new(),
+            live_response: String::new(),
+            queued_count: 0,
+            turn_active: false,
+            pending_question: None,
+            pending_approval: None,
+        };
+        let listed = ControllerSnapshot {
+            sessions: vec![SessionChoice {
+                id: "saved-session".to_owned(),
+                title: "Saved session".to_owned(),
+                when: "today".to_owned(),
+                message_count: 2,
+            }],
+            ..initial.clone()
+        };
+        let active = ControllerSnapshot {
+            session_id: Some("active-session".to_owned()),
+            ..listed.clone()
+        };
+
+        assert!(should_show_start_screen(Some(&initial)));
+        assert!(should_show_start_screen(Some(&listed)));
+        assert!(!should_show_start_screen(Some(&active)));
+    }
 
     #[test]
     fn invalid_workspace_error_is_available_to_the_start_screen() {
