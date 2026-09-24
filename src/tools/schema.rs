@@ -391,6 +391,16 @@ pub(crate) fn mcp_tool_display_name(name: &str) -> Option<String> {
 }
 
 pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
+    collect_mcp_tools_with_servers()
+        .into_iter()
+        .map(|(name, _, description, schema)| (name, description, schema))
+        .collect()
+}
+
+/// Collect MCP schemas with their configured server name alongside the
+/// provider-facing tool name. The owner is needed for per-server reservations;
+/// the provider-facing name remains unchanged for compatibility.
+fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, Value)> {
     let mut discovered = Vec::new();
     let mut clients_for_names = Vec::new();
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
@@ -441,7 +451,7 @@ pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
             raw_name
         };
         if emitted.insert(name.clone()) {
-            out.push((name, desc, schema));
+            out.push((name, server, desc, schema));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -498,6 +508,13 @@ pub(crate) struct McpSchemaSelectionStats {
     pub previously_used: usize,
     pub fallback: usize,
     pub omitted: usize,
+    /// Names omitted from the provider schema, included in operational events
+    /// so a missing callable MCP tool is diagnosable.
+    pub omitted_names: Vec<String>,
+    /// Configured servers whose complete toolsets were bound by reservation.
+    pub reserved_servers: Vec<String>,
+    /// Servers whose reservation could not fit the count or byte budget.
+    pub rejected_reservations: Vec<String>,
     pub selected_names: Vec<String>,
     pub phase: ToolSchemaPhase,
     pub builtin_available: usize,
@@ -1185,9 +1202,28 @@ fn mcp_tool_relevance(
     score
 }
 
+#[cfg(test)]
 pub(super) fn select_mcp_tools_for_context_in_phase(
     tools: &[(String, String, Value)],
     messages: &[Value],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+        tools,
+        &[],
+        &[],
+        messages,
+        &[],
+        phase,
+    )
+}
+
+pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+    tools: &[(String, String, Value)],
+    owners: &[String],
+    always_include_servers: &[String],
+    messages: &[Value],
+    sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
     let terms = context_terms(messages);
@@ -1219,46 +1255,104 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
             .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
     });
 
-    let mut candidates = requested
-        .iter()
-        .copied()
-        .take(MAX_MCP_NATIVE_SCHEMAS)
-        .collect::<Vec<_>>();
-    candidates.extend(
-        previous
-            .iter()
-            .copied()
-            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(candidates.len())),
-    );
-    let previously_used_count = candidates.len().saturating_sub(requested.len());
-    candidates.extend(
-        relevant
-            .iter()
-            .map(|(index, _)| *index)
-            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(candidates.len())),
-    );
-    candidates.dedup();
-
+    // Reserve complete configured server toolsets first. A reservation is
+    // all-or-none: if adding the complete set would exceed either hard limit,
+    // the server is reported as rejected and none of its tools are bound for
+    // this request.
     let mut selected = Vec::new();
+    let mut selected_indices = std::collections::HashSet::new();
+    let mut rejected_indices = std::collections::HashSet::new();
     let mut selected_schema_bytes: usize = 0;
     let mut schema_budget_exhausted = false;
+    let mut reserved_servers = Vec::new();
+    let mut rejected_reservations = Vec::new();
+    let mut seen_servers = std::collections::HashSet::new();
+    for server in always_include_servers {
+        if !seen_servers.insert(server.as_str()) {
+            continue;
+        }
+        let group = owners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, owner)| (owner == server).then_some(index))
+            .collect::<Vec<_>>();
+        if group.is_empty() {
+            continue;
+        }
+        let group_bytes = group.iter().fold(0usize, |total, index| {
+            let (name, description, schema) = &tools[*index];
+            total.saturating_add(mcp_schema_bytes(name, description, schema))
+        });
+        let count_fits = selected.len().saturating_add(group.len()) <= MAX_MCP_NATIVE_SCHEMAS;
+        let bytes_fit =
+            selected_schema_bytes.saturating_add(group_bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES;
+        if count_fits && bytes_fit {
+            for index in group {
+                if selected_indices.insert(index) {
+                    selected.push(index);
+                }
+            }
+            selected_schema_bytes = selected_schema_bytes.saturating_add(group_bytes);
+            reserved_servers.push(server.clone());
+        } else {
+            rejected_reservations.push(server.clone());
+            schema_budget_exhausted |= !bytes_fit;
+            rejected_indices.extend(group);
+        }
+    }
+
+    let candidates = requested
+        .iter()
+        .copied()
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(previous.iter().copied())
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(
+            sticky_names
+                .iter()
+                .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky)),
+        )
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(
+            relevant
+                .iter()
+                .map(|(index, _)| *index)
+                .filter(|index| !rejected_indices.contains(index)),
+        );
+    let mut previously_used_count = 0;
     for index in candidates {
         if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
             break;
         }
+        if !selected_indices.insert(index) {
+            continue;
+        }
         let (name, description, schema) = &tools[index];
         let bytes = mcp_schema_bytes(name, description, schema);
         if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+            selected_indices.remove(&index);
             schema_budget_exhausted = true;
             continue;
+        }
+        if previous.contains(&index) {
+            previously_used_count += 1;
         }
         selected.push(index);
         selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
     }
+
     let relevant_count = selected
         .iter()
-        .filter(|index| !requested.contains(index) && !previous.contains(index))
+        .filter(|index| {
+            !explicitly_requested.contains(&tools[**index].0)
+                && !previous.contains(index)
+                && !sticky_names.contains(&tools[**index].0)
+                && !reserved_servers
+                    .iter()
+                    .any(|server| owners.get(**index).is_some_and(|owner| owner == server))
+        })
         .count();
+
     let mut fallback_count = 0;
     if selected.is_empty() && phase == ToolSchemaPhase::Established {
         for preferred in MCP_DISCOVERY_CORE {
@@ -1266,25 +1360,89 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
                 break;
             }
             if let Some(index) = tools.iter().position(|(name, _, _)| name == preferred) {
+                if rejected_indices.contains(&index) {
+                    continue;
+                }
+                if !selected_indices.insert(index) {
+                    continue;
+                }
                 let (name, description, schema) = &tools[index];
                 let bytes = mcp_schema_bytes(name, description, schema);
                 if selected_schema_bytes.saturating_add(bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES {
                     selected.push(index);
                     selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
                 } else {
+                    selected_indices.remove(&index);
                     schema_budget_exhausted = true;
                 }
             }
         }
         fallback_count = selected.len();
     }
+
+    // Sticky and explicit tools can be promoted within the already selected
+    // surface. Reserved server tools stay first so a follow-up cannot break a
+    // complete configured reservation.
+    if !sticky_names.is_empty() {
+        let reserved_indices = owners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, owner)| reserved_servers.contains(owner).then_some(index))
+            .filter(|index| selected_indices.contains(index))
+            .collect::<Vec<_>>();
+        let sticky_indices = sticky_names
+            .iter()
+            .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
+            .collect::<Vec<_>>();
+        let mut prioritized = Vec::with_capacity(selected.len());
+        let mut prioritized_set = std::collections::HashSet::with_capacity(selected.len());
+        for index in reserved_indices
+            .into_iter()
+            .chain(requested.iter().copied())
+            .chain(sticky_indices)
+            .chain(selected.iter().copied())
+        {
+            if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
+                break;
+            }
+            if selected_indices.contains(&index) && prioritized_set.insert(index) {
+                prioritized.push(index);
+            }
+        }
+        selected = prioritized;
+        selected_schema_bytes = 0;
+        let mut within_budget = Vec::with_capacity(selected.len());
+        for index in selected {
+            let (name, description, schema) = &tools[index];
+            let bytes = mcp_schema_bytes(name, description, schema);
+            if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+                schema_budget_exhausted = true;
+                continue;
+            }
+            selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+            within_budget.push(index);
+        }
+        selected = within_budget;
+    }
+
     selected.sort_unstable();
     selected.dedup();
     debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
+    let selected_set = selected
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
     let selected_names = selected
         .iter()
         .map(|index| tools[*index].0.clone())
-        .collect();
+        .collect::<Vec<_>>();
+    let omitted_names = tools
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (name, _, _))| {
+            (!selected_set.contains(&index)).then_some(name.clone())
+        })
+        .collect::<Vec<_>>();
     let stats = McpSchemaSelectionStats {
         available: tools.len(),
         selected: selected.len(),
@@ -1293,6 +1451,9 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
         fallback: fallback_count.min(selected.len()),
         omitted: tools.len().saturating_sub(selected.len()),
         selected_names,
+        omitted_names,
+        reserved_servers,
+        rejected_reservations,
         phase,
         mcp_schema_bytes: selected_schema_bytes,
         mcp_schema_budget_bytes: MAX_MCP_NATIVE_SCHEMA_BYTES,
@@ -1310,77 +1471,21 @@ pub(super) fn select_mcp_tools_for_context(
     select_mcp_tools_for_context_in_phase(tools, messages, ToolSchemaPhase::Established)
 }
 
+#[cfg(test)]
 pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
     tools: &[(String, String, Value)],
     messages: &[Value],
     sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
-    let (selected, mut stats) = select_mcp_tools_for_context_in_phase(tools, messages, phase);
-    if sticky_names.is_empty() {
-        return (selected, stats);
-    }
-
-    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, messages);
-    let mut pinned_indices = explicitly_requested
-        .iter()
-        .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
-        .collect::<Vec<_>>();
-    pinned_indices.sort_unstable();
-    let sticky_indices = sticky_names
-        .iter()
-        .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
-        .collect::<Vec<_>>();
-    let mut selected_indices = std::collections::HashSet::with_capacity(selected.len());
-    let mut prioritized = Vec::with_capacity(selected.len());
-    for index in pinned_indices {
-        if selected_indices.insert(index) {
-            prioritized.push(index);
-        }
-        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
-            break;
-        }
-    }
-    for index in sticky_indices {
-        if selected_indices.insert(index) {
-            prioritized.push(index);
-        }
-        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
-            break;
-        }
-    }
-    for index in selected {
-        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
-            break;
-        }
-        if selected_indices.insert(index) {
-            prioritized.push(index);
-        }
-    }
-    let mut selected = Vec::new();
-    let mut selected_schema_bytes: usize = 0;
-    let mut schema_budget_exhausted = false;
-    for index in prioritized {
-        let (name, description, schema) = &tools[index];
-        let bytes = mcp_schema_bytes(name, description, schema);
-        if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
-            schema_budget_exhausted = true;
-            continue;
-        }
-        selected.push(index);
-        selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
-    }
-    selected.sort_unstable();
-    stats.selected = selected.len();
-    stats.omitted = tools.len().saturating_sub(selected.len());
-    stats.mcp_schema_bytes = selected_schema_bytes;
-    stats.mcp_schema_budget_bytes = MAX_MCP_NATIVE_SCHEMA_BYTES;
-    stats.schema_budget_exhausted |= schema_budget_exhausted;
-    stats.selected_names = selected
-        .iter()
-        .map(|index| tools[*index].0.clone())
-        .collect();
-    (selected, stats)
+    select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+        tools,
+        &[],
+        &[],
+        messages,
+        sticky_names,
+        phase,
+    )
 }
 
 #[cfg(test)]
@@ -1414,11 +1519,28 @@ pub(crate) fn native_tools_schema_for_context_with_sticky(
     native_tools_schema_for_context_with_sticky_at(policy, messages, sticky_names, None)
 }
 
+#[cfg(test)]
 pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     policy: ToolSchemaPolicy,
     messages: &[Value],
     sticky_names: &[String],
     workspace_root: Option<&Path>,
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
+        policy,
+        messages,
+        sticky_names,
+        workspace_root,
+        &[],
+    )
+}
+
+pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
+    workspace_root: Option<&Path>,
+    always_include_servers: &[String],
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
     #[cfg(test)]
     maybe_pause_native_schema_test_gate(messages);
@@ -1441,9 +1563,21 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
     let stats = if policy.include_mcp_tools {
-        let mcp_tools = collect_mcp_tools();
-        let (selected, stats) = select_mcp_tools_for_context_with_sticky_in_phase(
+        let collected = collect_mcp_tools_with_servers();
+        let mcp_tools = collected
+            .iter()
+            .map(|(name, _, description, schema)| {
+                (name.clone(), description.clone(), schema.clone())
+            })
+            .collect::<Vec<_>>();
+        let owners = collected
+            .iter()
+            .map(|(_, server, _, _)| server.clone())
+            .collect::<Vec<_>>();
+        let (selected, stats) = select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
             &mcp_tools,
+            &owners,
+            always_include_servers,
             messages,
             sticky_names,
             phase,

@@ -272,6 +272,7 @@ mod tests {
                 "mcp-secret".to_string(),
             )]),
             enabled: true,
+            always_include: false,
         });
 
         let snapshot = session_settings_snapshot(&config).expect("config should serialize");

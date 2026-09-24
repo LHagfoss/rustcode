@@ -96,6 +96,45 @@ fn test_config_save_load() {
 }
 
 #[test]
+fn mcp_server_always_include_defaults_false_and_round_trips() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+enabled = true
+always_include = true
+"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert!(config.mcp_servers[0].always_include);
+
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+enabled = true
+"#,
+    )
+    .unwrap();
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert!(!config.mcp_servers[0].always_include);
+}
+
+#[test]
 fn discord_rich_presence_defaults_enabled_and_round_trips() {
     assert!(AppConfig::default().discord_rpc_enabled);
 

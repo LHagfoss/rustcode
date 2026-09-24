@@ -134,6 +134,23 @@ and reported instead of being overwritten.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
 
+Native API requests expose at most 16 MCP tool schemas at a time. Set
+`always_include = true` on an MCP server's `[[mcp_servers]]` entry to reserve
+slots for its complete toolset, independent of the current prompt:
+
+```toml
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+always_include = true
+```
+
+Reservations are applied in configuration order and still obey the schema
+byte budget. If a complete server toolset cannot fit either limit, that
+reservation is rejected for the request; the rejection and omitted tool names
+are recorded in `mcp.native_schema_selection`.
+
 ACP supports background command completion and continuation. A background tool
 call is reported as `InProgress`, its terminal update retains the provider's
 original tool-call ID, and the same logical turn resumes after completion.

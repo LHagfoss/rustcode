@@ -489,6 +489,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 enabled: true,
+                always_include: false,
             },
             crate::config::McpServerConfig {
                 name: "disabled".to_string(),
@@ -496,6 +497,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 enabled: false,
+                always_include: false,
             },
             crate::config::McpServerConfig {
                 name: "enabled-two".to_string(),
@@ -503,6 +505,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 enabled: true,
+                always_include: false,
             },
         ];
         let started = Arc::new(StdMutex::new(Vec::new()));
@@ -538,6 +541,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 enabled: true,
+                always_include: false,
             },
             crate::config::McpServerConfig {
                 name: "reachable".to_string(),
@@ -545,6 +549,7 @@ mod tests {
                 args: Vec::new(),
                 env: HashMap::new(),
                 enabled: true,
+                always_include: false,
             },
         ];
         let started = Arc::new(StdMutex::new(Vec::new()));
