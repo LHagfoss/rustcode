@@ -891,7 +891,9 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
             }
             (Some('"'), ch) => {
                 let assignment_value = is_leading_assignment_value(&tokens, &token);
-                if matches!(ch, '$' | '`' | '^') && !assignment_value
+                if ch == '`'
+                    || ch == '$' && characters.peek() == Some(&'(')
+                    || matches!(ch, '$' | '^') && !assignment_value
                     || is_paired_expansion_marker(command, ch, '!') && !assignment_value
                     || is_paired_expansion_marker(command, ch, '%') && !assignment_value
                 {
@@ -911,11 +913,12 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
                 }
             }
             (None, ch)
-                if (matches!(
-                    ch,
-                    ';' | '|' | '&' | '<' | '>' | '`' | '$' | '(' | ')' | '{' | '}'
-                ) || matches!(ch, '*' | '?' | '[' | ']' | '~' | '^'))
-                    && !is_leading_assignment_value(&tokens, &token)
+                if ch == '`'
+                    || ch == '$' && characters.peek() == Some(&'(')
+                    || matches!(ch, '(' | ')')
+                    || (matches!(ch, ';' | '|' | '&' | '<' | '>' | '$' | '{' | '}')
+                        || matches!(ch, '*' | '?' | '[' | ']' | '~' | '^'))
+                        && !is_leading_assignment_value(&tokens, &token)
                     || ch == '\\' && !windows_executable_path
                     || is_paired_expansion_marker(command, ch, '!')
                         && !is_leading_assignment_value(&tokens, &token)
@@ -940,9 +943,10 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
 }
 
 fn is_leading_assignment_value(tokens: &[String], token: &str) -> bool {
-    tokens
-        .iter()
-        .all(|token| is_posix_environment_assignment(token))
+    !token.is_empty()
+        && tokens
+            .iter()
+            .all(|token| is_posix_environment_assignment(token))
         && token
             .split_once('=')
             .is_some_and(|(name, _)| is_valid_environment_name(name))
@@ -1640,6 +1644,11 @@ mod command_prefix_tests {
             ("git push", "FOO=bar git push"),
             ("git push", "FOO='static value' git push"),
             ("git push", "FOO=1 BAR=\"$VALUE\" git push"),
+            ("git push", "FOO=$(git push) echo harmless"),
+            ("git push", "FOO=\"$(git push)\" echo harmless"),
+            ("git push", "FOO=`git push` echo harmless"),
+            ("git push", "$CMD push"),
+            ("git push", "\"$CMD\" push"),
             ("git push", "eval git push"),
             ("git push", "eval 'git push'"),
             ("git push", "sudo --user root git push"),
