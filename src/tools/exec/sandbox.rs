@@ -783,8 +783,23 @@ mod tests {
                     network_access: false,
                 },
             );
-            let error = result.expect_err("sandbox setup must fail on this runner");
-            assert!(error.contains("command was not run"), "{error}");
+            match result {
+                Ok(prepared) => {
+                    let output = run_sandboxed(prepared, workspace.path());
+                    assert!(
+                        !output.success,
+                        "sandbox setup unexpectedly succeeded on this runner"
+                    );
+                    let error = String::from_utf8_lossy(output.stderr.bytes());
+                    assert!(
+                        error.contains("setting up uid map: Permission denied"),
+                        "unexpected sandbox setup failure: {error}"
+                    );
+                }
+                Err(error) => {
+                    assert!(error.contains("command was not run"), "{error}");
+                }
+            }
             assert!(!marker.exists(), "command ran after sandbox setup failed");
             return;
         }
