@@ -91,6 +91,233 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(approval.description, "src/main.rs\nfn main() {}");
 }
 
+#[tokio::test]
+async fn controller_question_answer_resolves_the_existing_response_channel() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingQuestion;
+    state.pending_question = Some(PendingQuestion::new(
+        "Continue?".to_owned(),
+        vec!["Proceed".to_owned()],
+        false,
+    ));
+    state.question_response = Some(tx);
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    super::worker::answer_question(&state, &mut cancel_token, "Proceed".to_owned())
+        .await
+        .expect("pending question should accept its answer");
+
+    assert_eq!(
+        rx.await.expect("question response"),
+        "User selected: Proceed"
+    );
+    assert!(state.lock().await.pending_question.is_none());
+}
+
+#[tokio::test]
+async fn controller_approval_resolves_the_existing_response_channel() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingToolConfirmation;
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "write_file".to_owned(),
+        path: "src/main.rs".to_owned(),
+        content_preview: "fn main() {}".to_owned(),
+        content_bytes: 12,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+    state.tool_confirmation_response = Some(tx);
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    super::worker::apply_approval(&state, &mut cancel_token, super::ApprovalChoice::Approve)
+        .await
+        .expect("pending approval should accept a choice");
+
+    assert_eq!(
+        rx.await.expect("approval response"),
+        crate::app::ToolConfirmationResponse::Approve
+    );
+    assert!(state.lock().await.pending_tool_confirmation.is_none());
+}
+
+#[tokio::test]
+async fn cancelled_turn_can_be_followed_by_a_new_submit() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock provider");
+    let provider = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let (first_chunk_tx, first_chunk_rx) = tokio::sync::oneshot::channel();
+    let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut first_socket, _) = listener.accept().await.expect("first provider request");
+        read_provider_request(&mut first_socket).await;
+        first_socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("send first response headers");
+        first_socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"first chunk\"}}]}\n\n")
+            .await
+            .expect("send first response chunk");
+        let _ = first_chunk_tx.send(());
+        let _ = release_first_rx.await;
+        let _ = first_socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            .await;
+        let _ = first_socket.write_all(b"data: [DONE]\n\n").await;
+        drop(first_socket);
+
+        let (mut second_socket, _) = listener.accept().await.expect("second provider request");
+        read_provider_request(&mut second_socket).await;
+        second_socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"second chunk\"}}]}\n\n")
+            .await
+            .expect("send second response text");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        second_socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            .await
+            .expect("send second response finish");
+        second_socket
+            .write_all(b"data: [DONE]\n\n")
+            .await
+            .expect("finish second stream");
+    });
+
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    std::fs::create_dir(workspace.path().join(".rustcode")).expect("project config directory");
+    std::fs::write(
+        workspace.path().join(".rustcode/config.toml"),
+        format!(
+            "default = \"controller-mock\"\n[[models]]\nname = \"controller-mock\"\nurl = \"{provider}\"\nmodel = \"controller-mock\"\ntool_protocol = \"native\"\n"
+        ),
+    )
+    .expect("project config");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let _started = updates.recv().await.expect("start snapshot");
+    handle
+        .send(Command::Submit("first prompt".to_owned()))
+        .expect("submit first prompt");
+
+    tokio::time::timeout(Duration::from_secs(10), first_chunk_rx)
+        .await
+        .expect("provider first chunk timeout")
+        .expect("first chunk signal");
+    let mut saw_first_text = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = updates.recv().await {
+            if matches!(event.update, ControllerUpdate::Turn(super::TurnUpdate::TextDelta(ref text)) if text == "first chunk") {
+                saw_first_text = true;
+                break;
+            }
+        }
+    })
+    .await
+    .expect("first text delta timeout");
+    assert!(saw_first_text);
+    handle.send(Command::Cancel).expect("cancel active turn");
+    let _ = release_first_tx.send(());
+    handle
+        .send(Command::Submit("second prompt".to_owned()))
+        .expect("submit while cancellation unwinds");
+
+    let mut saw_cancelled = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            match event.update {
+                ControllerUpdate::Turn(super::TurnUpdate::Cancelled) => saw_cancelled = true,
+                ControllerUpdate::Snapshot(snapshot) if saw_cancelled && !snapshot.turn_active => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("cancel completion timeout");
+    assert!(saw_cancelled);
+
+    let mut saw_second_prompt = false;
+    let mut saw_second_text = false;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while let Some(event) = updates.recv().await {
+            match event.update {
+                ControllerUpdate::Turn(super::TurnUpdate::PromptStarted(prompt))
+                    if prompt == "second prompt" =>
+                {
+                    saw_second_prompt = true
+                }
+                ControllerUpdate::Turn(super::TurnUpdate::TextDelta(text))
+                    if text == "second chunk" =>
+                {
+                    saw_second_text = true
+                }
+                ControllerUpdate::Turn(super::TurnUpdate::TurnFinished) if saw_second_prompt => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("second turn timeout");
+    assert!(saw_second_prompt);
+    assert!(saw_second_text);
+    server.await.expect("mock provider server");
+    handle.send(Command::Shutdown).expect("shutdown");
+}
+
+async fn read_provider_request(socket: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = socket
+            .read(&mut buffer)
+            .await
+            .expect("read provider request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+}
+
 #[test]
 fn generation_filter_rejects_events_from_an_older_session() {
     let event = super::ControllerEvent {

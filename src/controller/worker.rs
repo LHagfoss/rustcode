@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::AppState;
@@ -31,6 +32,7 @@ struct ActiveSession {
     generation: u64,
     state: Arc<Mutex<AppState>>,
     cancel_token: CancellationToken,
+    turn_task: Option<JoinHandle<()>>,
 }
 
 async fn controller_worker(
@@ -79,6 +81,7 @@ async fn controller_worker(
                     generation,
                     state: Arc::new(Mutex::new(state)),
                     cancel_token: CancellationToken::new(),
+                    turn_task: None,
                 };
                 send_snapshot(&updates, generation, &session.state).await;
                 active = Some(session);
@@ -111,12 +114,13 @@ async fn controller_worker(
                     generation,
                     state: Arc::new(Mutex::new(state)),
                     cancel_token: CancellationToken::new(),
+                    turn_task: None,
                 };
                 send_snapshot(&updates, generation, &session.state).await;
                 active = Some(session);
             }
             Command::Submit(prompt) => {
-                let Some(session) = active.as_ref() else {
+                let Some(session) = active.as_mut() else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
@@ -138,7 +142,7 @@ async fn controller_worker(
                 let starting_history_len = state.history.len();
                 drop(state);
                 if let Some(lease) = lease {
-                    spawn_turn(
+                    session.turn_task = Some(spawn_turn(
                         session.generation,
                         Arc::clone(&session.state),
                         session.cancel_token.clone(),
@@ -146,12 +150,26 @@ async fn controller_worker(
                         lease,
                         starting_history_len,
                         updates.clone(),
-                    );
+                    ));
                 }
             }
             Command::Cancel => {
-                if let Some(session) = active.as_ref() {
+                if let Some(session) = active.as_mut() {
                     session.cancel_token.cancel();
+                    if let Some(turn_task) = session.turn_task.take()
+                        && turn_task.await.is_err()
+                    {
+                        send_error(
+                            &updates,
+                            session.generation,
+                            ControllerError::Provider(
+                                "turn worker stopped unexpectedly".to_owned(),
+                            ),
+                        );
+                    }
+                    // The old queue has unwound before this fresh token is
+                    // used for another turn in the same session.
+                    session.cancel_token = CancellationToken::new();
                     send_snapshot(&updates, session.generation, &session.state).await;
                 } else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
@@ -190,15 +208,24 @@ async fn controller_worker(
                     });
                 }
             }
-            Command::AnswerQuestion(_) | Command::Approval(_) => {
-                if active.is_none() {
+            Command::AnswerQuestion(answer) => {
+                let Some(session) = active.as_mut() else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
-                } else {
-                    send_error(
-                        &updates,
-                        active.as_ref().unwrap().generation,
-                        ControllerError::Session("there is no pending interaction".to_owned()),
-                    );
+                    continue;
+                };
+                match answer_question(&session.state, &mut session.cancel_token, answer).await {
+                    Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
+                    Err(error) => send_error(&updates, session.generation, error),
+                }
+            }
+            Command::Approval(choice) => {
+                let Some(session) = active.as_mut() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                match apply_approval(&session.state, &mut session.cancel_token, choice).await {
+                    Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
+                    Err(error) => send_error(&updates, session.generation, error),
                 }
             }
         }
@@ -262,6 +289,54 @@ fn send_error(
     });
 }
 
+pub(super) async fn answer_question(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    answer: String,
+) -> Result<(), ControllerError> {
+    let answer = {
+        let state = state.lock().await;
+        let Some(question) = state.pending_question.as_ref() else {
+            return Err(ControllerError::Session(
+                "there is no pending question".to_owned(),
+            ));
+        };
+        if state.question_response.is_none() {
+            return Err(ControllerError::Session(
+                "the pending question has no response channel".to_owned(),
+            ));
+        }
+        if question.options.iter().any(|option| option == &answer) {
+            crate::app::QuestionAnswer::Selected(answer)
+        } else {
+            crate::app::QuestionAnswer::Custom(answer)
+        }
+    };
+    crate::app::runtime::apply_question_answer(state, cancel_token, answer).await;
+    Ok(())
+}
+
+pub(super) async fn apply_approval(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    choice: ApprovalChoice,
+) -> Result<(), ControllerError> {
+    {
+        let state = state.lock().await;
+        if state.pending_tool_confirmation.is_none() || state.tool_confirmation_response.is_none() {
+            return Err(ControllerError::Session(
+                "there is no pending tool approval".to_owned(),
+            ));
+        }
+    }
+    let decision = match choice {
+        ApprovalChoice::Approve => crate::app::ApprovalDecision::Approve,
+        ApprovalChoice::Deny => crate::app::ApprovalDecision::Deny,
+    };
+    crate::app::runtime::apply_approval_decision(state, cancel_token, decision).await;
+    Ok(())
+}
+
 fn spawn_turn(
     generation: u64,
     state: Arc<Mutex<AppState>>,
@@ -270,7 +345,7 @@ fn spawn_turn(
     lease: crate::app::OrchestratorLease,
     starting_history_len: usize,
     updates: mpsc::UnboundedSender<ControllerEvent>,
-) {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let (event_sender, mut event_receiver) =
             crate::network::ui_adapter::AgentUiEventSender::channel();
@@ -343,5 +418,5 @@ fn spawn_turn(
             generation,
             update: ControllerUpdate::Snapshot(snapshot.0),
         });
-    });
+    })
 }

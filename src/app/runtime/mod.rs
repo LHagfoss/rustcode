@@ -32,7 +32,7 @@ mod updates;
 
 pub(crate) use orchestration::spawn_observed_orchestrator;
 
-use events::{apply_approval_decision, apply_question_answer};
+pub(crate) use events::{apply_approval_decision, apply_question_answer};
 use input::{InputContext, InputFlow, handle_app_event};
 #[cfg(test)]
 use render::session_title_for_render;
