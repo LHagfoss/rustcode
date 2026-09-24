@@ -8,7 +8,7 @@ pub(crate) use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionInfo,
+    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionInfo, SessionInfoUpdate,
     SessionListCapabilities, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse,
 };
@@ -370,6 +370,17 @@ async fn acp_load_session(
             if let Err(error) =
                 connection.send_notification(SessionNotification::new(session_id.clone(), update))
             {
+                unregister_acp_session(server, &session_id).await;
+                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+            }
+        }
+        if !meta.title.trim().is_empty() {
+            if let Err(error) = connection.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::SessionInfoUpdate(
+                    SessionInfoUpdate::new().title(meta.title.clone()),
+                ),
+            )) {
                 unregister_acp_session(server, &session_id).await;
                 return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
             }
