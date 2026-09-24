@@ -25,20 +25,27 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     )
     .expect("project config");
     let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("provider request");
-        read_provider_request(&mut socket).await;
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"saved answer\"}}]}\n\n")
-            .await
-            .expect("send answer");
-        socket
-            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
-            .await
-            .expect("finish answer");
-        socket
-            .write_all(b"data: [DONE]\n\n")
-            .await
-            .expect("finish stream");
+        for answer in ["saved answer", "continued answer"] {
+            let (mut socket, _) = listener.accept().await.expect("provider request");
+            read_provider_request(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"choices\":[{{\"delta\":{{\"content\":\"{answer}\"}}}}]}}\n\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("send answer");
+            socket
+                .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+                .await
+                .expect("finish answer");
+            socket
+                .write_all(b"data: [DONE]\n\n")
+                .await
+                .expect("finish stream");
+        }
     });
 
     let (handle, mut updates) = InteractiveController::spawn(
@@ -67,7 +74,6 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     })
     .await
     .expect("saved turn completion");
-    server.await.expect("mock provider");
     handle.send(Command::ListSessions).expect("list sessions");
     let listed = updates.recv().await.expect("session list snapshot");
     let ControllerUpdate::Snapshot(listed) = listed.update else {
@@ -107,6 +113,27 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     assert_eq!(resumed.session_id.as_deref(), Some(saved_id.as_str()));
     assert_eq!(resumed.transcript[0].content, "saved prompt");
     assert!(resumed.generation > listed.generation);
+
+    handle
+        .send(Command::Submit("continue saved session".to_owned()))
+        .expect("continue resumed session");
+    let mut continued = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if let ControllerUpdate::Snapshot(snapshot) = event.update
+                && snapshot.transcript.iter().any(|item| {
+                    item.role == "assistant" && item.content.contains("continued answer")
+                })
+            {
+                continued = true;
+                break;
+            }
+        }
+    })
+    .await
+    .expect("continuation completion timeout");
+    assert!(continued, "resumed session should accept a continuation");
+    server.await.expect("mock provider");
 
     handle.send(Command::Shutdown).expect("shutdown");
     assert!(
@@ -150,6 +177,16 @@ async fn lifecycle_rejects_invalid_workspace_and_model_without_replacing_session
     assert!(matches!(
         updates.recv().await.expect("workspace error").update,
         ControllerUpdate::Error(super::ControllerError::InvalidWorkspace(_))
+    ));
+    handle
+        .send(Command::Resume {
+            session_id: "missing-session".to_owned(),
+            workspace: workspace.path().to_path_buf(),
+        })
+        .expect("resume missing session");
+    assert!(matches!(
+        updates.recv().await.expect("resume error").update,
+        ControllerUpdate::Error(super::ControllerError::Session(_))
     ));
 
     handle.send(Command::ListSessions).expect("list sessions");
@@ -269,6 +306,157 @@ async fn lifecycle_switch_cancels_old_turn_before_publishing_new_generation() {
     let _ = release_tx.send(());
     let _ = server.await;
     handle.send(Command::Shutdown).expect("shutdown");
+}
+
+#[tokio::test]
+async fn controller_routes_background_completion_to_the_session_and_restarts_its_wakeup() {
+    use tokio::io::AsyncWriteExt;
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::create_dir(workspace.path().join(".rustcode")).expect("project config directory");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock provider");
+    let provider = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    std::fs::write(
+        workspace.path().join(".rustcode/config.toml"),
+        format!(
+            "default = \"controller-mock\"\n[[models]]\nname = \"controller-mock\"\nurl = \"{provider}\"\nmodel = \"controller-mock\"\ntool_protocol = \"native\"\n"
+        ),
+    )
+    .expect("project config");
+    let (provider_request_tx, provider_request_rx) = tokio::sync::oneshot::channel();
+    let provider_server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("background wakeup request");
+        read_provider_request(&mut socket).await;
+        let _ = provider_request_tx.send(());
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"background handled\"}}]}\n\n")
+            .await
+            .expect("send response");
+        socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            .await
+            .expect("finish response");
+        socket
+            .write_all(b"data: [DONE]\n\n")
+            .await
+            .expect("finish stream");
+    });
+
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("started session snapshot");
+    let session_id = match started.update {
+        ControllerUpdate::Snapshot(snapshot) => snapshot.session_id.expect("session ID"),
+        other => panic!("unexpected start update: {other:?}"),
+    };
+
+    let task_id = format!("controller-background-{}", std::process::id());
+    crate::tools::background_task_manager()
+        .spawn_with_id(
+            task_id.clone(),
+            rustcode_tasks::TaskSpec::new(
+                session_id.clone(),
+                rustcode_command::CommandRequest {
+                    command: if cfg!(target_os = "windows") {
+                        "echo background_ready".to_owned()
+                    } else {
+                        "printf background_ready".to_owned()
+                    },
+                    cwd: Some(workspace.path().to_path_buf()),
+                    env: Vec::new(),
+                    timeout: Duration::from_secs(5),
+                    process_group: true,
+                    inherited_fds: Vec::new(),
+                },
+            ),
+        )
+        .expect("spawn background task");
+
+    tokio::time::timeout(Duration::from_secs(10), provider_request_rx)
+        .await
+        .expect("background completion should restart the wakeup turn")
+        .expect("provider request signal");
+    let mut saw_completion = false;
+    let mut saw_response = false;
+    let mut saw_active_generation = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if let ControllerUpdate::Snapshot(snapshot) = event.update {
+                let has_completion = snapshot
+                    .transcript
+                    .iter()
+                    .any(|item| item.role == "tool" && item.content.contains("background_ready"));
+                if has_completion {
+                    saw_completion = true;
+                    saw_active_generation = event.generation == started.generation;
+                }
+                saw_response |= snapshot.transcript.iter().any(|item| {
+                    item.role == "assistant" && item.content.contains("background handled")
+                });
+                if saw_completion && saw_response && saw_active_generation {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("background completion snapshot timeout");
+    assert!(
+        saw_completion,
+        "completion output should reach the active session"
+    );
+    assert!(saw_response, "the queued wakeup should reach the provider");
+    assert!(
+        saw_active_generation,
+        "completion snapshot should use active generation"
+    );
+    provider_server.await.expect("provider server");
+    handle.send(Command::Shutdown).expect("shutdown");
+}
+
+#[tokio::test]
+async fn explicit_controller_workspace_is_the_default_tool_working_directory() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let mut app = AppState::new_with_workspace_session(&workspace, Some("controller-tool-cwd"));
+    app.workspace_root = Some(workspace.clone());
+    app.task_working_directory = Some(workspace.clone());
+    app.auto_confirm = true;
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(app));
+
+    let (output, _, _) = crate::network::confirm_and_execute(
+        &reqwest::Client::new(),
+        &state,
+        &tokio_util::sync::CancellationToken::new(),
+        "run_command",
+        &serde_json::json!({ "command": "pwd" }),
+        "run_command",
+        true,
+        Some(workspace.clone()),
+        None,
+    )
+    .await;
+
+    assert!(output.success, "tool output: {}", output.content);
+    assert!(
+        output.content.contains(&workspace.display().to_string()),
+        "tool should run in the selected workspace: {}",
+        output.content
+    );
 }
 
 #[test]

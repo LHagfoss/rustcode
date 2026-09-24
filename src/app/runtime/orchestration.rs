@@ -79,22 +79,26 @@ fn record_active_background_task(
     true
 }
 
-async fn apply_background_task_event(
+pub(crate) async fn apply_background_task_event(
     app_state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
     event: TaskEvent,
-) {
+) -> bool {
     let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
-        return;
+        return false;
     };
     let mut state = app_state.lock().await;
     if state.active_session_id == session_id {
         if record_active_background_task(&mut state, &task_id, output) {
             crate::config::save_session_history(&session_id, &state.history);
+            true
+        } else {
+            false
         }
     } else {
         let mut history = crate::config::load_session_history_direct(&session_id);
         history.push(crate::background_task_history_message(&task_id, output));
         crate::config::save_session_history(&session_id, &history);
+        false
     }
 }
 

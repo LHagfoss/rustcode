@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rustcode_tasks::TaskSubscription;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -43,13 +45,20 @@ async fn controller_worker(
     let mut active: Option<ActiveSession> = None;
     let mut generation = 0;
     let client = reqwest::Client::new();
+    let mut task_subscriptions = HashMap::<String, TaskSubscription>::new();
+    let mut task_poll = tokio::time::interval(std::time::Duration::from_millis(25));
+    task_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let _ = updates.send(ControllerEvent {
         generation,
         update: ControllerUpdate::Snapshot(empty_snapshot(generation)),
     });
 
-    while let Some(command) = commands.recv().await {
-        match command {
+    loop {
+        poll_background_events(&mut active, &mut task_subscriptions, &client, &updates).await;
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else { break };
+                match command {
             Command::Shutdown => {
                 if let Some(session) = active.take() {
                     retire_session(session, &updates).await;
@@ -294,6 +303,9 @@ async fn controller_worker(
                     Err(error) => send_error(&updates, session.generation, error),
                 }
             }
+                }
+            }
+            _ = task_poll.tick() => {}
         }
     }
     if let Some(session) = active {
@@ -313,6 +325,120 @@ async fn retire_session(
     let state = session.state.lock().await;
     crate::config::save_session_history(&state.active_session_id, &state.history);
     crate::config::flush_history();
+}
+
+async fn poll_background_events(
+    active: &mut Option<ActiveSession>,
+    subscriptions: &mut HashMap<String, TaskSubscription>,
+    client: &reqwest::Client,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+) {
+    let active_session_id = if let Some(session) = active.as_ref() {
+        Some(session.state.lock().await.active_session_id.clone())
+    } else {
+        None
+    };
+    if let Some(session_id) = active_session_id.as_ref() {
+        subscriptions.entry(session_id.clone()).or_insert_with(|| {
+            crate::tools::background_task_manager().subscribe_session(session_id.clone())
+        });
+    }
+
+    let mut events = Vec::new();
+    let mut disconnected = Vec::new();
+    for (session_id, subscription) in subscriptions.iter_mut() {
+        loop {
+            match subscription.try_recv() {
+                Ok(event) => events.push(event),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected.push(session_id.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    for event in events {
+        let event_session_id = event.session_id().as_str().to_owned();
+        let belongs_to_active = active_session_id.as_deref() == Some(&event_session_id);
+        let Some(session) = active.as_mut().filter(|_| belongs_to_active) else {
+            if let Some(session) = active.as_ref() {
+                crate::app::runtime::apply_background_task_event(&session.state, event).await;
+            }
+            continue;
+        };
+        if crate::app::runtime::apply_background_task_event(&session.state, event).await {
+            start_pending_turn(session, client, updates).await;
+            send_snapshot(updates, session.generation, &session.state).await;
+        }
+    }
+
+    if let Some(session) = active.as_mut() {
+        start_pending_turn(session, client, updates).await;
+    }
+
+    let manager = crate::tools::background_task_manager();
+    let mut late_events = Vec::new();
+    for (session_id, subscription) in subscriptions.iter_mut() {
+        if active_session_id.as_deref() == Some(session_id.as_str())
+            || manager.has_running(session_id)
+        {
+            continue;
+        }
+        loop {
+            match subscription.try_recv() {
+                Ok(event) => late_events.push(event),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected.push(session_id.clone());
+                    break;
+                }
+            }
+        }
+    }
+    for event in late_events {
+        if let Some(session) = active.as_ref() {
+            crate::app::runtime::apply_background_task_event(&session.state, event).await;
+        }
+    }
+
+    subscriptions.retain(|session_id, _| {
+        active_session_id.as_deref() == Some(session_id.as_str()) || manager.has_running(session_id)
+    });
+    for session_id in disconnected {
+        subscriptions.remove(&session_id);
+    }
+}
+
+async fn start_pending_turn(
+    session: &mut ActiveSession,
+    client: &reqwest::Client,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+) {
+    let pending = {
+        let mut state = session.state.lock().await;
+        if state.summary_in_flight || state.orchestrator_running || state.pending_queue.is_empty() {
+            None
+        } else {
+            let starting_history_len = state.history.len();
+            state.claim_orchestrator().map(|lease| {
+                state.status = crate::app::AppStatus::Queued;
+                (lease, starting_history_len)
+            })
+        }
+    };
+    if let Some((lease, starting_history_len)) = pending {
+        session.turn_task = Some(spawn_turn(
+            session.generation,
+            Arc::clone(&session.state),
+            session.cancel_token.clone(),
+            client.clone(),
+            lease,
+            starting_history_len,
+            updates.clone(),
+        ));
+    }
 }
 
 fn empty_snapshot(generation: u64) -> ControllerSnapshot {
