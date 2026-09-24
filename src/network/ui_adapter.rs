@@ -283,9 +283,14 @@ async fn publish_snapshot_with_mode(
     previous_response.revision = response_revision;
 
     for call in live_tools.iter() {
-        if started_tools.insert(call.key.clone()) {
+        // Live keys identify presentation instances, not protocol calls. A
+        // provider-less speculative call gets its ID from completed arguments
+        // in assistant history below, once the call is authoritative.
+        if let Some(id) = call.provider_call_id.as_ref()
+            && started_tools.insert(id.clone())
+        {
             sender.send(AgentUiEvent::ToolStarted {
-                id: call.key.clone(),
+                id: id.clone(),
                 name: call.tool_name.clone(),
             });
         }
@@ -321,11 +326,34 @@ async fn publish_snapshot_with_mode(
     }
 
     for message in history {
+        if message.role == "assistant" {
+            for call in resolve_tool_calls(&message, protocol) {
+                let id = call.call_id.clone().unwrap_or_else(|| {
+                    format!(
+                        "local_{}",
+                        super::tool_exec::stable_arguments_hash(&call.arguments)
+                    )
+                });
+                if started_tools.insert(id.clone()) {
+                    sender.send(AgentUiEvent::ToolStarted {
+                        id,
+                        name: call.name,
+                    });
+                }
+            }
+        }
         if let Some(event) =
             history_tool_result_event(&message, suppress_synthetic_background_completion)
-            && let AgentUiEvent::ToolFinished { id, .. } = &event
+            && let AgentUiEvent::ToolFinished { id, result } = &event
             && finished_tools.insert(id.clone())
         {
+            // A fast call can finish entirely between snapshot ticks.
+            if started_tools.insert(id.clone()) {
+                sender.send(AgentUiEvent::ToolStarted {
+                    id: id.clone(),
+                    name: result.tool_name.clone(),
+                });
+            }
             sender.send(event);
         }
     }
@@ -432,6 +460,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     suppress_synthetic_background_completion: bool,
 ) -> super::TurnContext {
     sender.send(AgentUiEvent::PromptStarted { prompt });
+    let starting_history_len = state.lock().await.history.len();
     let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context_for_session(
         client,
         state,
@@ -441,45 +470,12 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
         context,
         turn_session_id,
     ));
-    let mut previous_response = ResponseDeltaTracker::default();
-    let mut previous_history_len = 0;
-    let mut started_tools = HashSet::new();
-    let mut finished_tools = HashSet::new();
-    let mut approval_sent = false;
-    let mut previous_question = None;
-    let mut previous_subagents = std::collections::HashMap::new();
-
-    let context = loop {
-        tokio::select! {
-            context = &mut turn => break context,
-            _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                publish_snapshot_with_mode(
-                    state,
-                    &sender,
-                    &mut previous_response,
-                    &mut previous_history_len,
-                    &mut started_tools,
-                    &mut finished_tools,
-                    &mut approval_sent,
-                    &mut previous_question,
-                    &mut previous_subagents,
-                    suppress_synthetic_background_completion,
-                ).await;
-            }
-        }
-    };
-
-    publish_snapshot_with_mode(
+    let context = drive_turn_with_snapshots(
+        turn.as_mut(),
         state,
         &sender,
-        &mut previous_response,
-        &mut previous_history_len,
-        &mut started_tools,
-        &mut finished_tools,
-        &mut approval_sent,
-        &mut previous_question,
-        &mut previous_subagents,
         suppress_synthetic_background_completion,
+        starting_history_len,
     )
     .await;
 
@@ -496,15 +492,233 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     context
 }
 
+/// Keep the turn and its UI projection advancing on the same task.
+async fn drive_turn_with_snapshots<F: std::future::Future>(
+    mut turn: std::pin::Pin<&mut F>,
+    state: &Arc<Mutex<AppState>>,
+    sender: &AgentUiEventSender,
+    suppress_synthetic_background_completion: bool,
+    starting_history_len: usize,
+) -> F::Output {
+    let mut previous_response = ResponseDeltaTracker::default();
+    let mut previous_history_len = starting_history_len;
+    let mut started_tools = HashSet::new();
+    let mut finished_tools = HashSet::new();
+    let mut approval_sent = false;
+    let mut previous_question = None;
+    let mut previous_subagents = std::collections::HashMap::new();
+
+    let context = loop {
+        tokio::select! {
+            context = &mut turn => break context,
+            // Poll the snapshot alongside the turn. Awaiting it in the branch
+            // handler would suspend the turn while the snapshot waits for a
+            // mutex that Tokio may already have reserved for that same turn.
+            _ = async {
+                tokio::time::sleep(Duration::from_millis(16)).await;
+                publish_snapshot_with_mode(
+                    state,
+                    sender,
+                    &mut previous_response,
+                    &mut previous_history_len,
+                    &mut started_tools,
+                    &mut finished_tools,
+                    &mut approval_sent,
+                    &mut previous_question,
+                    &mut previous_subagents,
+                    suppress_synthetic_background_completion,
+                ).await;
+            } => {}
+        }
+    };
+
+    publish_snapshot_with_mode(
+        state,
+        sender,
+        &mut previous_response,
+        &mut previous_history_len,
+        &mut started_tools,
+        &mut finished_tools,
+        &mut approval_sent,
+        &mut previous_question,
+        &mut previous_subagents,
+        suppress_synthetic_background_completion,
+    )
+    .await;
+
+    context
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AgentUiEvent, AgentUiEventSender, map_agent_event, publish_snapshot};
-    use crate::app::AppState;
+    use crate::app::{AppState, ChatMessage};
     use crate::network::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
     use crate::tools::ToolCall;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    // The controller can own AppState while the turn queues for its mutex.
+    // Once the snapshot timer fires, both futures must continue being polled:
+    // Tokio's fair mutex otherwise reserves the next lock for the frozen turn.
+    async fn contended_turn_publishes_completion(cancel: bool) {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let held = Arc::clone(&state).lock_owned().await;
+        let token = tokio_util::sync::CancellationToken::new();
+        let turn = async {
+            let mut state = state.lock().await;
+            state.history.push(
+                crate::app::ChatMessage::new("tool", "file contents")
+                    .answering(Some("call-read".to_owned()))
+                    .with_tool_result(crate::app::ToolResultRecord {
+                        tool_name: "view_file".to_owned(),
+                        success: true,
+                        ..Default::default()
+                    }),
+            );
+            drop(state);
+            if cancel {
+                token.cancelled().await;
+            }
+            42
+        };
+        tokio::pin!(turn);
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let driver = super::drive_turn_with_snapshots(turn.as_mut(), &state, &sender, false, 0);
+        tokio::pin!(driver);
+        // Queue the turn first, then explicitly poll the expired snapshot timer
+        // while the mutex is still held. Release only after both have waited.
+        assert!(futures_util::poll!(driver.as_mut()).is_pending());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(futures_util::poll!(driver.as_mut()).is_pending());
+        drop(held);
+        if cancel {
+            // Poll once after release so cancellation happens while the turn
+            // is active, rather than before it can acquire the state mutex.
+            assert!(futures_util::poll!(driver.as_mut()).is_pending());
+            token.cancel();
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), driver.as_mut())
+            .await
+            .expect("snapshot publication must not suspend the turn's mutex waiter");
+        assert_eq!(result, 42);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::ToolStarted { id, .. }) if id == "call-read"
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::ToolFinished { id, result })
+                if id == "call-read" && result.content == "file contents"
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "completion must be published once"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_contention_does_not_freeze_completed_tools() {
+        contended_turn_publishes_completion(false).await;
+    }
+
+    #[tokio::test]
+    async fn snapshot_contention_does_not_block_turn_cancellation() {
+        contended_turn_publishes_completion(true).await;
+    }
+
+    #[tokio::test]
+    async fn tool_snapshot_uses_matching_ids_and_skips_prior_turn_history() {
+        let mut app = AppState::new();
+        let completed = |id: Option<&str>, hash: &str| {
+            ChatMessage::new("tool", "done")
+                .answering(id.map(str::to_owned))
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: "view_file".to_owned(),
+                    arguments_hash: hash.to_owned(),
+                    success: true,
+                    ..Default::default()
+                })
+        };
+        app.history.push(completed(Some("old-call"), "old"));
+        let mut history_len = app.history.len();
+        app.begin_live_tool_call(Some("provider-call"), "view_file", &json!({"path":"a"}));
+        // This speculative projection has no protocol identity yet.
+        app.begin_live_tool_call(None, "view_file", &json!({"path":"b"}));
+        let state = Arc::new(Mutex::new(app));
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut response = super::ResponseDeltaTracker::default();
+        let mut started = std::collections::HashSet::new();
+        let mut finished = std::collections::HashSet::new();
+        let mut approval = false;
+        let mut question = None;
+        let mut subagents = std::collections::HashMap::new();
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut response,
+            &mut history_len,
+            &mut started,
+            &mut finished,
+            &mut approval,
+            &mut question,
+            &mut subagents,
+        )
+        .await;
+        assert!(
+            matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolStarted { id, .. }) if id == "provider-call")
+        );
+        assert!(receiver.try_recv().is_err());
+        {
+            let mut state = state.lock().await;
+            state
+                .history
+                .push(completed(Some("provider-call"), "native"));
+            state.history.push(completed(None, "synthetic"));
+            state.history.push(completed(Some("fast-call"), "fast"));
+        }
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut response,
+            &mut history_len,
+            &mut started,
+            &mut finished,
+            &mut approval,
+            &mut question,
+            &mut subagents,
+        )
+        .await;
+        assert!(
+            matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolFinished { id, .. }) if id == "provider-call")
+        );
+        for expected in ["local_synthetic", "fast-call"] {
+            assert!(
+                matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolStarted { id, .. }) if id == expected)
+            );
+            assert!(
+                matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolFinished { id, .. }) if id == expected)
+            );
+        }
+        assert!(receiver.try_recv().is_err());
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut response,
+            &mut history_len,
+            &mut started,
+            &mut finished,
+            &mut approval,
+            &mut question,
+            &mut subagents,
+        )
+        .await;
+        assert!(
+            receiver.try_recv().is_err(),
+            "completed calls must not replay"
+        );
+    }
 
     #[test]
     fn maps_text_tool_completion_cancellation_and_errors() {
