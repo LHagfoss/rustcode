@@ -603,6 +603,7 @@ fn welcome_banner_renders_without_a_conversation() {
         rendered.contains("model:")
             && rendered.contains("effort:")
             && rendered.contains("context:")
+            && rendered.contains("OS sandbox:")
             && rendered.contains("directory:"),
         "the empty chat must display its welcome banner: {rendered:?}"
     );

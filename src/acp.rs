@@ -1322,6 +1322,38 @@ mod tests {
     }
 
     #[test]
+    fn acp_yolo_still_requests_one_shot_network_permission() {
+        let call = crate::tools::ToolCall {
+            name: "run_command".to_owned(),
+            arguments: serde_json::json!({
+                "command": "cargo test",
+                "network_access": true
+            }),
+            call_id: Some("call-network".to_owned()),
+        };
+        assert_eq!(
+            approval_requirement(&[call], crate::config::AgentMode::Build, true),
+            ApprovalRequirement::Request
+        );
+    }
+
+    #[test]
+    fn acp_yolo_still_requests_one_shot_filesystem_permission() {
+        let call = crate::tools::ToolCall {
+            name: "run_command".to_owned(),
+            arguments: serde_json::json!({
+                "command": "touch /tmp/release.txt",
+                "filesystem_write_path": "/tmp"
+            }),
+            call_id: Some("call-filesystem".to_owned()),
+        };
+        assert_eq!(
+            approval_requirement(&[call], crate::config::AgentMode::Build, true),
+            ApprovalRequirement::Request
+        );
+    }
+
+    #[test]
     fn acp_plan_mode_denies_mutations_even_with_yolo() {
         assert!(matches!(
             approval_requirement(

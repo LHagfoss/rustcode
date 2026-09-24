@@ -25,8 +25,48 @@ pub(crate) struct SandboxPolicy<'a> {
     pub workspace_root: Option<&'a Path>,
     pub writable_roots: &'a [PathBuf],
     pub session_scratch_roots: &'a [PathBuf],
-    /// Network remains denied by default. A later permission mode may opt in.
+    /// User-approved directories writable for this command only.
+    pub one_shot_writable_roots: &'a [PathBuf],
+    pub write_access: bool,
+    /// Network is enabled by the configured mode or a user-approved one-shot request.
     pub network_access: bool,
+}
+
+/// Resolve a one-command writable directory and reject scopes that overlap the
+/// active workspace (which already has its own configured permission policy).
+pub(crate) fn resolve_scoped_writable_root(
+    requested: &str,
+    workspace: &Path,
+) -> Result<PathBuf, String> {
+    let requested = Path::new(requested);
+    if !requested.is_absolute() {
+        return Err("one-shot filesystem permission requires an absolute directory path".into());
+    }
+    let root = requested.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve one-shot writable directory '{}': {error}",
+            requested.display()
+        )
+    })?;
+    if !root.is_dir() {
+        return Err(format!(
+            "one-shot writable path '{}' is not a directory",
+            root.display()
+        ));
+    }
+    if root == Path::new("/") {
+        return Err("one-shot filesystem permission cannot grant access to `/`".into());
+    }
+    let workspace = workspace.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve active workspace '{}': {error}",
+            workspace.display()
+        )
+    })?;
+    if root.starts_with(&workspace) || workspace.starts_with(&root) {
+        return Err("one-shot writable directory must not overlap the active workspace".into());
+    }
+    Ok(root)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -49,7 +89,7 @@ fn linux_command(command: &str, policy: SandboxPolicy<'_>) -> Result<SandboxedCo
         None => workspace.clone(),
     };
     let mut writable_roots = Vec::new();
-    for root in policy.writable_roots {
+    for root in policy.writable_roots.iter().filter(|_| policy.write_access) {
         let canonical = if policy.session_scratch_roots.contains(root) {
             match std::fs::symlink_metadata(root) {
                 Ok(_) => canonical_session_scratch(root)?,
@@ -72,13 +112,30 @@ fn linux_command(command: &str, policy: SandboxPolicy<'_>) -> Result<SandboxedCo
         }
         writable_roots.push(canonical);
     }
-    if !writable_roots.contains(&workspace) {
+    for root in policy.one_shot_writable_roots {
+        let canonical = canonical_directory(Some(root), "one-shot writable root")?;
+        if canonical == Path::new("/") {
+            return Err(
+                "Linux shell sandbox refused `/` as a one-shot writable root; command was not run"
+                    .into(),
+            );
+        }
+        if !writable_roots.contains(&canonical) {
+            writable_roots.push(canonical);
+        }
+    }
+    if policy.write_access && !writable_roots.contains(&workspace) {
         return Err("Linux shell sandbox requires the active workspace in its writable roots; command was not run".to_string());
     }
     let bubblewrap = find_bubblewrap().ok_or_else(|| {
         "Linux shell sandbox unavailable: install bubblewrap (`bwrap`) in a root-owned system PATH directory such as /usr/bin; command was not run".to_string()
     })?;
-    if !writable_roots.iter().any(|root| cwd.starts_with(root)) {
+    let cwd_in_workspace = cwd.starts_with(&workspace)
+        || policy
+            .session_scratch_roots
+            .iter()
+            .any(|root| cwd.starts_with(root));
+    if !cwd_in_workspace {
         return Err("Linux shell sandbox refused a working directory outside its writable roots; command was not run".to_string());
     }
 
@@ -197,6 +254,8 @@ pub(crate) fn runtime_tests_available() -> bool {
                     workspace_root: Some(workspace.path()),
                     writable_roots: &writable_roots,
                     session_scratch_roots: &[],
+                    one_shot_writable_roots: &[],
+                    write_access: true,
                     network_access: false,
                 },
             )?;
@@ -267,7 +326,7 @@ fn command_with_seatbelt_path(
     };
 
     let mut writable_roots = Vec::new();
-    for root in policy.writable_roots {
+    for root in policy.writable_roots.iter().filter(|_| policy.write_access) {
         let canonical = if policy.session_scratch_roots.contains(root) {
             match std::fs::symlink_metadata(root) {
                 Ok(_) => canonical_session_scratch(root)?,
@@ -292,16 +351,33 @@ fn command_with_seatbelt_path(
             writable_roots.push(canonical);
         }
     }
+    for root in policy.one_shot_writable_roots {
+        let canonical = canonical_directory(Some(root), "one-shot writable root")?;
+        if canonical == Path::new("/") {
+            return Err(
+                "macOS shell sandbox refused `/` as a one-shot writable root; command was not run"
+                    .into(),
+            );
+        }
+        if !writable_roots.contains(&canonical) {
+            writable_roots.push(canonical);
+        }
+    }
     if workspace == Path::new("/") {
         return Err(
             "macOS shell sandbox refused `/` as the active workspace; command was not run"
                 .to_string(),
         );
     }
-    if !writable_roots.contains(&workspace) {
+    if policy.write_access && !writable_roots.contains(&workspace) {
         return Err("macOS shell sandbox requires the active workspace in its writable roots; command was not run".to_string());
     }
-    if !writable_roots.iter().any(|root| cwd.starts_with(root)) {
+    let cwd_in_workspace = cwd.starts_with(&workspace)
+        || policy
+            .session_scratch_roots
+            .iter()
+            .any(|root| cwd.starts_with(root));
+    if !cwd_in_workspace {
         return Err("macOS shell sandbox refused a working directory outside its writable roots; command was not run".to_string());
     }
 
@@ -778,6 +854,62 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn scoped_writable_root_requires_a_canonical_directory_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let permitted = tempfile::tempdir().unwrap();
+        let permitted_path = permitted.path().canonicalize().unwrap();
+        let resolved =
+            resolve_scoped_writable_root(permitted_path.to_str().unwrap(), workspace.path())
+                .unwrap();
+        assert_eq!(resolved, permitted.path().canonicalize().unwrap());
+
+        #[cfg(unix)]
+        {
+            let alias_parent = tempfile::tempdir().unwrap();
+            let alias = alias_parent.path().join("permitted-alias");
+            if std::os::unix::fs::symlink(permitted.path(), &alias).is_ok() {
+                assert_eq!(
+                    resolve_scoped_writable_root(alias.to_str().unwrap(), workspace.path())
+                        .unwrap(),
+                    permitted.path().canonicalize().unwrap()
+                );
+            }
+        }
+
+        let workspace_child = workspace.path().join("child");
+        std::fs::create_dir(&workspace_child).unwrap();
+        assert!(
+            resolve_scoped_writable_root(workspace_child.to_str().unwrap(), workspace.path(),)
+                .is_err()
+        );
+        assert!(
+            resolve_scoped_writable_root(
+                workspace.path().parent().unwrap().to_str().unwrap(),
+                workspace.path(),
+            )
+            .is_err()
+        );
+        assert!(resolve_scoped_writable_root("/", workspace.path()).is_err());
+        assert!(resolve_scoped_writable_root("relative/path", workspace.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_writable_root_rejects_symlink_alias_into_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let child = workspace.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let alias = outside.path().join("workspace-child");
+        if std::os::unix::fs::symlink(&child, &alias).is_err() {
+            return;
+        }
+        let error =
+            resolve_scoped_writable_root(alias.to_str().unwrap(), workspace.path()).unwrap_err();
+        assert!(error.contains("must not overlap"), "{error}");
+    }
+
     #[cfg(target_os = "macos")]
     fn macos_policy<'a>(
         workspace: &'a Path,
@@ -790,6 +922,8 @@ mod tests {
             workspace_root: Some(workspace),
             writable_roots,
             session_scratch_roots,
+            one_shot_writable_roots: &[],
+            write_access: true,
             network_access: false,
         }
     }
@@ -855,6 +989,8 @@ mod tests {
                 workspace_root: None,
                 writable_roots: &[],
                 session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: false,
             },
         )
@@ -1059,6 +1195,8 @@ mod tests {
                 workspace_root: None,
                 writable_roots: &[],
                 session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: false,
             },
         )
@@ -1080,6 +1218,8 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: false,
             },
         )
@@ -1105,6 +1245,8 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: false,
             },
         )
@@ -1132,6 +1274,8 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &scratch_roots,
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: false,
             },
         )
@@ -1155,6 +1299,8 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &scratch_roots,
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: true,
             },
         )
@@ -1174,6 +1320,8 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: true,
                 network_access: true,
             },
         );
@@ -1204,6 +1352,8 @@ mod tests {
                     workspace_root: Some(workspace.path()),
                     writable_roots: &roots,
                     session_scratch_roots: &[],
+                    one_shot_writable_roots: &[],
+                    write_access: true,
                     network_access: false,
                 },
             );
@@ -1242,6 +1392,8 @@ mod tests {
             workspace_root: Some(workspace.path()),
             writable_roots: &roots,
             session_scratch_roots: &[],
+            one_shot_writable_roots: &[],
+            write_access: true,
             network_access: false,
         };
         let wrapped = command(&command_text, make_policy()).unwrap();
@@ -1301,6 +1453,100 @@ mod tests {
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn read_only_mode_denies_writes_inside_workspace() {
+        if !runtime_tests_available() {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let marker = workspace.path().join("must-not-be-created");
+        let roots = vec![workspace.path().to_path_buf()];
+        let prepared = command(
+            &format!("printf x > {}", shell_quote(&marker.to_string_lossy())),
+            SandboxPolicy {
+                command_cwd: Some(workspace.path()),
+                workspace_root: Some(workspace.path()),
+                writable_roots: &roots,
+                session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: false,
+                network_access: false,
+            },
+        )
+        .unwrap();
+        let output = run_sandboxed(prepared, workspace.path());
+        assert!(
+            !output.success,
+            "read-only sandbox accepted a workspace write"
+        );
+        assert!(
+            !marker.exists(),
+            "read-only sandbox created a workspace file"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn one_shot_directory_is_writable_without_widening_other_paths() {
+        if !runtime_tests_available() {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let approved = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let approved_path = approved.path().canonicalize().unwrap();
+        let approved_root =
+            resolve_scoped_writable_root(approved_path.to_str().unwrap(), workspace.path())
+                .unwrap();
+        let prepared = command(
+            &format!(
+                "printf ok > {}",
+                shell_quote(&approved_path.join("allowed").to_string_lossy())
+            ),
+            SandboxPolicy {
+                command_cwd: Some(workspace.path()),
+                workspace_root: Some(workspace.path()),
+                writable_roots: &[workspace.path().to_path_buf()],
+                session_scratch_roots: &[],
+                one_shot_writable_roots: &[approved_root],
+                write_access: false,
+                network_access: false,
+            },
+        )
+        .unwrap();
+        let output = run_sandboxed(prepared, workspace.path());
+        assert!(
+            output.success,
+            "approved directory write failed: {}",
+            String::from_utf8_lossy(output.stderr.bytes())
+        );
+        assert_eq!(std::fs::read(approved_path.join("allowed")).unwrap(), b"ok");
+
+        let denied = command(
+            &format!(
+                "printf no > {}",
+                shell_quote(&other.path().join("denied").to_string_lossy())
+            ),
+            SandboxPolicy {
+                command_cwd: Some(workspace.path()),
+                workspace_root: Some(workspace.path()),
+                writable_roots: &[workspace.path().to_path_buf()],
+                session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: false,
+                network_access: false,
+            },
+        )
+        .unwrap();
+        let output = run_sandboxed(denied, workspace.path());
+        assert!(
+            !output.success,
+            "unapproved external directory write succeeded"
+        );
+        assert!(!other.path().join("denied").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn run_sandboxed(command: SandboxedCommand, cwd: &Path) -> rustcode_command::CommandOutput {
         rustcode_command::run_with_timeout(
             &rustcode_command::CommandRequest {
@@ -1336,6 +1582,8 @@ mod tests {
                     workspace_root: Some(&workspace),
                     writable_roots: &roots,
                     session_scratch_roots: &[],
+                    one_shot_writable_roots: &[],
+                    write_access: true,
                     network_access: false,
                 },
             )
