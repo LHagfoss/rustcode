@@ -47,7 +47,9 @@ fn current_branch(project: &Path) -> Option<String> {
 }
 
 use crate::{
-    backend::{NativeBackend, project_selection_command, resume_session_command},
+    backend::{
+        NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
+    },
     projection::{
         ChatViewState, ProjectionRow, ToolStatus, can_submit, project_rows, stop_available,
         toggle_option,
@@ -312,11 +314,11 @@ impl AppView {
     }
 
     fn resume_session(&mut self, session_id: String, cx: &mut Context<Self>) {
-        let workspace = if self.selected_project.is_dir() {
-            self.selected_project.clone()
-        } else if self.launch_dir.is_dir() {
-            self.launch_dir.clone()
-        } else {
+        // Never resume in a stale directory: prefer the selected project,
+        // fall back to the launch directory, and offer the folder picker
+        // when neither is valid (issue #1377).
+        let Some(workspace) = resolve_resume_workspace(&self.selected_project, &self.launch_dir)
+        else {
             self.choose_project_and_resume(session_id, cx);
             return;
         };
