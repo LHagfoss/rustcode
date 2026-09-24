@@ -966,6 +966,7 @@ impl TaskManager {
 fn test_request(command: &str) -> CommandRequest {
     CommandRequest {
         command: command.to_owned(),
+        status_command: None,
         cwd: None,
         env: Vec::new(),
         timeout: std::time::Duration::from_secs(5),

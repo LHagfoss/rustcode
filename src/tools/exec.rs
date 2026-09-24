@@ -575,7 +575,7 @@ fn run_command_output_inner(
     let session_scratch = get_active_session_id()
         .and_then(|session_id| crate::config::get_active_session_sandbox_dir(&session_id));
     let workspace_root = context.workspace_root.clone();
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     let workspace_root = workspace_root.or_else(|| {
         resolved_cwd.clone().or_else(|| {
             static TEST_WORKSPACE: std::sync::OnceLock<tempfile::TempDir> =
@@ -603,6 +603,7 @@ fn run_command_output_inner(
     )?;
     let command_request = rustcode_command::CommandRequest {
         command: sandboxed.command,
+        status_command: Some(command_str.to_owned()),
         cwd: resolved_cwd.clone(),
         env: command_env,
         timeout: Duration::from_millis(timeout_ms.max(1)),
@@ -1054,6 +1055,7 @@ mod tests {
     ) -> rustcode_command::CommandRequest {
         rustcode_command::CommandRequest {
             command: command.to_owned(),
+            status_command: None,
             cwd,
             env: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
@@ -1490,7 +1492,7 @@ mod tests {
         }))
         .expect("pipeline should return a structured command result");
 
-        assert!(output.success);
+        assert!(output.success, "{}", output.content);
         let status = output.command_status.expect("command status metadata");
         assert!(status.completed);
         assert_eq!(status.exit_code, Some(141));

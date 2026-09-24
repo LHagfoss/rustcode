@@ -4,7 +4,9 @@
 //! and writable access only to the active workspace/session scratch directory.
 //! Network access is isolated with a private network namespace when bubblewrap
 //! can configure loopback; otherwise seccomp restricts network syscalls and
-//! socket families. Other platforms retain their existing execution path.
+//! socket families. macOS uses Seatbelt through `/usr/bin/sandbox-exec` with
+//! the same workspace and network restrictions. Other platforms retain their
+//! existing execution path.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -27,11 +29,20 @@ pub(crate) struct SandboxPolicy<'a> {
     pub network_access: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn command(
     command: &str,
     policy: SandboxPolicy<'_>,
 ) -> Result<SandboxedCommand, String> {
+    #[cfg(target_os = "linux")]
+    return linux_command(command, policy);
+
+    #[cfg(target_os = "macos")]
+    return macos_command(command, policy);
+}
+
+#[cfg(target_os = "linux")]
+fn linux_command(command: &str, policy: SandboxPolicy<'_>) -> Result<SandboxedCommand, String> {
     let workspace = canonical_directory(policy.workspace_root, "active workspace")?;
     let cwd = match policy.command_cwd {
         Some(path) => canonical_directory(Some(path), "command working directory")?,
@@ -229,7 +240,193 @@ fn bubblewrap_candidate_exists() -> bool {
         .any(|directory| directory.join("bwrap").exists())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
+
+#[cfg(target_os = "macos")]
+fn macos_command(command: &str, policy: SandboxPolicy<'_>) -> Result<SandboxedCommand, String> {
+    command_with_seatbelt_path(
+        command,
+        policy,
+        Path::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn command_with_seatbelt_path(
+    command: &str,
+    policy: SandboxPolicy<'_>,
+    seatbelt: &Path,
+) -> Result<SandboxedCommand, String> {
+    let workspace = canonical_directory(policy.workspace_root, "active workspace")?;
+    let cwd = match policy.command_cwd {
+        Some(path) => canonical_directory(Some(path), "command working directory")?,
+        None => workspace.clone(),
+    };
+
+    let mut writable_roots = Vec::new();
+    for root in policy.writable_roots {
+        let canonical = if policy.session_scratch_roots.contains(root) {
+            match std::fs::symlink_metadata(root) {
+                Ok(_) => canonical_session_scratch(root)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "macOS shell sandbox could not inspect session scratch directory '{}': {error}; command was not run",
+                        root.display()
+                    ));
+                }
+            }
+        } else {
+            canonical_directory(Some(root), "writable root")?
+        };
+        if canonical == Path::new("/") {
+            return Err(
+                "macOS shell sandbox refused `/` as a writable root; command was not run"
+                    .to_string(),
+            );
+        }
+        if !writable_roots.contains(&canonical) {
+            writable_roots.push(canonical);
+        }
+    }
+    if workspace == Path::new("/") {
+        return Err(
+            "macOS shell sandbox refused `/` as the active workspace; command was not run"
+                .to_string(),
+        );
+    }
+    if !writable_roots.contains(&workspace) {
+        return Err("macOS shell sandbox requires the active workspace in its writable roots; command was not run".to_string());
+    }
+    if !writable_roots.iter().any(|root| cwd.starts_with(root)) {
+        return Err("macOS shell sandbox refused a working directory outside its writable roots; command was not run".to_string());
+    }
+
+    if seatbelt != Path::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE) && !seatbelt.is_file() {
+        return Err(format!(
+            "macOS shell sandbox unavailable: '{}' is not a regular sandbox-exec file; command was not run",
+            seatbelt.display()
+        ));
+    }
+    if !seatbelt.is_file() {
+        return Err(format!(
+            "macOS shell sandbox unavailable: required '{}' was not found; command was not run",
+            MACOS_PATH_TO_SEATBELT_EXECUTABLE
+        ));
+    }
+
+    let profile = seatbelt_profile(writable_roots.len(), policy.network_access);
+    let mut arguments = vec!["-p".to_string(), profile];
+    for (index, root) in writable_roots.iter().enumerate() {
+        arguments.push(format!("-DWRITABLE_ROOT_{index}={}", root.display()));
+    }
+    arguments.extend([
+        "--".to_string(),
+        "/bin/bash".to_string(),
+        "-o".to_string(),
+        "pipefail".to_string(),
+        "-c".to_string(),
+        command.to_string(),
+    ]);
+
+    // rustcode-command starts requests through `bash -c`, so preserve every
+    // argv boundary and keep shell syntax in the original command as data.
+    // Keep compiler and build-tool temporary files inside a writable root.
+    // The inherited host TMPDIR usually points outside Seatbelt's policy.
+    let temp_dir = shell_quote(&workspace.to_string_lossy());
+    let mut wrapped = format!("TMPDIR={temp_dir} TMP={temp_dir} TEMP={temp_dir} ");
+    wrapped.push_str(&shell_quote(&seatbelt.to_string_lossy()));
+    for argument in arguments {
+        wrapped.push(' ');
+        wrapped.push_str(&shell_quote(&argument));
+    }
+    Ok(SandboxedCommand {
+        command: wrapped,
+        inherited_fds: Vec::new(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn seatbelt_profile(writable_root_count: usize, network_access: bool) -> String {
+    let mut profile = String::from(
+        r#"(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow file-read*)
+(allow file-write-data (require-all (literal "/dev/null") (vnode-type CHARACTER-DEVICE)))
+(allow sysctl-read)
+"#,
+    );
+    for index in 0..writable_root_count {
+        profile.push_str(&format!(
+            "(allow file-write* (subpath (param \"WRITABLE_ROOT_{index}\")))\n"
+        ));
+    }
+    if network_access {
+        profile
+            .push_str("(allow network-outbound)\n(allow network-inbound)\n(allow network-bind)\n");
+    }
+    profile
+}
+
+#[cfg(target_os = "macos")]
+fn canonical_directory(path: Option<&Path>, description: &str) -> Result<PathBuf, String> {
+    let path = path.ok_or_else(|| {
+        format!("macOS shell sandbox needs an {description}; command was not run")
+    })?;
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "macOS shell sandbox could not resolve {description} '{}': {error}; command was not run",
+            path.display()
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(format!(
+            "macOS shell sandbox {description} '{}' is not a directory; command was not run",
+            path.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+#[cfg(target_os = "macos")]
+fn canonical_session_scratch(path: &Path) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "macOS shell sandbox could not inspect session scratch directory '{}': {error}; command was not run",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(
+            "macOS shell sandbox refused an invalid session scratch directory; command was not run"
+                .to_string(),
+        );
+    }
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "macOS shell sandbox could not resolve session scratch directory '{}': {error}; command was not run",
+            path.display()
+        )
+    })?;
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .ok_or_else(|| {
+            "macOS shell sandbox could not resolve the session directory; command was not run"
+                .to_string()
+        })?;
+    if canonical != parent.join("sandbox") {
+        return Err("macOS shell sandbox refused a redirected session scratch directory; command was not run".to_string());
+    }
+    Ok(canonical)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn command(
     command: &str,
     _policy: SandboxPolicy<'_>,
@@ -570,7 +767,7 @@ fn canonical_session_scratch(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -578,6 +775,231 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    fn macos_policy<'a>(
+        workspace: &'a Path,
+        writable_roots: &'a [PathBuf],
+        session_scratch_roots: &'a [PathBuf],
+        command_cwd: Option<&'a Path>,
+    ) -> SandboxPolicy<'a> {
+        SandboxPolicy {
+            command_cwd,
+            workspace_root: Some(workspace),
+            writable_roots,
+            session_scratch_roots,
+            network_access: false,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_command_keeps_paths_out_of_profile_and_quotes_shell_arguments() {
+        let workspace = tempfile::Builder::new()
+            .prefix("rustcode workspace's ")
+            .tempdir()
+            .unwrap();
+        let roots = vec![workspace.path().to_path_buf()];
+        let prepared = command(
+            "printf '%s' \"a b\"",
+            macos_policy(workspace.path(), &roots, &[], Some(workspace.path())),
+        )
+        .unwrap();
+
+        assert!(prepared.command.contains("/usr/bin/sandbox-exec"));
+        assert!(prepared.command.contains("deny default"));
+        assert!(prepared.command.contains("WRITABLE_ROOT_0"));
+        assert!(prepared.command.contains("printf"));
+        assert!(prepared.command.contains("a b"));
+        assert!(prepared.command.contains("'\\''"));
+        assert!(!prepared.command.contains("rustcode workspace's "));
+        assert!(prepared.inherited_fds.is_empty());
+
+        let profile = seatbelt_profile(1, false);
+        assert!(profile.contains("(deny default)"));
+        assert!(profile.contains("WRITABLE_ROOT_0"));
+        assert!(!profile.contains(&workspace.path().to_string_lossy().to_string()));
+        assert!(!profile.contains("network-outbound"));
+        assert!(seatbelt_profile(1, true).contains("(allow network-outbound)"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_command_fails_closed_without_sandbox_exec() {
+        let workspace = tempfile::tempdir().unwrap();
+        let roots = vec![workspace.path().to_path_buf()];
+        let error = command_with_seatbelt_path(
+            "touch must-not-run",
+            macos_policy(workspace.path(), &roots, &[], Some(workspace.path())),
+            Path::new("/definitely/missing/sandbox-exec"),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("sandbox-exec"));
+        assert!(error.contains("command was not run"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_requires_workspace_and_rejects_cwd_outside_writable_roots() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let roots = vec![workspace.path().to_path_buf()];
+
+        let missing_workspace = command(
+            "id",
+            SandboxPolicy {
+                command_cwd: None,
+                workspace_root: None,
+                writable_roots: &[],
+                session_scratch_roots: &[],
+                network_access: false,
+            },
+        )
+        .unwrap_err();
+        assert!(missing_workspace.contains("active workspace"));
+        assert!(missing_workspace.contains("command was not run"));
+
+        let outside_cwd = command(
+            "id",
+            macos_policy(workspace.path(), &roots, &[], Some(outside.path())),
+        )
+        .unwrap_err();
+        assert!(outside_cwd.contains("outside its writable roots"));
+        assert!(outside_cwd.contains("command was not run"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_rejects_a_session_scratch_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let session = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let scratch = session.path().join("sandbox");
+        symlink(outside.path(), &scratch).unwrap();
+        let roots = vec![workspace.path().to_path_buf(), scratch.clone()];
+        let scratch_roots = vec![scratch];
+
+        let error = command(
+            "id",
+            macos_policy(
+                workspace.path(),
+                &roots,
+                &scratch_roots,
+                Some(workspace.path()),
+            ),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("invalid session scratch directory"));
+        assert!(error.contains("command was not run"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_allows_workspace_and_session_writes_but_denies_outside_and_network() {
+        let workspace = tempfile::tempdir().unwrap();
+        let session = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let scratch = session.path().join("sandbox");
+        std::fs::create_dir(&scratch).unwrap();
+        let workspace_file = workspace.path().join("workspace-write");
+        let scratch_file = scratch.join("session-write");
+        let outside_file = outside.path().join("outside-write");
+        let roots = vec![workspace.path().to_path_buf(), scratch.clone()];
+        let scratch_roots = vec![scratch.clone()];
+        let write_command = format!(
+            "printf w > {}; printf s > {}; printf o > {}",
+            shell_quote(&workspace_file.to_string_lossy()),
+            shell_quote(&scratch_file.to_string_lossy()),
+            shell_quote(&outside_file.to_string_lossy()),
+        );
+        let prepared = command(
+            &write_command,
+            macos_policy(
+                workspace.path(),
+                &roots,
+                &scratch_roots,
+                Some(workspace.path()),
+            ),
+        )
+        .unwrap();
+        let output = run_sandboxed(prepared, workspace.path());
+        if seatbelt_is_unavailable(&output) {
+            eprintln!("skipping Seatbelt enforcement assertions: nested Seatbelt is unavailable");
+            return;
+        }
+        assert!(
+            !output.success,
+            "outside write should be denied: {}",
+            String::from_utf8_lossy(output.stderr.bytes())
+        );
+        assert_eq!(std::fs::read_to_string(workspace_file).unwrap(), "w");
+        assert_eq!(std::fs::read_to_string(scratch_file).unwrap(), "s");
+        assert!(!outside_file.exists());
+
+        let ipv4_listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let ipv4_port = ipv4_listener.local_addr().unwrap().port();
+        let ipv6_listener = std::net::TcpListener::bind(("::1", 0)).unwrap();
+        let ipv6_port = ipv6_listener.local_addr().unwrap().port();
+        for (family, host, port) in [
+            ("AF_INET", "127.0.0.1", ipv4_port),
+            ("AF_INET6", "::1", ipv6_port),
+        ] {
+            let script = format!(
+                "import errno,socket;\ns=socket.socket(socket.{family}, socket.SOCK_STREAM)\ntry: s.connect(({host:?}, {port}))\nexcept OSError as e: assert e.errno in (errno.EPERM, errno.EACCES), e\nelse: raise AssertionError('{family} connection was allowed')"
+            );
+            let network_command = format!("python3 -c {}", shell_quote(&script));
+            let prepared = command(
+                &network_command,
+                macos_policy(
+                    workspace.path(),
+                    &roots,
+                    &scratch_roots,
+                    Some(workspace.path()),
+                ),
+            )
+            .unwrap();
+            let output = run_sandboxed(prepared, workspace.path());
+            assert!(
+                output.success,
+                "{family} socket was not denied: {}",
+                String::from_utf8_lossy(output.stderr.bytes())
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_denies_writes_through_workspace_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("symlink-escape");
+        let link = workspace.path().join("outside-link");
+        symlink(outside.path(), &link).unwrap();
+        let roots = vec![workspace.path().to_path_buf()];
+        let command_text = format!(
+            "printf x > {}",
+            shell_quote(&link.join("symlink-escape").to_string_lossy())
+        );
+        let prepared = command(
+            &command_text,
+            macos_policy(workspace.path(), &roots, &[], Some(workspace.path())),
+        )
+        .unwrap();
+        let output = run_sandboxed(prepared, workspace.path());
+        if seatbelt_is_unavailable(&output) {
+            eprintln!("skipping Seatbelt enforcement assertions: nested Seatbelt is unavailable");
+            return;
+        }
+
+        assert!(!output.success, "symlink escape should fail");
+        assert!(!outside_file.exists(), "symlink escaped the writable root");
+    }
 
     #[test]
     fn shell_quote_keeps_metacharacters_as_data() {
@@ -876,11 +1298,12 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn run_sandboxed(command: SandboxedCommand, cwd: &Path) -> rustcode_command::CommandOutput {
         rustcode_command::run_with_timeout(
             &rustcode_command::CommandRequest {
                 command: command.command,
+                status_command: None,
                 cwd: Some(cwd.to_path_buf()),
                 env: Vec::new(),
                 timeout: std::time::Duration::from_secs(10),
@@ -890,5 +1313,11 @@ mod tests {
             None,
         )
         .expect("sandboxed command should start")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn seatbelt_is_unavailable(output: &rustcode_command::CommandOutput) -> bool {
+        String::from_utf8_lossy(output.stderr.bytes())
+            .contains("sandbox_apply: Operation not permitted")
     }
 }
