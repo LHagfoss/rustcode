@@ -20,9 +20,18 @@ pub const IMAGE_CACHE_FILE: &str = "image_cache.json";
 /// background turn, cleared otherwise.
 pub const SEGMENT_CHECKPOINT_FILE: &str = "segment.json";
 pub const SESSION_METADATA_FILE: &str = "metadata.json";
+pub const SESSION_WORKSPACE_FILE: &str = "workspace.json";
 pub const SESSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_SESSIONS: usize = 30;
+
+pub fn valid_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
 
 mod workspace;
 pub use workspace::*;
@@ -243,6 +252,15 @@ pub struct SessionMeta {
     pub title: String,
     pub when: String,
     pub message_count: usize,
+}
+
+/// Workspace roots associated with an ACP session. Older sessions may not
+/// have a workspace record because the previous format did not persist it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspace {
+    pub cwd: PathBuf,
+    #[serde(default)]
+    pub additional_directories: Vec<PathBuf>,
 }
 
 /// Versioned information stored alongside a canonical session transcript.
@@ -736,6 +754,90 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
+    pub fn save_session_workspace(
+        &self,
+        session_id: &str,
+        workspace: &SessionWorkspace,
+    ) -> std::io::Result<()> {
+        if !valid_session_id(session_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid session id",
+            ));
+        }
+        let directory = self.ensure_session(session_id);
+        let path = directory.join(SESSION_WORKSPACE_FILE);
+        let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
+        let contents = serde_json::to_vec(workspace).map_err(std::io::Error::other)?;
+        std::fs::write(&temporary, contents)?;
+        std::fs::rename(temporary, path)
+    }
+
+    pub fn load_session_workspace(&self, session_id: &str) -> Option<SessionWorkspace> {
+        if !valid_session_id(session_id) {
+            return None;
+        }
+        serde_json::from_slice(
+            &std::fs::read(self.session_dir(session_id).join(SESSION_WORKSPACE_FILE)).ok()?,
+        )
+        .ok()
+    }
+
+    pub fn load_session_metadata(&self, session_id: &str) -> Option<SessionMetadata> {
+        if !valid_session_id(session_id) {
+            return None;
+        }
+        let metadata: SessionMetadata = serde_json::from_slice(
+            &std::fs::read(self.session_dir(session_id).join(SESSION_METADATA_FILE)).ok()?,
+        )
+        .ok()?;
+        (metadata.id == session_id && metadata.schema_version == SESSION_METADATA_SCHEMA_VERSION)
+            .then_some(metadata)
+    }
+
+    /// Return a page in most-recent-first order. The cursor must identify a
+    /// currently discoverable session; filtering happens before the page cap.
+    pub fn list_sessions_page<F>(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+        mut include: F,
+    ) -> Result<(Vec<SessionMeta>, Option<String>), ()>
+    where
+        F: FnMut(&SessionMeta) -> bool,
+    {
+        let paths = self.sorted_session_paths();
+        let start = if let Some(after_id) = after_id {
+            if !valid_session_id(after_id) {
+                return Err(());
+            }
+            let anchor = paths
+                .iter()
+                .position(|path| Self::session_id_from_path(path).as_deref() == Some(after_id))
+                .ok_or(())?;
+            anchor + 1
+        } else {
+            0
+        };
+        let mut sessions = Vec::new();
+        for path in paths.into_iter().skip(start) {
+            let Some(meta) = self.load_session_meta(&path) else {
+                continue;
+            };
+            if !include(&meta) {
+                continue;
+            }
+            if sessions.len() == limit {
+                let next = sessions
+                    .last()
+                    .and_then(|previous: &SessionMeta| Self::session_id_from_path(&previous.path));
+                return Ok((sessions, next));
+            }
+            sessions.push(meta);
+        }
+        Ok((sessions, None))
+    }
+
     pub fn delete_session_file(path: &Path) {
         if path.file_name().is_some_and(|name| name == HISTORY_FILE) {
             if let Some(parent) = path.parent()
@@ -1050,6 +1152,107 @@ mod tests {
         assert_eq!(
             SessionStore::session_id_from_path(&path).as_deref(),
             Some("123")
+        );
+    }
+
+    #[test]
+    fn session_workspace_round_trips_without_touching_global_state() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let workspace = SessionWorkspace {
+            cwd: PathBuf::from("/workspace/project"),
+            additional_directories: vec![PathBuf::from("/workspace/shared")],
+        };
+        store.save_session_workspace("123", &workspace).unwrap();
+        assert_eq!(store.load_session_workspace("123"), Some(workspace));
+        assert!(
+            store
+                .save_session_workspace("../escape", &SessionWorkspace::default())
+                .is_err()
+        );
+        assert!(store.load_session_workspace("../escape").is_none());
+    }
+
+    #[test]
+    fn legacy_sessions_without_workspace_remain_discoverable_and_bad_workspace_is_ignored() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "legacy-session";
+        let history = vec![
+            message("user", "prior request"),
+            message("assistant", "prior answer"),
+        ];
+        store.save_session_history(id, &history);
+        flush_history();
+        assert!(store.session_meta_by_id(id).is_some());
+        assert!(store.load_session_workspace(id).is_none());
+
+        let path = store.session_dir(id).join(SESSION_WORKSPACE_FILE);
+        std::fs::write(path, "{not json").unwrap();
+        assert!(store.load_session_workspace(id).is_none());
+    }
+
+    #[test]
+    fn malformed_session_history_is_not_resumable() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let history_path = store.ensure_session("malformed-session").join(HISTORY_FILE);
+        std::fs::write(&history_path, "{not history json").unwrap();
+        assert!(store.session_meta_by_id("malformed-session").is_none());
+        assert!(store.load_session_file(&history_path).is_empty());
+    }
+
+    #[test]
+    fn session_pages_are_bounded_filtered_and_reject_stale_cursors() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let history = vec![message("user", "prompt"), message("assistant", "reply")];
+        for (id, cwd) in [
+            ("101", "/work/a"),
+            ("102", "/work/b"),
+            ("103", "/work/a"),
+            ("104", "/work/a"),
+        ] {
+            store.save_session_history(id, &history);
+            store
+                .save_session_workspace(
+                    id,
+                    &SessionWorkspace {
+                        cwd: PathBuf::from(cwd),
+                        additional_directories: Vec::new(),
+                    },
+                )
+                .unwrap();
+        }
+        flush_history();
+        let filter = |meta: &SessionMeta| {
+            let id = SessionStore::session_id_from_path(&meta.path).unwrap();
+            store
+                .load_session_workspace(&id)
+                .is_some_and(|workspace| workspace.cwd == PathBuf::from("/work/a"))
+        };
+        let (first, cursor) = store.list_sessions_page(None, 2, filter).unwrap();
+        assert_eq!(first.len(), 2);
+        let cursor = cursor.expect("another filtered page");
+        let (second, next) = store
+            .list_sessions_page(Some(&cursor), 2, |meta| {
+                let id = SessionStore::session_id_from_path(&meta.path).unwrap();
+                store
+                    .load_session_workspace(&id)
+                    .is_some_and(|workspace| workspace.cwd == PathBuf::from("/work/a"))
+            })
+            .unwrap();
+        assert_eq!(second.len(), 1);
+        assert!(next.is_none());
+        assert!(
+            store
+                .list_sessions_page(Some("missing"), 2, |_| true)
+                .is_err()
+        );
+        assert!(
+            store
+                .list_sessions_page(Some("../bad"), 2, |_| true)
+                .is_err()
         );
     }
 

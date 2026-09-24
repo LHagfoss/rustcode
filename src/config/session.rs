@@ -2,7 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
-    HistorySnapshot, SessionMeta, SessionMigrationReport, WorkspaceManager, WorkspaceRequest,
+    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceManager,
+    WorkspaceRequest,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -449,6 +450,45 @@ pub fn list_sessions_limited(limit: usize) -> (Vec<SessionMeta>, bool) {
         || (Vec::new(), false),
         |session_store| session_store.list_sessions_limited(limit),
     )
+}
+
+pub fn list_sessions_page<F>(
+    after_id: Option<&str>,
+    limit: usize,
+    include: F,
+) -> Result<(Vec<SessionMeta>, Option<String>), ()>
+where
+    F: FnMut(&SessionMeta) -> bool,
+{
+    store()
+        .map(|session_store| session_store.list_sessions_page(after_id, limit, include))
+        .unwrap_or(Ok((Vec::new(), None)))
+}
+
+pub fn load_session_by_id(session_id: &str) -> Option<(SessionMeta, Vec<ChatMessage>)> {
+    let session_store = store()?;
+    let meta = session_store.session_meta_by_id(session_id)?;
+    let history = session_store.load_session_file(&meta.path);
+    (!history.is_empty()).then_some((meta, history))
+}
+
+pub fn load_session_workspace(session_id: &str) -> Option<SessionWorkspace> {
+    store()?.load_session_workspace(session_id)
+}
+
+pub fn load_session_metadata(session_id: &str) -> Option<rustcode_session::SessionMetadata> {
+    store()?.load_session_metadata(session_id)
+}
+
+pub fn save_session_workspace(
+    session_id: &str,
+    workspace: &SessionWorkspace,
+) -> std::io::Result<()> {
+    store()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "session store unavailable")
+        })?
+        .save_session_workspace(session_id, workspace)
 }
 
 #[allow(dead_code)]
