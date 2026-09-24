@@ -1121,6 +1121,15 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
     if depth > 4 {
         return true;
     }
+    if let Some(case_result) = parse_case_compound(command) {
+        let Ok((bodies, remainder)) = case_result else {
+            return true;
+        };
+        return bodies
+            .iter()
+            .any(|body| denied_command_contains_rule(body, rules, depth + 1))
+            || denied_command_contains_rule(&remainder, rules, depth + 1);
+    }
     // Split shell operators only outside quotes so punctuation in search
     // patterns, messages, and other literal arguments stays literal.
     let mut previous_pipeline_segment: Option<String> = None;
@@ -1157,6 +1166,180 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
         previous_pipeline_segment = Some(segment);
     }
     false
+}
+
+fn parse_case_compound(command: &str) -> Option<Result<(Vec<String>, String), ()>> {
+    let leading = command.len() - command.trim_start().len();
+    let command = &command[leading..];
+    if !command.starts_with("case")
+        || command
+            .as_bytes()
+            .get(4)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+    {
+        return None;
+    }
+    let Some(in_index) = find_shell_keyword(command, 4, "in") else {
+        return Some(Err(()));
+    };
+    if deny_invocation_tokens(command[..in_index].trim()).is_none() {
+        return Some(Err(()));
+    }
+    let mut bodies = Vec::new();
+    let mut index = in_index + 2;
+    loop {
+        while command
+            .as_bytes()
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b';')
+        {
+            index += 1;
+        }
+        if command[index..].starts_with("esac")
+            && command
+                .as_bytes()
+                .get(index + 4)
+                .is_none_or(|byte| byte.is_ascii_whitespace() || *byte == b';' || *byte == b'|')
+        {
+            index += 4;
+            return Some(Ok((bodies, command[index..].to_owned())));
+        }
+        if command.as_bytes().get(index) == Some(&b'(') {
+            index += 1;
+        }
+        let Some(pattern_end) = find_unquoted_character(command, index, b')') else {
+            return Some(Err(()));
+        };
+        let body_start = pattern_end + 1;
+        let Some((body_end, terminator_end)) = find_case_arm_end(command, body_start) else {
+            return Some(Err(()));
+        };
+        bodies.push(command[body_start..body_end].to_owned());
+        index = terminator_end;
+    }
+}
+
+fn find_shell_keyword(command: &str, start: usize, keyword: &str) -> Option<usize> {
+    let bytes = command.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = start;
+    while index + keyword.len() <= bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if quote == Some(b'"') && byte == b'\\' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if quote.is_none() && byte == b'\\' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if quote.is_some() {
+            if quote == Some(byte) {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        let before_boundary = index == 0 || bytes[index - 1].is_ascii_whitespace();
+        let after = index + keyword.len();
+        let after_boundary = after == bytes.len() || bytes[after].is_ascii_whitespace();
+        if before_boundary && after_boundary && &command[index..after] == keyword {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_unquoted_character(command: &str, start: usize, target: u8) -> Option<usize> {
+    let bytes = command.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate().skip(start) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quote == Some(b'"') && byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        if quote.is_none() && byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        if quote.is_some() {
+            if quote == Some(byte) {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == target {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn find_case_arm_end(command: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = command.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = start;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if quote == Some(b'"') && byte == b'\\' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if quote.is_none() && byte == b'\\' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if quote.is_some() {
+            if quote == Some(byte) {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if byte == b';' && matches!(bytes.get(index + 1), Some(b';' | b'&')) {
+            let terminator_end =
+                if bytes.get(index + 1) == Some(&b';') && bytes.get(index + 2) == Some(&b'&') {
+                    index + 3
+                } else {
+                    index + 2
+                };
+            return Some((index, terminator_end));
+        }
+        index += 1;
+    }
+    None
 }
 
 fn denied_command_tokens_cover(tokens: &[String], rules: &[Vec<String>], depth: usize) -> bool {
@@ -1397,6 +1580,7 @@ fn wrapped_command_payload(tokens: &[String]) -> Option<WrappedCommandPayload> {
         "source" | "." => Some(WrappedCommandPayload::Ambiguous),
         "trap" => match args.first().map(String::as_str) {
             Some("-p" | "-l") => None,
+            Some("--") => args.get(1).cloned().map(WrappedCommandPayload::Shell),
             Some("") => None,
             Some(action) if action.starts_with('-') => Some(WrappedCommandPayload::Ambiguous),
             Some(action) => Some(WrappedCommandPayload::Shell(action.to_owned())),
@@ -1838,6 +2022,9 @@ mod command_prefix_tests {
             ("git push", "source ./push.sh"),
             ("git push", ". ./push.sh"),
             ("git push", "trap 'git push' EXIT"),
+            ("git push", "case x in a) git push;; esac"),
+            ("git push", r"case x in a\)b) echo ok; git push;; esac"),
+            ("git push", r"case x in a) echo ok\; true; git push;; esac"),
             ("git push", "eval git push"),
             ("git push", "eval 'git push'"),
             ("git push", "sudo --user root git push"),
@@ -1874,6 +2061,8 @@ mod command_prefix_tests {
             ("git push", "for x in a b; do echo \"$x\"; done"),
             ("git push", "! echo ok"),
             ("git push", "trap 'echo ok' EXIT"),
+            ("git push", "trap -- 'echo ok' EXIT"),
+            ("git push", "case \"$mode\" in debug) echo ok;; esac"),
             ("git push", "wc -l < README.md"),
             ("git push", "echo ok > /tmp/file"),
             ("git push", "echo \"$HOME\""),
