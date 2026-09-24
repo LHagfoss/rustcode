@@ -6,13 +6,13 @@ mod view;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    AppContext, WindowBounds, WindowOptions,
-    component::{Root, Theme, ThemeMode},
+    AppContext, KeyBinding, WindowBounds, WindowOptions,
+    component::{Root, Theme, ThemeMode, TitleBar},
     px, size,
 };
 
 use backend::NativeBackend;
-use view::AppView;
+use view::{AppView, ToggleSidebar};
 
 fn main() {
     let launch_dir = std::env::args_os()
@@ -30,6 +30,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            cx.bind_keys([KeyBinding::new("cmd-b", ToggleSidebar, None)]);
             Theme::change(ThemeMode::Dark, None, cx);
             let window_bounds = WindowBounds::centered(size(px(1200.), px(800.)), cx);
             let backend = backend.take().expect("native window is opened once");
@@ -38,10 +39,14 @@ fn main() {
                     WindowOptions {
                         window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(900.), px(620.))),
-                        ..WindowOptions::default()
+                        ..TitleBar::window_options()
                     },
                     move |window, cx| {
                         let view = cx.new(|cx| AppView::new(backend, launch_dir, window, cx));
+                        let toggle_view = view.downgrade();
+                        cx.on_action(move |_: &ToggleSidebar, cx| {
+                            let _ = toggle_view.update(cx, |view, cx| view.toggle_sidebar(cx));
+                        });
                         let updates = view.update(cx, |view, _| view.take_updates());
                         let update_view = view.clone();
                         cx.spawn(async move |cx| {

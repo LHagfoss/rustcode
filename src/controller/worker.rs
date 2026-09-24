@@ -44,13 +44,14 @@ async fn controller_worker(
 ) {
     let mut active: Option<ActiveSession> = None;
     let mut generation = 0;
+    let mut auto_approve = true;
     let client = reqwest::Client::new();
     let mut task_subscriptions = HashMap::<String, TaskSubscription>::new();
     let mut task_poll = tokio::time::interval(std::time::Duration::from_millis(25));
     task_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let _ = updates.send(ControllerEvent {
         generation,
-        update: ControllerUpdate::Snapshot(empty_snapshot(generation)),
+        update: ControllerUpdate::Snapshot(empty_snapshot(generation, auto_approve)),
     });
 
     loop {
@@ -85,7 +86,7 @@ async fn controller_worker(
                 state.workspace_root = Some(workspace.clone());
                 state.task_working_directory = Some(workspace);
                 // Native frontends do not have the TUI confirmation overlay.
-                state.auto_confirm = true;
+                state.auto_confirm = auto_approve;
                 let session = ActiveSession {
                     generation,
                     state: Arc::new(Mutex::new(state)),
@@ -160,7 +161,7 @@ async fn controller_worker(
                     state.api_base_url = url;
                 }
                 generation += 1;
-                state.auto_confirm = true;
+                state.auto_confirm = auto_approve;
                 let session = ActiveSession {
                     generation,
                     state: Arc::new(Mutex::new(state)),
@@ -198,6 +199,19 @@ async fn controller_worker(
                     cancel_active_turn(session, &updates).await;
                 } else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
+                }
+            }
+            Command::SetAutoApprove(enabled) => {
+                auto_approve = enabled;
+                if let Some(session) = active.as_ref() {
+                    let mut state = session.state.lock().await;
+                    state.auto_confirm = enabled;
+                    send_snapshot_locked(&updates, session.generation, &state);
+                } else {
+                    let _ = updates.send(ControllerEvent {
+                        generation,
+                        update: ControllerUpdate::Snapshot(empty_snapshot(generation, enabled)),
+                    });
                 }
             }
             Command::SelectModel(model) => {
@@ -272,6 +286,7 @@ async fn controller_worker(
                     });
                 } else {
                     let mut state = AppState::new_with_workspace_session(&launch_dir, Some(""));
+                    state.auto_confirm = auto_approve;
                     state.workspace_root = Some(launch_dir.clone());
                     state.task_working_directory = Some(launch_dir.clone());
                     state.history_picker_sessions = crate::app::actions::build_session_list(&state);
@@ -441,7 +456,7 @@ async fn start_pending_turn(
     }
 }
 
-fn empty_snapshot(generation: u64) -> ControllerSnapshot {
+fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
     ControllerSnapshot {
         generation,
         workspace: None,
@@ -453,6 +468,7 @@ fn empty_snapshot(generation: u64) -> ControllerSnapshot {
         live_response: String::new(),
         queued_count: 0,
         turn_active: false,
+        auto_approve,
         pending_question: None,
         pending_approval: None,
     }

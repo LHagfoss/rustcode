@@ -337,6 +337,7 @@ mod tests {
             live_response: String::new(),
             queued_count: 0,
             turn_active,
+            auto_approve: true,
             pending_question: None,
             pending_approval: None::<ApprovalPrompt>,
         }

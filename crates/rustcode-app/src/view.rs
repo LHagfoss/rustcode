@@ -1,9 +1,12 @@
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    process::Command as ProcessCommand,
+};
 
 use gpui_kit::{
-    Anchor, Context, PathPromptOptions, Render, Window,
+    Anchor, Context, PathPromptOptions, Render, Window, actions,
     component::{
-        Disableable, Icon, IconName, Selectable, StyledExt,
+        Disableable, Icon, IconName, Selectable, StyledExt, TitleBar,
         bubble::Bubble,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
@@ -24,6 +27,23 @@ use gpui_kit::{
 use rustcode::controller::{
     ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, SessionChoice,
 };
+
+actions!(rustcode_app, [ToggleSidebar]);
+
+fn current_branch(project: &Path) -> Option<String> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8(output.stdout).ok()?;
+    let branch = branch.trim();
+    (!branch.is_empty()).then(|| branch.to_owned())
+}
 
 use crate::{
     backend::{NativeBackend, project_selection_command, resume_session_command},
@@ -49,6 +69,7 @@ pub struct AppView {
     starting_new_session: bool,
     clear_composer_on_render: bool,
     sidebar_collapsed: bool,
+    git_branch: Option<String>,
 }
 
 impl AppView {
@@ -72,6 +93,7 @@ impl AppView {
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
             backend,
+            git_branch: current_branch(&launch_dir),
             selected_project: launch_dir.clone(),
             launch_dir,
             composer,
@@ -147,6 +169,7 @@ impl AppView {
                 {
                     self.selected_project = workspace;
                 }
+                self.git_branch = current_branch(&self.selected_project);
                 if started_session {
                     if let Some(model_id) = self.pending_model_selection.take() {
                         self.send_command(Command::SelectModel(model_id), cx);
@@ -187,6 +210,7 @@ impl AppView {
         if let Some(command) = project_selection_command(Some(workspace)) {
             if let Command::StartNew(path) = &command {
                 self.selected_project = path.clone();
+                self.git_branch = current_branch(path);
                 self.starting_new_session = true;
             }
             if !self.send_command(command, cx) {
@@ -206,6 +230,11 @@ impl AppView {
             return;
         };
         self.start_workspace(project, cx);
+    }
+
+    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
     }
 
     fn choose_project_and_start(&mut self, cx: &mut Context<Self>) {
@@ -449,47 +478,30 @@ impl AppView {
             .as_ref()
             .and_then(|snapshot| snapshot.session_id.as_deref());
 
-        let header =
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .when(!collapsed, |this| {
-                            this.child(div().font_semibold().child("RustCode"))
-                        })
-                        .child(SidebarToggleButton::new().collapsed(collapsed).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.sidebar_collapsed = !this.sidebar_collapsed;
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .child(
-                    div()
-                        .id("new-chat")
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .p_2()
-                        .rounded_lg()
-                        .text_sm()
-                        .cursor_pointer()
-                        .hover(|this| this.bg(rgb(0x34363a)))
-                        .when(collapsed, |this| this.justify_center())
-                        .child(Icon::new(IconName::Plus).size_4())
-                        .when(!collapsed, |this| this.child("New chat"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.start_new_chat(cx);
-                        })),
-                );
+        let header = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().font_semibold().child("RustCode"))
+            .child(
+                div()
+                    .id("new-chat")
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded_lg()
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(rgb(0x34363a)))
+                    .child(Icon::new(IconName::Plus).size_4())
+                    .child("New chat")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.start_new_chat(cx);
+                    })),
+            );
 
         let projects = SidebarGroup::new("Projects").child(
             SidebarMenu::new().child(
@@ -524,13 +536,11 @@ impl AppView {
             .w(px(270.))
             .bg(rgb(0x222426))
             .border_color(rgb(0x34363a))
-            .collapsible(SidebarCollapsible::Icon)
+            .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(collapsed)
             .header(header)
             .child(projects)
-            .when(!collapsed, |this| {
-                this.child(SidebarGroup::new("Recents").child(recent_menu))
-            })
+            .child(SidebarGroup::new("Recents").child(recent_menu))
             .into_any_element()
     }
 
@@ -691,6 +701,10 @@ impl Render for AppView {
             .unwrap_or_else(|| "Choose project".to_owned());
         let status = self.status.clone();
         let turn_active = self.chat_state.turn_active();
+        let auto_approve = self
+            .snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.auto_approve);
         let composer_enabled = self.chat_state.composer_enabled();
         let send_enabled = composer_enabled
             && self.pending_prompt.is_none()
@@ -751,7 +765,10 @@ impl Render for AppView {
                         this.choose_project_and_start(cx);
                     })),
             )
-            .child("Local");
+            .when_some(self.git_branch.clone(), |this, branch| {
+                this.child(Icon::new(IconName::Network).size_4())
+                    .child(branch)
+            });
         let composer = div()
             .w_full()
             .max_w(px(860.))
@@ -794,11 +811,35 @@ impl Render for AppView {
                     .justify_between()
                     .gap_2()
                     .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .text_color(rgb(0xd49b64))
-                            .child("Auto approve"),
+                        div().flex_1().flex().items_center().child(
+                            Button::new("auto-approve")
+                                .ghost()
+                                .compact()
+                                .w(px(130.))
+                                .justify_start()
+                                .icon(if auto_approve {
+                                    IconName::CircleCheck
+                                } else {
+                                    IconName::CircleX
+                                })
+                                .label(if auto_approve {
+                                    "Auto approve"
+                                } else {
+                                    "Ask first"
+                                })
+                                .tooltip(if auto_approve {
+                                    "Tool actions are approved automatically. Click to ask first."
+                                } else {
+                                    "Tool actions ask for approval. Click to auto approve."
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let enabled = this
+                                        .snapshot
+                                        .as_ref()
+                                        .is_none_or(|snapshot| snapshot.auto_approve);
+                                    this.send_command(Command::SetAutoApprove(!enabled), cx);
+                                })),
+                        ),
                     )
                     .child(self.render_model_picker(cx))
                     .when(stop_available(turn_active), |this| {
@@ -871,13 +912,23 @@ impl Render for AppView {
                     .child(composer),
             );
 
+        let title_bar = TitleBar::new()
+            .bg(rgb(0x1b1d1f))
+            .border_color(rgb(0x1b1d1f))
+            .child(
+                SidebarToggleButton::new()
+                    .collapsed(self.sidebar_collapsed)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+            );
+
         div()
             .size_full()
             .flex()
+            .flex_col()
             .bg(rgb(0x1b1d1f))
             .text_color(rgb(0xe8e9ed))
-            .child(sidebar)
-            .child(main)
+            .child(title_bar)
+            .child(div().flex_1().min_h_0().flex().child(sidebar).child(main))
     }
 }
 
@@ -902,6 +953,7 @@ mod tests {
             live_response: String::new(),
             queued_count: 0,
             turn_active: false,
+            auto_approve: true,
             pending_question: None,
             pending_approval: None,
         };

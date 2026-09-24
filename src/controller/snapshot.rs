@@ -15,6 +15,7 @@ pub enum Command {
     },
     Submit(String),
     Cancel,
+    SetAutoApprove(bool),
     SelectModel(String),
     AnswerQuestion(String),
     Approval(ApprovalChoice),
@@ -86,6 +87,7 @@ pub struct ControllerSnapshot {
     pub live_response: String,
     pub queued_count: usize,
     pub turn_active: bool,
+    pub auto_approve: bool,
     pub pending_question: Option<QuestionPrompt>,
     pub pending_approval: Option<ApprovalPrompt>,
 }
@@ -153,6 +155,7 @@ impl ControllerSnapshot {
                     | AppStatus::AwaitingToolConfirmation
                     | AppStatus::AwaitingQuestion
             ) || state.orchestrator_running,
+            auto_approve: state.auto_confirm,
             pending_question: state
                 .pending_question
                 .as_ref()
