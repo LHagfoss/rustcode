@@ -169,6 +169,36 @@ jobs:
             - name: Test Seatbelt enforcement
               run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
 
+    macos-app:
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: macOS native app
+        runs-on: macos-15
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-app
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check native app test targets
+              run: cargo check --locked -p rustcode-app --tests
+
+            - name: Test native app
+              run: cargo test --locked -p rustcode-app
+
+            - name: Build native app
+              run: cargo build --locked -p rustcode-app
+
     portability:
         name: ${{ matrix.name }} portability coverage
         needs: changes
