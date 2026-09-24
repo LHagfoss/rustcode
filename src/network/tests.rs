@@ -946,6 +946,164 @@ async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<
     (format!("http://{address}"), accepted_rx)
 }
 
+struct AcpPromptTestPolicy;
+
+impl policy::TurnPolicy for AcpPromptTestPolicy {
+    async fn should_approve(
+        &self,
+        _state: &Arc<tokio::sync::Mutex<crate::app::AppState>>,
+        _tool_calls: &[crate::tools::ToolCall],
+    ) -> bool {
+        true
+    }
+
+    fn should_verify_completion(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_prompt_turn_releases_state_and_delivers_provider_completion() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::app::AppState::new();
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-prompt-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    app.history
+        .push(ChatMessage::new("user", "Reply with exactly: PONG"));
+    let state = Arc::new(Mutex::new(app));
+    let (sender, mut receiver) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            "Reply with exactly: PONG".to_owned(),
+            sender,
+        ),
+    )
+    .await
+    .expect("ACP prompt must not hold AppState locked while waiting for its turn");
+
+    provider_request
+        .await
+        .expect("mock provider must receive the ACP prompt");
+    assert_eq!(
+        context.response.final_content,
+        "wakeup request reached provider"
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(ui_adapter::AgentUiEvent::PromptStarted { .. })
+    ));
+    let mut completed_content = None;
+    while let Some(event) = receiver.recv().await {
+        if let ui_adapter::AgentUiEvent::TurnFinished { content, .. } = event {
+            completed_content = Some(content);
+            break;
+        }
+    }
+    assert_eq!(
+        completed_content.as_deref(),
+        Some("wakeup request reached provider"),
+        "ACP must emit a terminal event carrying the provider output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_continuation_releases_state_and_delivers_provider_completion() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::app::AppState::new();
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-continuation-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    app.history
+        .push(ChatMessage::new("user", "Continue the existing task"));
+    let state = Arc::new(Mutex::new(app));
+    let (sender, mut receiver) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = TurnContext::with_budgets(8, 16);
+    let context = tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_and_context_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            String::new(),
+            sender,
+            context,
+        ),
+    )
+    .await
+    .expect("ACP continuation must release AppState while waiting for its turn");
+
+    provider_request
+        .await
+        .expect("mock provider must receive the ACP continuation");
+    assert_eq!(
+        context.response.final_content,
+        "wakeup request reached provider"
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(ui_adapter::AgentUiEvent::PromptStarted { prompt }) if prompt.is_empty()
+    ));
+    let mut completed_content = None;
+    while let Some(event) = receiver.recv().await {
+        if let ui_adapter::AgentUiEvent::TurnFinished { content, .. } = event {
+            completed_content = Some(content);
+            break;
+        }
+    }
+    assert_eq!(
+        completed_content.as_deref(),
+        Some("wakeup request reached provider"),
+        "ACP continuation must emit a terminal event carrying the provider output"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn background_wakeup_releases_state_during_native_schema_selection_and_starts_provider_request()
  {
