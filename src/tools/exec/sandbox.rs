@@ -85,34 +85,11 @@ pub(crate) fn command(
         None
     };
 
-    let mut args = vec![
-        "--die-with-parent".to_string(),
-        "--new-session".to_string(),
-        "--unshare-user".to_string(),
-        "--unshare-pid".to_string(),
-        "--unshare-ipc".to_string(),
-        "--disable-userns".to_string(),
-        "--cap-drop".to_string(),
-        "ALL".to_string(),
-        "--ro-bind".to_string(),
-        "/".to_string(),
-        "/".to_string(),
-        "--dev".to_string(),
-        "/dev".to_string(),
-        "--proc".to_string(),
-        "/proc".to_string(),
-        "--tmpfs".to_string(),
-        "/tmp".to_string(),
-        "--tmpfs".to_string(),
-        "/run".to_string(),
-    ];
-    if use_network_namespace == Some(true) {
-        args.push("--unshare-net".to_string());
-    }
-    if let Some(filter) = &seccomp {
-        use std::os::fd::AsRawFd;
-        args.extend(["--seccomp".to_string(), filter.as_raw_fd().to_string()]);
-    }
+    use std::os::fd::AsRawFd;
+    let mut args = base_bubblewrap_arguments(
+        use_network_namespace == Some(true),
+        seccomp.as_ref().map(|filter| filter.as_raw_fd()),
+    );
     for root in writable_roots {
         args.extend([
             "--bind".to_string(),
@@ -142,6 +119,41 @@ pub(crate) fn command(
         command: wrapped,
         inherited_fds: seccomp.into_iter().collect(),
     })
+}
+
+#[cfg(target_os = "linux")]
+fn base_bubblewrap_arguments(
+    isolate_network: bool,
+    seccomp_fd: Option<std::os::fd::RawFd>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--die-with-parent".to_string(),
+        "--new-session".to_string(),
+        "--unshare-user".to_string(),
+        "--unshare-pid".to_string(),
+        "--unshare-ipc".to_string(),
+        "--disable-userns".to_string(),
+        "--cap-drop".to_string(),
+        "ALL".to_string(),
+        "--ro-bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+        "--proc".to_string(),
+        "/proc".to_string(),
+        "--tmpfs".to_string(),
+        "/tmp".to_string(),
+        "--tmpfs".to_string(),
+        "/run".to_string(),
+    ];
+    if isolate_network {
+        args.push("--unshare-net".to_string());
+    }
+    if let Some(fd) = seccomp_fd {
+        args.extend(["--seccomp".to_string(), fd.to_string()]);
+    }
+    args
 }
 
 /// Whether this test host can execute commands inside the production sandbox.
@@ -397,32 +409,9 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
 
     let fd = filter.as_raw_fd();
     let mut probe = std::process::Command::new(bubblewrap);
-    probe
-        .args([
-            "--die-with-parent",
-            "--new-session",
-            "--unshare-user",
-            "--unshare-pid",
-            "--unshare-ipc",
-            "--unshare-net",
-            "--disable-userns",
-            "--cap-drop",
-            "ALL",
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--tmpfs",
-            "/tmp",
-            "--tmpfs",
-            "/run",
-            "--seccomp",
-        ])
-        .arg(fd.to_string())
-        .args(["--", "/bin/true"]);
+    let mut args = base_bubblewrap_arguments(true, Some(fd));
+    args.extend(["--".to_string(), "/bin/true".to_string()]);
+    probe.args(args);
     // SAFETY: the hook only makes the filter memfd inheritable in this child.
     unsafe {
         probe.pre_exec(move || {
