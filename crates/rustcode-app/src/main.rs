@@ -1,3 +1,5 @@
+mod projection;
+
 mod backend;
 mod view;
 
@@ -31,7 +33,13 @@ fn main() {
                 cx.spawn(async move |cx| {
                     let mut updates = updates;
                     while let Some(event) = updates.recv().await {
-                        update_view.update(cx, |view, cx| view.apply_event(event, cx));
+                        let mut batch = vec![event];
+                        while let Ok(event) = updates.try_recv() {
+                            batch.push(event);
+                        }
+                        for event in coalesce_text_deltas(batch) {
+                            update_view.update(cx, |view, cx| view.apply_event(event, cx));
+                        }
                     }
                     update_view.update(cx, |view, cx| view.controller_stopped(cx));
                 })
@@ -43,4 +51,27 @@ fn main() {
         })
         .detach();
     });
+}
+
+fn coalesce_text_deltas(
+    events: Vec<rustcode::controller::ControllerEvent>,
+) -> Vec<rustcode::controller::ControllerEvent> {
+    use rustcode::controller::{ControllerUpdate, TurnUpdate};
+
+    let mut coalesced: Vec<rustcode::controller::ControllerEvent> =
+        Vec::with_capacity(events.len());
+    for event in events {
+        if let Some(previous) = coalesced.last_mut()
+            && previous.generation == event.generation
+            && let (
+                ControllerUpdate::Turn(TurnUpdate::TextDelta(previous_text)),
+                ControllerUpdate::Turn(TurnUpdate::TextDelta(text)),
+            ) = (&mut previous.update, &event.update)
+        {
+            previous_text.push_str(text);
+        } else {
+            coalesced.push(event);
+        }
+    }
+    coalesced
 }
