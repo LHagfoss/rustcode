@@ -149,6 +149,9 @@ fn acp_list_sessions(
             return false;
         }
         let id = crate::config::session_id_from_path(&meta.path);
+        if !id.as_deref().is_some_and(valid_acp_session_id) {
+            return false;
+        }
         let workspace = id
             .as_deref()
             .and_then(crate::config::load_session_workspace);
@@ -1104,6 +1107,56 @@ mod tests {
         assert!(acp_list_sessions(ListSessionsRequest::new().cwd("relative")).is_err());
         for index in 0..51 {
             let id = format!("acp-list-{index:03}");
+            rustcode_session::SessionStore::delete_session_file(
+                &store.session_dir(&id).join(rustcode_session::HISTORY_FILE),
+            );
+        }
+    }
+
+    #[test]
+    fn session_list_skips_legacy_ids_that_cannot_be_loaded_or_used_as_cursors() {
+        let config_dir = crate::config::get_config_dir().unwrap();
+        let store = rustcode_session::SessionStore::new(config_dir);
+        let history = vec![
+            crate::app::ChatMessage::new("user", "legacy pagination prompt"),
+            crate::app::ChatMessage::new("assistant", "answer"),
+        ];
+        let mut ids = Vec::new();
+        for index in 0..49 {
+            let id = format!("session-y-{index:03}");
+            store.save_session_history(&id, &history);
+            ids.push(id);
+        }
+        for index in 0..2 {
+            let id = format!("session-a-{index:03}");
+            store.save_session_history(&id, &history);
+            ids.push(id);
+        }
+        // This legacy path-derived ID sorts at the page boundary, but cannot
+        // be represented by the validated ACP session/load and cursor APIs.
+        let invalid_id = "session-m.bad";
+        store.save_session_history(invalid_id, &history);
+        rustcode_session::flush_history();
+
+        let first = acp_list_sessions(ListSessionsRequest::new()).unwrap();
+        assert_eq!(first.sessions.len(), ACP_SESSION_PAGE_SIZE);
+        assert!(
+            first
+                .sessions
+                .iter()
+                .all(|session| valid_acp_session_id(session.session_id.0.as_ref()))
+        );
+        let cursor = first.next_cursor.expect("one safe legacy session remains");
+        assert!(parse_session_cursor(Some(&cursor)).is_ok());
+        let second = acp_list_sessions(ListSessionsRequest::new().cursor(cursor)).unwrap();
+        assert_eq!(second.sessions.len(), 1);
+        assert!(second.next_cursor.is_none());
+        assert_ne!(second.sessions[0].session_id.0.as_ref(), invalid_id);
+
+        for id in ids
+            .into_iter()
+            .chain(std::iter::once(invalid_id.to_owned()))
+        {
             rustcode_session::SessionStore::delete_session_file(
                 &store.session_dir(&id).join(rustcode_session::HISTORY_FILE),
             );
