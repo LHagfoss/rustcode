@@ -247,6 +247,16 @@ pub(crate) fn build_loaded_app_state(
     state
 }
 
+fn session_workspace(
+    cwd: std::path::PathBuf,
+    additional_directories: Vec<std::path::PathBuf>,
+) -> rustcode_session::SessionWorkspace {
+    rustcode_session::SessionWorkspace {
+        cwd,
+        additional_directories,
+    }
+}
+
 async fn acp_load_session(
     server: &AcpServer,
     request: LoadSessionRequest,
@@ -343,10 +353,7 @@ async fn acp_load_session(
         drop(sessions);
         let _ = crate::config::save_session_workspace(
             &session_id,
-            &rustcode_session::SessionWorkspace {
-                cwd,
-                additional_directories: request.additional_directories.clone(),
-            },
+            &session_workspace(cwd, request.additional_directories.clone()),
         );
         for update in replay_history_updates(&history) {
             connection
@@ -614,10 +621,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let config_options = build_session_config_options(&state);
                     let _ = crate::config::save_session_workspace(
                         &session_id,
-                        &rustcode_session::SessionWorkspace {
-                            cwd: request.cwd.clone(),
-                            additional_directories: Vec::new(),
-                        },
+                        &session_workspace(
+                            request.cwd.clone(),
+                            request.additional_directories.clone(),
+                        ),
                     );
                     let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
                     let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
@@ -1041,6 +1048,20 @@ mod tests {
                 &store.session_dir(&id).join(rustcode_session::HISTORY_FILE),
             );
         }
+    }
+
+    #[test]
+    fn session_workspace_preserves_client_additional_directories() {
+        let cwd = PathBuf::from("/workspace/project");
+        let additional_directories = vec![
+            PathBuf::from("/workspace/shared"),
+            PathBuf::from("/workspace/generated"),
+        ];
+
+        let workspace = session_workspace(cwd.clone(), additional_directories.clone());
+
+        assert_eq!(workspace.cwd, cwd);
+        assert_eq!(workspace.additional_directories, additional_directories);
     }
 
     #[test]
