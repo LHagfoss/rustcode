@@ -80,6 +80,13 @@ impl AppView {
             return;
         }
 
+        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::QuestionRequested(question)) =
+            &event.update
+            && self.chat_state.pending_question() != Some(question)
+        {
+            self.selected_question_options.clear();
+        }
+
         self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
@@ -127,11 +134,11 @@ impl AppView {
         if !can_submit(&text) {
             return;
         }
-        let command = if let Some(question) = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.pending_question.as_ref())
-        {
+        let command = if let Some(question) = self.chat_state.pending_question().or_else(|| {
+            self.snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.pending_question.as_ref())
+        }) {
             crate::projection::answer_for_question(question, None, &text)
                 .map(Command::AnswerQuestion)
         } else {
@@ -217,10 +224,11 @@ impl AppView {
     }
 
     fn render_question(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let prompt = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.pending_question.clone())?;
+        let prompt = self.chat_state.pending_question().cloned().or_else(|| {
+            self.snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.pending_question.clone())
+        })?;
         let controller = self.backend.controller().clone();
         let composer = self.question_answer.clone();
         let view = cx.entity().downgrade();
@@ -283,10 +291,11 @@ impl AppView {
     }
 
     fn render_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let prompt = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.pending_approval.clone())?;
+        let prompt = self.chat_state.pending_approval().cloned().or_else(|| {
+            self.snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.pending_approval.clone())
+        })?;
         let controller = self.backend.controller().clone();
         let approve_controller = controller.clone();
         let view = cx.entity().downgrade();
@@ -489,10 +498,10 @@ impl Render for AppView {
                                 .primary()
                                 .disabled(!send_enabled)
                                 .label(
-                                    if self
-                                        .snapshot
-                                        .as_ref()
-                                        .is_some_and(|snapshot| snapshot.pending_question.is_some())
+                                    if self.chat_state.pending_question().is_some()
+                                        || self.snapshot.as_ref().is_some_and(|snapshot| {
+                                            snapshot.pending_question.is_some()
+                                        })
                                     {
                                         "Answer"
                                     } else {

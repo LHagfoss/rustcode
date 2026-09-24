@@ -144,6 +144,7 @@ impl TranscriptModel {
             crate::network::ui_adapter::AgentUiEvent::Cancelled { .. }
             | crate::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
             | crate::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
+            | crate::network::ui_adapter::AgentUiEvent::QuestionRequested { .. }
             | crate::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
             #[cfg(test)]
             crate::network::ui_adapter::AgentUiEvent::Error { .. }

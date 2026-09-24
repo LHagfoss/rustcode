@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use rustcode::controller::{
-    ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem, TurnUpdate,
+    ApprovalPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
+    TurnUpdate,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +81,8 @@ pub struct ChatViewState {
     turn_active: bool,
     stream_rows: Vec<ProjectionRow>,
     active_tools: HashMap<String, usize>,
+    pending_question: Option<QuestionPrompt>,
+    pending_approval: Option<ApprovalPrompt>,
 }
 
 impl ChatViewState {
@@ -95,6 +98,18 @@ impl ChatViewState {
 
     fn apply_snapshot(&mut self, snapshot: ControllerSnapshot) {
         self.turn_active = snapshot.turn_active;
+        self.pending_question = snapshot.pending_question.clone();
+        self.pending_approval = snapshot.pending_approval.clone();
+        if snapshot.transcript.iter().any(|item| {
+            item.role == "user"
+                && self
+                    .stream_rows
+                    .iter()
+                    .any(|row| row == &ProjectionRow::User(item.content.clone()))
+        }) {
+            self.stream_rows
+                .retain(|row| !matches!(row, ProjectionRow::User(_)));
+        }
         if !self.turn_active {
             self.stream_rows.clear();
             self.active_tools.clear();
@@ -103,12 +118,13 @@ impl ChatViewState {
 
     fn apply_turn_update(&mut self, update: TurnUpdate) {
         match update {
-            TurnUpdate::PromptStarted(_) => {
+            TurnUpdate::PromptStarted(prompt) => {
                 self.turn_active = true;
                 self.error = None;
                 self.approval_denied = false;
                 self.stream_rows.clear();
                 self.active_tools.clear();
+                self.stream_rows.push(ProjectionRow::User(prompt));
             }
             TurnUpdate::TextDelta(text) => {
                 self.turn_active = true;
@@ -136,7 +152,14 @@ impl ChatViewState {
                     *current = content;
                 }
             }
-            TurnUpdate::ApprovalRequested(_) => self.turn_active = true,
+            TurnUpdate::ApprovalRequested(approvals) => {
+                self.turn_active = true;
+                self.pending_approval = approvals.into_iter().next();
+            }
+            TurnUpdate::QuestionRequested(question) => {
+                self.turn_active = true;
+                self.pending_question = Some(question);
+            }
             TurnUpdate::TurnFinished | TurnUpdate::Cancelled => self.turn_active = false,
         }
     }
@@ -147,6 +170,14 @@ impl ChatViewState {
 
     pub fn stream_rows(&self) -> &[ProjectionRow] {
         &self.stream_rows
+    }
+
+    pub fn pending_question(&self) -> Option<&QuestionPrompt> {
+        self.pending_question.as_ref()
+    }
+
+    pub fn pending_approval(&self) -> Option<&ApprovalPrompt> {
+        self.pending_approval.as_ref()
     }
 
     pub fn begin_user_action(&mut self) {
@@ -331,6 +362,7 @@ mod tests {
         assert_eq!(
             view.stream_rows(),
             &[
+                ProjectionRow::User("run".to_owned()),
                 ProjectionRow::Assistant("Before ".to_owned()),
                 ProjectionRow::Tool {
                     name: "read_file".to_owned(),
@@ -349,6 +381,7 @@ mod tests {
         assert_eq!(
             view.stream_rows(),
             &[
+                ProjectionRow::User("run".to_owned()),
                 ProjectionRow::Assistant("Before ".to_owned()),
                 ProjectionRow::Tool {
                     name: "read_file".to_owned(),
@@ -361,6 +394,55 @@ mod tests {
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TurnFinished));
         assert!(!view.turn_active());
         assert!(!stop_available(view.turn_active()));
+    }
+
+    #[test]
+    fn prompt_starts_as_a_user_row_and_final_snapshot_replaces_it_once() {
+        let mut view = ChatViewState::default();
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::PromptStarted(
+            "show this immediately".to_owned(),
+        )));
+
+        assert_eq!(
+            view.stream_rows(),
+            &[ProjectionRow::User("show this immediately".to_owned())]
+        );
+
+        let mut final_snapshot = snapshot(false);
+        final_snapshot
+            .transcript
+            .push(user("show this immediately"));
+        view.apply_update(ControllerUpdate::Snapshot(final_snapshot.clone()));
+        assert!(view.stream_rows().is_empty());
+        assert_eq!(
+            project_rows(&final_snapshot.transcript, &final_snapshot.live_response),
+            vec![ProjectionRow::User("show this immediately".to_owned())]
+        );
+    }
+
+    #[test]
+    fn streamed_question_and_approval_events_open_their_dialog_state() {
+        let mut view = ChatViewState::default();
+        let question = QuestionPrompt {
+            text: "Continue?".to_owned(),
+            options: vec!["Proceed".to_owned()],
+            multiple: false,
+        };
+        let approval = ApprovalPrompt {
+            tool_name: "write_file".to_owned(),
+            description: "src/main.rs".to_owned(),
+        };
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
+            question.clone(),
+        )));
+        assert_eq!(view.pending_question(), Some(&question));
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+            approval.clone(),
+        ])));
+        assert_eq!(view.pending_approval(), Some(&approval));
+        assert!(view.turn_active());
     }
 
     #[test]

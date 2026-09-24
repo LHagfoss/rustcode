@@ -30,6 +30,7 @@ pub enum TurnUpdate {
     },
     /// The approval prompt batch is available in owned form to the frontend.
     ApprovalRequested(Vec<ApprovalPrompt>),
+    QuestionRequested(crate::controller::QuestionPrompt),
     TurnFinished,
     Cancelled,
 }
@@ -94,6 +95,9 @@ pub(crate) fn from_agent_ui_event(
                     .collect(),
             ))
         }
+        AgentUiEvent::QuestionRequested { prompt } => {
+            ControllerUpdate::Turn(TurnUpdate::QuestionRequested(prompt))
+        }
         AgentUiEvent::SubagentUpdated { .. } => return None,
     };
     Some(ControllerEvent { generation, update })
@@ -123,6 +127,33 @@ mod tests {
                     description: r#"{"path":"src/main.rs"}"#.to_owned(),
                 },
             ]))
+        );
+    }
+
+    #[test]
+    fn question_requests_are_observable_and_tagged_with_the_generation() {
+        let public = from_agent_ui_event(
+            23,
+            crate::network::ui_adapter::AgentUiEvent::QuestionRequested {
+                prompt: crate::controller::QuestionPrompt {
+                    text: "Choose".to_owned(),
+                    options: vec!["One".to_owned(), "Two".to_owned()],
+                    multiple: true,
+                },
+            },
+        )
+        .expect("question prompt should be projected");
+
+        assert_eq!(public.generation, 23);
+        assert_eq!(
+            public.update,
+            ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
+                crate::controller::QuestionPrompt {
+                    text: "Choose".to_owned(),
+                    options: vec!["One".to_owned(), "Two".to_owned()],
+                    multiple: true,
+                }
+            ))
         );
     }
 
