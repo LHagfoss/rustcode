@@ -17,6 +17,7 @@ use rustcode_tasks::{
 use super::{Tool, ToolCapability, ToolSafety};
 
 mod policy;
+pub(crate) mod sandbox;
 
 #[cfg(test)]
 pub(crate) use policy::command_confirmation_scope;
@@ -240,7 +241,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never create or switch task branches in the active user checkout, including `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`, or `git switch -C`; do not run `git rebase` or `git reset --hard` there. Keep the user's checkout on its original branch throughout the task. Create task branches and do branch/merge work only inside an isolated worktree under /tmp, created with `git worktree add`. When repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead. After merging, never checkout or pull `main` by moving the original active checkout; keep the user's checkout on its original branch and update `main` only in a separate clone or isolated checkout. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. On Linux, shell execution requires bubblewrap and an active workspace; RustCode fails closed if sandbox setup is unavailable. The Linux sandbox allows writes only in the active workspace and session scratch directory, and blocks IP networking with a private network namespace or seccomp fallback. macOS and Windows native sandbox backends are not implemented yet. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Never create or switch task branches in the active user checkout, including `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`, or `git switch -C`; do not run `git rebase` or `git reset --hard` there. Keep the user's checkout on its original branch throughout the task. Create task branches and do branch/merge work only inside an isolated worktree under /tmp, created with `git worktree add`. When repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead. After merging, never checkout or pull `main` by moving the original active checkout; keep the user's checkout on its original branch and update `main` only in a separate clone or isolated checkout. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -566,16 +567,47 @@ fn run_command_output_inner(
         || (has_background_operator && !command_manages_own_background_jobs(command_str));
     let run_in_bg = (background_requested || detached)
         && (detached || !is_short_discovery_command(command_str));
-    let command_request = rustcode_command::CommandRequest {
-        command: if detached {
-            detached_shell_command(command_str, has_background_operator)
-        } else {
-            command_str.to_owned()
+    let shell_command = if detached {
+        detached_shell_command(command_str, has_background_operator)
+    } else {
+        command_str.to_owned()
+    };
+    let session_scratch = get_active_session_id()
+        .and_then(|session_id| crate::config::get_active_session_sandbox_dir(&session_id));
+    let workspace_root = context.workspace_root.clone();
+    #[cfg(all(test, target_os = "linux"))]
+    let workspace_root = workspace_root.or_else(|| {
+        resolved_cwd.clone().or_else(|| {
+            static TEST_WORKSPACE: std::sync::OnceLock<tempfile::TempDir> =
+                std::sync::OnceLock::new();
+            Some(
+                TEST_WORKSPACE
+                    .get_or_init(|| tempfile::tempdir().expect("test workspace"))
+                    .path()
+                    .to_path_buf(),
+            )
+        })
+    });
+    let mut writable_roots = workspace_root.iter().cloned().collect::<Vec<_>>();
+    let session_scratch_roots = session_scratch.iter().cloned().collect::<Vec<_>>();
+    writable_roots.extend(session_scratch_roots.iter().cloned());
+    let sandboxed = sandbox::command(
+        &shell_command,
+        sandbox::SandboxPolicy {
+            command_cwd: resolved_cwd.as_deref(),
+            workspace_root: workspace_root.as_deref(),
+            writable_roots: &writable_roots,
+            session_scratch_roots: &session_scratch_roots,
+            network_access: false,
         },
+    )?;
+    let command_request = rustcode_command::CommandRequest {
+        command: sandboxed.command,
         cwd: resolved_cwd.clone(),
         env: command_env,
         timeout: Duration::from_millis(timeout_ms.max(1)),
         process_group: true,
+        inherited_fds: sandboxed.inherited_fds,
     };
 
     if run_in_bg {
@@ -986,6 +1018,7 @@ pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
 
 #[cfg(test)]
 mod tests {
+    use super::sandbox;
     #[cfg(unix)]
     use super::terminate_background_pid;
     use super::{
@@ -1025,6 +1058,7 @@ mod tests {
             env: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
             process_group: true,
+            inherited_fds: Vec::new(),
         }
     }
 
@@ -1281,6 +1315,9 @@ mod tests {
 
     #[test]
     fn run_command_reports_stdout_and_stderr_while_running() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = events.clone();
         let callback: super::CommandProgressCallback = std::sync::Arc::new(move |bytes, stderr| {
@@ -1312,6 +1349,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancellable_run_command_returns_one_cancelled_result() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let token = tokio_util::sync::CancellationToken::new();
         let trigger = token.clone();
         std::thread::spawn(move || {
@@ -1381,6 +1421,9 @@ mod tests {
 
     #[test]
     fn run_command_executes_chained_shell_commands() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf one; printf two"
         }))
@@ -1392,6 +1435,9 @@ mod tests {
 
     #[test]
     fn run_command_supports_conditional_chaining() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf first && printf second"
         }))
@@ -1403,6 +1449,9 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn run_command_propagates_pipeline_failures() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "false | tail -n 1"
         }))
@@ -1413,6 +1462,9 @@ mod tests {
 
     #[test]
     fn command_execution_metadata_classifies_nonzero_exit_only() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let failed = run_command_output(&serde_json::json!({"command": "false"}))
             .expect("false should return a structured command result");
         assert!(!failed.success);
@@ -1430,6 +1482,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn command_result_envelope_marks_sigpipe_as_downstream_completion() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let output = run_command_output(&serde_json::json!({
             "command": "yes | head -n 1"
         }))
@@ -1451,6 +1506,9 @@ mod tests {
 
     #[test]
     fn command_result_envelope_marks_a_successful_completion() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let output = run_command_output(&serde_json::json!({
             "command": "printf complete"
         }))
@@ -1467,6 +1525,9 @@ mod tests {
 
     #[test]
     fn background_command_start_is_pending_and_names_command() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let command = "sleep 1; printf background-output";
         let output = run_command_output(&serde_json::json!({
             "command": command,
@@ -1509,6 +1570,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn detached_server_start_is_completed_but_remains_tracked_and_killable() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "detached-server-test-{}",
             std::time::SystemTime::now()
@@ -1577,6 +1641,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn self_managed_background_script_runs_in_foreground_with_output() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "self-managed-test-{}",
             std::time::SystemTime::now()
@@ -1607,6 +1674,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn shell_background_operator_is_auto_detached_without_background_flag() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "nested-background-test-{}",
             std::time::SystemTime::now()
@@ -1636,6 +1706,9 @@ mod tests {
 
     #[test]
     fn short_discovery_commands_ignore_background_request() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         for command in [
             "printf synchronous-output",
             "pwd",
@@ -1658,6 +1731,9 @@ mod tests {
 
     #[test]
     fn background_request_is_preserved_for_long_or_mutating_commands() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let command = "sleep 1";
         let output = run_command_output(&serde_json::json!({
             "command": command,
@@ -1899,6 +1975,9 @@ mod tests {
     // prior behavior) would throw that away before the model ever sees it.
     #[test]
     fn a_failing_command_with_oversized_output_keeps_the_tail() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf 'START_MARKER\\n'; \
                 i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
@@ -1925,6 +2004,9 @@ mod tests {
     // truncation must not silently drop either end.
     #[test]
     fn oversized_output_is_bounded_and_keeps_both_head_and_tail() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf 'START_MARKER\\n'; \
                 i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
@@ -1950,6 +2032,9 @@ mod tests {
 
     #[test]
     fn cat_and_head_are_read_only_and_execute_cleanly() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         assert!(!command_requires_confirmation(&serde_json::json!({
             "command": "cat Cargo.toml"
         })));

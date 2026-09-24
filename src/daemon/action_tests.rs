@@ -131,6 +131,9 @@ fn scheduled_prompt_restores_recorded_settings_without_override() {
 
 #[tokio::test]
 async fn authorized_shell_mutation_runs_through_policy() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let workspace = tempfile::tempdir().unwrap();
     let action = JobAction::ShellCommand {
         command: "touch confirmed".into(),
@@ -397,6 +400,9 @@ async fn shell_policy_rejects_unapproved_mutation() {
 
 #[tokio::test]
 async fn shell_timeout_retains_partial_output() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let action = JobAction::ShellCommand {
         authorized: false,
         command: "printf partial; tail -f /dev/null".into(),
@@ -490,6 +496,9 @@ read -r line
 
 #[tokio::test]
 async fn shell_uses_recorded_directory_and_only_allowlisted_environment() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let workspace = tempfile::tempdir().unwrap();
     for (command, allowlist, expected) in [
         (
@@ -619,6 +628,9 @@ async fn every_outcome_bounds_unicode_output_and_diagnostics() {
 
 #[tokio::test]
 async fn executor_deadline_retains_shell_partial_output() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let action = JobAction::ShellCommand {
         authorized: false,
         command: "printf partial; tail -f /dev/null".into(),
@@ -748,6 +760,9 @@ exit 1
 
 #[tokio::test]
 async fn shell_timeout_covers_descendants_holding_output_pipes() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let action = JobAction::ShellCommand {
         authorized: false,
         command: "printf partial; tail -f /dev/null &".into(),

@@ -405,6 +405,20 @@ impl ActionBackend for ProductionActions {
                             "shell working directory must be an existing absolute directory",
                         );
                     }
+                    let writable_roots = vec![cwd.clone()];
+                    let sandboxed_command = match crate::tools::exec::sandbox::command(
+                        &command,
+                        crate::tools::exec::sandbox::SandboxPolicy {
+                            command_cwd: Some(&cwd),
+                            workspace_root: Some(&cwd),
+                            writable_roots: &writable_roots,
+                            session_scratch_roots: &[],
+                            network_access: false,
+                        },
+                    ) {
+                        Ok(command) => command,
+                        Err(error) => return permanent(error),
+                    };
                     let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
                     let captured = output.clone();
                     let progress: rustcode_command::ProgressCallback = Arc::new(move |bytes, _| {
@@ -419,11 +433,12 @@ impl ActionBackend for ProductionActions {
                             return Err("cancelled before shell dispatch".to_owned());
                         }
                         let request = rustcode_command::CommandRequest {
-                            command,
+                            command: sandboxed_command.command,
                             cwd: Some(cwd),
                             env: vec![],
                             timeout: Duration::from_secs(timeout_seconds),
                             process_group: true,
+                            inherited_fds: sandboxed_command.inherited_fds,
                         };
                         rustcode_command::run_with_timeout_cancellable_env(
                             &request,

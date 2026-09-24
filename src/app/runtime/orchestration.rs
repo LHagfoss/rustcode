@@ -525,6 +525,7 @@ mod tests {
                         env: Vec::new(),
                         timeout: std::time::Duration::from_secs(5),
                         process_group: true,
+                        inherited_fds: Vec::new(),
                     },
                 ),
             )

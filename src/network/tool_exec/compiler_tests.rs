@@ -32,6 +32,9 @@ fn unverified_build_notice_preserves_successful_edit_metadata() {
 
 #[tokio::test]
 async fn batch_compiler_diagnostics_are_once_per_edit_and_refresh_after_fix() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let project = compiler_project();
     let unrelated_project = tempfile::tempdir().unwrap();
     let state = Arc::new(Mutex::new(AppState::new()));
