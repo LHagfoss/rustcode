@@ -4,6 +4,53 @@ use std::sync::mpsc::TryRecvError;
 
 const IDLE_SUMMARY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+pub(crate) async fn spawn_observed_orchestrator(
+    client: reqwest::Client,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    ui_events: AgentUiEventSender,
+) -> bool {
+    let lease = {
+        let mut state = state.lock().await;
+        if state.summary_in_flight || state.pending_queue.is_empty() {
+            return false;
+        }
+        let Some(lease) = state.claim_orchestrator() else {
+            return false;
+        };
+        state.status = AppStatus::Queued;
+        lease
+    };
+
+    let handle = tokio::spawn(async move {
+        crate::network::process_queue_orchestrator_with_ui_events(
+            client,
+            state,
+            cancel_token,
+            Arc::new(crate::network::policy::InteractivePolicy),
+            ui_events,
+            lease,
+        )
+        .await;
+    });
+    tokio::spawn(async move {
+        match handle.await {
+            Ok(()) => {}
+            Err(error) if error.is_cancelled() => {
+                crate::dbg_log!("Orchestrator task cancelled");
+            }
+            Err(error) => {
+                crate::dbg_log!("Orchestrator task died: {error}");
+                crate::logger::operational_event(
+                    "orchestrator.task_died",
+                    serde_json::json!({ "error": error.to_string() }),
+                );
+            }
+        }
+    });
+    true
+}
+
 fn record_active_background_task(
     state: &mut crate::app::AppState,
     task_id: &str,
@@ -318,51 +365,22 @@ impl AppRuntime {
                 frame_requester.schedule_frame();
             }
 
+            let should_drain_queue = {
+                let state = app_state.lock().await;
+                !state.summary_in_flight
+                    && !state.orchestrator_running
+                    && !state.pending_queue.is_empty()
+            };
+            if should_drain_queue
+                && spawn_observed_orchestrator(
+                    client.clone(),
+                    Arc::clone(&app_state),
+                    current_cancel_token.clone(),
+                    agent_ui_event_sender.clone(),
+                )
+                .await
             {
-                let mut s = app_state.lock().await;
-                if !s.summary_in_flight
-                    && !s.orchestrator_running
-                    && !s.pending_queue.is_empty()
-                    && let Some(orchestrator_lease) = s.claim_orchestrator()
-                {
-                    s.status = AppStatus::Queued;
-                    let client_clone = client.clone();
-                    let state_clone = Arc::clone(&app_state);
-                    let token_clone = current_cancel_token.clone();
-                    let ui_event_sender = agent_ui_event_sender.clone();
-                    drop(s);
-                    let handle = tokio::spawn(async move {
-                        crate::network::process_queue_orchestrator_with_ui_events(
-                            client_clone,
-                            state_clone,
-                            token_clone,
-                            std::sync::Arc::new(crate::network::policy::InteractivePolicy),
-                            ui_event_sender,
-                            orchestrator_lease,
-                        )
-                        .await;
-                    });
-                    // Issue #1226: a panicking orchestrator was silently
-                    // dropped, freezing the TUI mid-stream with zero log
-                    // evidence. Observe the JoinHandle so task death is
-                    // always recorded in debug.log.
-                    tokio::spawn(async move {
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {
-                                crate::dbg_log!("Orchestrator task cancelled");
-                            }
-                            Err(error) => {
-                                crate::dbg_log!("Orchestrator task died: {error}");
-                                crate::logger::operational_event(
-                                    "orchestrator.task_died",
-                                    serde_json::json!({ "error": error.to_string() }),
-                                );
-                            }
-                        }
-                    });
-                    needs_redraw = true;
-                }
+                needs_redraw = true;
             }
 
             let response_just_finished = was_responding && !response_active;
@@ -415,6 +433,7 @@ impl AppRuntime {
                     terminal_focused: &mut terminal_focused,
                     transcript_state: &mut transcript_state,
                     app_event_sender: &app_event_sender,
+                    agent_ui_event_sender: &agent_ui_event_sender,
                     composer: &composer,
                 },
             )

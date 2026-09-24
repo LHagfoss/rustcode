@@ -30,6 +30,8 @@ mod terminal;
 mod transcript;
 mod updates;
 
+pub(crate) use orchestration::spawn_observed_orchestrator;
+
 use events::{apply_approval_decision, apply_question_answer};
 use input::{InputContext, InputFlow, handle_app_event};
 #[cfg(test)]

@@ -1139,11 +1139,13 @@ async fn background_wakeup_releases_state_during_native_schema_selection_and_sta
         .await
         .claim_orchestrator()
         .expect("test orchestrator lease");
-    let task = tokio::spawn(crate::network::process_queue_orchestrator(
+    let (ui_events, _ui_event_receiver) = ui_adapter::AgentUiEventSender::channel();
+    let task = tokio::spawn(crate::network::process_queue_orchestrator_with_ui_events(
         reqwest::Client::new(),
         Arc::clone(&state),
         CancellationToken::new(),
         Arc::new(InteractivePolicy),
+        ui_events,
         lease,
     ));
 
