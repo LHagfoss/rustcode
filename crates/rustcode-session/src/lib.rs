@@ -453,7 +453,8 @@ impl SessionStore {
     }
 
     pub fn load_session_meta(&self, path: &Path) -> Option<SessionMeta> {
-        let content = std::fs::read_to_string(path).ok()?;
+        let read_path = self.session_read_path(path)?;
+        let content = std::fs::read_to_string(read_path).ok()?;
         let messages: Vec<ChatMessageMetaRef<'_>> = serde_json::from_str(&content).ok()?;
         let has_user = messages
             .iter()
@@ -747,11 +748,27 @@ impl SessionStore {
     }
 
     pub fn load_session_file(&self, path: &Path) -> Vec<ChatMessage> {
-        std::fs::read_to_string(path)
+        // The global legacy history file lives outside sessions/ and remains
+        // readable. Any session transcript path must resolve inside the
+        // canonical session store before its contents are opened.
+        let Some(read_path) = self.session_read_path(path) else {
+            return Vec::new();
+        };
+        std::fs::read_to_string(read_path)
             .ok()
             .and_then(|content| serde_json::from_str::<Vec<ChatMessage>>(&content).ok())
             .map(rebuild_from_compaction_boundary)
             .unwrap_or_default()
+    }
+
+    fn session_read_path(&self, path: &Path) -> Option<PathBuf> {
+        if !path.starts_with(self.root.join(SESSIONS_DIR)) {
+            // Preserve callers that explicitly read a non-session legacy file.
+            return Some(path.to_path_buf());
+        }
+        let sessions_root = std::fs::canonicalize(self.root.join(SESSIONS_DIR)).ok()?;
+        let canonical = std::fs::canonicalize(path).ok()?;
+        canonical.starts_with(sessions_root).then_some(canonical)
     }
 
     pub fn save_session_workspace(
@@ -795,8 +812,10 @@ impl SessionStore {
             .then_some(metadata)
     }
 
-    /// Return a page in most-recent-first order. The cursor must identify a
-    /// currently discoverable session; filtering happens before the page cap.
+    /// Return a stable page ordered by session timestamp and ID. The cursor
+    /// must identify a currently discoverable session; filtering happens
+    /// before the page cap. Unlike the UI ordering, this pagination order does
+    /// not use mutable file modification times.
     pub fn list_sessions_page<F>(
         &self,
         after_id: Option<&str>,
@@ -806,7 +825,10 @@ impl SessionStore {
     where
         F: FnMut(&SessionMeta) -> bool,
     {
-        let paths = self.sorted_session_paths();
+        let mut paths = self.discovered_session_paths();
+        paths.sort_by(|left, right| {
+            stable_session_sort_key(right).cmp(&stable_session_sort_key(left))
+        });
         let start = if let Some(after_id) = after_id {
             if !valid_session_id(after_id) {
                 return Err(());
@@ -1114,6 +1136,11 @@ fn session_sort_key(path: &Path) -> (u64, String) {
     (timestamp, path.to_string_lossy().into_owned())
 }
 
+fn stable_session_sort_key(path: &Path) -> (u64, String) {
+    let id = SessionStore::session_id_from_path(path).unwrap_or_default();
+    (session_timestamp_ms(&id).unwrap_or(0), id)
+}
+
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -1202,6 +1229,32 @@ mod tests {
         assert!(store.load_session_file(&history_path).is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn session_reads_reject_history_symlinks_outside_the_store_before_opening() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let sessions = root.path().join(SESSIONS_DIR);
+        std::fs::create_dir_all(&sessions).unwrap();
+        let outside = root.path().join("outside.json");
+        std::fs::write(
+            &outside,
+            serde_json::to_vec(&vec![
+                message("user", "outside"),
+                message("assistant", "secret"),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let linked_history = sessions.join("linked.json");
+        symlink(&outside, &linked_history).unwrap();
+
+        assert!(store.load_session_meta(&linked_history).is_none());
+        assert!(store.load_session_file(&linked_history).is_empty());
+    }
+
     #[test]
     fn session_pages_are_bounded_filtered_and_reject_stale_cursors() {
         let root = tempfile::tempdir().expect("temp root");
@@ -1254,6 +1307,44 @@ mod tests {
                 .list_sessions_page(Some("../bad"), 2, |_| true)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn session_page_cursor_survives_history_mtime_changes() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let history = vec![message("user", "prompt"), message("assistant", "reply")];
+        for id in ["stable-a", "stable-b", "stable-c", "stable-d"] {
+            store.save_session_history(id, &history);
+        }
+        flush_history();
+
+        let (first, cursor) = store.list_sessions_page(None, 2, |_| true).unwrap();
+        let ids = |metas: &[SessionMeta]| {
+            metas
+                .iter()
+                .map(|meta| SessionStore::session_id_from_path(&meta.path).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&first), ["stable-d", "stable-c"]);
+
+        // Legacy IDs have no timestamp in the ID, so their old ordering fell
+        // back to file mtime. Editing an unreturned history used to move it
+        // ahead of the cursor and make it disappear from later pages.
+        store.save_session_history(
+            "stable-a",
+            &vec![
+                message("user", "newer prompt"),
+                message("assistant", "reply"),
+            ],
+        );
+        flush_history();
+
+        let (second, next) = store
+            .list_sessions_page(cursor.as_deref(), 2, |_| true)
+            .unwrap();
+        assert_eq!(ids(&second), ["stable-b", "stable-a"]);
+        assert!(next.is_none());
     }
 
     #[test]

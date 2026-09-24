@@ -242,9 +242,28 @@ pub(crate) fn build_loaded_app_state(
     let mut state = crate::app::AppState::new();
     state.active_session_id = session_id.to_owned();
     state.task_working_directory = Some(cwd.to_path_buf());
-    state.workspace_root = std::env::current_dir().ok();
+    state.workspace_root = Some(cwd.to_path_buf());
     state.history.replace(history);
     state
+}
+
+fn canonical_acp_cwd(
+    cwd: &std::path::Path,
+    operation: &str,
+) -> Result<std::path::PathBuf, agent_client_protocol::Error> {
+    if !cwd.is_absolute() {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("{operation} cwd must be absolute")));
+    }
+    let canonical = std::fs::canonicalize(cwd).map_err(|error| {
+        agent_client_protocol::Error::invalid_params()
+            .data(format!("invalid {operation} cwd: {error}"))
+    })?;
+    if !canonical.is_dir() {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("{operation} cwd must be a directory")));
+    }
+    Ok(canonical)
 }
 
 fn session_workspace(
@@ -266,18 +285,7 @@ async fn acp_load_session(
     if !valid_acp_session_id(&session_id) {
         return Err(agent_client_protocol::Error::invalid_params().data("invalid session id"));
     }
-    if !request.cwd.is_absolute() {
-        return Err(agent_client_protocol::Error::invalid_params()
-            .data("session/load cwd must be absolute"));
-    }
-    let cwd = std::fs::canonicalize(&request.cwd).map_err(|error| {
-        agent_client_protocol::Error::invalid_params()
-            .data(format!("invalid session/load cwd: {error}"))
-    })?;
-    if !cwd.is_dir() {
-        return Err(agent_client_protocol::Error::invalid_params()
-            .data("session/load cwd must be a directory"));
-    }
+    let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
         agent_client_protocol::Error::invalid_params()
             .data(format!("unknown or unresumable ACP session: {session_id}"))
@@ -356,11 +364,12 @@ async fn acp_load_session(
             &session_workspace(cwd, request.additional_directories.clone()),
         );
         for update in replay_history_updates(&history) {
-            connection
-                .send_notification(SessionNotification::new(session_id.clone(), update))
-                .map_err(|error| {
-                    agent_client_protocol::Error::internal_error().data(error.to_string())
-                })?;
+            if let Err(error) =
+                connection.send_notification(SessionNotification::new(session_id.clone(), update))
+            {
+                unregister_acp_session(server, &session_id).await;
+                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+            }
         }
         return Ok(LoadSessionResponse::new().config_options(config_options));
     }
@@ -585,6 +594,19 @@ impl AcpServer {
     }
 }
 
+async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
+    server
+        .task_routes
+        .lock()
+        .expect("ACP task routes mutex poisoned")
+        .remove(session_id);
+    let session = server.sessions.lock().await.remove(session_id);
+    unmark_acp_session(session_id);
+    if let Some(session) = session {
+        session.turns.cancel_active().await;
+    }
+}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     crate::mcp::start_enabled_servers(&startup_state.config.mcp_servers, |name| async move {
@@ -609,22 +631,19 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             {
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
+                    let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
                     let mut state = crate::app::AppState::new();
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
-                    state.task_working_directory = Some(request.cwd.clone());
-                    // ACP launches RustCode from the broader workspace in the
-                    // common editor/orchestrator setup. Keep that process root
-                    // as the containment boundary while treating request.cwd
-                    // as the task's project scope.
-                    state.workspace_root = std::env::current_dir().ok();
+                    state.task_working_directory = Some(cwd.clone());
+                    // ACP's requested cwd is both the task's initial location
+                    // and its hard filesystem boundary, independent of the
+                    // directory from which RustCode itself was launched.
+                    state.workspace_root = Some(cwd.clone());
                     let config_options = build_session_config_options(&state);
                     let _ = crate::config::save_session_workspace(
                         &session_id,
-                        &session_workspace(
-                            request.cwd.clone(),
-                            request.additional_directories.clone(),
-                        ),
+                        &session_workspace(cwd.clone(), request.additional_directories.clone()),
                     );
                     let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
                     let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
@@ -657,7 +676,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         session_id.clone(),
                         AcpSession {
                             state,
-                            cwd: request.cwd,
+                            cwd,
                             turns: Arc::new(SessionTurnState::new()),
                             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
                             known_task_ids,
@@ -996,6 +1015,47 @@ mod tests {
         assert!(!session_id_is_active(&sessions, "another-session"));
     }
 
+    #[tokio::test]
+    async fn unregistering_failed_session_load_removes_registry_and_task_route() {
+        let session_id = "failed-replay-session";
+        let server = AcpServer {
+            sessions: new_registry(),
+            client: Arc::new(reqwest::Client::new()),
+            auto_approve: false,
+            task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        };
+        let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
+        server.task_routes.lock().unwrap().insert(
+            session_id.into(),
+            TaskRoute {
+                sender: task_sender,
+                known_task_ids: Arc::clone(&known_task_ids),
+                sink: None,
+            },
+        );
+        server.sessions.lock().await.insert(
+            session_id.into(),
+            AcpSession {
+                state,
+                cwd: PathBuf::from("/tmp"),
+                turns: Arc::new(SessionTurnState::new()),
+                task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
+                known_task_ids,
+                terminal_backlog: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+                terminal_overflow: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        mark_acp_session(session_id);
+
+        unregister_acp_session(&server, session_id).await;
+
+        assert!(!server.sessions.lock().await.contains_key(session_id));
+        assert!(!server.task_routes.lock().unwrap().contains_key(session_id));
+        assert!(!is_acp_session(session_id));
+    }
+
     #[test]
     fn session_list_filters_and_paginates_with_standard_titles() {
         let config_dir = crate::config::get_config_dir().unwrap();
@@ -1108,15 +1168,33 @@ mod tests {
 
     #[test]
     fn loaded_session_state_keeps_transcript_and_uses_its_own_identity() {
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
         let history = vec![
             crate::app::ChatMessage::new("user", "earlier task"),
             crate::app::ChatMessage::new("assistant", "earlier answer"),
         ];
-        let state = build_loaded_app_state("session-loaded", &cwd, history.clone());
+        let state = build_loaded_app_state("session-loaded", cwd.path(), history.clone());
         assert_eq!(state.active_session_id, "session-loaded");
-        assert_eq!(state.task_working_directory.as_deref(), Some(cwd.as_path()));
+        assert_eq!(state.task_working_directory.as_deref(), Some(cwd.path()));
+        assert_eq!(state.workspace_root.as_deref(), Some(cwd.path()));
         assert_eq!(state.history.to_vec(), history);
+    }
+
+    #[test]
+    fn acp_cwd_must_be_an_absolute_existing_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            canonical_acp_cwd(directory.path(), "session/new").unwrap(),
+            std::fs::canonicalize(directory.path()).unwrap()
+        );
+        assert!(canonical_acp_cwd(std::path::Path::new("relative"), "session/new").is_err());
+        assert!(
+            canonical_acp_cwd(
+                std::path::Path::new("/definitely/not/a/directory"),
+                "session/new"
+            )
+            .is_err()
+        );
     }
 
     #[test]
