@@ -1,5 +1,5 @@
 use agent_client_protocol::schema::v1::{
-    ContentBlock, SessionNotification, SessionUpdate, StopReason,
+    ContentBlock, SessionInfoUpdate, SessionNotification, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use rustcode_tasks::{TaskEvent, TaskManager};
@@ -19,6 +19,52 @@ struct BackgroundTurnTasks {
     existing: HashSet<String>,
     pending: HashSet<String>,
     terminal: HashSet<String>,
+}
+
+struct SessionTitleTracker {
+    last_title: Option<String>,
+    checked_after_prompt_start: bool,
+}
+
+impl SessionTitleTracker {
+    fn new(title: Option<String>) -> Self {
+        Self {
+            last_title: title,
+            checked_after_prompt_start: false,
+        }
+    }
+
+    fn observe_title(&mut self, title: Option<String>) -> Option<SessionUpdate> {
+        if self.last_title == title {
+            return None;
+        }
+        self.last_title = title.clone();
+        title.map(|title| SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)))
+    }
+
+    fn observe_event(
+        &mut self,
+        event: &crate::network::AgentUiEvent,
+        session_id: &str,
+    ) -> Option<SessionUpdate> {
+        let check = match event {
+            crate::network::AgentUiEvent::PromptStarted { .. } => false,
+            crate::network::AgentUiEvent::ToolFinished { result, .. }
+                if result.tool_name == "set_session_title" && result.metadata.success =>
+            {
+                true
+            }
+            _ if !self.checked_after_prompt_start => {
+                self.checked_after_prompt_start = true;
+                true
+            }
+            _ => false,
+        };
+        check
+            .then(|| crate::config::load_session_title(session_id))
+            .flatten()
+            .and_then(|title| self.observe_title(Some(title)))
+    }
 }
 
 impl BackgroundTurnTasks {
@@ -374,6 +420,7 @@ where
     F: std::future::Future<Output = crate::network::TurnContext>,
 {
     let mut run = Box::pin(run);
+    let mut title_tracker = SessionTitleTracker::new(crate::config::load_session_title(session_id));
     let context = loop {
         tokio::select! {
             context = &mut run => break context,
@@ -395,22 +442,64 @@ where
                 if abort_background {
                     crate::tools::abort_background_starts(session_id);
                 }
+                let title_update = title_tracker.observe_event(&event, session_id);
                 send_updates(connection, session_id, event_stream.updates(event))?;
+                if let Some(update) = title_update {
+                    send_updates(connection, session_id, vec![update])?;
+                }
             }
         }
     };
     while let Ok(event) = receiver.try_recv() {
+        let title_update = title_tracker.observe_event(&event, session_id);
         send_updates(connection, session_id, event_stream.updates(event))?;
+        if let Some(update) = title_update {
+            send_updates(connection, session_id, vec![update])?;
+        }
+    }
+    if let Some(title) = crate::config::load_session_title(session_id)
+        && let Some(update) = title_tracker.observe_title(Some(title))
+    {
+        send_updates(connection, session_id, vec![update])?;
     }
     Ok(context)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BackgroundTurnTasks, drain_task_events};
+    use super::{BackgroundTurnTasks, SessionTitleTracker, drain_task_events};
     use rustcode_tasks::TaskEvent;
     use std::collections::VecDeque;
     use std::sync::Arc;
+
+    #[test]
+    fn title_tracker_emits_protocol_updates_when_persisted_title_changes() {
+        let mut tracker = SessionTitleTracker::new(None);
+
+        let update = tracker
+            .observe_title(Some("Initial project title".to_owned()))
+            .expect("new title should be announced");
+        assert_eq!(
+            serde_json::to_value(update).unwrap(),
+            serde_json::json!({
+                "sessionUpdate": "session_info_update",
+                "title": "Initial project title"
+            })
+        );
+        assert!(
+            tracker
+                .observe_title(Some("Initial project title".to_owned()))
+                .is_none()
+        );
+
+        let update = tracker
+            .observe_title(Some("Refined project title".to_owned()))
+            .expect("changed title should be announced");
+        assert_eq!(
+            serde_json::to_value(update).unwrap()["title"],
+            "Refined project title"
+        );
+    }
 
     #[test]
     fn background_tracker_ignores_old_tasks_and_handles_cancellation() {
