@@ -54,15 +54,30 @@ async fn run_compiler_command(
     if cancel_token.is_cancelled() {
         return unverified("was cancelled");
     }
+    let writable_roots = [cwd.to_path_buf()];
+    let command_for_exec = match crate::tools::exec::sandbox::command(
+        command,
+        crate::tools::exec::sandbox::SandboxPolicy {
+            command_cwd: Some(cwd),
+            workspace_root: Some(cwd),
+            writable_roots: &writable_roots,
+            session_scratch_roots: &[],
+            network_access: false,
+        },
+    ) {
+        Ok(command) => command,
+        Err(error) => return unverified(&error),
+    };
     // A child token also stops the blocking worker if this async future is dropped.
     let worker_token = cancel_token.child_token();
     let _cancel_on_drop = worker_token.clone().drop_guard();
     let request = rustcode_command::CommandRequest {
-        command: command.to_owned(),
+        command: command_for_exec.command,
         cwd: Some(cwd.to_path_buf()),
         env: vec![("PATH".into(), compiler_augmented_path().into())],
         timeout,
         process_group: true,
+        inherited_fds: command_for_exec.inherited_fds,
     };
     let output = tokio::task::spawn_blocking(move || {
         rustcode_command::run_with_timeout_cancellable(
@@ -233,6 +248,9 @@ mod compiler_execution_tests {
 
     #[tokio::test]
     async fn stderr_only_cargo_failure_is_not_cached_as_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         std::fs::write(
             project.path().join("Cargo.toml"),
@@ -257,6 +275,9 @@ mod compiler_execution_tests {
 
     #[tokio::test]
     async fn successful_cargo_check_is_cached_as_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("Cargo.toml"), "[package]\nname = \"valid_compiler_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n").unwrap();
         std::fs::write(project.path().join("lib.rs"), "pub fn valid() {}\n").unwrap();
@@ -292,6 +313,9 @@ mod compiler_execution_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn nonzero_without_diagnostics_is_failure_and_zero_is_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         let token = CancellationToken::new();
         let failure = run_compiler_command(
@@ -363,12 +387,18 @@ mod compiler_execution_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn compiler_timeout_kills_descendants() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         assert_compiler_tree_cleanup(false).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn compiler_cancellation_kills_descendants() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         assert_compiler_tree_cleanup(true).await;
     }
 }

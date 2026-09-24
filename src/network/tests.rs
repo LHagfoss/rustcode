@@ -3229,6 +3229,9 @@ fn cancellation_persists_completed_results_and_typed_missing_results() {
 
 #[tokio::test]
 async fn test_run_compiler_check_success() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let cwd = std::env::current_dir().unwrap();
     let check = run_compiler_check(&cwd, &tokio_util::sync::CancellationToken::new()).await;
     assert!(check.is_none());
@@ -4637,6 +4640,9 @@ async fn successful_session_replay_pairs_tools_and_records_real_changes() {
 
 #[tokio::test]
 async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let result = run_one_tool(test_tool_call(
         "run_command",
         serde_json::json!({
