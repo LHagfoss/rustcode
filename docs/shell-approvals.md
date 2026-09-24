@@ -2,21 +2,28 @@
 
 RustCode checks `run_command` calls before they execute. Known read-only
 commands may run without a prompt. Mutating, unclassified, or shell-composed
-commands ask for confirmation. A user can approve a command once, save an
-exact-command allow rule, or forbid a matching token sequence from the
-confirmation panel.
+commands ask for confirmation. A user can approve a command once, save a
+reusable plain-token command-prefix rule, or forbid a matching token sequence
+from the confirmation panel.
 
-Reusable allow rules cover only the same normalized argv the user approved.
-For example, approving `git add src/main.rs` does not allow
-`git add src/main.rs .`, and approving `make test` does not allow
-`make test upload-prod`. Whitespace differences are normalized. Shell syntax,
-quotes, substitutions, redirections, globs, tilde expansion, and environment
-or background overrides are ineligible for reusable allow rules. Privilege
-escalation, network clients, package installation/publication,
+Newly saved reusable allow rules match complete leading tokens, so
+`cargo test` covers `cargo test --lib` but not `cargo testing`. Existing saved
+entries without a prefix marker continue to match only the exact normalized
+command the user approved. Whitespace differences are normalized. A new prefix
+rule intentionally covers plain arguments after the approved prefix; choose a
+narrow prefix when extra arguments could widen the action.
+Shell syntax, quotes, substitutions, redirections, globs, tilde expansion, and
+environment or background overrides are ineligible for reusable allow rules.
+Privilege escalation, network clients, package installation/publication,
 deployment/release actions, and known destructive commands are also ineligible.
-The config field `approved_command_prefixes` is retained for compatibility,
-but its entries are treated as exact normalized argv until an operating-system
-sandbox is available. Parent and subagent shell calls use the same saved rules.
+Forbid rules take precedence over allows and session auto-confirm. Parent and
+subagent shell calls use the same saved rules.
+
+Approval rules decide when RustCode asks the user. They do not provide
+operating-system isolation or change the shell process's permissions. OS
+permissions are enforced separately only on platforms with a supported
+sandbox backend. On unsupported platforms such as Windows, commands run with
+the RustCode process's permissions.
 
 Forbid rules persist in `~/.config/rustcode/config.toml` as
 `denied_command_prefixes`, are user-level only, and take precedence over saved
@@ -32,8 +39,19 @@ forbidden action. Remove or edit an entry in the global config to change it.
 One-time approval remains available for commands without a matching saved
 forbid rule.
 
+The `/sandbox` command and `sandbox_mode` setting in
+`~/.config/rustcode/config.toml` control
+effective shell permissions on Linux and macOS. Its values are
+`read_only`, `workspace_write` (the default), and
+`workspace_write_network`. The startup banner shows the effective mode
+separately from the command approval mode. Project config files cannot change
+this user-level security setting. `/sandbox` with no argument shows the current
+effective permissions; pass one of the mode names to change and persist it.
+
 On Linux, shell commands run through bubblewrap with the host filesystem
-read-only and the active workspace and session scratch directory writable.
+read-only and, in `workspace_write` modes, the active workspace and session
+scratch directory writable. `read_only` leaves the entire host filesystem
+read-only.
 RustCode first probes whether bubblewrap can create a private network
 namespace. When the host denies bubblewrap's loopback setup, RustCode uses the
 same filesystem and process isolation plus a seccomp filter. The filter
@@ -48,11 +66,42 @@ commands still require approval under the shell guard. RustCode requires
 sandbox setup or the seccomp filter fails, it refuses to run the command.
 Install bubblewrap with your distribution's package manager.
 
-Native sandbox backends for macOS and Windows are not implemented yet. Those
-platforms retain the existing command execution behavior, so approval is not
-an operating-system isolation boundary there. The Linux sandbox isolates
-filesystem writes and IP networking. The seccomp fallback preserves AF_UNIX
-socket creation and socketpairs, but blocks `connect` and server-side network
-syscalls, including for AF_UNIX. Additional Codex controls such as fine-grained
-read restrictions, protected metadata, and approval-aware permission
-escalation remain future work.
+On macOS, shell commands run under Seatbelt through the fixed
+`/usr/bin/sandbox-exec` executable. The policy allows host file reads but
+restricts writes to the canonical active workspace and session scratch
+directory in `workspace_write` modes, and denies network connections by
+default. `read_only` grants no filesystem writes. Temporary-file
+environment variables point inside the workspace so build tools keep their
+temporary output within the writable policy. Symlinked scratch directories,
+working directories outside writable roots, and workspaces resolving to `/`
+are rejected before launch. `.git` remains writable inside the workspace so
+approved Git operations work. If `sandbox-exec` is unavailable or Seatbelt
+rejects the profile, RustCode refuses to run the command; it does not fall
+back to an unsandboxed shell. Apple has deprecated `sandbox-exec`, but it is
+the system Seatbelt interface RustCode currently uses.
+
+The `workspace_write_network` mode allows network access for every shell
+command. A command may also request `network_access: true` for one-shot
+network permission. RustCode adds the requested permission to the approval
+card and requires an interactive approval even in YOLO mode; saved command
+approvals do not grant it. Approval only widens network access for that one
+command and does not change the configured mode.
+
+The `filesystem_write_path` argument requests write access to one existing
+absolute directory outside the active workspace. The approval card shows its
+canonical resolved path and RustCode requires an interactive decision,
+including in YOLO mode; saved command approvals do not grant filesystem
+access. On Linux and macOS, that directory is the only additional writable
+root for the command, so read-only mode continues to protect the workspace
+and other paths.
+
+Windows does not yet have an operating-system sandbox backend. Shell commands
+continue to run with the RustCode process permissions there, and the startup
+banner reports that no OS sandbox is active. Linux and macOS currently give
+commands broad host read access while restricting writes and network access
+according to the configured mode. Reusable command approvals remain separate
+from operating-system permissions and do not widen the sandbox.
+
+On Linux, the seccomp fallback preserves AF_UNIX socket creation and
+socketpairs, but blocks `connect` and server-side network syscalls, including
+for AF_UNIX.

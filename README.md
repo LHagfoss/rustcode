@@ -185,16 +185,26 @@ approve tool confirmations. Background commands started by the turn are
 tracked until their terminal result is delivered; unrelated tasks already
 running in the same session do not delay the turn.
 
-Interactive shell confirmations offer one-time approval, reusable allows for
-the exact normalized command argv, and reusable token-sequence denies. An
-allow for `git add src/main.rs` does not also allow extra operands such as
-`git add src/main.rs .`; deny rules take precedence over allows and session
-auto-confirm. Shell composition, dynamic shell syntax, environment or
-background overrides, privileged/network commands, package
-installation/publication, deployment/release actions, and known destructive
-commands remain ineligible for reusable allows. RustCode does not isolate
-shell commands with an operating-system sandbox, so approved commands still
-run with the permissions of the RustCode process. See
+Interactive shell confirmations offer one-time approval, reusable plain-token
+command-prefix allows, and reusable token-sequence denies. An allow for
+`cargo test` covers `cargo test --lib` but not `cargo testing`; deny rules take
+precedence over allows and session auto-confirm. Shell composition, dynamic
+shell syntax, environment or background overrides, privileged/network
+commands, package installation/publication, deployment/release actions, and
+known destructive commands remain ineligible for reusable allows. Approval
+rules do not provide operating-system isolation or change the shell process's
+permissions. OS sandbox enforcement is available only on supported backends
+(currently Linux and macOS); on unsupported platforms such as Windows,
+approved commands run with the RustCode process's permissions. Configure the
+effective Linux/macOS mode with `sandbox_mode = "read_only"`,
+`"workspace_write"` (default), or `"workspace_write_network"` in the user
+config; the startup banner displays effective permissions separately from
+approval mode. `network_access: true` requests network access for one command
+and always needs interactive approval, including in YOLO mode. The
+`filesystem_write_path` argument requests one-command write access to one
+existing absolute directory outside the active workspace; its canonical path
+is shown in the approval card. It also requires
+interactive approval and cannot be covered by a saved command approval. See
 [docs/shell-approvals.md](docs/shell-approvals.md).
 
 ## Background commands

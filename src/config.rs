@@ -6,6 +6,49 @@ use std::path::{Path, PathBuf};
 
 pub use rustcode_core::{AgentMode, ToolProtocol};
 
+/// OS-enforced command permissions on platforms with a native sandbox backend.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxMode {
+    /// Read-only host view, with no writable workspace or network access.
+    ReadOnly,
+    /// Read the host, write only to the active workspace/session scratch, and deny network.
+    #[default]
+    WorkspaceWrite,
+    /// Workspace writes with network access enabled.
+    WorkspaceWriteNetwork,
+}
+
+impl SandboxMode {
+    pub fn allows_workspace_write(self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
+
+    pub fn allows_network(self) -> bool {
+        matches!(self, Self::WorkspaceWriteNetwork)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only host; no network",
+            Self::WorkspaceWrite => "workspace/session writes; no network",
+            Self::WorkspaceWriteNetwork => "workspace/session writes; network",
+        }
+    }
+
+    pub fn effective_description(self) -> &'static str {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.description()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = self;
+            "OS sandbox unavailable; shell uses RustCode process permissions"
+        }
+    }
+}
+
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 /// Zero means no fixed round ceiling. Turns still terminate on context,
@@ -951,6 +994,9 @@ pub struct AppConfig {
     /// over reusable approvals and session auto-confirm.
     #[serde(default)]
     pub denied_command_prefixes: Vec<String>,
+    /// Effective OS sandbox permissions for shell commands.
+    #[serde(default)]
+    pub sandbox_mode: SandboxMode,
     #[serde(default)]
     pub audio: AudioConfig,
     /// Publish the active RustCode session to the local Discord desktop IPC
@@ -1010,6 +1056,8 @@ struct RuntimeConfig {
     #[serde(default)]
     denied_command_prefixes: Vec<String>,
     #[serde(default)]
+    sandbox_mode: SandboxMode,
+    #[serde(default)]
     audio: AudioConfig,
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
@@ -1057,6 +1105,8 @@ struct TomlConfig {
     approved_command_prefixes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     denied_command_prefixes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox_mode: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1205,6 +1255,7 @@ impl Default for AppConfig {
             }],
             approved_command_prefixes: Vec::new(),
             denied_command_prefixes: Vec::new(),
+            sandbox_mode: SandboxMode::default(),
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             legacy_laya: None,
@@ -1438,6 +1489,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.mcp_servers = runtime.mcp_servers;
                     config.approved_command_prefixes = runtime.approved_command_prefixes;
                     config.denied_command_prefixes = runtime.denied_command_prefixes;
+                    config.sandbox_mode = runtime.sandbox_mode;
                     config.agent_mode = runtime.agent_mode;
                     config.verbosity = runtime.verbosity;
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
@@ -1525,6 +1577,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
         denied_command_prefixes: Some(config.denied_command_prefixes.clone()),
+        sandbox_mode: Some(config.sandbox_mode),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         legacy_laya: config.legacy_laya.clone(),
@@ -1599,6 +1652,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(prefixes) = file.denied_command_prefixes {
         config.denied_command_prefixes = prefixes;
     }
+    if let Some(sandbox_mode) = file.sandbox_mode {
+        config.sandbox_mode = sandbox_mode;
+    }
     if let Some(audio) = file.audio {
         config.audio = audio;
     }
@@ -1648,6 +1704,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // checked-out project configuration.
     file.approved_command_prefixes = None;
     file.denied_command_prefixes = None;
+    // A checked-out project must not widen the user's OS command permissions.
+    file.sandbox_mode = None;
     // Legacy user data should remain attached to the global config, never a
     // checked-out project file.
     file.legacy_laya = None;
@@ -1687,6 +1745,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     }
     if file.agent_mode.is_some() {
         persisted.agent_mode = global.agent_mode;
+    }
+    if file.sandbox_mode.is_some() {
+        persisted.sandbox_mode = global.sandbox_mode;
     }
     if file.verbosity.is_some() {
         persisted.verbosity = global.verbosity.clone();
@@ -1729,6 +1790,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         mcp_servers: None,
         approved_command_prefixes: None,
         denied_command_prefixes: None,
+        sandbox_mode: None,
         audio: None,
         discord_rpc_enabled: None,
         legacy_laya: None,

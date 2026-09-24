@@ -292,19 +292,26 @@ pub(crate) fn to_messages_with_instructions(
     history: &[ChatMessage],
     instructions: RequestInstructions<'_>,
 ) -> Vec<serde_json::Value> {
-    to_messages_with_scope(history, instructions, HistoryRenderScope::Full)
+    to_messages_with_scope(history, instructions, RequestHistoryScope::Full)
 }
 
-/// Render the request-local history projection used for an active model turn.
-/// Persisted history remains complete, but old tool mechanics and lifecycle
-/// notices are not useful conversation context forever. Keep durable dialogue
-/// from older turns, the complete previous turn for continuity, and the
-/// complete active turn for progressive reads, edits, and recovery.
+/// Render the full persisted history for an active model turn.
 pub(crate) fn to_messages_for_request(
     history: &[ChatMessage],
     instructions: RequestInstructions<'_>,
 ) -> Vec<serde_json::Value> {
-    to_messages_with_scope(history, instructions, HistoryRenderScope::RecentTurns)
+    to_messages_with_scope(history, instructions, RequestHistoryScope::Full)
+}
+
+/// Render a request with an explicit history scope. Request assembly starts
+/// with `Full` and retries with `RecentTurns` only when its measured preflight
+/// exceeds the safe context target.
+pub(crate) fn to_messages_for_request_with_scope(
+    history: &[ChatMessage],
+    instructions: RequestInstructions<'_>,
+    scope: RequestHistoryScope,
+) -> Vec<serde_json::Value> {
+    to_messages_with_scope(history, instructions, scope)
 }
 
 /// Check the final OpenAI-compatible native-tool message sequence immediately
@@ -370,9 +377,8 @@ pub(crate) fn validate_native_tool_messages(messages: &[serde_json::Value]) -> R
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum HistoryRenderScope {
-    #[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RequestHistoryScope {
     Full,
     RecentTurns,
 }
@@ -380,7 +386,7 @@ enum HistoryRenderScope {
 fn to_messages_with_scope(
     history: &[ChatMessage],
     instructions: RequestInstructions<'_>,
-    scope: HistoryRenderScope,
+    scope: RequestHistoryScope,
 ) -> Vec<serde_json::Value> {
     let mut messages = vec![serde_json::json!({
         "role": "system",
@@ -404,7 +410,12 @@ fn to_messages_with_scope(
     // and an unanswered id makes the whole request invalid. Rather than trusting
     // every path that records a call to also record its outcome, the gap is
     // closed here, where the request is actually built.
-    let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
+    let redundant = match scope {
+        RequestHistoryScope::Full => std::collections::HashSet::new(),
+        RequestHistoryScope::RecentTurns => {
+            redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS)
+        }
+    };
     let turn_starts = request_turn_starts(history);
     let included: std::collections::HashSet<usize> = history
         .iter()
@@ -600,16 +611,15 @@ fn is_durable_older_message(message: &ChatMessage) -> bool {
 fn should_include_request_message(
     index: usize,
     message: &ChatMessage,
-    scope: HistoryRenderScope,
+    scope: RequestHistoryScope,
     turn_starts: Option<(usize, Option<usize>)>,
 ) -> bool {
     if message.conversation_recap {
         return false;
     }
     match scope {
-        #[cfg(test)]
-        HistoryRenderScope::Full => true,
-        HistoryRenderScope::RecentTurns => {
+        RequestHistoryScope::Full => true,
+        RequestHistoryScope::RecentTurns => {
             let Some((active_start, previous_start)) = turn_starts else {
                 return true;
             };
@@ -1111,9 +1121,10 @@ mod tests {
         ];
         let stored = serde_json::to_string(&history).expect("serialize history");
 
-        let messages = to_messages_for_request(
+        let messages = to_messages_for_request_with_scope(
             &history,
             RequestInstructions::new("base", Some("developer")),
+            RequestHistoryScope::RecentTurns,
         );
         let rendered = serde_json::to_string(&messages).expect("render request");
 
@@ -1125,6 +1136,68 @@ mod tests {
         assert!(!rendered.contains("previous recovery"));
         assert!(rendered.contains("current recovery"));
         assert_eq!(serde_json::to_string(&history).unwrap(), stored);
+    }
+
+    #[test]
+    fn request_projection_keeps_older_tool_mechanics_when_budget_has_not_required_projection() {
+        let old_call = ChatMessage::new("assistant", "older tool reasoning").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "older-call".into(),
+                name: "run_command".into(),
+                arguments: r#"{"command":"npm run build"}"#.into(),
+            },
+        ]);
+        let history = vec![
+            ChatMessage::new("user", "first task"),
+            old_call,
+            ChatMessage::new("tool", "run_command: build output from earlier")
+                .answering(Some("older-call".into())),
+            ChatMessage::new("assistant", "first task done"),
+            ChatMessage::new("user", "second task"),
+            ChatMessage::new("assistant", "second task done"),
+            ChatMessage::new("user", "third task"),
+            ChatMessage::new("assistant", "third task done"),
+            ChatMessage::new("user", "follow up task"),
+            ChatMessage::new("assistant", "continuing with the old build result"),
+        ];
+
+        let rendered = serde_json::to_string(&to_messages_for_request(
+            &history,
+            RequestInstructions::new("base", None),
+        ))
+        .expect("render request");
+
+        assert!(rendered.contains("older-call"));
+        assert!(rendered.contains("build output from earlier"));
+    }
+
+    #[test]
+    fn full_request_history_keeps_older_duplicate_tool_results_before_budget_pressure() {
+        let (older_call, older_result) =
+            structured_read("old-read", "view_file: [File: src/lib.rs]\n1: same body");
+        let (newer_call, newer_result) =
+            structured_read("new-read", "view_file: [File: src/lib.rs]\n1: same body");
+        let mut history = vec![
+            ChatMessage::new("user", "inspect this file"),
+            older_call,
+            older_result,
+        ];
+        for index in 0..12 {
+            history.push(ChatMessage::new("assistant", format!("progress {index}")));
+        }
+        history.push(newer_call);
+        history.push(newer_result);
+        history.push(ChatMessage::new("user", "keep both observations"));
+
+        let rendered = serde_json::to_string(&to_messages_for_request(
+            &history,
+            RequestInstructions::new("base", None),
+        ))
+        .expect("render full history");
+
+        assert!(rendered.contains("old-read"));
+        assert!(rendered.contains("new-read"));
+        assert_eq!(rendered.matches("1: same body").count(), 2);
     }
 
     #[test]
@@ -1148,7 +1221,11 @@ mod tests {
             current_call,
         ];
 
-        let messages = to_messages_for_request(&history, RequestInstructions::new("base", None));
+        let messages = to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("base", None),
+            RequestHistoryScope::RecentTurns,
+        );
         let assistant_index = messages
             .iter()
             .position(|message| message.get("tool_calls").is_some())
@@ -1214,9 +1291,10 @@ mod tests {
             "[Evidence-based recovery: take one different action]",
         ));
 
-        let rendered = serde_json::to_string(&to_messages_for_request(
+        let rendered = serde_json::to_string(&to_messages_for_request_with_scope(
             &history,
             RequestInstructions::new("base", None),
+            RequestHistoryScope::RecentTurns,
         ))
         .expect("render request");
 
@@ -1310,7 +1388,11 @@ mod tests {
             entries[2],
             HistoryEntry::ToolResult { metadata: None, .. }
         ));
-        let messages = to_messages(&history, "system");
+        let messages = to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("system", None),
+            RequestHistoryScope::RecentTurns,
+        );
         assert_eq!(messages[3]["role"], "user");
         assert!(messages[3]["content"].as_str().unwrap().contains("grep:"));
     }
@@ -1360,7 +1442,11 @@ mod tests {
         let entries: Vec<_> = normalize_history(&history).collect();
         assert!(matches!(entries[1], HistoryEntry::Assistant(_)));
 
-        let messages = to_messages(&history, "system");
+        let messages = to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("system", None),
+            RequestHistoryScope::RecentTurns,
+        );
         assert_eq!(messages[2]["role"], "assistant");
         assert!(messages[2]["tool_calls"].is_null());
         assert_eq!(messages[2]["content"], partial);
@@ -1596,7 +1682,11 @@ mod tests {
         history.push(second_read);
         let before = serde_json::to_string(&history).unwrap();
 
-        let messages = to_messages(&history, "system");
+        let messages = to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("system", None),
+            RequestHistoryScope::RecentTurns,
+        );
 
         assert_eq!(serde_json::to_string(&history).unwrap(), before);
         let rendered_ids: Vec<&str> = messages
@@ -1653,7 +1743,11 @@ mod tests {
             current_call,
         ];
 
-        let messages = to_messages_for_request(&history, RequestInstructions::new("system", None));
+        let messages = to_messages_for_request_with_scope(
+            &history,
+            RequestInstructions::new("system", None),
+            RequestHistoryScope::RecentTurns,
+        );
 
         assert_native_tool_call_results(&messages);
         assert!(!messages.iter().any(|message| {

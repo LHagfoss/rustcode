@@ -62,6 +62,8 @@ async fn run_compiler_command(
             workspace_root: Some(cwd),
             writable_roots: &writable_roots,
             session_scratch_roots: &[],
+            one_shot_writable_roots: &[],
+            write_access: true,
             network_access: false,
         },
     ) {
@@ -73,6 +75,8 @@ async fn run_compiler_command(
     let _cancel_on_drop = worker_token.clone().drop_guard();
     let request = rustcode_command::CommandRequest {
         command: command_for_exec.command,
+        status_command: None,
+        sandboxed_shell: true,
         cwd: Some(cwd.to_path_buf()),
         env: vec![("PATH".into(), compiler_augmented_path().into())],
         timeout,

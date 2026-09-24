@@ -1057,6 +1057,24 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
 }
 
 #[tokio::test]
+async fn sandbox_command_shows_and_sets_the_effective_mode() {
+    use crate::config::SandboxMode;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/sandbox read_only".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    let s = state.lock().await;
+    assert_eq!(s.config.sandbox_mode, SandboxMode::ReadOnly);
+    assert!(s.history.last().unwrap().content.contains("read-only"));
+}
+
+#[tokio::test]
 async fn test_theme_command_flow() {
     use crate::app::state::AppState;
     use std::sync::Arc;

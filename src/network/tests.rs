@@ -1,6 +1,81 @@
 use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
 use super::*;
 
+#[test]
+fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
+    let history = vec![
+        ChatMessage::new("user", "first task"),
+        ChatMessage::new("assistant", "older call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "older-call".into(),
+                name: "run_command".into(),
+                arguments: r#"{"command":"npm run build"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "run_command: earlier build output")
+            .answering(Some("older-call".into())),
+        ChatMessage::new("assistant", "first task done"),
+        ChatMessage::new("user", "second task"),
+        ChatMessage::new("assistant", "second task done"),
+        ChatMessage::new("user", "current task"),
+        ChatMessage::new("assistant", "current call context").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: "current-call".into(),
+                name: "view_file".into(),
+                arguments: r#"{"path":"src/lib.rs"}"#.into(),
+            },
+        ]),
+        ChatMessage::new("tool", "view_file: current inspection output")
+            .answering(Some("current-call".into())),
+    ];
+    let instructions = history::RequestInstructions::new("base", None);
+    let full = history::to_messages_for_request_with_scope(
+        &history,
+        instructions,
+        history::RequestHistoryScope::Full,
+    );
+    let mut budget = crate::config::ModelProfile {
+        name: "projection-test".into(),
+        model: "projection-test".into(),
+        context_window: Some(100_000),
+        max_output_tokens: Some(1_000),
+        ..Default::default()
+    }
+    .context_budget();
+    budget.soft_context_target = u32::MAX;
+    let full_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+
+    assert_eq!(
+        history_scope_for_preflight(&full_preflight),
+        history::RequestHistoryScope::Full
+    );
+    history::validate_native_tool_messages(&full).expect("full history keeps valid tool pairs");
+    assert!(
+        serde_json::to_string(&full)
+            .unwrap()
+            .contains("earlier build output")
+    );
+
+    budget.soft_context_target = u32::try_from(full_preflight.total_estimated_prompt)
+        .expect("fixture prompt fits in u32")
+        .saturating_sub(1);
+    let pressured_preflight =
+        compaction::calculate_preflight_budget_for_projection(&full, &[], 0, &budget);
+    let pressured_scope = history_scope_for_preflight(&pressured_preflight);
+    assert_eq!(pressured_scope, history::RequestHistoryScope::RecentTurns);
+
+    let pressured =
+        history::to_messages_for_request_with_scope(&history, instructions, pressured_scope);
+    history::validate_native_tool_messages(&pressured)
+        .expect("recent-turn projection keeps valid tool pairs");
+    let rendered = serde_json::to_string(&pressured).unwrap();
+    assert!(!rendered.contains("older-call"));
+    assert!(!rendered.contains("earlier build output"));
+    assert!(rendered.contains("current-call"));
+    assert!(rendered.contains("current inspection output"));
+}
+
 #[tokio::test]
 async fn context_detection_does_not_probe_unverified_omlx_endpoints() {
     use std::time::Duration;
@@ -887,7 +962,7 @@ async fn gated_json_server(
     (format!("http://{address}"), accepted_rx, release_tx)
 }
 
-async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<Vec<u8>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -927,7 +1002,7 @@ async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<
                 break;
             }
         }
-        accepted_tx.send(()).ok();
+        accepted_tx.send(request).ok();
         let body = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"wakeup request reached provider\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -1101,6 +1176,79 @@ async fn acp_continuation_releases_state_and_delivers_provider_completion() {
         completed_content.as_deref(),
         Some("wakeup request reached provider"),
         "ACP continuation must emit a terminal event carrying the provider output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_loaded_session_continues_with_its_persisted_transcript() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::acp::build_loaded_app_state(
+        "loaded-session-123",
+        &std::env::current_dir().unwrap(),
+        vec![
+            ChatMessage::new("user", "Earlier user request"),
+            ChatMessage::new("assistant", "Earlier assistant answer"),
+        ],
+    );
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-loaded-session-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    let state = Arc::new(Mutex::new(app));
+    let (sender, _) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = TurnContext::with_budgets(8, 16);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_and_context_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            String::new(),
+            sender,
+            context,
+        ),
+    )
+    .await
+    .expect("loaded ACP session prompt must complete");
+    let request = provider_request.await.expect("provider request");
+    let request_text = String::from_utf8(request).expect("HTTP request UTF-8");
+    let body = request_text
+        .split_once("\r\n\r\n")
+        .expect("HTTP request body")
+        .1;
+    let request_json: serde_json::Value = serde_json::from_str(body).expect("provider JSON");
+    let messages = request_json["messages"].as_array().expect("messages");
+    assert!(messages.iter().any(|message| {
+        message["role"] == "user" && message["content"] == "Earlier user request"
+    }));
+    assert!(
+        messages.iter().any(|message| {
+            message["role"] == "assistant"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("Earlier assistant answer"))
+        }),
+        "loaded assistant transcript should be sent to the provider"
     );
 }
 

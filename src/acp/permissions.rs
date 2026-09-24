@@ -66,7 +66,16 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
             {
                 return false;
             }
-            if auto_approve {
+            let has_one_shot_permission_request = tool_calls.iter().any(|call| {
+                call.name == "run_command"
+                    && (call
+                        .arguments
+                        .get("network_access")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                        || call.arguments.get("filesystem_write_path").is_some())
+            });
+            if auto_approve && !has_one_shot_permission_request {
                 return true;
             }
 

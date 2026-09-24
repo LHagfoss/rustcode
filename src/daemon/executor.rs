@@ -406,6 +406,9 @@ impl ActionBackend for ProductionActions {
                         );
                     }
                     let writable_roots = vec![cwd.clone()];
+                    let sandbox_mode = crate::config::load_config_for_workspace(&cwd)
+                        .2
+                        .sandbox_mode;
                     let sandboxed_command = match crate::tools::exec::sandbox::command(
                         &command,
                         crate::tools::exec::sandbox::SandboxPolicy {
@@ -413,7 +416,9 @@ impl ActionBackend for ProductionActions {
                             workspace_root: Some(&cwd),
                             writable_roots: &writable_roots,
                             session_scratch_roots: &[],
-                            network_access: false,
+                            one_shot_writable_roots: &[],
+                            write_access: sandbox_mode.allows_workspace_write(),
+                            network_access: sandbox_mode.allows_network(),
                         },
                     ) {
                         Ok(command) => command,
@@ -434,6 +439,8 @@ impl ActionBackend for ProductionActions {
                         }
                         let request = rustcode_command::CommandRequest {
                             command: sandboxed_command.command,
+                            status_command: None,
+                            sandboxed_shell: true,
                             cwd: Some(cwd),
                             env: vec![],
                             timeout: Duration::from_secs(timeout_seconds),

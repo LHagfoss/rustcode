@@ -553,6 +553,7 @@ pub fn build_help_text() -> String {
                 ("/goal", "Run a task in continuous autoloop mode"),
                 ("/delegate", "Allow subagents for next task only"),
                 ("/yolo", "Show or set tool confirmation mode"),
+                ("/sandbox", "Show or set OS-enforced shell permissions"),
                 ("/skills", "Discover and list custom skills"),
                 ("/sync", "Sync config, skills, and themes with Git"),
                 ("/copy", "Copy last assistant reply to clipboard"),

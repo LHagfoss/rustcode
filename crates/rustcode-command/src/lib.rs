@@ -5,7 +5,7 @@
 //! background task orchestration stay in the application crate.
 
 use std::collections::VecDeque;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -23,6 +23,13 @@ const CAPTURE_TAIL_BYTES: usize = MAX_OUTPUT_BYTES - CAPTURE_HEAD_BYTES;
 #[derive(Clone, Debug)]
 pub struct CommandRequest {
     pub command: String,
+    /// Original shell text used to interpret exit metadata when `command` is
+    /// wrapped by an operating-system sandbox launcher.
+    pub status_command: Option<String>,
+    /// Marks a shell command whose first process is an operating-system
+    /// sandbox launcher. Startup-sensitive environment must not run in the
+    /// outer shell before that launcher begins.
+    pub sandboxed_shell: bool,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(OsString, OsString)>,
     pub timeout: Duration,
@@ -37,6 +44,8 @@ pub struct CommandRequest {
 impl PartialEq for CommandRequest {
     fn eq(&self, other: &Self) -> bool {
         self.command == other.command
+            && self.status_command == other.status_command
+            && self.sandboxed_shell == other.sandboxed_shell
             && self.cwd == other.cwd
             && self.env == other.env
             && self.timeout == other.timeout
@@ -170,10 +179,15 @@ fn build_command_with_environment(
     allowlist: Option<&[String]>,
 ) -> Command {
     let mut command = shell_command(&request.command);
-    if let Some(allowlist) = allowlist {
+    if request.sandboxed_shell || allowlist.is_some() {
         command.env_clear();
-        for name in allowlist {
-            if let Some(value) = std::env::var_os(name) {
+        for (name, value) in std::env::vars_os() {
+            let allowed = allowlist.is_none_or(|allowlist| {
+                allowlist
+                    .iter()
+                    .any(|allowed_name| name == OsStr::new(allowed_name))
+            });
+            if allowed && (!request.sandboxed_shell || !is_unsafe_pre_sandbox_environment(&name)) {
                 command.env(name, value);
             }
         }
@@ -247,6 +261,16 @@ pub fn run_with_timeout_cancellable_env(
     cancellation: Option<CancellationCallback>,
     allowlist: &[String],
 ) -> Result<CommandOutput, String> {
+    if request.sandboxed_shell
+        && let Some(name) = allowlist
+            .iter()
+            .find(|name| is_unsafe_pre_sandbox_environment(std::ffi::OsStr::new(name)))
+    {
+        return Err(format!(
+            "sandboxed shell refuses startup environment variable '{}' in the scheduled environment allowlist; command was not run",
+            name
+        ));
+    }
     run_command_internal(
         request,
         Some(request.timeout),
@@ -292,6 +316,18 @@ fn run_command_internal(
     cancellation: Option<CancellationCallback>,
     mut command: Command,
 ) -> Result<CommandOutput, String> {
+    if request.sandboxed_shell
+        && let Some((name, _)) = request
+            .env
+            .iter()
+            .find(|(name, _)| is_unsafe_pre_sandbox_environment(name))
+    {
+        return Err(format!(
+            "sandboxed shell refuses explicit startup environment variable '{}'; command was not run",
+            name.to_string_lossy()
+        ));
+    }
+
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn process: {e}"))?;
@@ -353,9 +389,12 @@ fn run_command_internal(
     }
     let stdout = out_handle.join().unwrap_or_default().finish();
     let stderr = err_handle.join().unwrap_or_default().finish();
-    let signal = terminating_signal(&status, &request.command);
-    let downstream_consumer_terminated =
-        is_downstream_consumer_termination(signal, &request.command);
+    let status_command = request
+        .status_command
+        .as_deref()
+        .unwrap_or(&request.command);
+    let signal = terminating_signal(&status, status_command);
+    let downstream_consumer_terminated = is_downstream_consumer_termination(signal, status_command);
     Ok(CommandOutput {
         success: status.success() || downstream_consumer_terminated,
         exit_code: status.code(),
@@ -364,6 +403,14 @@ fn run_command_internal(
         stdout,
         stderr,
     })
+}
+
+fn is_unsafe_pre_sandbox_environment(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    matches!(name.as_ref(), "BASH_ENV" | "ENV" | "SHELLOPTS" | "BASHOPTS")
+        || name.starts_with("BASH_FUNC_")
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
 }
 
 #[cfg(unix)]
@@ -506,6 +553,7 @@ mod tests {
     use super::{
         CancellationCallback, CommandRequest, MAX_OUTPUT_BYTES, ProgressCallback, StartedCallback,
         format_bounded_output, run_until_exit, run_with_timeout, run_with_timeout_cancellable,
+        run_with_timeout_cancellable_env,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -524,9 +572,35 @@ mod tests {
         }
     }
 
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "rustcode-command-test-{}-{}",
+                std::process::id(),
+                MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn request(command: &str) -> CommandRequest {
         CommandRequest {
             command: command.to_owned(),
+            status_command: None,
+            sandboxed_shell: false,
             cwd: None,
             env: Vec::new(),
             timeout: Duration::from_secs(5),
@@ -551,6 +625,159 @@ mod tests {
         assert!(output.success);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn sandboxed_shell_rejects_explicit_startup_environment() {
+        let directory = TestDirectory::new();
+        let startup = directory.path().join("startup.sh");
+        let marker = directory.path().join("outside-marker");
+        std::fs::write(&startup, format!("touch {}\n", marker.display())).unwrap();
+        for name in [
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "BASH_FUNC_probe%%",
+            "LD_PRELOAD",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+        ] {
+            let mut request = request("printf should-not-run");
+            request.sandboxed_shell = true;
+            request.env.push((
+                OsString::from(name),
+                if name == "BASH_ENV" {
+                    startup.as_os_str().to_owned()
+                } else {
+                    OsString::from("unsafe")
+                },
+            ));
+
+            let error = run_with_timeout(&request, None).unwrap_err();
+
+            assert!(error.contains(name), "{error}");
+            assert!(error.contains("sandbox"), "{error}");
+            assert!(error.contains("command was not run"), "{error}");
+            assert!(
+                !marker.exists(),
+                "unsafe startup script ran before rejection"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandboxed_scheduled_shell_rejects_startup_environment_allowlist() {
+        let request = CommandRequest {
+            sandboxed_shell: true,
+            ..request("printf should-not-run")
+        };
+
+        let error =
+            run_with_timeout_cancellable_env(&request, None, None, &["BASH_ENV".to_owned()])
+                .unwrap_err();
+
+        assert!(error.contains("BASH_ENV"), "{error}");
+        assert!(error.contains("scheduled environment allowlist"), "{error}");
+        assert!(error.contains("command was not run"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandboxed_shell_preserves_ordinary_environment_overrides() {
+        let mut request = request("printf '%s' \"$RUSTCODE_SANDBOX_ENV_TEST\"");
+        request.sandboxed_shell = true;
+        request.env.push((
+            OsString::from("RUSTCODE_SANDBOX_ENV_TEST"),
+            OsString::from("forwarded"),
+        ));
+
+        let output = run_with_timeout(&request, None).unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.stdout.bytes(), b"forwarded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandboxed_shell_does_not_source_ambient_bash_env_before_wrapper() {
+        const CHILD_MARKER_ENV: &str = "RUSTCODE_COMMAND_STARTUP_TEST_MARKER";
+        const CHILD_MODE_ENV: &str = "RUSTCODE_COMMAND_STARTUP_TEST_CHILD";
+
+        if let Some(marker) = std::env::var_os(CHILD_MARKER_ENV) {
+            let mut request = request("printf shell-ran");
+            request.sandboxed_shell = true;
+            let output = run_with_timeout(&request, None).unwrap();
+            assert!(output.success);
+            assert_eq!(output.stdout.bytes(), b"shell-ran");
+            assert!(!PathBuf::from(marker).exists());
+            return;
+        }
+
+        let directory = TestDirectory::new();
+        let startup = directory.path().join("startup.sh");
+        let marker = directory.path().join("outside-marker");
+        std::fs::write(&startup, format!("touch {}\n", marker.display())).unwrap();
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::sandboxed_shell_does_not_source_ambient_bash_env_before_wrapper",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE_ENV, "1")
+            .env(CHILD_MARKER_ENV, &marker)
+            .env("BASH_ENV", &startup)
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert!(
+            !marker.exists(),
+            "ambient BASH_ENV ran before wrapper execution"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandboxed_shell_does_not_import_ambient_bash_functions() {
+        const CHILD_MARKER_ENV: &str = "RUSTCODE_COMMAND_FUNCTION_TEST_MARKER";
+        const CHILD_MODE_ENV: &str = "RUSTCODE_COMMAND_FUNCTION_TEST_CHILD";
+
+        if let Some(marker) = std::env::var_os(CHILD_MARKER_ENV) {
+            let mut request = request("rustcode_outside_probe");
+            request.sandboxed_shell = true;
+            let output = run_with_timeout(&request, None).unwrap();
+            assert!(
+                !output.success,
+                "startup function remained visible to shell"
+            );
+            assert!(!PathBuf::from(marker).exists());
+            return;
+        }
+
+        let directory = TestDirectory::new();
+        let marker = directory.path().join("outside-marker");
+        let function_name = "BASH_FUNC_rustcode_outside_probe%%";
+        let function_body = format!("() {{ touch {}; }}", marker.display());
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::sandboxed_shell_does_not_import_ambient_bash_functions",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE_ENV, "1")
+            .env(CHILD_MARKER_ENV, &marker)
+            .env(function_name, function_body)
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert!(!marker.exists(), "ambient exported function was imported");
+    }
+
     #[test]
     fn shell_preserves_pipefail_and_chaining() {
         #[cfg(not(target_os = "windows"))]
@@ -565,6 +792,25 @@ mod tests {
     #[test]
     fn downstream_sigpipe_is_explicit_and_not_a_command_failure() {
         let output = run_with_timeout(&request("yes | head -n 1"), None).unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.exit_code, Some(141));
+        assert_eq!(output.signal, Some(libc::SIGPIPE));
+        assert!(output.downstream_consumer_terminated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapped_command_uses_original_shell_text_for_sigpipe_classification() {
+        let original = "yes | head -n 1";
+        let wrapped = format!("/bin/bash -o pipefail -c '{}'", original);
+        let request = CommandRequest {
+            command: wrapped,
+            status_command: Some(original.to_owned()),
+            ..request("")
+        };
+
+        let output = run_with_timeout(&request, None).unwrap();
 
         assert!(output.success);
         assert_eq!(output.exit_code, Some(141));

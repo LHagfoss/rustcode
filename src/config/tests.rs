@@ -1,6 +1,26 @@
 use super::*;
 use crate::app::ChatMessage;
 
+#[test]
+fn sandbox_modes_round_trip_and_default_to_workspace_write() {
+    assert_eq!(SandboxMode::default(), SandboxMode::WorkspaceWrite);
+    for (serialized, expected) in [
+        ("read_only", SandboxMode::ReadOnly),
+        ("workspace_write", SandboxMode::WorkspaceWrite),
+        (
+            "workspace_write_network",
+            SandboxMode::WorkspaceWriteNetwork,
+        ),
+    ] {
+        let decoded: SandboxMode = serde_json::from_str(&format!("\"{serialized}\"")).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            format!("\"{serialized}\"")
+        );
+    }
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("rustcode-tests").join(format!(
         "{}-{}",
@@ -80,6 +100,7 @@ fn test_config_save_load() {
         default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
         approved_command_prefixes: vec!["cargo test".to_string()],
         denied_command_prefixes: vec!["make clean".to_string()],
+        sandbox_mode: SandboxMode::WorkspaceWriteNetwork,
         ..AppConfig::default()
     };
     save_config_to(&dir, &config);
@@ -95,6 +116,12 @@ fn test_config_save_load() {
     assert_eq!(model, expected.model);
     assert_eq!(loaded.approved_command_prefixes, ["cargo test"]);
     assert_eq!(loaded.denied_command_prefixes, ["make clean"]);
+    assert_eq!(loaded.sandbox_mode, SandboxMode::WorkspaceWriteNetwork);
+    assert!(!crate::tools::approved_command_prefix_covers_call(
+        "run_command",
+        &serde_json::json!({"command":"cargo test --lib"}),
+        &loaded.approved_command_prefixes
+    ));
 }
 
 #[test]

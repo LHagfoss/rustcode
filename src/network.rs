@@ -1003,6 +1003,16 @@ fn push_status_line(s: &mut AppState, text: String) {
     crate::config::save_history(&s.history);
 }
 
+fn history_scope_for_preflight(
+    preflight: &compaction::PreflightBudget,
+) -> history::RequestHistoryScope {
+    if preflight.fits_soft_target() {
+        history::RequestHistoryScope::Full
+    } else {
+        history::RequestHistoryScope::RecentTurns
+    }
+}
+
 /// Reserve the known non-history portions of the soft target so compaction
 /// happens before request assembly reaches the provider's target. The final
 /// preflight still accounts for the exact system prompt, schemas, and dynamic
@@ -1461,11 +1471,11 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let rendered_history = history::to_messages_for_request(
-        &history_snapshot,
-        history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref()),
-    );
-    let rendered_history_messages = rendered_history.len();
+    let instructions =
+        history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref());
+    let context_budget = state.lock().await.active_context_budget();
+    let mut history_scope = history::RequestHistoryScope::Full;
+    let mut rendered_history = history::to_messages_for_request(&history_snapshot, instructions);
 
     // Preserve the complete previous request before appending newly rendered
     // assistant/tool messages. A fresh runtime snapshot remains at the tail.
@@ -1490,7 +1500,6 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     });
     inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
 
-    let context_budget = state.lock().await.active_context_budget();
     let mut native_tool_schemas = match native_schema_policy {
         Some(policy) => {
             prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
@@ -1500,13 +1509,52 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         None => Vec::new(),
     };
     let prompt_budget = (context_budget.hard_effective_limit as usize)
-        .saturating_sub(context_budget.completion_reserve as usize);
-    let initial_preflight = compaction::calculate_preflight_budget_for_projection(
+        .saturating_sub(context_budget.completion_reserve as usize)
+        .min(context_budget.soft_context_target as usize);
+    let mut initial_preflight = compaction::calculate_preflight_budget_for_projection(
         &msgs,
         &native_tool_schemas,
         0,
         &context_budget,
     );
+    if history_scope_for_preflight(&initial_preflight) == history::RequestHistoryScope::RecentTurns
+    {
+        history_scope = history::RequestHistoryScope::RecentTurns;
+        rendered_history = history::to_messages_for_request_with_scope(
+            &history_snapshot,
+            instructions,
+            history_scope,
+        );
+        msgs = prefix_cache
+            .as_deref_mut()
+            .map(|cache| cache.compose(&rendered_history, &dynamic_context))
+            .unwrap_or_else(|| {
+                let mut messages = rendered_history.clone();
+                attach_request_context_tail(&mut messages, &dynamic_context);
+                messages
+            });
+        inject_system_reminder(&mut msgs);
+        let bootstrap_phase = native_schema_policy.is_some_and(|_| {
+            crate::tools::tool_schema_phase(&msgs, task_working_directory.as_deref())
+                == crate::tools::ToolSchemaPhase::Bootstrap
+        });
+        inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
+        native_tool_schemas = match native_schema_policy {
+            Some(policy) => {
+                prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
+                    .await
+                    .0
+            }
+            None => Vec::new(),
+        };
+        initial_preflight = compaction::calculate_preflight_budget_for_projection(
+            &msgs,
+            &native_tool_schemas,
+            0,
+            &context_budget,
+        );
+    }
+    let rendered_history_messages = rendered_history.len();
     // Native schemas are not messages, so leave their exact measured cost out
     // of the message trim allowance. Provider overhead is already represented
     // by hard_effective_limit and is not subtracted a second time here.
@@ -1654,7 +1702,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 .as_deref()
                 .map(RequestPrefixCache::context_updates)
                 .unwrap_or_default(),
-            "history_projection": "recent_turns",
+            "history_projection": match history_scope {
+                history::RequestHistoryScope::Full => "full",
+                history::RequestHistoryScope::RecentTurns => "recent_turns",
+            },
             "hard_trimmed": dropped > 0,
         }),
     );

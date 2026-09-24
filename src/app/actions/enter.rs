@@ -298,6 +298,50 @@ async fn handle_enter_inner(
                     ));
                 }
             },
+            "/sandbox" => {
+                let current = s.config.sandbox_mode;
+                match tokens.get(1).copied() {
+                    None => s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "OS sandbox mode: {} ({})\nUse /sandbox read_only, /sandbox workspace_write, or /sandbox workspace_write_network.",
+                            current.description(),
+                            current.effective_description()
+                        ),
+                    )),
+                    Some("read_only") => {
+                        s.config.sandbox_mode = crate::config::SandboxMode::ReadOnly;
+                        crate::config::save_entire_config(&s.config);
+                        let effective = s.config.sandbox_mode.effective_description();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("OS sandbox mode set to read_only ({effective})"),
+                        ));
+                    }
+                    Some("workspace_write") => {
+                        s.config.sandbox_mode = crate::config::SandboxMode::WorkspaceWrite;
+                        crate::config::save_entire_config(&s.config);
+                        let effective = s.config.sandbox_mode.effective_description();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("OS sandbox mode set to workspace_write ({effective})"),
+                        ));
+                    }
+                    Some("workspace_write_network") => {
+                        s.config.sandbox_mode = crate::config::SandboxMode::WorkspaceWriteNetwork;
+                        crate::config::save_entire_config(&s.config);
+                        let effective = s.config.sandbox_mode.effective_description();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("OS sandbox mode set to workspace_write_network ({effective})"),
+                        ));
+                    }
+                    Some(_) => s.history.push(ChatMessage::new(
+                        "system",
+                        "Invalid option. Use read_only, workspace_write, or workspace_write_network.",
+                    )),
+                }
+            }
             "/verbosity" => {
                 use crate::app::state::Verbosity;
                 let label = |v: &Verbosity| match v {
