@@ -116,12 +116,7 @@ impl ControllerSnapshot {
                 .history_picker_sessions
                 .iter()
                 .map(|session| SessionChoice {
-                    id: session
-                        .path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or_default()
-                        .to_owned(),
+                    id: crate::config::session_id_from_path(&session.path).unwrap_or_default(),
                     title: session.title.clone(),
                     when: session.when.clone(),
                     message_count: session.message_count,

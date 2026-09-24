@@ -52,7 +52,7 @@ async fn controller_worker(
         match command {
             Command::Shutdown => {
                 if let Some(session) = active.take() {
-                    session.cancel_token.cancel();
+                    retire_session(session, &updates).await;
                 }
                 break;
             }
@@ -69,7 +69,7 @@ async fn controller_worker(
                     continue;
                 };
                 if let Some(previous) = active.take() {
-                    previous.cancel_token.cancel();
+                    retire_session(previous, &updates).await;
                 }
                 generation += 1;
                 let mut state = AppState::new_with_workspace_session(&workspace, None);
@@ -101,14 +101,56 @@ async fn controller_worker(
                     );
                     continue;
                 };
-                if let Some(previous) = active.take() {
-                    previous.cancel_token.cancel();
+                let Some(meta) = crate::config::session_meta_by_id(&session_id) else {
+                    send_error(
+                        &updates,
+                        generation,
+                        ControllerError::Session(format!("session not found: {session_id}")),
+                    );
+                    continue;
+                };
+                if crate::config::load_session_file(&meta.path).is_empty() {
+                    send_error(
+                        &updates,
+                        generation,
+                        ControllerError::Session(format!("session has no history: {session_id}")),
+                    );
+                    continue;
                 }
-                generation += 1;
+                if let Some(previous) = active.take() {
+                    retire_session(previous, &updates).await;
+                }
                 let mut state = AppState::new_with_workspace_session(&workspace, Some(&session_id));
                 state.workspace_root = Some(workspace.clone());
                 state.task_working_directory = Some(workspace);
-                state.history = crate::config::load_session_history_direct(&session_id).into();
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .resume(
+                        &mut state,
+                        crate::app::SessionAction::Id(session_id.clone()),
+                    )
+                {
+                    send_error(
+                        &updates,
+                        generation,
+                        ControllerError::Session(error.to_string()),
+                    );
+                    continue;
+                }
+                if let Some(profile_name) = crate::config::load_session_settings(&session_id)
+                    .map(|settings| settings.active_profile)
+                    && let Some((model, url)) = state
+                        .config
+                        .models
+                        .iter()
+                        .find(|profile| {
+                            profile.name == profile_name || profile.model == profile_name
+                        })
+                        .map(|profile| (profile.model.clone(), profile.url.clone()))
+                {
+                    state.model_name = model;
+                    state.api_base_url = url;
+                }
+                generation += 1;
                 state.auto_confirm = true;
                 let session = ActiveSession {
                     generation,
@@ -155,15 +197,26 @@ async fn controller_worker(
                     continue;
                 };
                 let mut state = session.state.lock().await;
-                if let Some((model_name, api_base_url)) = state
+                if let Some((model_name, api_base_url, profile_name)) = state
                     .config
                     .models
                     .iter()
                     .find(|profile| profile.model == model || profile.name == model)
-                    .map(|profile| (profile.model.clone(), profile.url.clone()))
+                    .map(|profile| {
+                        (
+                            profile.model.clone(),
+                            profile.url.clone(),
+                            profile.name.clone(),
+                        )
+                    })
                 {
                     state.model_name = model_name;
                     state.api_base_url = api_base_url;
+                    crate::config::record_session_settings_for_profile(
+                        &state.active_session_id,
+                        &state.config,
+                        &profile_name,
+                    );
                     send_snapshot_locked(&updates, session.generation, &state);
                 } else {
                     send_error(&updates, session.generation, ControllerError::Model(model));
@@ -171,14 +224,53 @@ async fn controller_worker(
             }
             Command::ListSessions => {
                 if let Some(session) = active.as_ref() {
-                    send_snapshot(&updates, session.generation, &session.state).await;
+                    let state = session.state.lock().await;
+                    let sessions = crate::app::actions::build_session_list(&state);
+                    let mut snapshot = ControllerSnapshot::from_state(session.generation, &state);
+                    snapshot.sessions = sessions
+                        .into_iter()
+                        .map(|session| SessionChoice {
+                            id: crate::config::session_id_from_path(&session.path)
+                                .unwrap_or_default(),
+                            title: session.title,
+                            when: session.when,
+                            message_count: session.message_count,
+                        })
+                        .collect();
+                    if crate::config::session_has_content(&state.history)
+                        && !snapshot
+                            .sessions
+                            .iter()
+                            .any(|choice| choice.id == state.active_session_id)
+                    {
+                        snapshot.sessions.insert(
+                            0,
+                            SessionChoice {
+                                id: state.active_session_id.clone(),
+                                title: crate::config::session_title(&state.history),
+                                when: state
+                                    .history
+                                    .first()
+                                    .map(|message| message.timestamp.clone())
+                                    .unwrap_or_default(),
+                                message_count: state.history.len(),
+                            },
+                        );
+                    }
+                    let _ = updates.send(ControllerEvent {
+                        generation: session.generation,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    });
                 } else {
+                    let mut state = AppState::new_with_workspace_session(&launch_dir, Some(""));
+                    state.workspace_root = Some(launch_dir.clone());
+                    state.task_working_directory = Some(launch_dir.clone());
+                    state.history_picker_sessions = crate::app::actions::build_session_list(&state);
+                    let mut snapshot = ControllerSnapshot::from_state(generation, &state);
+                    snapshot.session_id = None;
                     let _ = updates.send(ControllerEvent {
                         generation,
-                        update: ControllerUpdate::Snapshot(empty_state_snapshot(
-                            generation,
-                            &launch_dir,
-                        )),
+                        update: ControllerUpdate::Snapshot(snapshot),
                     });
                 }
             }
@@ -205,8 +297,22 @@ async fn controller_worker(
         }
     }
     if let Some(session) = active {
+        retire_session(session, &updates).await;
+    }
+}
+
+async fn retire_session(
+    mut session: ActiveSession,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+) {
+    if session.turn_task.is_some() {
+        cancel_active_turn_inner(&mut session, updates, false).await;
+    } else {
         session.cancel_token.cancel();
     }
+    let state = session.state.lock().await;
+    crate::config::save_session_history(&state.active_session_id, &state.history);
+    crate::config::flush_history();
 }
 
 fn empty_snapshot(generation: u64) -> ControllerSnapshot {
@@ -224,12 +330,6 @@ fn empty_snapshot(generation: u64) -> ControllerSnapshot {
         pending_question: None,
         pending_approval: None,
     }
-}
-
-fn empty_state_snapshot(generation: u64, launch_dir: &std::path::Path) -> ControllerSnapshot {
-    let mut snapshot = empty_snapshot(generation);
-    snapshot.workspace = Some(launch_dir.to_path_buf());
-    snapshot
 }
 
 async fn send_snapshot(
@@ -293,6 +393,14 @@ pub(super) async fn cancel_active_turn(
     session: &mut ActiveSession,
     updates: &mpsc::UnboundedSender<ControllerEvent>,
 ) {
+    cancel_active_turn_inner(session, updates, true).await;
+}
+
+async fn cancel_active_turn_inner(
+    session: &mut ActiveSession,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+    publish_snapshot: bool,
+) {
     {
         let mut state = session.state.lock().await;
         if let Some(response) = state.tool_confirmation_response.take() {
@@ -323,7 +431,9 @@ pub(super) async fn cancel_active_turn(
     // The old queue has unwound before this fresh token is used for another
     // turn in the same session.
     session.cancel_token = CancellationToken::new();
-    send_snapshot(updates, session.generation, &session.state).await;
+    if publish_snapshot {
+        send_snapshot(updates, session.generation, &session.state).await;
+    }
 }
 
 pub(super) async fn answer_question(

@@ -4,6 +4,273 @@ use super::{
 use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion, ToolConfirmation};
 use std::time::Duration;
 
+#[tokio::test]
+async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
+    use tokio::io::AsyncWriteExt;
+
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    std::fs::create_dir(workspace.path().join(".rustcode")).expect("project config directory");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock provider");
+    let provider = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    std::fs::write(
+        workspace.path().join(".rustcode/config.toml"),
+        format!(
+            "default = \"controller-mock\"\n[[models]]\nname = \"controller-mock\"\nurl = \"{provider}\"\nmodel = \"controller-mock\"\ntool_protocol = \"native\"\n"
+        ),
+    )
+    .expect("project config");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("provider request");
+        read_provider_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"saved answer\"}}]}\n\n")
+            .await
+            .expect("send answer");
+        socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            .await
+            .expect("finish answer");
+        socket
+            .write_all(b"data: [DONE]\n\n")
+            .await
+            .expect("finish stream");
+    });
+
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start saved session");
+    let started = updates.recv().await.expect("start snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("StartNew should return a snapshot");
+    };
+    let saved_id = started.session_id.expect("session ID");
+    handle
+        .send(Command::Submit("saved prompt".to_owned()))
+        .expect("save a conversation turn");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if matches!(event.update, ControllerUpdate::Snapshot(snapshot) if !snapshot.turn_active)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("saved turn completion");
+    server.await.expect("mock provider");
+    handle.send(Command::ListSessions).expect("list sessions");
+    let listed = updates.recv().await.expect("session list snapshot");
+    let ControllerUpdate::Snapshot(listed) = listed.update else {
+        panic!("ListSessions should return a snapshot");
+    };
+    assert!(
+        listed.sessions.iter().any(|session| session.id == saved_id),
+        "expected {saved_id}, session list: {:?}",
+        listed.sessions,
+    );
+
+    handle
+        .send(Command::Resume {
+            session_id: saved_id.clone(),
+            workspace: workspace.path().to_path_buf(),
+        })
+        .expect("resume saved session");
+    let resumed = loop {
+        let event = updates.recv().await.expect("resumed snapshot");
+        if event.generation > listed.generation {
+            break event;
+        }
+    };
+    let ControllerUpdate::Snapshot(resumed) = resumed.update else {
+        panic!("Resume should return a snapshot");
+    };
+    assert_eq!(
+        resumed.workspace.as_deref(),
+        Some(
+            workspace
+                .path()
+                .canonicalize()
+                .expect("canonical workspace")
+                .as_path()
+        )
+    );
+    assert_eq!(resumed.session_id.as_deref(), Some(saved_id.as_str()));
+    assert_eq!(resumed.transcript[0].content, "saved prompt");
+    assert!(resumed.generation > listed.generation);
+
+    handle.send(Command::Shutdown).expect("shutdown");
+    assert!(
+        updates.recv().await.is_none(),
+        "shutdown should finish worker"
+    );
+    let persisted = crate::config::load_session_history_direct(&saved_id);
+    assert!(
+        persisted
+            .iter()
+            .any(|message| message.content == "saved prompt")
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_rejects_invalid_workspace_and_model_without_replacing_session() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("start snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("StartNew should return a snapshot");
+    };
+
+    handle
+        .send(Command::SelectModel("not-configured".to_owned()))
+        .expect("select invalid model");
+    assert!(matches!(
+        updates.recv().await.expect("model error").update,
+        ControllerUpdate::Error(super::ControllerError::Model(_))
+    ));
+    handle
+        .send(Command::StartNew(workspace.path().join("missing")))
+        .expect("start invalid workspace");
+    assert!(matches!(
+        updates.recv().await.expect("workspace error").update,
+        ControllerUpdate::Error(super::ControllerError::InvalidWorkspace(_))
+    ));
+
+    handle.send(Command::ListSessions).expect("list sessions");
+    let unchanged = updates.recv().await.expect("unchanged snapshot");
+    let ControllerUpdate::Snapshot(unchanged) = unchanged.update else {
+        panic!("ListSessions should return a snapshot");
+    };
+    assert_eq!(unchanged.session_id, started.session_id);
+    assert_eq!(unchanged.generation, started.generation);
+    handle.send(Command::Shutdown).expect("shutdown");
+}
+
+#[tokio::test]
+async fn lifecycle_switch_cancels_old_turn_before_publishing_new_generation() {
+    use tokio::io::AsyncWriteExt;
+
+    let old_workspace = tempfile::tempdir().expect("old workspace");
+    std::fs::create_dir(old_workspace.path().join(".rustcode"))
+        .expect("old project config directory");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock provider");
+    let provider = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    std::fs::write(
+        old_workspace.path().join(".rustcode/config.toml"),
+        format!(
+            "default = \"controller-mock\"\n[[models]]\nname = \"controller-mock\"\nurl = \"{provider}\"\nmodel = \"controller-mock\"\ntool_protocol = \"native\"\n"
+        ),
+    )
+    .expect("old project config");
+    let (first_chunk_tx, first_chunk_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("provider request");
+        read_provider_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("send headers");
+        socket
+            .write_all(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"old workspace response\"}}]}\n\n",
+            )
+            .await
+            .expect("send first chunk");
+        let _ = first_chunk_tx.send(());
+        let _ = release_rx.await;
+        let _ = socket.write_all(b"data: [DONE]\n\n").await;
+    });
+
+    let new_workspace = tempfile::tempdir().expect("new workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        old_workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(old_workspace.path().to_path_buf()))
+        .expect("start old session");
+    let started = updates.recv().await.expect("old session snapshot");
+    let old_generation = started.generation;
+    handle
+        .send(Command::Submit("old prompt".to_owned()))
+        .expect("submit old prompt");
+    tokio::time::timeout(Duration::from_secs(10), first_chunk_rx)
+        .await
+        .expect("provider first chunk timeout")
+        .expect("first chunk signal");
+
+    handle
+        .send(Command::StartNew(new_workspace.path().to_path_buf()))
+        .expect("switch workspace");
+    let mut saw_old_cancel = false;
+    let switched = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if event.generation == old_generation
+                && matches!(
+                    event.update,
+                    ControllerUpdate::Turn(super::TurnUpdate::Cancelled)
+                )
+            {
+                saw_old_cancel = true;
+            }
+            if event.generation > old_generation
+                && let ControllerUpdate::Snapshot(snapshot) = event.update
+            {
+                return snapshot;
+            }
+        }
+        panic!("controller closed before workspace switch completed");
+    })
+    .await
+    .expect("workspace switch timeout");
+    assert!(saw_old_cancel);
+    assert!(switched.generation > old_generation);
+    assert_eq!(
+        switched.workspace.as_deref(),
+        Some(
+            new_workspace
+                .path()
+                .canonicalize()
+                .expect("canonical workspace")
+                .as_path()
+        )
+    );
+    let stale = super::ControllerEvent {
+        generation: old_generation,
+        update: ControllerUpdate::Turn(super::TurnUpdate::TextDelta("late".to_owned())),
+    };
+    assert!(!accepts_generation(switched.generation, &stale));
+
+    let _ = release_tx.send(());
+    let _ = server.await;
+    handle.send(Command::Shutdown).expect("shutdown");
+}
+
 #[test]
 fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
