@@ -521,6 +521,8 @@ mod tests {
                         } else {
                             "printf retained".to_owned()
                         },
+                        status_command: None,
+                        sandboxed_shell: false,
                         cwd: None,
                         env: Vec::new(),
                         timeout: std::time::Duration::from_secs(5),

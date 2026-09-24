@@ -139,6 +139,36 @@ jobs:
               # warnings visible locally while denying only correctness lints.
               run: cargo clippy --locked -- -A warnings -D clippy::correctness
 
+    macos-seatbelt:
+        needs: changes
+        if: needs.changes.outputs.code == 'true'
+        name: macOS Seatbelt
+        runs-on: macos-15
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-seatbelt
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check test targets
+              run: cargo check --locked --tests
+
+            - name: Test command status metadata
+              run: cargo test --locked -p rustcode-command
+
+            - name: Test Seatbelt enforcement
+              run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
+
     portability:
         name: ${{ matrix.name }} portability coverage
         needs: changes
