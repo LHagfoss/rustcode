@@ -373,6 +373,15 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
         });
     }
     let result = probe.output().map_err(|error| format!("Linux shell sandbox could not probe bubblewrap network isolation: {error}; command was not run"))?;
+    // Bubblewrap consumes the filter FD when setting up a working namespace.
+    // The probe and the eventual shell share this memfd's open-file description,
+    // so restore its offset before handing it to the real command.
+    if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
+        return Err(format!(
+            "Linux shell sandbox could not rewind seccomp filter after network probe: {}; command was not run",
+            std::io::Error::last_os_error()
+        ));
+    }
     if result.status.success() {
         return Ok(true);
     }
@@ -661,6 +670,12 @@ mod tests {
             network_access: false,
         };
         let wrapped = command(&command_text, make_policy()).unwrap();
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe { libc::lseek(wrapped.inherited_fds[0].as_raw_fd(), 0, libc::SEEK_CUR,) },
+            0,
+            "seccomp filter must be rewound after the bwrap probe"
+        );
         let output = run_sandboxed(wrapped, workspace.path());
         assert!(
             output.success,
