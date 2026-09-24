@@ -7,7 +7,7 @@ use std::{
 use gpui_kit::{
     Anchor, Context, PathPromptOptions, Render, Window, actions,
     component::{
-        Disableable, Icon, IconName, Selectable, StyledExt, TitleBar,
+        Disableable, Icon, IconName, Selectable, Sizable, StyledExt, TitleBar,
         bubble::Bubble,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
@@ -15,10 +15,7 @@ use gpui_kit::{
         menu::{DropdownMenu, PopupMenuItem},
         message::{Message, MessageAlignment, MessageContent, MessageHeader},
         message_scroller::{MessageScroller, MessageScrollerState},
-        sidebar::{
-            Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
-            SidebarToggleButton,
-        },
+        sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
         text::TextView,
     },
     div,
@@ -457,9 +454,18 @@ impl AppView {
             *thought_time_ms = self.chat_state.thought_elapsed_ms();
         }
         let rows = group_tool_rows(rows);
+        let streaming_tail = !self.chat_state.stream_rows().is_empty() && !rows.is_empty();
         if self.messages.read(cx).item_count() != rows.len() {
             self.messages
                 .update(cx, |state, cx| state.reset(rows.len(), cx));
+        } else if streaming_tail {
+            // The streaming tail changes height every frame while the
+            // virtual list caches row heights by index. Remeasure it so the
+            // transcript never shows stale blank gaps while a turn streams.
+            let last = rows.len() - 1;
+            self.messages.update(cx, |state, cx| {
+                state.remeasure_items(last..last + 1, cx);
+            });
         }
         let rendered_rows = rows.clone();
         let expanded_thoughts = self.expanded_thoughts.clone();
@@ -473,7 +479,15 @@ impl AppView {
                 None => div().child("Message unavailable").into_any_element(),
             }
         })
-        .with_content_style(gpui_kit::StyleRefinement::default().gap_3().px_4().pb_4())
+        // The row wrapper already insets px_3, so keep the viewport flush:
+        // a second viewport inset misaligns message text against tool cards.
+        // Row gaps come from the row style (the default pb_8 is far too airy).
+        .with_content_style(gpui_kit::StyleRefinement::default().px_0().pb_1())
+        .with_list_style(gpui_kit::StyleRefinement::default().py_1())
+        .with_row_style(gpui_kit::StyleRefinement::default().pb_2())
+        // Melt partially visible edge rows into the background instead of
+        // clipping them mid-line.
+        .with_bottom_fade(rgb(0x1b1d1f))
         .size_full()
     }
 
@@ -547,31 +561,24 @@ impl AppView {
             .as_ref()
             .and_then(|snapshot| snapshot.session_id.as_deref());
 
-        let header = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .pt(px(34.))
-            .child(div().font_semibold().child("RustCode"))
-            .child(
-                div()
-                    .id("new-chat")
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .p_2()
-                    .rounded_lg()
-                    .text_sm()
-                    .cursor_pointer()
-                    .hover(|this| this.bg(rgb(0x34363a)))
-                    .child(Icon::new(IconName::Plus).size_4())
-                    .child("New chat")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.start_new_chat(cx);
-                    })),
-            );
+        let header = div().w_full().flex().flex_col().gap_3().pt(px(30.)).child(
+            div()
+                .id("new-chat")
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
+                .p_2()
+                .rounded_lg()
+                .text_sm()
+                .cursor_pointer()
+                .hover(|this| this.bg(rgb(0x34363a)))
+                .child(Icon::new(IconName::Plus).size_4())
+                .child("New chat")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.start_new_chat(cx);
+                })),
+        );
 
         let projects = SidebarGroup::new("Projects").child(
             SidebarMenu::new().child(
@@ -859,6 +866,8 @@ fn render_message(
                 .map(|ms| format!("RustCode · {} response", format_duration(ms)))
                 .unwrap_or_else(|| "RustCode".to_owned());
             let body = div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_2()
@@ -896,6 +905,8 @@ fn render_message(
                     .when(thought_expanded && !thought.is_empty(), |this| {
                         this.child(
                             div()
+                                .w_full()
+                                .min_w_0()
                                 .max_w(px(760.))
                                 .px_3()
                                 .py_2()
@@ -910,7 +921,16 @@ fn render_message(
                     })
                 })
                 .when(!answer.trim().is_empty(), |this| {
-                    this.child(TextView::markdown(format!("assistant-{index}"), answer))
+                    // Constrain the markdown to the content width so long
+                    // lines wrap instead of bleeding past the window edge;
+                    // wide tables and code blocks clip at the content box.
+                    this.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(TextView::markdown(format!("assistant-{index}"), answer)),
+                    )
                 });
             Message::new()
                 .alignment(MessageAlignment::Start)
@@ -923,7 +943,13 @@ fn render_message(
             .alignment(MessageAlignment::Start)
             .header(MessageHeader::new().child("System"))
             .content(
-                MessageContent::new().child(TextView::markdown(format!("system-{index}"), text)),
+                MessageContent::new().child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(TextView::markdown(format!("system-{index}"), text)),
+                ),
             )
             .into_any_element(),
     }
@@ -1144,7 +1170,7 @@ impl Render for AppView {
             .items_center()
             .gap_4()
             .px_6()
-            .pt(px(34.))
+            .pt(px(16.))
             .pb_5()
             .child(
                 div()
@@ -1190,12 +1216,24 @@ impl Render for AppView {
                     .child(composer),
             );
 
+        // SidebarToggleButton hardcodes a small button and a 16px icon with
+        // no size override, so use a large ghost button directly for a
+        // bigger, easier target.
+        let toggle_icon = if self.sidebar_collapsed {
+            IconName::PanelLeftOpen
+        } else {
+            IconName::PanelLeftClose
+        };
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
             .border_color(gpui_kit::rgba(0x00000000))
             .child(
-                SidebarToggleButton::new()
-                    .collapsed(self.sidebar_collapsed)
+                Button::new("sidebar-toggle")
+                    .ghost()
+                    .large()
+                    .icon(toggle_icon)
+                    .tooltip("Toggle sidebar")
+                    .accessibility_label("Toggle sidebar")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
             );
 
