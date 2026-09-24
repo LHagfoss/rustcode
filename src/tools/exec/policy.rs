@@ -862,6 +862,14 @@ pub(crate) fn rememberable_command_forbid_prefix_for_call(args: &Value) -> Optio
 /// accepted and normalized because deny rules only block matching calls.
 /// Shell composition and expansion syntax cannot form a stored rule.
 fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
+    parse_deny_tokens(command, false)
+}
+
+fn deny_invocation_tokens(command: &str) -> Option<Vec<String>> {
+    parse_deny_tokens(command, true)
+}
+
+fn parse_deny_tokens(command: &str, allow_simple_variables: bool) -> Option<Vec<String>> {
     let trimmed = command.trim_start();
     let command_start = trimmed
         .strip_prefix('"')
@@ -893,7 +901,8 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
                 let assignment_value = is_leading_assignment_value(&tokens, &token);
                 if ch == '`'
                     || ch == '$' && characters.peek() == Some(&'(')
-                    || matches!(ch, '$' | '^') && !assignment_value
+                    || ch == '$' && !assignment_value && !allow_simple_variables
+                    || ch == '^' && !assignment_value
                     || is_paired_expansion_marker(command, ch, '!') && !assignment_value
                     || is_paired_expansion_marker(command, ch, '%') && !assignment_value
                 {
@@ -916,7 +925,10 @@ fn plain_deny_rule_tokens(command: &str) -> Option<Vec<String>> {
                 if ch == '`'
                     || ch == '$' && characters.peek() == Some(&'(')
                     || matches!(ch, '(' | ')')
-                    || (matches!(ch, ';' | '|' | '&' | '<' | '>' | '$' | '{' | '}')
+                    || ch == '$'
+                        && !is_leading_assignment_value(&tokens, &token)
+                        && !allow_simple_variables
+                    || (matches!(ch, ';' | '|' | '&' | '<' | '>' | '{' | '}')
                         || matches!(ch, '*' | '?' | '[' | ']' | '~' | '^'))
                         && !is_leading_assignment_value(&tokens, &token)
                     || ch == '\\' && !windows_executable_path
@@ -963,6 +975,123 @@ fn is_paired_expansion_marker(command: &str, current: char, marker: char) -> boo
     current == marker && command.matches(marker).count() > 1
 }
 
+/// Remove simple file redirects before tokenizing a command. This keeps paths
+/// and descriptors from looking like command arguments while leaving compound
+/// or expandable redirect forms fail-closed.
+fn strip_simple_redirects(command: &str) -> Option<String> {
+    let characters = command.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0;
+    let mut quote = None;
+    while index < characters.len() {
+        let character = characters[index];
+        if let Some(active_quote) = quote {
+            output.push(character);
+            if character == active_quote {
+                quote = None;
+            } else if character == '\\' && active_quote == '"' {
+                index += 1;
+                if index < characters.len() {
+                    output.push(characters[index]);
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if !matches!(character, '<' | '>') {
+            output.push(character);
+            index += 1;
+            continue;
+        }
+
+        let fd_suffix_start = output
+            .char_indices()
+            .rev()
+            .take_while(|(_, ch)| ch.is_ascii_digit())
+            .map(|(index, _)| index)
+            .last();
+        let has_separate_fd = fd_suffix_start.is_some_and(|start| {
+            start == 0
+                || output[..start]
+                    .chars()
+                    .last()
+                    .is_some_and(char::is_whitespace)
+        });
+        if has_separate_fd {
+            while output.chars().last().is_some_and(|ch| ch.is_ascii_digit()) {
+                output.pop();
+            }
+        }
+        let operator = character;
+        index += 1;
+        if characters.get(index) == Some(&operator) {
+            // Here-documents and here-strings have their own parsing rules.
+            return None;
+        }
+        if operator == '>' && characters.get(index) == Some(&'|') {
+            return None;
+        }
+        while characters.get(index).is_some_and(|ch| ch.is_whitespace()) {
+            index += 1;
+        }
+        if characters.get(index) == Some(&'&') {
+            index += 1;
+            if characters
+                .get(index)
+                .is_none_or(|ch| !ch.is_ascii_digit() && *ch != '-')
+            {
+                return None;
+            }
+            while characters
+                .get(index)
+                .is_some_and(|ch| ch.is_ascii_digit() || *ch == '-')
+            {
+                index += 1;
+            }
+            continue;
+        }
+        let Some(&first) = characters.get(index) else {
+            return None;
+        };
+        if first == '\'' || first == '"' {
+            let target_quote = first;
+            index += 1;
+            let target_start = index;
+            while index < characters.len() && characters[index] != target_quote {
+                if matches!(characters[index], '$' | '`' | '<' | '>') {
+                    return None;
+                }
+                index += 1;
+            }
+            if index >= characters.len() {
+                return None;
+            }
+            index += 1;
+            if index == target_start {
+                return None;
+            }
+        } else {
+            let target_start = index;
+            while index < characters.len() && !characters[index].is_whitespace() {
+                if matches!(characters[index], '$' | '`' | '<' | '>') {
+                    return None;
+                }
+                index += 1;
+            }
+            if index == target_start {
+                return None;
+            }
+        }
+    }
+    quote.is_none().then_some(output)
+}
+
 /// Match a persistent deny prefix before regular command approval. Known
 /// command paths and global options are normalized, and composed segments and
 /// nested wrapper payloads are checked so they cannot hide a saved rule.
@@ -996,7 +1125,14 @@ fn denied_command_contains_rule(command: &str, rules: &[Vec<String>], depth: usi
     // patterns, messages, and other literal arguments stays literal.
     let mut previous_pipeline_segment: Option<String> = None;
     for (segment, follows_pipe) in split_deny_command_segments(command) {
-        let Some(tokens) = plain_deny_rule_tokens(&segment) else {
+        let Some(scannable_segment) = strip_simple_redirects(&segment) else {
+            if segment.chars().any(|ch| !ch.is_whitespace()) {
+                return true;
+            }
+            previous_pipeline_segment = None;
+            continue;
+        };
+        let Some(tokens) = deny_invocation_tokens(&scannable_segment) else {
             // We cannot safely understand shell syntax with active deny rules;
             // fail closed so wrappers/redirections cannot hide a denied argv.
             if segment.chars().any(|ch| !ch.is_whitespace()) {
@@ -1049,6 +1185,17 @@ fn denied_command_tokens_cover(tokens: &[String], rules: &[Vec<String>], depth: 
         return true;
     }
     let normalized = normalized_deny_command(tokens);
+    if rules.iter().any(|rule| {
+        !rule.is_empty()
+            && normalized.first() == rule.first()
+            && normalized
+                .iter()
+                .take(rule.len())
+                .skip(1)
+                .any(|token| token.contains('$'))
+    }) {
+        return true;
+    }
     if rules
         .iter()
         .any(|rule| !rule.is_empty() && normalized.starts_with(rule))
@@ -1644,11 +1791,16 @@ mod command_prefix_tests {
             ("git push", "FOO=bar git push"),
             ("git push", "FOO='static value' git push"),
             ("git push", "FOO=1 BAR=\"$VALUE\" git push"),
+            ("git push", "git push 2>/dev/null"),
             ("git push", "FOO=$(git push) echo harmless"),
             ("git push", "FOO=\"$(git push)\" echo harmless"),
             ("git push", "FOO=`git push` echo harmless"),
             ("git push", "$CMD push"),
             ("git push", "\"$CMD\" push"),
+            ("git push", "env \"$CMD\" push"),
+            ("git push", "sh -c '$CMD push'"),
+            ("git push", "sh -c \"$CMD push\""),
+            ("git push", "git \"$SUBCOMMAND\""),
             ("git push", "eval git push"),
             ("git push", "eval 'git push'"),
             ("git push", "sudo --user root git push"),
@@ -1680,6 +1832,11 @@ mod command_prefix_tests {
             ("git push", "printf push | xargs echo"),
             ("git push", "printf log | xargs -J_ git _ -1"),
             ("git push", "rg \"foo\\sbar\""),
+            ("git push", "git status 2>/dev/null"),
+            ("git push", "wc -l < README.md"),
+            ("git push", "echo ok > /tmp/file"),
+            ("git push", "echo \"$HOME\""),
+            ("git push", "rg \"$pattern\" README.md"),
             ("git push", "FOO=bar git log"),
             ("git push", "FOO='static value' git log"),
             ("git push", "FOO=\"$VALUE\" echo harmless"),
