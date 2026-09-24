@@ -947,6 +947,10 @@ pub struct AppConfig {
     /// repeated confirmation. Values are revalidated before matching.
     #[serde(default)]
     pub approved_command_prefixes: Vec<String>,
+    /// User-forbidden plain shell command prefixes. Deny rules take precedence
+    /// over reusable approvals and session auto-confirm.
+    #[serde(default)]
+    pub denied_command_prefixes: Vec<String>,
     #[serde(default)]
     pub audio: AudioConfig,
     /// Publish the active RustCode session to the local Discord desktop IPC
@@ -1004,6 +1008,8 @@ struct RuntimeConfig {
     #[serde(default)]
     approved_command_prefixes: Vec<String>,
     #[serde(default)]
+    denied_command_prefixes: Vec<String>,
+    #[serde(default)]
     audio: AudioConfig,
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
@@ -1049,6 +1055,8 @@ struct TomlConfig {
     mcp_servers: Option<Vec<McpServerConfig>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     approved_command_prefixes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    denied_command_prefixes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1196,6 +1204,7 @@ impl Default for AppConfig {
                 always_include: false,
             }],
             approved_command_prefixes: Vec::new(),
+            denied_command_prefixes: Vec::new(),
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             legacy_laya: None,
@@ -1428,6 +1437,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.last_active_session_id = runtime.last_active_session_id;
                     config.mcp_servers = runtime.mcp_servers;
                     config.approved_command_prefixes = runtime.approved_command_prefixes;
+                    config.denied_command_prefixes = runtime.denied_command_prefixes;
                     config.agent_mode = runtime.agent_mode;
                     config.verbosity = runtime.verbosity;
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
@@ -1514,6 +1524,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
+        denied_command_prefixes: Some(config.denied_command_prefixes.clone()),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         legacy_laya: config.legacy_laya.clone(),
@@ -1585,6 +1596,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(prefixes) = file.approved_command_prefixes {
         config.approved_command_prefixes = prefixes;
     }
+    if let Some(prefixes) = file.denied_command_prefixes {
+        config.denied_command_prefixes = prefixes;
+    }
     if let Some(audio) = file.audio {
         config.audio = audio;
     }
@@ -1633,6 +1647,7 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Command approvals are user trust decisions and must not be granted by a
     // checked-out project configuration.
     file.approved_command_prefixes = None;
+    file.denied_command_prefixes = None;
     // Legacy user data should remain attached to the global config, never a
     // checked-out project file.
     file.legacy_laya = None;
@@ -1713,6 +1728,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         last_active_session_id: None,
         mcp_servers: None,
         approved_command_prefixes: None,
+        denied_command_prefixes: None,
         audio: None,
         discord_rpc_enabled: None,
         legacy_laya: None,

@@ -723,6 +723,7 @@ mod tests {
             content_preview: String::new(),
             content_bytes: 0,
             rememberable_prefix: None,
+            forbidden_prefix: None,
         }]);
         state.pending_question = Some(crate::app::PendingQuestion::new(
             "Proceed?".to_owned(),

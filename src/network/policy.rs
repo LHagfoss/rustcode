@@ -68,15 +68,22 @@ impl InteractivePolicy {
             )
         };
         let approved_command_prefixes = state.lock().await.config.approved_command_prefixes.clone();
+        let denied_command_prefixes = state.lock().await.config.denied_command_prefixes.clone();
 
         if !auto_confirm {
             for call in tool_calls {
                 let mode = { state.lock().await.agent_mode };
                 let decision = authorization_for_interactive_call(call, mode, false, assessments);
                 let covered_by_prefix = saved_prefix_covers_call(call, &approved_command_prefixes);
+                let blocked_by_prefix = tools::denied_command_prefix_covers_call(
+                    &call.name,
+                    &call.arguments,
+                    &denied_command_prefixes,
+                );
                 if matches!(decision, tools::AuthorizationDecision::RequireConfirmation)
                     && !tools::is_agent_tool(&call.name)
                     && !covered_by_prefix
+                    && !blocked_by_prefix
                 {
                     let path = if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str())
                     {
@@ -133,6 +140,11 @@ impl InteractivePolicy {
                         rememberable_prefix: (call.name == "run_command")
                             .then(|| tools::rememberable_command_prefix_for_call(&call.arguments))
                             .flatten(),
+                        forbidden_prefix: (call.name == "run_command")
+                            .then(|| {
+                                tools::rememberable_command_forbid_prefix_for_call(&call.arguments)
+                            })
+                            .flatten(),
                     });
                 }
             }
@@ -173,6 +185,22 @@ impl InteractivePolicy {
                         && !state.config.approved_command_prefixes.contains(&prefix)
                     {
                         state.config.approved_command_prefixes.push(prefix);
+                        crate::config::save_entire_config(&state.config);
+                    }
+                    true
+                }
+                Ok(crate::app::ToolConfirmationResponse::ForbidAndRemember(prefix)) => {
+                    let mut state = state.lock().await;
+                    if tool_calls.len() == 1
+                        && tool_calls[0].name == "run_command"
+                        && tools::rememberable_command_forbid_prefix_for_call(
+                            &tool_calls[0].arguments,
+                        )
+                        .as_deref()
+                            == Some(prefix.as_str())
+                        && !state.config.denied_command_prefixes.contains(&prefix)
+                    {
+                        state.config.denied_command_prefixes.push(prefix);
                         crate::config::save_entire_config(&state.config);
                     }
                     true
@@ -257,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_prefix_applies_only_to_plain_run_command_calls() {
+    fn saved_allow_applies_only_to_exact_plain_run_command_calls() {
         let prefixes = vec!["cargo test".to_string()];
         let call = |command: &str, extra: serde_json::Value| ToolCall {
             name: "run_command".to_string(),
@@ -272,6 +300,10 @@ mod tests {
             call_id: None,
         };
         assert!(saved_prefix_covers_call(
+            &call("cargo test", serde_json::json!({})),
+            &prefixes
+        ));
+        assert!(!saved_prefix_covers_call(
             &call("cargo test --lib", serde_json::json!({})),
             &prefixes
         ));
@@ -326,14 +358,59 @@ mod tests {
             .expect("confirmation response channel");
         response
             .send(crate::app::ToolConfirmationResponse::ApproveAndRemember(
-                "cargo test".to_owned(),
+                "cargo test --lib".to_owned(),
             ))
             .expect("policy task should be waiting");
 
         assert!(task.await.expect("policy task should finish"));
         assert_eq!(
             state.lock().await.config.approved_command_prefixes,
-            ["cargo test"]
+            ["cargo test --lib"]
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_forbid_choice_persists_a_denied_prefix() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let policy_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({"command": "make test"}),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the command should await interactive confirmation");
+
+        let response = state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .expect("confirmation response channel");
+        response
+            .send(crate::app::ToolConfirmationResponse::ForbidAndRemember(
+                "make test".to_owned(),
+            ))
+            .expect("policy task should be waiting");
+
+        assert!(task.await.expect("policy task should finish"));
+        assert_eq!(
+            state.lock().await.config.denied_command_prefixes,
+            ["make test"]
         );
     }
 }

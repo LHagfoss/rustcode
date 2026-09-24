@@ -27,6 +27,7 @@ pub struct ToolConfirmation {
     pub content_preview: String,
     pub content_bytes: usize,
     pub rememberable_prefix: Option<String>,
+    pub forbidden_prefix: Option<String>,
 }
 
 /// An interactive `ask_question` prompt awaiting the user's choice. Rendered as

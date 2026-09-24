@@ -16,6 +16,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: None,
+        forbidden_prefix: None,
     }]);
 
     let input_area = Rect::new(0, 2, 100, 10);
@@ -79,6 +80,7 @@ fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
         ),
         content_bytes: 0,
         rememberable_prefix: None,
+        forbidden_prefix: None,
     }]);
 
     terminal
@@ -132,6 +134,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
         content_preview: "+new line".to_owned(),
         content_bytes: 9,
         rememberable_prefix: None,
+        forbidden_prefix: None,
     }]);
     terminal
         .draw(|frame| {
@@ -161,6 +164,7 @@ fn approval_selection_visibly_moves_to_deny() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: Some("cargo test".to_owned()),
     }]);
     terminal
         .draw(|frame| {
@@ -177,7 +181,8 @@ fn approval_selection_visibly_moves_to_deny() {
 
     assert!(rendered.contains("› 2. No, cancel this tool call"));
     assert!(!rendered.contains("› 1. Yes, proceed"));
-    assert!(rendered.contains("3. Always allow `cargo test…`"));
+    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("4. Always forbid literal tokens `cargo test…`"));
 }
 
 #[test]
@@ -191,6 +196,7 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
         content_preview: String::new(),
         content_bytes: 14,
         rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: Some("cargo test".to_owned()),
     }]);
     terminal
         .draw(|frame| {
@@ -206,12 +212,55 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
         .collect::<String>();
 
     assert!(rendered.contains("Would you like to run the following command?"));
-    assert!(rendered.contains("3. Always allow `cargo test…`"));
+    assert!(rendered.contains("3. Always allow this exact command"));
+    assert!(rendered.contains("4. Always forbid literal tokens `cargo test…`"));
     assert!(rendered.contains("$ cargo test --lib"));
 }
 
 #[test]
-fn approval_selection_reaches_the_reusable_prefix_choice() {
+fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
+    let mut terminal = Terminal::new(TestBackend::new(90, 12)).unwrap();
+    let mut state = AppState::new();
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "run_command".to_owned(),
+        path: "curl https://example.com".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 24,
+        rememberable_prefix: None,
+        forbidden_prefix: Some("curl".to_owned()),
+    }]);
+    terminal
+        .draw(|frame| {
+            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 90, 10))
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("3. Always forbid literal tokens `curl…`"));
+    assert!(!rendered.contains("Always allow"));
+
+    state.move_tool_confirmation_selection(1);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 2);
+    assert!(matches!(
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            2,
+            None,
+            Some("curl")
+        ),
+        Some(AppEvent::ApprovalDecision(ApprovalDecision::ForbidAndRemember(prefix)))
+            if prefix == "curl"
+    ));
+}
+
+#[test]
+fn approval_selection_reaches_allow_and_forbid_prefix_choices() {
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         tool_name: "run_command".to_owned(),
@@ -219,13 +268,16 @@ fn approval_selection_reaches_the_reusable_prefix_choice() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: Some("cargo test".to_owned()),
     }]);
     state.move_tool_confirmation_selection(1);
     assert_eq!(state.tool_confirmation_selected, 1);
     state.move_tool_confirmation_selection(1);
     assert_eq!(state.tool_confirmation_selected, 2);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 3);
     state.move_tool_confirmation_selection(-1);
-    assert_eq!(state.tool_confirmation_selected, 1);
+    assert_eq!(state.tool_confirmation_selected, 2);
 }
 
 #[test]
@@ -239,6 +291,7 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
             content_preview: String::new(),
             content_bytes: 1,
             rememberable_prefix: None,
+            forbidden_prefix: None,
         },
         ToolConfirmation {
             tool_name: "run_command".to_owned(),
@@ -246,6 +299,7 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
             content_preview: String::new(),
             content_bytes: 11,
             rememberable_prefix: None,
+            forbidden_prefix: None,
         },
     ]);
     terminal
@@ -275,31 +329,64 @@ fn approval_keys_emit_typed_decisions() {
         approval_event_for_key(
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
             1,
-            None
+            None,
+            None,
         ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Approve))
     ));
     assert!(matches!(
         approval_event_for_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            3,
+            Some("cargo test"),
+            Some("cargo test"),
+        ),
+        Some(AppEvent::ApprovalDecision(ApprovalDecision::ForbidAndRemember(prefix)))
+            if prefix == "cargo test"
+    ));
+    assert!(matches!(
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            0,
+            None,
+            Some("cargo test"),
+        ),
+        Some(AppEvent::ApprovalDecision(ApprovalDecision::ForbidAndRemember(prefix)))
+            if prefix == "cargo test"
+    ));
+    assert!(matches!(
+        approval_event_for_key(
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
             1,
-            None
+            None,
+            None,
         ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAll))
     ));
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1, None),
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            1,
+            None,
+            None
+        ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
     ));
     assert!(matches!(
-        approval_event_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 0, None),
+        approval_event_for_key(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            0,
+            None,
+            None
+        ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
     ));
     assert!(matches!(
         approval_event_for_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             2,
-            Some("cargo test")
+            Some("cargo test"),
+            Some("cargo test"),
         ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAndRemember(prefix)))
             if prefix == "cargo test"
@@ -308,7 +395,8 @@ fn approval_keys_emit_typed_decisions() {
         approval_event_for_key(
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
             0,
-            Some("cargo test")
+            Some("cargo test"),
+            Some("cargo test"),
         ),
         Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAndRemember(prefix)))
             if prefix == "cargo test"

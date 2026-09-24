@@ -48,6 +48,7 @@ fn rejects_steers_without_a_regular_active_streaming_turn() {
         content_preview: String::new(),
         content_bytes: 0,
         rememberable_prefix: None,
+        forbidden_prefix: None,
     }]);
     assert!(!state.queue_steer("no".to_owned()));
     state.pending_tool_confirmation = None;

@@ -21,7 +21,8 @@ pub(super) async fn apply_approval_decision(
             state.lock().await.auto_confirm = true;
             (true, None)
         }
-        ApprovalDecision::ApproveAndRemember(prefix) => (true, Some(prefix)),
+        ApprovalDecision::ApproveAndRemember(prefix) => (true, Some((prefix, false))),
+        ApprovalDecision::ForbidAndRemember(prefix) => (true, Some((prefix, true))),
         ApprovalDecision::Deny => (false, None),
         ApprovalDecision::Custom(reason) => (!reason.trim().is_empty(), None),
     };
@@ -33,15 +34,32 @@ pub(super) async fn apply_approval_decision(
     if let Some(tx) = state.tool_confirmation_response.take() {
         let response = if !approved {
             crate::app::ToolConfirmationResponse::Deny
-        } else if let Some(prefix) = remember_prefix {
+        } else if let Some((prefix, forbid)) = remember_prefix {
             let valid_prefix = state
                 .pending_tool_confirmation
                 .as_ref()
-                .filter(|items| items.len() == 1 && items[0].rememberable_prefix.is_some())
-                .and_then(|items| items[0].rememberable_prefix.clone())
+                .filter(|items| {
+                    items.len() == 1
+                        && if forbid {
+                            items[0].forbidden_prefix.is_some()
+                        } else {
+                            items[0].rememberable_prefix.is_some()
+                        }
+                })
+                .and_then(|items| {
+                    if forbid {
+                        items[0].forbidden_prefix.clone()
+                    } else {
+                        items[0].rememberable_prefix.clone()
+                    }
+                })
                 .filter(|actual| actual == &prefix);
             valid_prefix.map_or(crate::app::ToolConfirmationResponse::Approve, |prefix| {
-                crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)
+                if forbid {
+                    crate::app::ToolConfirmationResponse::ForbidAndRemember(prefix)
+                } else {
+                    crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)
+                }
             })
         } else {
             crate::app::ToolConfirmationResponse::Approve
