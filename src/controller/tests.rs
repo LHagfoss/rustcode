@@ -373,6 +373,8 @@ async fn controller_routes_background_completion_to_the_session_and_restarts_its
                     } else {
                         "printf background_ready".to_owned()
                     },
+                    status_command: None,
+                    sandboxed_shell: false,
                     cwd: Some(workspace.path().to_path_buf()),
                     env: Vec::new(),
                     timeout: Duration::from_secs(5),
