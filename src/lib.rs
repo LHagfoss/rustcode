@@ -8,6 +8,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod context;
+pub mod controller;
 pub mod daemon;
 mod discord_rpc;
 mod doctor;
