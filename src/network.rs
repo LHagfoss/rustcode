@@ -90,7 +90,6 @@ pub(crate) use tool_exec::{
 
 #[path = "network/turn/mod.rs"]
 pub(crate) mod turn_engine;
-pub(crate) use turn_engine::process_queue_orchestrator;
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 pub(crate) use turn_engine::run_agent_turn_with_context;
 pub use turn_engine::{SegmentCheckpoint, TurnContext, run_agent_turn};

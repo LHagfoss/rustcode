@@ -1213,3 +1213,46 @@ async fn update_command_initiates_check_and_sets_notice() {
         );
     }
 }
+
+#[test]
+fn submit_plain_prompt_ignores_empty_text_and_queues_in_order() {
+    use crate::app::AppState;
+
+    let mut state = AppState::new();
+    assert_eq!(
+        super::submit_plain_prompt(&mut state, "  ".into()),
+        super::SubmitOutcome::Empty
+    );
+    assert!(state.pending_queue.is_empty());
+    assert_eq!(
+        super::submit_plain_prompt(&mut state, "first".into()),
+        super::SubmitOutcome::Queued
+    );
+    assert_eq!(
+        super::submit_plain_prompt(&mut state, "second".into()),
+        super::SubmitOutcome::Queued
+    );
+    assert_eq!(state.pending_queue, ["first", "second"]);
+}
+
+#[test]
+fn submit_plain_prompt_steers_only_when_the_active_turn_accepts_steering() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.active_turn_steerable_session = Some(state.active_session_id.clone());
+    assert_eq!(
+        super::submit_plain_prompt(&mut state, "correction".into()),
+        super::SubmitOutcome::Steered
+    );
+    assert!(state.pending_queue.is_empty());
+    assert_eq!(state.pending_steers[0].text, "correction");
+
+    state.draft_submit_mode = DraftSubmitMode::Queue;
+    assert_eq!(
+        super::submit_plain_prompt(&mut state, "follow-up".into()),
+        super::SubmitOutcome::Queued
+    );
+    assert_eq!(state.pending_queue, ["follow-up"]);
+}

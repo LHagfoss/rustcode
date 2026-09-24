@@ -93,14 +93,19 @@ mod commands;
 mod enter;
 #[path = "actions/session.rs"]
 mod session;
+#[path = "actions/submit.rs"]
+mod submit;
 
 #[cfg(test)]
 #[path = "actions/tests.rs"]
 mod tests;
 
 pub use commands::*;
+#[allow(unused_imports)]
 pub use enter::handle_enter;
+pub(crate) use enter::handle_enter_with_ui_events;
 pub use session::*;
+pub(crate) use submit::{SubmitOutcome, submit_plain_prompt};
 
 #[cfg(test)]
 use commands::append_codex_rate_limits;

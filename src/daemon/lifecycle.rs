@@ -511,12 +511,26 @@ mod tests {
         tokio::task::yield_now().await;
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        // The executor-backed server drops its scheduler handle as the
-        // cancelled task is torn down; give Tokio one turn to finish that
-        // destructor before reacquiring the ownership lock.
-        tokio::task::yield_now().await;
         assert!(!lifecycle.socket_path().exists());
         assert!(!lifecycle.registration_path().exists());
-        drop(lifecycle.bind().unwrap());
+        // The aborted task releases its ownership lock asynchronously; a
+        // single yield is not enough on a loaded runner, so poll with a
+        // deadline instead of assuming one turn suffices.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match lifecycle.bind() {
+                Ok(server) => {
+                    drop(server);
+                    break;
+                }
+                Err(error) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "ownership lock not released after abort: {error:#}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
     }
 }
