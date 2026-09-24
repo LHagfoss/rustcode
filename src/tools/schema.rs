@@ -1257,10 +1257,11 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
 
     // Reserve complete configured server toolsets first. A reservation is
     // all-or-none: if adding the complete set would exceed either hard limit,
-    // the server is reported as rejected and its tools remain eligible for
-    // ordinary relevance selection.
+    // the server is reported as rejected and none of its tools are bound for
+    // this request.
     let mut selected = Vec::new();
     let mut selected_indices = std::collections::HashSet::new();
+    let mut rejected_indices = std::collections::HashSet::new();
     let mut selected_schema_bytes: usize = 0;
     let mut schema_budget_exhausted = false;
     let mut reserved_servers = Vec::new();
@@ -1296,19 +1297,28 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         } else {
             rejected_reservations.push(server.clone());
             schema_budget_exhausted |= !bytes_fit;
+            rejected_indices.extend(group);
         }
     }
 
     let candidates = requested
         .iter()
         .copied()
+        .filter(|index| !rejected_indices.contains(index))
         .chain(previous.iter().copied())
+        .filter(|index| !rejected_indices.contains(index))
         .chain(
             sticky_names
                 .iter()
                 .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky)),
         )
-        .chain(relevant.iter().map(|(index, _)| *index));
+        .filter(|index| !rejected_indices.contains(index))
+        .chain(
+            relevant
+                .iter()
+                .map(|(index, _)| *index)
+                .filter(|index| !rejected_indices.contains(index)),
+        );
     let mut previously_used_count = 0;
     for index in candidates {
         if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
@@ -1350,6 +1360,9 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
                 break;
             }
             if let Some(index) = tools.iter().position(|(name, _, _)| name == preferred) {
+                if rejected_indices.contains(&index) {
+                    continue;
+                }
                 if !selected_indices.insert(index) {
                     continue;
                 }

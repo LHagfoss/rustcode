@@ -543,12 +543,15 @@ fn mcp_always_include_reports_a_reservation_that_exceeds_the_tool_cap() {
     for index in 0..(MAX_MCP_NATIVE_SCHEMAS + 1) {
         tools.push((
             format!("oversize_tool_{index:02}"),
-            "Unrelated".to_string(),
+            "Send email using this mail service".to_string(),
             serde_json::json!({"type":"object","properties":{}}),
         ));
         owners.push("oversize".to_string());
     }
-    let messages = vec![serde_json::json!({"role":"user","content":"unmatched"})];
+    let messages = vec![serde_json::json!({
+        "role":"user",
+        "content":"Send email using the mail service"
+    })];
 
     let (selected, stats) =
         super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
@@ -571,17 +574,23 @@ fn mcp_always_include_rejects_a_server_toolset_that_exceeds_the_schema_byte_budg
     let tools = vec![
         (
             "first_tool".to_string(),
-            "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2),
+            format!(
+                "Send email {}",
+                "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2)
+            ),
             serde_json::json!({"type":"object","properties":{}}),
         ),
         (
             "second_tool".to_string(),
-            "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2),
+            format!(
+                "Send email {}",
+                "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2)
+            ),
             serde_json::json!({"type":"object","properties":{}}),
         ),
     ];
     let owners = vec!["large".to_string(), "large".to_string()];
-    let messages = vec![serde_json::json!({"role":"user","content":"unmatched"})];
+    let messages = vec![serde_json::json!({"role":"user","content":"Send email"})];
 
     let (selected, stats) =
         super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
