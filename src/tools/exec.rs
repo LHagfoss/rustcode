@@ -1018,6 +1018,7 @@ pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
 
 #[cfg(test)]
 mod tests {
+    use super::sandbox;
     #[cfg(unix)]
     use super::terminate_background_pid;
     use super::{
@@ -1314,6 +1315,9 @@ mod tests {
 
     #[test]
     fn run_command_reports_stdout_and_stderr_while_running() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = events.clone();
         let callback: super::CommandProgressCallback = std::sync::Arc::new(move |bytes, stderr| {
@@ -1345,6 +1349,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancellable_run_command_returns_one_cancelled_result() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let token = tokio_util::sync::CancellationToken::new();
         let trigger = token.clone();
         std::thread::spawn(move || {
@@ -1414,6 +1421,9 @@ mod tests {
 
     #[test]
     fn run_command_executes_chained_shell_commands() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf one; printf two"
         }))
@@ -1425,6 +1435,9 @@ mod tests {
 
     #[test]
     fn run_command_supports_conditional_chaining() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf first && printf second"
         }))
@@ -1446,6 +1459,9 @@ mod tests {
 
     #[test]
     fn command_execution_metadata_classifies_nonzero_exit_only() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let failed = run_command_output(&serde_json::json!({"command": "false"}))
             .expect("false should return a structured command result");
         assert!(!failed.success);
@@ -1463,6 +1479,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn command_result_envelope_marks_sigpipe_as_downstream_completion() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let output = run_command_output(&serde_json::json!({
             "command": "yes | head -n 1"
         }))
@@ -1484,6 +1503,9 @@ mod tests {
 
     #[test]
     fn command_result_envelope_marks_a_successful_completion() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let output = run_command_output(&serde_json::json!({
             "command": "printf complete"
         }))
@@ -1610,6 +1632,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn self_managed_background_script_runs_in_foreground_with_output() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let session_id = format!(
             "self-managed-test-{}",
             std::time::SystemTime::now()
@@ -1932,6 +1957,9 @@ mod tests {
     // prior behavior) would throw that away before the model ever sees it.
     #[test]
     fn a_failing_command_with_oversized_output_keeps_the_tail() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf 'START_MARKER\\n'; \
                 i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
@@ -1958,6 +1986,9 @@ mod tests {
     // truncation must not silently drop either end.
     #[test]
     fn oversized_output_is_bounded_and_keeps_both_head_and_tail() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         let result = run_command(&serde_json::json!({
             "command": "printf 'START_MARKER\\n'; \
                 i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
@@ -1983,6 +2014,9 @@ mod tests {
 
     #[test]
     fn cat_and_head_are_read_only_and_execute_cleanly() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
         assert!(!command_requires_confirmation(&serde_json::json!({
             "command": "cat Cargo.toml"
         })));

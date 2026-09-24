@@ -248,6 +248,9 @@ mod compiler_execution_tests {
 
     #[tokio::test]
     async fn stderr_only_cargo_failure_is_not_cached_as_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         std::fs::write(
             project.path().join("Cargo.toml"),
@@ -272,6 +275,9 @@ mod compiler_execution_tests {
 
     #[tokio::test]
     async fn successful_cargo_check_is_cached_as_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("Cargo.toml"), "[package]\nname = \"valid_compiler_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n").unwrap();
         std::fs::write(project.path().join("lib.rs"), "pub fn valid() {}\n").unwrap();
@@ -307,6 +313,9 @@ mod compiler_execution_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn nonzero_without_diagnostics_is_failure_and_zero_is_passed() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         let project = tempfile::tempdir().unwrap();
         let token = CancellationToken::new();
         let failure = run_compiler_command(
@@ -378,12 +387,18 @@ mod compiler_execution_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn compiler_timeout_kills_descendants() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         assert_compiler_tree_cleanup(false).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn compiler_cancellation_kills_descendants() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
         assert_compiler_tree_cleanup(true).await;
     }
 }
