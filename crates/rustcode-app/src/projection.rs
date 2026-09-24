@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use rustcode::controller::{
     ApprovalPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
@@ -8,9 +8,26 @@ use rustcode::controller::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionRow {
     User(String),
-    Assistant(String),
-    Tool { name: String, content: String },
+    Assistant {
+        content: String,
+        response_time_ms: Option<u64>,
+        thought_time_ms: Option<u64>,
+    },
+    Tool {
+        name: String,
+        content: String,
+        status: ToolStatus,
+        elapsed_ms: Option<u64>,
+    },
     System(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolStatus {
+    Running,
+    Pending,
+    Completed,
+    Failed,
 }
 
 pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<ProjectionRow> {
@@ -21,11 +38,23 @@ pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<P
                 ProjectionRow::Tool {
                     name: name.clone(),
                     content: item.content.clone(),
+                    status: if item.tool_pending {
+                        ToolStatus::Pending
+                    } else if item.tool_success == Some(false) {
+                        ToolStatus::Failed
+                    } else {
+                        ToolStatus::Completed
+                    },
+                    elapsed_ms: None,
                 }
             } else {
                 match item.role.as_str() {
                     "user" => ProjectionRow::User(item.content.clone()),
-                    "assistant" => ProjectionRow::Assistant(item.content.clone()),
+                    "assistant" => ProjectionRow::Assistant {
+                        content: item.content.clone(),
+                        response_time_ms: item.response_time_ms,
+                        thought_time_ms: item.thought_time_ms,
+                    },
                     _ => ProjectionRow::System(item.content.clone()),
                 }
             }
@@ -34,14 +63,18 @@ pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<P
 
     if !live_response.is_empty() {
         match rows.last_mut() {
-            Some(ProjectionRow::Assistant(content))
+            Some(ProjectionRow::Assistant { content, .. })
                 if live_response.starts_with(content.as_str()) =>
             {
                 content.push_str(&live_response[content.len()..]);
             }
-            Some(ProjectionRow::Assistant(content)) if content.ends_with(live_response) => {}
-            Some(ProjectionRow::Assistant(content)) => content.push_str(live_response),
-            _ => rows.push(ProjectionRow::Assistant(live_response.to_owned())),
+            Some(ProjectionRow::Assistant { content, .. }) if content.ends_with(live_response) => {}
+            Some(ProjectionRow::Assistant { content, .. }) => content.push_str(live_response),
+            _ => rows.push(ProjectionRow::Assistant {
+                content: live_response.to_owned(),
+                response_time_ms: None,
+                thought_time_ms: None,
+            }),
         }
     }
     rows
@@ -80,7 +113,11 @@ pub struct ChatViewState {
     approval_denied: bool,
     turn_active: bool,
     stream_rows: Vec<ProjectionRow>,
-    active_tools: HashMap<String, usize>,
+    active_tools: HashMap<String, (usize, Instant)>,
+    turn_started_at: Option<Instant>,
+    last_turn_elapsed_ms: Option<u64>,
+    thinking_started_at: Option<Instant>,
+    thinking_elapsed_ms: u64,
     pending_question: Option<QuestionPrompt>,
     pending_approval: Option<ApprovalPrompt>,
 }
@@ -113,6 +150,7 @@ impl ChatViewState {
         if !self.turn_active {
             self.stream_rows.clear();
             self.active_tools.clear();
+            self.thinking_started_at = None;
         }
     }
 
@@ -120,6 +158,10 @@ impl ChatViewState {
         match update {
             TurnUpdate::PromptStarted(prompt) => {
                 self.turn_active = true;
+                self.turn_started_at = Some(Instant::now());
+                self.last_turn_elapsed_ms = None;
+                self.thinking_started_at = None;
+                self.thinking_elapsed_ms = 0;
                 self.error = None;
                 self.approval_denied = false;
                 self.stream_rows.clear();
@@ -129,8 +171,22 @@ impl ChatViewState {
             TurnUpdate::TextDelta(text) => {
                 self.turn_active = true;
                 match self.stream_rows.last_mut() {
-                    Some(ProjectionRow::Assistant(content)) => content.push_str(&text),
-                    _ => self.stream_rows.push(ProjectionRow::Assistant(text)),
+                    Some(ProjectionRow::Assistant { content, .. }) => content.push_str(&text),
+                    _ => self.stream_rows.push(ProjectionRow::Assistant {
+                        content: text,
+                        response_time_ms: None,
+                        thought_time_ms: None,
+                    }),
+                }
+                if let Some(ProjectionRow::Assistant { content, .. }) = self.stream_rows.last() {
+                    let open = content.rfind("<think>");
+                    let close = content.rfind("</think>");
+                    let thinking = open.is_some_and(|open| close.is_none_or(|close| open > close));
+                    if thinking && self.thinking_started_at.is_none() {
+                        self.thinking_started_at = Some(Instant::now());
+                    } else if !thinking && let Some(started) = self.thinking_started_at.take() {
+                        self.thinking_elapsed_ms += started.elapsed().as_millis() as u64;
+                    }
                 }
             }
             TurnUpdate::ToolStarted { id, name } => {
@@ -138,18 +194,36 @@ impl ChatViewState {
                 let row = self.stream_rows.len();
                 self.stream_rows.push(ProjectionRow::Tool {
                     name,
-                    content: "Running…".to_owned(),
+                    content: String::new(),
+                    status: ToolStatus::Running,
+                    elapsed_ms: None,
                 });
-                self.active_tools.insert(id, row);
+                self.active_tools.insert(id, (row, Instant::now()));
             }
-            TurnUpdate::ToolFinished { id, content } => {
+            TurnUpdate::ToolFinished {
+                id,
+                content,
+                success,
+                pending,
+            } => {
                 self.turn_active = true;
-                if let Some(row) = self.active_tools.remove(&id)
+                if let Some((row, started_at)) = self.active_tools.remove(&id)
                     && let Some(ProjectionRow::Tool {
-                        content: current, ..
+                        content: current,
+                        status,
+                        elapsed_ms,
+                        ..
                     }) = self.stream_rows.get_mut(row)
                 {
                     *current = content;
+                    *status = if pending {
+                        ToolStatus::Pending
+                    } else if success {
+                        ToolStatus::Completed
+                    } else {
+                        ToolStatus::Failed
+                    };
+                    *elapsed_ms = Some(started_at.elapsed().as_millis() as u64);
                 }
             }
             TurnUpdate::ApprovalRequested(approvals) => {
@@ -160,7 +234,16 @@ impl ChatViewState {
                 self.turn_active = true;
                 self.pending_question = Some(question);
             }
-            TurnUpdate::TurnFinished | TurnUpdate::Cancelled => self.turn_active = false,
+            TurnUpdate::TurnFinished | TurnUpdate::Cancelled => {
+                self.turn_active = false;
+                if let Some(started) = self.thinking_started_at.take() {
+                    self.thinking_elapsed_ms += started.elapsed().as_millis() as u64;
+                }
+                self.last_turn_elapsed_ms = self
+                    .turn_started_at
+                    .take()
+                    .map(|started| started.elapsed().as_millis() as u64);
+            }
         }
     }
 
@@ -168,8 +251,41 @@ impl ChatViewState {
         self.turn_active
     }
 
+    pub fn turn_elapsed_ms(&self) -> Option<u64> {
+        self.turn_started_at
+            .map(|started| started.elapsed().as_millis() as u64)
+            .or(self.last_turn_elapsed_ms)
+    }
+
+    pub fn clear_turn_elapsed(&mut self) {
+        self.turn_started_at = None;
+        self.last_turn_elapsed_ms = None;
+        self.thinking_started_at = None;
+        self.thinking_elapsed_ms = 0;
+    }
+
+    pub fn thought_elapsed_ms(&self) -> Option<u64> {
+        (self.thinking_elapsed_ms > 0 || self.thinking_started_at.is_some()).then(|| {
+            self.thinking_elapsed_ms
+                + self
+                    .thinking_started_at
+                    .map(|started| started.elapsed().as_millis() as u64)
+                    .unwrap_or(0)
+        })
+    }
+
     pub fn stream_rows(&self) -> &[ProjectionRow] {
         &self.stream_rows
+    }
+
+    pub fn stream_rows_with_elapsed(&self) -> Vec<ProjectionRow> {
+        let mut rows = self.stream_rows.clone();
+        for (row, started) in self.active_tools.values() {
+            if let Some(ProjectionRow::Tool { elapsed_ms, .. }) = rows.get_mut(*row) {
+                *elapsed_ms = Some(started.elapsed().as_millis() as u64);
+            }
+        }
+        rows
     }
 
     pub fn pending_question(&self) -> Option<&QuestionPrompt> {
@@ -214,7 +330,7 @@ mod tests {
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
 
     use super::{
-        ChatViewState, ProjectionRow, answer_for_question, can_submit, project_rows,
+        ChatViewState, ProjectionRow, ToolStatus, answer_for_question, can_submit, project_rows,
         stop_available, toggle_option,
     };
 
@@ -223,6 +339,10 @@ mod tests {
             role: "user".to_owned(),
             content: content.to_owned(),
             tool_name: None,
+            tool_success: None,
+            tool_pending: false,
+            response_time_ms: None,
+            thought_time_ms: None,
         }
     }
 
@@ -231,6 +351,10 @@ mod tests {
             role: "assistant".to_owned(),
             content: content.to_owned(),
             tool_name: None,
+            tool_success: None,
+            tool_pending: false,
+            response_time_ms: None,
+            thought_time_ms: None,
         }
     }
 
@@ -239,6 +363,10 @@ mod tests {
             role: "tool".to_owned(),
             content: content.to_owned(),
             tool_name: Some(name.to_owned()),
+            tool_success: Some(true),
+            tool_pending: false,
+            response_time_ms: None,
+            thought_time_ms: None,
         }
     }
 
@@ -248,7 +376,11 @@ mod tests {
             project_rows(&[user("Hi"), assistant("Hello")], "!"),
             vec![
                 ProjectionRow::User("Hi".to_owned()),
-                ProjectionRow::Assistant("Hello!".to_owned()),
+                ProjectionRow::Assistant {
+                    content: "Hello!".to_owned(),
+                    response_time_ms: None,
+                    thought_time_ms: None
+                },
             ]
         );
     }
@@ -257,7 +389,11 @@ mod tests {
     fn live_response_already_present_in_history_is_not_duplicated() {
         assert_eq!(
             project_rows(&[assistant("Hello")], "Hello"),
-            vec![ProjectionRow::Assistant("Hello".to_owned())]
+            vec![ProjectionRow::Assistant {
+                content: "Hello".to_owned(),
+                response_time_ms: None,
+                thought_time_ms: None
+            }]
         );
     }
 
@@ -272,9 +408,15 @@ mod tests {
                 ProjectionRow::User("Run".to_owned()),
                 ProjectionRow::Tool {
                     name: "run_command".to_owned(),
-                    content: "done".to_owned()
+                    content: "done".to_owned(),
+                    status: ToolStatus::Completed,
+                    elapsed_ms: None,
                 },
-                ProjectionRow::Assistant("Okay".to_owned()),
+                ProjectionRow::Assistant {
+                    content: "Okay".to_owned(),
+                    response_time_ms: None,
+                    thought_time_ms: None
+                },
             ]
         );
     }
@@ -364,10 +506,16 @@ mod tests {
             view.stream_rows(),
             &[
                 ProjectionRow::User("run".to_owned()),
-                ProjectionRow::Assistant("Before ".to_owned()),
+                ProjectionRow::Assistant {
+                    content: "Before ".to_owned(),
+                    response_time_ms: None,
+                    thought_time_ms: None
+                },
                 ProjectionRow::Tool {
                     name: "read_file".to_owned(),
-                    content: "Running…".to_owned(),
+                    content: String::new(),
+                    status: ToolStatus::Running,
+                    elapsed_ms: None,
                 },
             ]
         );
@@ -375,21 +523,25 @@ mod tests {
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolFinished {
             id: "tool-1".to_owned(),
             content: "file contents".to_owned(),
+            success: true,
+            pending: false,
         }));
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
             "After".to_owned(),
         )));
+        assert_eq!(view.stream_rows().len(), 4);
+        assert!(matches!(
+            &view.stream_rows()[2],
+            ProjectionRow::Tool { name, content, status: ToolStatus::Completed, elapsed_ms: Some(_) }
+                if name == "read_file" && content == "file contents"
+        ));
         assert_eq!(
-            view.stream_rows(),
-            &[
-                ProjectionRow::User("run".to_owned()),
-                ProjectionRow::Assistant("Before ".to_owned()),
-                ProjectionRow::Tool {
-                    name: "read_file".to_owned(),
-                    content: "file contents".to_owned(),
-                },
-                ProjectionRow::Assistant("After".to_owned()),
-            ]
+            view.stream_rows()[3],
+            ProjectionRow::Assistant {
+                content: "After".to_owned(),
+                response_time_ms: None,
+                thought_time_ms: None
+            }
         );
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TurnFinished));

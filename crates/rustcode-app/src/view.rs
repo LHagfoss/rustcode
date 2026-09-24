@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
@@ -10,7 +11,7 @@ use gpui_kit::{
         bubble::Bubble,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Textarea, TextareaState},
+        input::{Enter, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         message::{Message, MessageAlignment, MessageContent, MessageHeader},
         message_scroller::{MessageScroller, MessageScrollerState},
@@ -48,7 +49,8 @@ fn current_branch(project: &Path) -> Option<String> {
 use crate::{
     backend::{NativeBackend, project_selection_command, resume_session_command},
     projection::{
-        ChatViewState, ProjectionRow, can_submit, project_rows, stop_available, toggle_option,
+        ChatViewState, ProjectionRow, ToolStatus, can_submit, project_rows, stop_available,
+        toggle_option,
     },
 };
 
@@ -70,6 +72,8 @@ pub struct AppView {
     clear_composer_on_render: bool,
     sidebar_collapsed: bool,
     git_branch: Option<String>,
+    expanded_thoughts: HashSet<usize>,
+    turn_timer_epoch: u64,
 }
 
 impl AppView {
@@ -88,12 +92,15 @@ impl AppView {
             TextareaState::new(window, cx)
                 .placeholder("Ask RustCode anything")
                 .auto_grow(2, 6)
+                .submit_on_enter(true)
         });
         let question_answer = cx.new(|cx| TextareaState::new(window, cx));
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
             backend,
             git_branch: current_branch(&launch_dir),
+            expanded_thoughts: HashSet::new(),
+            turn_timer_epoch: 0,
             selected_project: launch_dir.clone(),
             launch_dir,
             composer,
@@ -125,6 +132,11 @@ impl AppView {
             return;
         }
 
+        let starts_turn = matches!(
+            &event.update,
+            ControllerUpdate::Turn(rustcode::controller::TurnUpdate::PromptStarted(_))
+        );
+
         if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::QuestionRequested(question)) =
             &event.update
             && self.chat_state.pending_question() != Some(question)
@@ -142,9 +154,11 @@ impl AppView {
                     .snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_id.clone());
+                let prior_generation = self.snapshot.as_ref().map(|snapshot| snapshot.generation);
                 let session_id = snapshot.session_id.clone();
                 let started_session = session_id.is_some()
-                    && (!self.starting_new_session || session_id != prior_session_id);
+                    && (session_id != prior_session_id
+                        || prior_generation != Some(snapshot.generation));
                 let previous_question = self
                     .snapshot
                     .as_ref()
@@ -160,6 +174,8 @@ impl AppView {
                 self.snapshot = Some(snapshot);
                 self.status = None;
                 if started_session {
+                    self.expanded_thoughts.clear();
+                    self.chat_state.clear_turn_elapsed();
                     self.starting_new_session = false;
                 }
                 if let Some(workspace) = self
@@ -197,6 +213,31 @@ impl AppView {
                     self.pending_prompt = None;
                 }
             }
+        }
+        if starts_turn {
+            self.turn_timer_epoch = self.turn_timer_epoch.wrapping_add(1);
+            let epoch = self.turn_timer_epoch;
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                    let active = this
+                        .update(cx, |this, cx| {
+                            if this.turn_timer_epoch == epoch && this.chat_state.turn_active() {
+                                cx.notify();
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or(false);
+                    if !active {
+                        break;
+                    }
+                }
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -318,6 +359,12 @@ impl AppView {
     }
 
     fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_prompt.is_some()
+            || self.starting_new_session
+            || !self.chat_state.composer_enabled()
+        {
+            return;
+        }
         let text = self.composer.read(cx).value().to_string();
         if !can_submit(&text) {
             return;
@@ -351,8 +398,9 @@ impl AppView {
                 None
             }
         };
-        if let Some(command) = command {
-            self.send_command(command, cx);
+        if let Some(command) = command
+            && self.send_command(command, cx)
+        {
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
         }
@@ -377,34 +425,53 @@ impl AppView {
             .as_ref()
             .map(|snapshot| project_rows(&snapshot.transcript, &snapshot.live_response))
             .unwrap_or_default();
-        if self.chat_state.turn_active() {
-            for streamed in self.chat_state.stream_rows() {
-                match (rows.last_mut(), streamed) {
-                    (Some(ProjectionRow::Assistant(visible)), ProjectionRow::Assistant(text))
-                        if text.starts_with(visible.as_str()) =>
-                    {
+        if !self.chat_state.stream_rows().is_empty() {
+            for streamed in self.chat_state.stream_rows_with_elapsed() {
+                match (rows.last_mut(), &streamed) {
+                    (
+                        Some(ProjectionRow::Assistant {
+                            content: visible, ..
+                        }),
+                        ProjectionRow::Assistant { content: text, .. },
+                    ) if text.starts_with(visible.as_str()) => {
                         *visible = text.clone();
                     }
-                    (Some(ProjectionRow::Assistant(visible)), ProjectionRow::Assistant(text))
-                        if visible.starts_with(text.as_str()) || visible.ends_with(text) => {}
-                    _ => rows.push(streamed.clone()),
+                    (
+                        Some(ProjectionRow::Assistant {
+                            content: visible, ..
+                        }),
+                        ProjectionRow::Assistant { content: text, .. },
+                    ) if visible.starts_with(text.as_str()) || visible.ends_with(text) => {}
+                    _ => rows.push(streamed),
                 }
             }
         }
+        if self.chat_state.turn_active()
+            && let Some(ProjectionRow::Assistant {
+                thought_time_ms, ..
+            }) = rows.last_mut()
+            && thought_time_ms.is_none()
+        {
+            *thought_time_ms = self.chat_state.thought_elapsed_ms();
+        }
+        let rows = group_tool_rows(rows);
         if self.messages.read(cx).item_count() != rows.len() {
             self.messages
                 .update(cx, |state, cx| state.reset(rows.len(), cx));
         }
         let rendered_rows = rows.clone();
+        let expanded_thoughts = self.expanded_thoughts.clone();
+        let view = cx.entity().downgrade();
         MessageScroller::new("conversation", self.messages.clone(), move |index, _, _| {
-            render_message(
-                rendered_rows
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| ProjectionRow::System("Message unavailable".to_owned())),
-            )
+            match rendered_rows.get(index).cloned() {
+                Some(DisplayRow::Message(row)) => {
+                    render_message(row, index, expanded_thoughts.contains(&index), view.clone())
+                }
+                Some(DisplayRow::ToolGroup(tools)) => render_tool_group(tools),
+                None => div().child("Message unavailable").into_any_element(),
+            }
         })
-        .with_content_style(gpui_kit::StyleRefinement::default().gap_4().p_4())
+        .with_content_style(gpui_kit::StyleRefinement::default().gap_3().px_4().pb_4())
         .size_full()
     }
 
@@ -483,6 +550,7 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_3()
+            .pt(px(34.))
             .child(div().font_semibold().child("RustCode"))
             .child(
                 div()
@@ -652,24 +720,210 @@ impl AppView {
     }
 }
 
-fn render_message(row: ProjectionRow) -> impl IntoElement {
+#[derive(Clone)]
+enum DisplayRow {
+    Message(ProjectionRow),
+    ToolGroup(Vec<ProjectionRow>),
+}
+
+fn group_tool_rows(rows: Vec<ProjectionRow>) -> Vec<DisplayRow> {
+    let mut grouped = Vec::new();
+    for row in rows {
+        if matches!(row, ProjectionRow::Tool { .. }) {
+            if let Some(DisplayRow::ToolGroup(tools)) = grouped.last_mut() {
+                tools.push(row);
+            } else {
+                grouped.push(DisplayRow::ToolGroup(vec![row]));
+            }
+        } else {
+            grouped.push(DisplayRow::Message(row));
+        }
+    }
+    grouped
+}
+
+fn format_duration(ms: u64) -> String {
+    if ms >= 10_000 {
+        format!("{}s", ms / 1_000)
+    } else if ms >= 1_000 {
+        format!("{:.1}s", ms as f64 / 1_000.)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
+fn split_thinking(content: &str) -> (String, Option<(String, bool)>) {
+    let mut answer = String::new();
+    let mut thoughts = Vec::new();
+    let mut remaining = content;
+    while let Some(open) = remaining.find("<think>") {
+        answer.push_str(&remaining[..open]);
+        let after_open = &remaining[open + "<think>".len()..];
+        if let Some(close) = after_open.find("</think>") {
+            thoughts.push(after_open[..close].trim().to_owned());
+            remaining = &after_open[close + "</think>".len()..];
+        } else {
+            thoughts.push(after_open.trim().to_owned());
+            return (answer, Some((thoughts.join("\n\n"), true)));
+        }
+    }
+    answer.push_str(remaining);
+    if thoughts.is_empty() {
+        (answer, None)
+    } else {
+        (answer, Some((thoughts.join("\n\n"), false)))
+    }
+}
+
+fn render_tool_group(tools: Vec<ProjectionRow>) -> gpui_kit::AnyElement {
+    let count = tools.len();
+    div()
+        .w_full()
+        .max_w(px(760.))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(rgb(0x25272a))
+        .when(count > 1, |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(rgb(0x9da0a8))
+                    .child(format!("{count} tool calls")),
+            )
+        })
+        .children(tools.into_iter().filter_map(|tool| {
+            let ProjectionRow::Tool {
+                name,
+                status,
+                elapsed_ms,
+                ..
+            } = tool
+            else {
+                return None;
+            };
+            let (label, icon, color) = match status {
+                ToolStatus::Running => ("Running", IconName::LoaderCircle, 0xc9a76b),
+                ToolStatus::Pending => ("Pending", IconName::Pause, 0xc9a76b),
+                ToolStatus::Completed => ("Done", IconName::CircleCheck, 0x91b89b),
+                ToolStatus::Failed => ("Failed", IconName::CircleX, 0xd88d8d),
+            };
+            Some(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .child(Icon::new(icon).size_4().text_color(rgb(color)))
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(name))
+                    .child(div().text_xs().text_color(rgb(color)).child(label))
+                    .when_some(elapsed_ms, |this, elapsed| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x8c8f98))
+                                .child(format_duration(elapsed)),
+                        )
+                    }),
+            )
+        }))
+        .into_any_element()
+}
+
+fn render_message(
+    row: ProjectionRow,
+    index: usize,
+    thought_expanded: bool,
+    view: gpui_kit::WeakEntity<AppView>,
+) -> gpui_kit::AnyElement {
     match row {
         ProjectionRow::User(text) => Message::new()
             .alignment(MessageAlignment::End)
             .header(MessageHeader::new().child("You"))
-            .content(MessageContent::new().bubble(Bubble::new().child(text))),
-        ProjectionRow::Assistant(text) => Message::new()
-            .alignment(MessageAlignment::Start)
-            .header(MessageHeader::new().child("RustCode"))
-            .content(MessageContent::new().child(TextView::markdown("assistant-message", text))),
-        ProjectionRow::Tool { name, content } => Message::new()
-            .alignment(MessageAlignment::Start)
-            .header(MessageHeader::new().child(format!("Tool · {name}")))
-            .content(MessageContent::new().bubble(Bubble::new().child(content))),
+            .content(MessageContent::new().bubble(Bubble::new().child(text)))
+            .into_any_element(),
+        ProjectionRow::Assistant {
+            content,
+            response_time_ms,
+            thought_time_ms,
+        } => {
+            let (answer, thought) = split_thinking(&content);
+            let header = response_time_ms
+                .map(|ms| format!("RustCode · {} response", format_duration(ms)))
+                .unwrap_or_else(|| "RustCode".to_owned());
+            let body = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .when_some(thought, |this, (thought, ongoing)| {
+                    let label = if ongoing {
+                        thought_time_ms
+                            .map(|ms| format!("Thinking · {}", format_duration(ms)))
+                            .unwrap_or_else(|| "Thinking…".to_owned())
+                    } else if let Some(ms) = thought_time_ms {
+                        format!("Thought for {}", format_duration(ms))
+                    } else {
+                        "Thought".to_owned()
+                    };
+                    let view = view.clone();
+                    this.child(
+                        Button::new(format!("thought-{index}"))
+                            .ghost()
+                            .compact()
+                            .justify_start()
+                            .icon(if thought_expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .label(label)
+                            .on_click(move |_, _, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    if !this.expanded_thoughts.insert(index) {
+                                        this.expanded_thoughts.remove(&index);
+                                    }
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .when(thought_expanded && !thought.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .max_w(px(760.))
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgb(0x25272a))
+                                .text_color(rgb(0xb7bac2))
+                                .child(TextView::markdown(
+                                    format!("thought-content-{index}"),
+                                    thought,
+                                )),
+                        )
+                    })
+                })
+                .when(!answer.trim().is_empty(), |this| {
+                    this.child(TextView::markdown(format!("assistant-{index}"), answer))
+                });
+            Message::new()
+                .alignment(MessageAlignment::Start)
+                .header(MessageHeader::new().child(header))
+                .content(MessageContent::new().child(body))
+                .into_any_element()
+        }
+        ProjectionRow::Tool { .. } => render_tool_group(vec![row]),
         ProjectionRow::System(text) => Message::new()
             .alignment(MessageAlignment::Start)
             .header(MessageHeader::new().child("System"))
-            .content(MessageContent::new().child(TextView::markdown("system-message", text))),
+            .content(
+                MessageContent::new().child(TextView::markdown(format!("system-{index}"), text)),
+            )
+            .into_any_element(),
     }
 }
 
@@ -781,10 +1035,18 @@ impl Render for AppView {
             .border_color(rgb(0x383a40))
             .rounded_xl()
             .child(
-                Textarea::new(&self.composer)
-                    .appearance(false)
-                    .bordered(false)
-                    .disabled(!composer_enabled),
+                div()
+                    .on_action(cx.listener(|this, action: &Enter, window, cx| {
+                        if !action.shift && !action.secondary {
+                            this.submit_composer(window, cx);
+                        }
+                    }))
+                    .child(
+                        Textarea::new(&self.composer)
+                            .appearance(false)
+                            .bordered(false)
+                            .disabled(!composer_enabled),
+                    ),
             )
             .when_some(status.clone(), |this, message| {
                 this.child(
@@ -815,7 +1077,7 @@ impl Render for AppView {
                             Button::new("auto-approve")
                                 .ghost()
                                 .compact()
-                                .w(px(130.))
+                                .w(px(155.))
                                 .justify_start()
                                 .icon(if auto_approve {
                                     IconName::CircleCheck
@@ -880,7 +1142,7 @@ impl Render for AppView {
             .items_center()
             .gap_4()
             .px_6()
-            .pt_5()
+            .pt(px(34.))
             .pb_5()
             .child(
                 div()
@@ -901,6 +1163,20 @@ impl Render for AppView {
             .when_some(self.chat_state.approval_status(), |this, message| {
                 this.child(div().w_full().max_w(px(860.)).text_sm().child(message))
             })
+            .when_some(self.chat_state.turn_elapsed_ms(), |this, elapsed| {
+                this.child(
+                    div()
+                        .w_full()
+                        .max_w(px(860.))
+                        .text_xs()
+                        .text_color(rgb(0x8c8f98))
+                        .child(if turn_active {
+                            format!("Working · {}", format_duration(elapsed))
+                        } else {
+                            format!("Turn took {}", format_duration(elapsed))
+                        }),
+                )
+            })
             .child(
                 div()
                     .w_full()
@@ -913,8 +1189,8 @@ impl Render for AppView {
             );
 
         let title_bar = TitleBar::new()
-            .bg(rgb(0x1b1d1f))
-            .border_color(rgb(0x1b1d1f))
+            .bg(gpui_kit::rgba(0x00000000))
+            .border_color(gpui_kit::rgba(0x00000000))
             .child(
                 SidebarToggleButton::new()
                     .collapsed(self.sidebar_collapsed)
@@ -923,12 +1199,12 @@ impl Render for AppView {
 
         div()
             .size_full()
+            .relative()
             .flex()
-            .flex_col()
             .bg(rgb(0x1b1d1f))
             .text_color(rgb(0xe8e9ed))
-            .child(title_bar)
-            .child(div().flex_1().min_h_0().flex().child(sidebar).child(main))
+            .child(div().size_full().flex().child(sidebar).child(main))
+            .child(div().absolute().top_0().left_0().right_0().child(title_bar))
     }
 }
 

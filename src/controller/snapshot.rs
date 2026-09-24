@@ -59,6 +59,10 @@ pub struct TranscriptItem {
     pub role: String,
     pub content: String,
     pub tool_name: Option<String>,
+    pub tool_success: Option<bool>,
+    pub tool_pending: bool,
+    pub response_time_ms: Option<u64>,
+    pub thought_time_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +148,13 @@ impl ControllerSnapshot {
                         .tool_result
                         .as_ref()
                         .map(|result| result.tool_name.clone()),
+                    tool_success: message.tool_result.as_ref().map(|result| result.success),
+                    tool_pending: message
+                        .tool_result
+                        .as_ref()
+                        .is_some_and(|result| result.pending),
+                    response_time_ms: message.response_time_ms,
+                    thought_time_ms: message.thought_time_ms,
                 })
                 .collect(),
             live_response: state.current_response.as_ref().clone(),

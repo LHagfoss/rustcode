@@ -27,6 +27,8 @@ pub enum TurnUpdate {
     ToolFinished {
         id: String,
         content: String,
+        success: bool,
+        pending: bool,
     },
     /// The approval prompt batch is available in owned form to the frontend.
     ApprovalRequested(Vec<ApprovalPrompt>),
@@ -72,6 +74,8 @@ pub(crate) fn from_agent_ui_event(
             ControllerUpdate::Turn(TurnUpdate::ToolFinished {
                 id,
                 content: result.content,
+                success: result.metadata.success,
+                pending: result.metadata.pending,
             })
         }
         AgentUiEvent::TurnFinished { .. } => ControllerUpdate::Turn(TurnUpdate::TurnFinished),
