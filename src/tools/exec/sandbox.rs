@@ -202,6 +202,7 @@ pub(crate) fn runtime_tests_available() -> bool {
             )?;
             let request = rustcode_command::CommandRequest {
                 command: prepared.command,
+                sandboxed_shell: true,
                 cwd: Some(workspace.path().to_path_buf()),
                 env: Vec::new(),
                 timeout: std::time::Duration::from_secs(5),
@@ -1305,6 +1306,7 @@ mod tests {
             &rustcode_command::CommandRequest {
                 command: command.command,
                 status_command: None,
+                sandboxed_shell: true,
                 cwd: Some(cwd.to_path_buf()),
                 env: Vec::new(),
                 timeout: std::time::Duration::from_secs(10),
@@ -1314,6 +1316,81 @@ mod tests {
             None,
         )
         .expect("sandboxed command should start")
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn sandbox_wrapper_does_not_run_ambient_bash_env_before_entering_sandbox() {
+        const CHILD_MODE: &str = "RUSTCODE_SANDBOX_STARTUP_TEST_CHILD";
+        const CHILD_WORKSPACE: &str = "RUSTCODE_SANDBOX_STARTUP_TEST_WORKSPACE";
+        const CHILD_MARKER: &str = "RUSTCODE_SANDBOX_STARTUP_TEST_MARKER";
+
+        if std::env::var_os(CHILD_MODE).is_some() {
+            let workspace = PathBuf::from(std::env::var_os(CHILD_WORKSPACE).unwrap());
+            let marker = PathBuf::from(std::env::var_os(CHILD_MARKER).unwrap());
+            let roots = vec![workspace.clone()];
+            let prepared = command(
+                "true",
+                SandboxPolicy {
+                    command_cwd: Some(&workspace),
+                    workspace_root: Some(&workspace),
+                    writable_roots: &roots,
+                    session_scratch_roots: &[],
+                    network_access: false,
+                },
+            )
+            .unwrap();
+            let output = run_sandboxed(prepared, &workspace);
+            #[cfg(target_os = "macos")]
+            if seatbelt_is_unavailable(&output) {
+                return;
+            }
+            assert!(
+                output.success,
+                "sandbox wrapper failed: {}",
+                String::from_utf8_lossy(output.stderr.bytes())
+            );
+            assert!(
+                !marker.exists(),
+                "ambient BASH_ENV ran before sandbox entry"
+            );
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        if !runtime_tests_available() {
+            eprintln!("skipping startup environment integration: bwrap unavailable");
+            return;
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let marker = outside.path().join("outside-marker");
+        let startup = outside.path().join("bash-env.sh");
+        std::fs::write(
+            &startup,
+            format!("touch {}\n", shell_quote(&marker.to_string_lossy())),
+        )
+        .unwrap();
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tools::exec::sandbox::tests::sandbox_wrapper_does_not_run_ambient_bash_env_before_entering_sandbox",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE, "1")
+            .env(CHILD_WORKSPACE, workspace.path())
+            .env(CHILD_MARKER, &marker)
+            .env("BASH_ENV", &startup)
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert!(
+            !marker.exists(),
+            "ambient BASH_ENV ran before sandbox entry"
+        );
     }
 
     #[cfg(target_os = "macos")]
