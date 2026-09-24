@@ -376,6 +376,9 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy
     sender: AgentUiEventSender,
     context: super::TurnContext,
 ) -> super::TurnContext {
+    // Keep this lock guard out of the awaited turn future. The turn locks
+    // AppState while preparing each provider request, so an inline lock
+    // expression here can retain the mutex for the whole async call.
     let turn_session_id = { state.lock().await.active_session_id.clone() };
     run_agent_turn_with_events_and_context_mode(
         client,
