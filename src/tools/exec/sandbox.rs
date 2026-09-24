@@ -144,6 +144,53 @@ pub(crate) fn command(
     })
 }
 
+/// Whether this test host can execute commands inside the production sandbox.
+/// A runner without user namespace support cannot exercise command behavior,
+/// but production must continue to fail closed in that case.
+#[cfg(test)]
+pub(crate) fn runtime_tests_available() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return true;
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::sync::OnceLock;
+        static RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+        match RESULT.get_or_init(|| {
+            let bubblewrap = match find_bubblewrap() {
+                Some(path) => path,
+                None if !bubblewrap_candidate_exists() => {
+                    return Err("bubblewrap is not installed".to_string());
+                }
+                None => return Err("installed bubblewrap is not trusted".to_string()),
+            };
+            let filter = Arc::new(create_network_filter()?);
+            probe_network_namespace(&bubblewrap, &filter).map(|_| ())
+        }) {
+            Ok(()) => true,
+            Err(reason)
+                if reason == "bubblewrap is not installed"
+                    || reason.contains("setting up uid map: Permission denied") =>
+            {
+                eprintln!("skipping shell execution assertion: {reason}");
+                false
+            }
+            Err(reason) => panic!("sandbox test preflight failed unexpectedly: {reason}"),
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn bubblewrap_candidate_exists() -> bool {
+    let mut directories = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    directories.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+    directories
+        .into_iter()
+        .any(|directory| directory.join("bwrap").exists())
+}
+
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn command(
     command: &str,
@@ -376,10 +423,10 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
     // Bubblewrap consumes the filter FD when setting up a working namespace.
     // The probe and the eventual shell share this memfd's open-file description,
     // so restore its offset before handing it to the real command.
-    if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
+    if let Err(error) = rewind_filter_fd(fd) {
         return Err(format!(
             "Linux shell sandbox could not rewind seccomp filter after network probe: {}; command was not run",
-            std::io::Error::last_os_error()
+            error
         ));
     }
     if result.status.success() {
@@ -394,6 +441,14 @@ fn probe_network_namespace(bubblewrap: &Path, filter: &Arc<std::fs::File>) -> Re
         "Linux shell sandbox bubblewrap network probe failed: {}; command was not run",
         stderr.trim()
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn rewind_filter_fd(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -501,6 +556,44 @@ mod tests {
             shell_quote("a'b; $(touch nope)"),
             "'a'\\''b; $(touch nope)'"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn network_filter_restricts_socket_families_and_io_uring() {
+        let instructions = network_filter_instructions().unwrap();
+        let compared_values = instructions
+            .iter()
+            .filter(|instruction| instruction.code == 0x15)
+            .map(|instruction| instruction.k)
+            .collect::<Vec<_>>();
+        for syscall in [
+            libc::SYS_socket,
+            libc::SYS_socketpair,
+            libc::SYS_connect,
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
+        ] {
+            assert!(compared_values.contains(&(syscall as u32)));
+        }
+        assert!(compared_values.contains(&(libc::AF_UNIX as u32)));
+        assert!(instructions.iter().any(|instruction| {
+            instruction.code == 0x06 && instruction.k == (0x0005_0000 | libc::EPERM as u32)
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn seccomp_filter_fd_rewinds_after_consumption() {
+        use std::io::{Seek, SeekFrom};
+        use std::os::fd::AsRawFd;
+
+        let mut filter = create_network_filter().unwrap();
+        filter.seek(SeekFrom::End(0)).unwrap();
+        assert!(filter.stream_position().unwrap() > 0);
+        rewind_filter_fd(filter.as_raw_fd()).unwrap();
+        assert_eq!(filter.stream_position().unwrap(), 0);
     }
 
     #[cfg(target_os = "linux")]
@@ -618,7 +711,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn sandbox_command_contains_private_network_and_read_only_host_mounts() {
+    fn sandbox_command_contains_filesystem_mounts_without_a_runtime_probe() {
         let workspace = tempfile::tempdir().unwrap();
         let roots = vec![workspace.path().to_path_buf()];
         let output = command(
@@ -628,17 +721,16 @@ mod tests {
                 workspace_root: Some(workspace.path()),
                 writable_roots: &roots,
                 session_scratch_roots: &[],
-                network_access: false,
+                network_access: true,
             },
         );
         if find_bubblewrap().is_some() {
             let wrapped = output.unwrap();
-            assert!(wrapped.command.contains("--seccomp"));
             assert!(wrapped.command.contains("--ro-bind"));
             assert!(wrapped.command.contains("--bind"));
             assert!(wrapped.command.contains("printf"));
             assert!(wrapped.command.contains("a b"));
-            assert_eq!(wrapped.inherited_fds.len(), 1);
+            assert!(wrapped.inherited_fds.is_empty());
         } else {
             eprintln!("skipping bwrap argv assertions: bubblewrap is unavailable");
             assert!(output.unwrap_err().contains("install bubblewrap"));
@@ -648,10 +740,25 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn bubblewrap_blocks_host_writes_and_network_when_available() {
-        let Some(_bwrap) = find_bubblewrap() else {
-            eprintln!("skipping OS sandbox integration: bubblewrap is not installed");
+        if !runtime_tests_available() {
+            let workspace = tempfile::tempdir().unwrap();
+            let marker = workspace.path().join("command-must-not-run");
+            let roots = vec![workspace.path().to_path_buf()];
+            let result = command(
+                &format!("touch {}", shell_quote(&marker.to_string_lossy())),
+                SandboxPolicy {
+                    command_cwd: Some(workspace.path()),
+                    workspace_root: Some(workspace.path()),
+                    writable_roots: &roots,
+                    session_scratch_roots: &[],
+                    network_access: false,
+                },
+            );
+            let error = result.expect_err("sandbox setup must fail on this runner");
+            assert!(error.contains("command was not run"), "{error}");
+            assert!(!marker.exists(), "command ran after sandbox setup failed");
             return;
-        };
+        }
         let workspace = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let outside_file = outside.path().join("should-not-exist");

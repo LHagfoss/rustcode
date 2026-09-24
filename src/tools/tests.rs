@@ -2652,6 +2652,9 @@ fn list_directory_uses_active_workspace_root_instead_of_process_cwd() {
 
 #[test]
 fn run_command_uses_active_workspace_root_when_cwd_is_omitted() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("workspace-only.txt"), "content")
         .expect("workspace marker");
