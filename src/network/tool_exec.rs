@@ -375,6 +375,60 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     Option<String>,
     std::time::Duration,
 ) {
+    let normalized_args;
+    let args = if let Some(requested) = args.get("filesystem_write_path") {
+        let Some(path) = requested.as_str() else {
+            return (
+                crate::tools::ToolExecutionOutput::failure_with_kind(
+                    "error: filesystem_write_path must be an absolute directory string".to_string(),
+                    crate::tools::ToolErrorKind::PermissionDenied,
+                    false,
+                ),
+                None,
+                std::time::Duration::ZERO,
+            );
+        };
+        let Some(workspace) = workspace_root.as_deref() else {
+            return (
+                crate::tools::ToolExecutionOutput::failure_with_kind(
+                    "error: one-shot filesystem permission requires an active workspace"
+                        .to_string(),
+                    crate::tools::ToolErrorKind::PermissionDenied,
+                    false,
+                ),
+                None,
+                std::time::Duration::ZERO,
+            );
+        };
+        let resolved =
+            match crate::tools::exec::sandbox::resolve_scoped_writable_root(path, workspace) {
+                Ok(path) => path,
+                Err(error) => {
+                    return (
+                        crate::tools::ToolExecutionOutput::failure_with_kind(
+                            format!("error: {error}"),
+                            crate::tools::ToolErrorKind::PermissionDenied,
+                            false,
+                        ),
+                        None,
+                        std::time::Duration::ZERO,
+                    );
+                }
+            };
+        normalized_args = {
+            let mut args = args.clone();
+            args.as_object_mut()
+                .expect("tool arguments are JSON objects")
+                .insert(
+                    "filesystem_write_path".to_string(),
+                    serde_json::Value::String(resolved.display().to_string()),
+                );
+            args
+        };
+        &normalized_args
+    } else {
+        args
+    };
     let (agent_mode, auto_confirm, task_working_directory) = {
         let s = state.lock().await;
         (
@@ -478,6 +532,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let args_owned = args.clone();
         let call_id_owned = call_id.map(str::to_owned);
         let session_id = { state.lock().await.active_session_id.clone() };
+        let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
         let workspace_root_for_task = workspace_root.clone();
         let task_working_directory_for_task = task_working_directory.clone();
         let live_key_owned = live_key.map(str::to_owned);
@@ -502,6 +557,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                         workspace_root_for_task,
                         task_working_directory_for_task,
                         false,
+                        Some(sandbox_mode_for_task),
                     );
                     let result = if name_owned == "run_command" && live_key_owned.is_some() {
                         let callback: crate::tools::CommandProgressCallback =
@@ -540,7 +596,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                             call_id_owned.as_deref(),
                         )
                     };
-                    crate::tools::set_active_workspace_context(None, None, false);
+                    crate::tools::set_active_workspace_context(None, None, false, None);
                     crate::tools::set_active_session_id(None);
                     result
                 })
@@ -618,8 +674,21 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     .get("command")
                     .and_then(|value| value.as_str())
                     .unwrap_or("");
+                let sandbox_mode = state.lock().await.config.sandbox_mode;
+                let one_shot_network_access = args
+                    .get("network_access")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true);
+                let one_shot_filesystem_write_path = args
+                    .get("filesystem_write_path")
+                    .and_then(serde_json::Value::as_str);
                 (
-                    crate::tools::command_confirmation_preview(command),
+                    crate::tools::command_confirmation_preview(
+                        command,
+                        sandbox_mode,
+                        one_shot_network_access,
+                        one_shot_filesystem_write_path,
+                    ),
                     command.len(),
                 )
             } else {
@@ -720,6 +789,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let args_owned = args.clone();
                 let call_id_owned = call_id.map(str::to_owned);
                 let session_id = { state.lock().await.active_session_id.clone() };
+                let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
                 let workspace_root_for_task = workspace_root.clone();
                 let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
@@ -733,6 +803,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                             workspace_root_for_task,
                             task_working_directory_for_task,
                             false,
+                            Some(sandbox_mode_for_task),
                         );
                         let result = if name_owned == "render_video" && live_key_for_task.is_some()
                         {
@@ -754,7 +825,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                                 call_id_owned.as_deref(),
                             )
                         };
-                        crate::tools::set_active_workspace_context(None, None, false);
+                        crate::tools::set_active_workspace_context(None, None, false, None);
                         crate::tools::set_active_session_id(None);
                         result
                     })

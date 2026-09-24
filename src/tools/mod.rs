@@ -867,6 +867,7 @@ thread_local! {
     static ACTIVE_WORKSPACE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static ACTIVE_TASK_WORKING_DIRECTORY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static ACTIVE_TASK_SCOPE_ESCAPE: RefCell<bool> = const { RefCell::new(false) };
+    static ACTIVE_SANDBOX_MODE: RefCell<crate::config::SandboxMode> = const { RefCell::new(crate::config::SandboxMode::WorkspaceWrite) };
 }
 
 pub fn set_active_session_id(id: Option<String>) {
@@ -897,12 +898,20 @@ pub fn set_active_workspace_context(
     workspace_root: Option<PathBuf>,
     task_working_directory: Option<PathBuf>,
     allow_task_scope_escape: bool,
+    sandbox_mode: Option<crate::config::SandboxMode>,
 ) {
     ACTIVE_WORKSPACE_ROOT.with(|current| *current.borrow_mut() = workspace_root);
     ACTIVE_TASK_WORKING_DIRECTORY.with(|current| {
         *current.borrow_mut() = task_working_directory;
     });
     ACTIVE_TASK_SCOPE_ESCAPE.with(|current| *current.borrow_mut() = allow_task_scope_escape);
+    ACTIVE_SANDBOX_MODE.with(|current| {
+        *current.borrow_mut() = sandbox_mode.unwrap_or_default();
+    });
+}
+
+pub(crate) fn active_sandbox_mode() -> crate::config::SandboxMode {
+    ACTIVE_SANDBOX_MODE.with(|mode| *mode.borrow())
 }
 
 pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
@@ -1137,13 +1146,16 @@ pub fn authorize_tool_with_args(
         );
     }
     let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
+    let one_shot_escalation = name == "run_command"
+        && (args.get("network_access").and_then(Value::as_bool) == Some(true)
+            || args.get("filesystem_write_path").is_some());
     let requires_confirmation = if name == "run_command" {
         command_is_destructive
     } else {
         needs_confirmation(name)
     };
     if !bypass_confirmation
-        && !auto_confirm
+        && (!auto_confirm || one_shot_escalation)
         && (requires_confirmation || matches!(tool_safety(name), ToolSafety::Unknown))
     {
         return AuthorizationDecision::RequireConfirmation;

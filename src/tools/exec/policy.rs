@@ -825,6 +825,11 @@ pub(crate) fn rememberable_command_prefix(command: &str) -> Option<String> {
 }
 
 pub(crate) fn rememberable_command_prefix_for_call(args: &Value) -> Option<String> {
+    if args.get("network_access").and_then(Value::as_bool) == Some(true)
+        || args.get("filesystem_write_path").is_some()
+    {
+        return None;
+    }
     if args
         .get("env")
         .is_some_and(|env| !env.as_object().is_some_and(|values| values.is_empty()))
@@ -2192,15 +2197,35 @@ mod command_prefix_tests {
 }
 
 pub(crate) fn command_requires_confirmation(args: &Value) -> bool {
-    args.get("command")
-        .and_then(Value::as_str)
-        .map(|command| command_confirmation_scope(command).is_some())
-        .unwrap_or(true)
+    args.get("network_access").and_then(Value::as_bool) == Some(true)
+        || args.get("filesystem_write_path").is_some()
+        || args
+            .get("command")
+            .and_then(Value::as_str)
+            .map(|command| command_confirmation_scope(command).is_some())
+            .unwrap_or(true)
 }
 
-pub(crate) fn command_confirmation_preview(command: &str) -> String {
+pub(crate) fn command_confirmation_preview(
+    command: &str,
+    mode: crate::config::SandboxMode,
+    one_shot_network_access: bool,
+    one_shot_filesystem_write_path: Option<&str>,
+) -> String {
     let scope = command_confirmation_scope(command).unwrap_or("command execution".to_string());
-    format!("resolved command: {command}\nscope: {scope}")
+    let mut preview = format!(
+        "resolved command: {command}\nscope: {scope}\neffective OS permissions: {}",
+        mode.effective_description()
+    );
+    if one_shot_network_access {
+        preview.push_str("\nrequested for this command: network access (one time)");
+    }
+    if let Some(path) = one_shot_filesystem_write_path {
+        preview.push_str(&format!(
+            "\nrequested for this command: write access to '{path}' (one time)"
+        ));
+    }
+    preview
 }
 
 /// Return the explicitly requested base branch from a `gh pr create` command.

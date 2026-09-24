@@ -57,7 +57,7 @@ impl InteractivePolicy {
         assessments: &crate::tools::ShellAssessmentCache,
     ) -> bool {
         let mut confirmations = Vec::new();
-        let (auto_confirm, task_working_directory) = {
+        let (auto_confirm, task_working_directory, workspace_root, sandbox_mode) = {
             let state = state.lock().await;
             (
                 state.auto_confirm,
@@ -65,13 +65,41 @@ impl InteractivePolicy {
                     .task_working_directory
                     .clone()
                     .or_else(|| state.workspace_root.clone()),
+                state.workspace_root.clone(),
+                state.config.sandbox_mode,
             )
         };
         let approved_command_prefixes = state.lock().await.config.approved_command_prefixes.clone();
         let denied_command_prefixes = state.lock().await.config.denied_command_prefixes.clone();
 
-        if !auto_confirm {
+        let has_one_shot_permission_request = tool_calls.iter().any(|call| {
+            call.name == "run_command"
+                && (call
+                    .arguments
+                    .get("network_access")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                    || call.arguments.get("filesystem_write_path").is_some())
+        });
+        if !auto_confirm || has_one_shot_permission_request {
             for call in tool_calls {
+                let requested_filesystem_path = if let Some(requested) =
+                    call.arguments.get("filesystem_write_path")
+                {
+                    let Some(path) = requested.as_str() else {
+                        return false;
+                    };
+                    let Some(workspace) = workspace_root.as_deref() else {
+                        return false;
+                    };
+                    match crate::tools::exec::sandbox::resolve_scoped_writable_root(path, workspace)
+                    {
+                        Ok(path) => Some(path.display().to_string()),
+                        Err(_) => return false,
+                    }
+                } else {
+                    None
+                };
                 let mode = { state.lock().await.agent_mode };
                 let decision = authorization_for_interactive_call(call, mode, false, assessments);
                 let covered_by_prefix = saved_prefix_covers_call(call, &approved_command_prefixes);
@@ -118,7 +146,17 @@ impl InteractivePolicy {
                             .get("command")
                             .and_then(|value| value.as_str())
                             .unwrap_or("");
-                        let preview = tools::command_confirmation_preview(command);
+                        let requested_network = call
+                            .arguments
+                            .get("network_access")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true);
+                        let preview = tools::command_confirmation_preview(
+                            command,
+                            sandbox_mode,
+                            requested_network,
+                            requested_filesystem_path.as_deref(),
+                        );
                         (preview, command.len())
                     } else if let Some(ref d) = diff_opt {
                         (d.clone(), d.len())
@@ -388,6 +426,134 @@ mod tests {
             state.lock().await.config.approved_command_prefixes,
             ["prefix-v1:cargo test --lib"]
         );
+    }
+
+    #[tokio::test]
+    async fn one_shot_network_request_prompts_even_with_yolo_and_saved_allow() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.auto_confirm = true;
+            state.config.approved_command_prefixes = vec!["prefix-v1:cargo test".to_owned()];
+        }
+        let policy_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "cargo test --lib",
+                    "network_access": true
+                }),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("network access must await a user decision");
+        {
+            let state = state.lock().await;
+            let confirmation = &state.pending_tool_confirmation.as_ref().unwrap()[0];
+            assert!(
+                confirmation
+                    .content_preview
+                    .contains("effective OS permissions:")
+            );
+            assert!(
+                confirmation
+                    .content_preview
+                    .contains("network access (one time)")
+            );
+            assert!(confirmation.rememberable_prefix.is_none());
+        }
+        state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .unwrap()
+            .send(crate::app::ToolConfirmationResponse::Approve)
+            .unwrap();
+        assert!(task.await.unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn one_shot_filesystem_request_shows_canonical_scope_with_yolo() {
+        let workspace = tempfile::tempdir().unwrap();
+        let requested = tempfile::tempdir().unwrap();
+        let canonical = requested.path().canonicalize().unwrap();
+        let alias_parent = tempfile::tempdir().unwrap();
+        let alias = alias_parent.path().join("requested-directory");
+        let requested_path = if std::os::unix::fs::symlink(requested.path(), &alias).is_ok() {
+            alias
+        } else {
+            canonical.clone()
+        };
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.auto_confirm = true;
+            state.workspace_root = Some(workspace.path().to_path_buf());
+            state.config.approved_command_prefixes = vec!["prefix-v1:touch".to_owned()];
+        }
+        let policy_state = Arc::clone(&state);
+        let requested_path = requested_path.display().to_string();
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "touch /tmp/example",
+                    "filesystem_write_path": requested_path
+                }),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("filesystem access must await a user decision");
+        {
+            let state = state.lock().await;
+            let confirmation = &state.pending_tool_confirmation.as_ref().unwrap()[0];
+            assert!(
+                confirmation
+                    .content_preview
+                    .contains(&canonical.display().to_string())
+            );
+            assert!(confirmation.content_preview.contains("write access"));
+            assert!(confirmation.content_preview.contains("(one time)"));
+            assert!(confirmation.rememberable_prefix.is_none());
+        }
+        state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .unwrap()
+            .send(crate::app::ToolConfirmationResponse::Approve)
+            .unwrap();
+        assert!(task.await.unwrap());
     }
 
     #[tokio::test]

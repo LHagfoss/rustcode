@@ -62,6 +62,8 @@ async fn run_compiler_command(
             workspace_root: Some(cwd),
             writable_roots: &writable_roots,
             session_scratch_roots: &[],
+            one_shot_writable_roots: &[],
+            write_access: true,
             network_access: false,
         },
     ) {
