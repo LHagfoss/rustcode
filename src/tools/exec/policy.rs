@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+const APPROVED_COMMAND_PREFIX_MARKER: &str = "prefix-v1:";
+
 // Keep command classification separate from process execution: these helpers
 // decide whether a command is safe to run without confirmation, but never
 // execute or mutate anything themselves.
@@ -829,10 +831,28 @@ pub(crate) fn approved_command_prefix_covers_call(
     args.get("command")
         .and_then(Value::as_str)
         .is_some_and(|command| {
-            prefixes
-                .iter()
-                .any(|prefix| command_prefix_rule_matches(prefix, command))
+            prefixes.iter().any(|stored_rule| {
+                if let Some(prefix) = stored_rule.strip_prefix(APPROVED_COMMAND_PREFIX_MARKER) {
+                    command_prefix_rule_matches(prefix, command)
+                } else {
+                    exact_command_rule_matches(stored_rule, command)
+                }
+            })
         })
+}
+
+pub(crate) fn persisted_approved_command_prefix(prefix: &str) -> String {
+    format!("{APPROVED_COMMAND_PREFIX_MARKER}{prefix}")
+}
+
+fn exact_command_rule_matches(rule: &str, command: &str) -> bool {
+    let Some(rule_tokens) = reusable_rule_tokens(rule, true) else {
+        return false;
+    };
+    let Some(command_tokens) = reusable_rule_tokens(command, true) else {
+        return false;
+    };
+    command_tokens == rule_tokens
 }
 
 /// Match a complete token prefix from the normalized argv the user reviewed.
@@ -1882,7 +1902,7 @@ mod command_prefix_tests {
 
     #[test]
     fn approved_rules_cover_safe_plain_calls_with_the_saved_token_prefix() {
-        let prefixes = vec!["cargo test".to_owned()];
+        let prefixes = vec!["prefix-v1:cargo test".to_owned()];
         let args = |command: &str, extra: serde_json::Value| {
             let mut args = serde_json::json!({"command": command});
             args.as_object_mut().unwrap().extend(
@@ -1921,6 +1941,21 @@ mod command_prefix_tests {
             "write_to_file",
             &args("cargo test", serde_json::json!({})),
             &prefixes,
+        ));
+    }
+
+    #[test]
+    fn legacy_saved_allow_entries_remain_exact_while_new_rules_are_prefixes() {
+        let args = |command: &str| serde_json::json!({"command":command});
+        assert!(!approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test --lib"),
+            &["cargo test".to_owned()]
+        ));
+        assert!(approved_command_prefix_covers_call(
+            "run_command",
+            &args("cargo test --lib"),
+            &["prefix-v1:cargo test".to_owned()]
         ));
     }
 
