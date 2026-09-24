@@ -1,0 +1,347 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tokio::sync::{Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
+
+use crate::app::AppState;
+
+use super::*;
+
+/// Starts the UI-neutral session worker on the supplied Tokio runtime.
+pub struct InteractiveController;
+
+impl InteractiveController {
+    pub fn spawn(
+        tokio_handle: &tokio::runtime::Handle,
+        launch_dir: PathBuf,
+    ) -> (ControllerHandle, mpsc::UnboundedReceiver<ControllerEvent>) {
+        let (command_sender, command_receiver) = mpsc::unbounded_channel();
+        let (update_sender, update_receiver) = mpsc::unbounded_channel();
+        tokio_handle.spawn(controller_worker(
+            command_receiver,
+            update_sender,
+            launch_dir,
+        ));
+        (ControllerHandle::new(command_sender), update_receiver)
+    }
+}
+
+struct ActiveSession {
+    generation: u64,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: CancellationToken,
+}
+
+async fn controller_worker(
+    mut commands: mpsc::UnboundedReceiver<Command>,
+    updates: mpsc::UnboundedSender<ControllerEvent>,
+    launch_dir: PathBuf,
+) {
+    let mut active: Option<ActiveSession> = None;
+    let mut generation = 0;
+    let client = reqwest::Client::new();
+    let _ = updates.send(ControllerEvent {
+        generation,
+        update: ControllerUpdate::Snapshot(empty_snapshot(generation)),
+    });
+
+    while let Some(command) = commands.recv().await {
+        match command {
+            Command::Shutdown => {
+                if let Some(session) = active.take() {
+                    session.cancel_token.cancel();
+                }
+                break;
+            }
+            Command::StartNew(workspace) => {
+                let workspace = workspace.canonicalize().ok().filter(|path| path.is_dir());
+                let Some(workspace) = workspace else {
+                    send_error(
+                        &updates,
+                        generation,
+                        ControllerError::InvalidWorkspace(
+                            "workspace must be an existing directory".to_owned(),
+                        ),
+                    );
+                    continue;
+                };
+                if let Some(previous) = active.take() {
+                    previous.cancel_token.cancel();
+                }
+                generation += 1;
+                let mut state = AppState::new_with_workspace_session(&workspace, None);
+                state.workspace_root = Some(workspace.clone());
+                state.task_working_directory = Some(workspace);
+                // Native frontends do not have the TUI confirmation overlay.
+                state.auto_confirm = true;
+                let session = ActiveSession {
+                    generation,
+                    state: Arc::new(Mutex::new(state)),
+                    cancel_token: CancellationToken::new(),
+                };
+                send_snapshot(&updates, generation, &session.state).await;
+                active = Some(session);
+            }
+            Command::Resume {
+                session_id,
+                workspace,
+            } => {
+                let Some(workspace) = workspace.canonicalize().ok().filter(|path| path.is_dir())
+                else {
+                    send_error(
+                        &updates,
+                        generation,
+                        ControllerError::InvalidWorkspace(
+                            "workspace must be an existing directory".to_owned(),
+                        ),
+                    );
+                    continue;
+                };
+                if let Some(previous) = active.take() {
+                    previous.cancel_token.cancel();
+                }
+                generation += 1;
+                let mut state = AppState::new_with_workspace_session(&workspace, Some(&session_id));
+                state.workspace_root = Some(workspace.clone());
+                state.task_working_directory = Some(workspace);
+                state.history = crate::config::load_session_history_direct(&session_id).into();
+                state.auto_confirm = true;
+                let session = ActiveSession {
+                    generation,
+                    state: Arc::new(Mutex::new(state)),
+                    cancel_token: CancellationToken::new(),
+                };
+                send_snapshot(&updates, generation, &session.state).await;
+                active = Some(session);
+            }
+            Command::Submit(prompt) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                let mut state = session.state.lock().await;
+                let outcome = crate::app::submit_plain_prompt(&mut state, prompt);
+                if outcome == crate::app::SubmitOutcome::Empty {
+                    send_snapshot_locked(&updates, session.generation, &state);
+                    continue;
+                }
+                let lease = if !state.orchestrator_running {
+                    let lease = state.claim_orchestrator();
+                    if lease.is_some() {
+                        state.status = crate::app::AppStatus::Queued;
+                    }
+                    lease
+                } else {
+                    None
+                };
+                let starting_history_len = state.history.len();
+                drop(state);
+                if let Some(lease) = lease {
+                    spawn_turn(
+                        session.generation,
+                        Arc::clone(&session.state),
+                        session.cancel_token.clone(),
+                        client.clone(),
+                        lease,
+                        starting_history_len,
+                        updates.clone(),
+                    );
+                }
+            }
+            Command::Cancel => {
+                if let Some(session) = active.as_ref() {
+                    session.cancel_token.cancel();
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                } else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                }
+            }
+            Command::SelectModel(model) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                let mut state = session.state.lock().await;
+                if let Some((model_name, api_base_url)) = state
+                    .config
+                    .models
+                    .iter()
+                    .find(|profile| profile.model == model || profile.name == model)
+                    .map(|profile| (profile.model.clone(), profile.url.clone()))
+                {
+                    state.model_name = model_name;
+                    state.api_base_url = api_base_url;
+                    send_snapshot_locked(&updates, session.generation, &state);
+                } else {
+                    send_error(&updates, session.generation, ControllerError::Model(model));
+                }
+            }
+            Command::ListSessions => {
+                if let Some(session) = active.as_ref() {
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                } else {
+                    let _ = updates.send(ControllerEvent {
+                        generation,
+                        update: ControllerUpdate::Snapshot(empty_state_snapshot(
+                            generation,
+                            &launch_dir,
+                        )),
+                    });
+                }
+            }
+            Command::AnswerQuestion(_) | Command::Approval(_) => {
+                if active.is_none() {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                } else {
+                    send_error(
+                        &updates,
+                        active.as_ref().unwrap().generation,
+                        ControllerError::Session("there is no pending interaction".to_owned()),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(session) = active {
+        session.cancel_token.cancel();
+    }
+}
+
+fn empty_snapshot(generation: u64) -> ControllerSnapshot {
+    ControllerSnapshot {
+        generation,
+        workspace: None,
+        session_id: None,
+        sessions: Vec::new(),
+        models: Vec::new(),
+        selected_model: None,
+        transcript: Vec::new(),
+        live_response: String::new(),
+        queued_count: 0,
+        turn_active: false,
+        pending_question: None,
+        pending_approval: None,
+    }
+}
+
+fn empty_state_snapshot(generation: u64, launch_dir: &std::path::Path) -> ControllerSnapshot {
+    let mut snapshot = empty_snapshot(generation);
+    snapshot.workspace = Some(launch_dir.to_path_buf());
+    snapshot
+}
+
+async fn send_snapshot(
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+    generation: u64,
+    state: &Arc<Mutex<AppState>>,
+) {
+    let state = state.lock().await;
+    send_snapshot_locked(updates, generation, &state);
+}
+
+fn send_snapshot_locked(
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+    generation: u64,
+    state: &AppState,
+) {
+    let _ = updates.send(ControllerEvent {
+        generation,
+        update: ControllerUpdate::Snapshot(ControllerSnapshot::from_state(generation, state)),
+    });
+}
+
+fn send_error(
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+    generation: u64,
+    error: ControllerError,
+) {
+    let _ = updates.send(ControllerEvent {
+        generation,
+        update: ControllerUpdate::Error(error),
+    });
+}
+
+fn spawn_turn(
+    generation: u64,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: CancellationToken,
+    client: reqwest::Client,
+    lease: crate::app::OrchestratorLease,
+    starting_history_len: usize,
+    updates: mpsc::UnboundedSender<ControllerEvent>,
+) {
+    tokio::spawn(async move {
+        let (event_sender, mut event_receiver) =
+            crate::network::ui_adapter::AgentUiEventSender::channel();
+        let queue_state = Arc::clone(&state);
+        let recovery_lease = lease.clone();
+        let queue_task = tokio::spawn(crate::network::process_queue_orchestrator_with_ui_events(
+            client,
+            queue_state,
+            cancel_token,
+            Arc::new(crate::network::policy::InteractivePolicy),
+            event_sender,
+            lease,
+        ));
+        let mut queue_task = queue_task;
+        let mut event_stream_open = true;
+        let mut queue_result = None;
+        while event_stream_open || queue_result.is_none() {
+            tokio::select! {
+                event = event_receiver.recv(), if event_stream_open => {
+                    match event {
+                        Some(event) => {
+                            if let Some(public) = events::from_agent_ui_event(generation, event) {
+                                let _ = updates.send(public);
+                            }
+                        }
+                        None => event_stream_open = false,
+                    }
+                }
+                result = &mut queue_task, if queue_result.is_none() => {
+                    queue_result = Some(result);
+                }
+            }
+        }
+        if matches!(&queue_result, Some(Err(_))) {
+            let mut state = state.lock().await;
+            state.release_orchestrator(&recovery_lease);
+            state.enter_idle();
+            state.clear_active_turn_projection();
+            drop(state);
+            send_error(
+                &updates,
+                generation,
+                ControllerError::Provider("turn worker stopped unexpectedly".to_owned()),
+            );
+        }
+        let snapshot = {
+            let state = state.lock().await;
+            let provider_error =
+                state
+                    .history
+                    .iter()
+                    .skip(starting_history_len)
+                    .find_map(|message| {
+                        (message.role == "system"
+                            && (message.content.starts_with("Error from LLM Provider:")
+                                || message
+                                    .content
+                                    .starts_with("[Recoverable provider interruption:")))
+                        .then(|| message.content.clone())
+                    });
+            (
+                ControllerSnapshot::from_state(generation, &state),
+                provider_error,
+            )
+        };
+        if let Some(message) = snapshot.1 {
+            send_error(&updates, generation, ControllerError::Provider(message));
+        }
+        let _ = updates.send(ControllerEvent {
+            generation,
+            update: ControllerUpdate::Snapshot(snapshot.0),
+        });
+    });
+}
