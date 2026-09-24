@@ -962,7 +962,7 @@ async fn gated_json_server(
     (format!("http://{address}"), accepted_rx, release_tx)
 }
 
-async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<Vec<u8>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1002,7 +1002,7 @@ async fn streaming_provider_server() -> (String, tokio::sync::oneshot::Receiver<
                 break;
             }
         }
-        accepted_tx.send(()).ok();
+        accepted_tx.send(request).ok();
         let body = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"wakeup request reached provider\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -1176,6 +1176,79 @@ async fn acp_continuation_releases_state_and_delivers_provider_completion() {
         completed_content.as_deref(),
         Some("wakeup request reached provider"),
         "ACP continuation must emit a terminal event carrying the provider output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_loaded_session_continues_with_its_persisted_transcript() {
+    use crate::app::ChatMessage;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let (provider_url, provider_request) = streaming_provider_server().await;
+    let endpoint = format!("{provider_url}/v1/chat/completions");
+    let mut app = crate::acp::build_loaded_app_state(
+        "loaded-session-123",
+        &std::env::current_dir().unwrap(),
+        vec![
+            ChatMessage::new("user", "Earlier user request"),
+            ChatMessage::new("assistant", "Earlier assistant answer"),
+        ],
+    );
+    app.api_base_url = endpoint.clone();
+    app.model_name = "acp-loaded-session-test".to_owned();
+    app.config.models = vec![ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(ApiProtocol::ChatCompletions),
+        context_window: Some(8_192),
+        ..ModelProfile::default()
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    let state = Arc::new(Mutex::new(app));
+    let (sender, _) = ui_adapter::AgentUiEventSender::channel();
+    let client = reqwest::Client::new();
+    let cancellation = CancellationToken::new();
+    let policy = Arc::new(AcpPromptTestPolicy);
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let context = TurnContext::with_budgets(8, 16);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ui_adapter::run_agent_turn_with_events_and_context_for_acp(
+            &client,
+            &state,
+            &cancellation,
+            &policy,
+            &stream_buffer,
+            String::new(),
+            sender,
+            context,
+        ),
+    )
+    .await
+    .expect("loaded ACP session prompt must complete");
+    let request = provider_request.await.expect("provider request");
+    let request_text = String::from_utf8(request).expect("HTTP request UTF-8");
+    let body = request_text
+        .split_once("\r\n\r\n")
+        .expect("HTTP request body")
+        .1;
+    let request_json: serde_json::Value = serde_json::from_str(body).expect("provider JSON");
+    let messages = request_json["messages"].as_array().expect("messages");
+    assert!(messages.iter().any(|message| {
+        message["role"] == "user" && message["content"] == "Earlier user request"
+    }));
+    assert!(
+        messages.iter().any(|message| {
+            message["role"] == "assistant"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("Earlier assistant answer"))
+        }),
+        "loaded assistant transcript should be sent to the provider"
     );
 }
 
