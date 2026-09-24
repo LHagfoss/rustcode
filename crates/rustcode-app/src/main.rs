@@ -1,0 +1,46 @@
+mod backend;
+mod view;
+
+use std::path::PathBuf;
+
+use gpui_kit::{AppContext, WindowOptions, component::Root};
+
+use backend::NativeBackend;
+use view::AppView;
+
+fn main() {
+    let launch_dir = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let backend = NativeBackend::new(launch_dir.clone()).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
+    let mut backend = Some(backend);
+
+    gpui_kit::application().run(move |cx| {
+        gpui_kit::init(cx);
+        let backend = backend.take().expect("native window is opened once");
+        cx.spawn(async move |cx| {
+            cx.open_window(WindowOptions::default(), move |window, cx| {
+                let view = cx.new(|cx| AppView::new(backend, launch_dir, window, cx));
+                let updates = view.update(cx, |view, _| view.take_updates());
+                let update_view = view.clone();
+                cx.spawn(async move |cx| {
+                    let mut updates = updates;
+                    while let Some(event) = updates.recv().await {
+                        update_view.update(cx, |view, cx| view.apply_event(event, cx));
+                    }
+                    update_view.update(cx, |view, cx| view.controller_stopped(cx));
+                })
+                .detach();
+
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .expect("failed to open native window");
+        })
+        .detach();
+    });
+}
