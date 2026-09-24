@@ -1,3 +1,10 @@
+## [v0.55.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.11) - 2026-09-24
+
+### Improvements
+- Add ACP session listing, loading, persisted titles, and reliable prompt continuation.
+- Enforce Linux and macOS shell sandbox modes, with visible permissions and confirmed one-command network or scoped filesystem access.
+- Improve shell approval rules, context usage and history reporting, and command and question UI.
+- Bound log storage and remove the unused Laya sidecar.
 ## [v0.55.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.10) - 2026-09-23
 
 ### Fixes
