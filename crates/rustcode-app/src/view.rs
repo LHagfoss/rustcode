@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    Context, Render, SharedString, Window,
+    Context, PathPromptOptions, Render, SharedString, Window,
     component::{
         Disableable, Selectable, StyledExt,
         bubble::Bubble,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Input, InputState, Textarea, TextareaState},
+        input::{Textarea, TextareaState},
         message::{Message, MessageAlignment, MessageContent, MessageHeader},
         message_scroller::{MessageScroller, MessageScrollerState},
         text::TextView,
@@ -21,7 +21,7 @@ use rustcode::controller::{
 };
 
 use crate::{
-    backend::NativeBackend,
+    backend::{NativeBackend, project_selection_command, resume_session_command},
     projection::{
         ChatViewState, ProjectionRow, can_submit, project_rows, stop_available, toggle_option,
     },
@@ -30,7 +30,6 @@ use crate::{
 pub struct AppView {
     backend: NativeBackend,
     launch_dir: PathBuf,
-    project_path: gpui_kit::Entity<InputState>,
     composer: gpui_kit::Entity<TextareaState>,
     question_answer: gpui_kit::Entity<TextareaState>,
     messages: gpui_kit::Entity<MessageScrollerState>,
@@ -47,21 +46,24 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let project_path = cx.new(|cx| InputState::new(window, cx));
+        let status = backend
+            .controller()
+            .send(Command::ListSessions)
+            .err()
+            .map(|error| format!("Controller error: {error:?}"));
         let composer = cx.new(|cx| TextareaState::new(window, cx));
         let question_answer = cx.new(|cx| TextareaState::new(window, cx));
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
             backend,
             launch_dir,
-            project_path,
             composer,
             question_answer,
             messages,
             snapshot: None,
             chat_state: ChatViewState::default(),
             selected_question_options: Vec::new(),
-            status: None,
+            status,
         }
     }
 
@@ -110,11 +112,14 @@ impl AppView {
     }
 
     fn start_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
-        self.chat_state.begin_user_action();
-        if let Err(error) = self.backend.controller().send(Command::StartNew(workspace)) {
-            self.status = Some(format!("Controller error: {error:?}"));
-            cx.notify();
+        if let Some(command) = project_selection_command(Some(workspace)) {
+            self.send_command(command, cx);
         }
+    }
+
+    fn resume_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+        let command = resume_session_command(session_id, self.launch_dir.clone());
+        self.send_command(command, cx);
     }
 
     fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -367,6 +372,11 @@ impl Render for AppView {
             .child(self.render_model_buttons(cx));
 
         let shell = if workspace.is_none() {
+            let sessions = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.sessions.clone())
+                .unwrap_or_default();
             div()
                 .flex()
                 .flex_col()
@@ -380,21 +390,64 @@ impl Render for AppView {
                             this.start_workspace(this.launch_dir.clone(), cx);
                         })),
                 )
-                .child(div().child("Or enter a project directory:"))
-                .child(Input::new(&self.project_path).w(px(480.)))
+                .child(div().child("Or choose a project directory:"))
                 .child(
                     Button::new("choose-project")
-                        .label("Choose project")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let project = this.project_path.read(cx).value().to_string();
-                            if project.trim().is_empty() {
-                                this.status = Some("Enter a project directory first".to_owned());
-                                cx.notify();
-                            } else {
-                                this.start_workspace(PathBuf::from(project), cx);
-                            }
+                        .label("Choose project folder")
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            let selected = cx.prompt_for_paths(PathPromptOptions {
+                                files: false,
+                                directories: true,
+                                multiple: false,
+                                prompt: Some("Choose workspace".into()),
+                            });
+                            cx.spawn(async move |this, cx| {
+                                let result = selected.await;
+                                let _ = this.update(&mut *cx, |this, cx| match result {
+                                    Ok(Ok(Some(paths))) => {
+                                        if let Some(command) = paths
+                                            .into_iter()
+                                            .next()
+                                            .and_then(|path| project_selection_command(Some(path)))
+                                        {
+                                            this.send_command(command, cx);
+                                        }
+                                    }
+                                    Ok(Ok(None)) => {}
+                                    Ok(Err(error)) => {
+                                        this.status = Some(format!("Folder picker error: {error}"));
+                                        cx.notify();
+                                    }
+                                    Err(error) => {
+                                        this.status = Some(format!("Folder picker error: {error}"));
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                            .detach();
                         })),
                 )
+                .child(div().font_semibold().child("Recent sessions"))
+                .child(if sessions.is_empty() {
+                    div().text_sm().child("No saved sessions yet.")
+                } else {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(sessions.into_iter().map(|session| {
+                            let session_id = session.id.clone();
+                            let label = format!(
+                                "{} · {} · {} messages",
+                                session.title, session.when, session.message_count
+                            );
+                            Button::new(format!("resume-session-{}", session.id))
+                                .label(label)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.resume_session(session_id.clone(), cx);
+                                }))
+                        }))
+                })
         } else {
             div()
                 .flex()
@@ -464,5 +517,25 @@ impl Render for AppView {
             .when_some(self.chat_state.approval_status(), |this, status| {
                 this.child(div().text_sm().child(status))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustcode::controller::ControllerError;
+
+    use super::{ChatViewState, ControllerUpdate};
+
+    #[test]
+    fn invalid_workspace_error_is_available_to_the_start_screen() {
+        let mut chat_state = ChatViewState::default();
+        chat_state.apply_update(ControllerUpdate::Error(ControllerError::InvalidWorkspace(
+            "workspace must be an existing directory".into(),
+        )));
+
+        assert_eq!(
+            chat_state.error(),
+            Some("Controller error: InvalidWorkspace(\"workspace must be an existing directory\")")
+        );
     }
 }

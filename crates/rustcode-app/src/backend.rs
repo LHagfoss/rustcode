@@ -1,7 +1,18 @@
 use std::path::PathBuf;
 
-use rustcode::controller::{ControllerEvent, ControllerHandle, InteractiveController};
+use rustcode::controller::{Command, ControllerEvent, ControllerHandle, InteractiveController};
 use tokio::{runtime::Runtime, sync::mpsc};
+
+pub(crate) fn project_selection_command(selection: Option<PathBuf>) -> Option<Command> {
+    selection.map(Command::StartNew)
+}
+
+pub(crate) fn resume_session_command(session_id: impl Into<String>, workspace: PathBuf) -> Command {
+    Command::Resume {
+        session_id: session_id.into(),
+        workspace,
+    }
+}
 
 /// Owns the async runtime and the UI-neutral session controller.
 pub struct NativeBackend {
@@ -54,7 +65,33 @@ mod tests {
 
     use rustcode::controller::{Command, ControllerUpdate};
 
-    use super::NativeBackend;
+    use super::{NativeBackend, project_selection_command, resume_session_command};
+
+    #[test]
+    fn cancelling_project_picker_does_not_start_a_session() {
+        assert_eq!(project_selection_command(None), None);
+    }
+
+    #[test]
+    fn choosing_project_directory_starts_new_session_in_that_directory() {
+        let project = PathBuf::from("/tmp/rustcode-project");
+        assert_eq!(
+            project_selection_command(Some(project.clone())),
+            Some(Command::StartNew(project))
+        );
+    }
+
+    #[test]
+    fn resuming_session_uses_selected_session_id_and_workspace() {
+        let workspace = PathBuf::from("/tmp/rustcode-project");
+        assert_eq!(
+            resume_session_command("session-123", workspace.clone()),
+            Command::Resume {
+                session_id: "session-123".to_owned(),
+                workspace,
+            }
+        );
+    }
 
     #[test]
     fn starts_empty_and_accepts_start_new_without_a_terminal() {
