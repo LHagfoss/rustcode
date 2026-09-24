@@ -4,7 +4,7 @@
     </picture>
 </p>
 
-<h1 align="center">rustcode</h1>
+<h1 align="center">RustCode</h1>
 <p align="center">
     <b>An agent harness (or sum), made in Rust</b>
 </p>
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="mailto:lucas@flowdev.no">lucas@flowdev.no</a> · <a href="https://rustcode.lhagfoss.com">rustcode.lhagfoss.com</a>
+  <a href="mailto:hello@lhagfoss.com">hello@lhagfoss.com</a> · <a href="https://rustcode.lhagfoss.com">rustcode.lhagfoss.com</a>
 </p>
 
 <img src="./images/header.png" alt="rustcode screenshot 1"/>
