@@ -59,6 +59,9 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         name: test
         runs-on: ubuntu-24.04
+        # Healthy runs finish in ~6min. A hung runner or wedged test must
+        # fail fast instead of burning the 6h default (seen 20min+ stuck).
+        timeout-minutes: 20
         env:
             RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
         steps:
