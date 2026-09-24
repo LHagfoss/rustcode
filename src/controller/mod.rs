@@ -15,13 +15,24 @@ pub use snapshot::{
 #[cfg(test)]
 mod tests {
     use super::{ControllerSnapshot, accepts_generation};
-    use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion};
+    use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion, ToolConfirmation};
 
     #[test]
     fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() {
         let workspace = tempfile::tempdir().expect("temporary workspace");
         let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-7"));
         state.workspace_root = Some(workspace.path().to_path_buf());
+        let nested_workspace = workspace.path().join("nested");
+        std::fs::create_dir(&nested_workspace).expect("nested workspace");
+        state.task_working_directory = Some(nested_workspace.clone());
+        state
+            .history_picker_sessions
+            .push(rustcode_session::SessionMeta {
+                path: workspace.path().join("sessions/session-8.jsonl"),
+                title: "Saved session".to_owned(),
+                when: "today".to_owned(),
+                message_count: 4,
+            });
         state.active_session_id = "session-7".to_owned();
         state.model_name = "model-7".to_owned();
         state.history.push(ChatMessage::new("user", "first"));
@@ -34,13 +45,45 @@ mod tests {
             vec!["A".to_owned(), "B".to_owned()],
             false,
         ));
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "write_file".to_owned(),
+            path: "src/main.rs".to_owned(),
+            content_preview: "fn main() {}".to_owned(),
+            content_bytes: 12,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        }]);
 
         let snapshot = ControllerSnapshot::from_state(7, &state);
 
         assert_eq!(snapshot.generation, 7);
         assert_eq!(snapshot.session_id.as_deref(), Some("session-7"));
-        assert_eq!(snapshot.workspace.as_deref(), Some(workspace.path()));
+        assert_eq!(
+            snapshot.workspace.as_deref(),
+            Some(nested_workspace.as_path())
+        );
         assert_eq!(snapshot.selected_model.as_deref(), Some("model-7"));
+        assert_eq!(
+            snapshot.sessions,
+            [super::SessionChoice {
+                id: "session-8".to_owned(),
+                title: "Saved session".to_owned(),
+                when: "today".to_owned(),
+                message_count: 4,
+            }]
+        );
+        assert_eq!(
+            snapshot.models,
+            state
+                .config
+                .models
+                .iter()
+                .map(|model| super::ModelChoice {
+                    id: model.model.clone(),
+                    label: model.name.clone(),
+                })
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             snapshot
                 .transcript
@@ -56,6 +99,9 @@ mod tests {
         assert_eq!(question.text, "Pick one");
         assert_eq!(question.options, ["A", "B"]);
         assert!(!question.multiple);
+        let approval = snapshot.pending_approval.expect("approval projection");
+        assert_eq!(approval.tool_name, "write_file");
+        assert_eq!(approval.description, "src/main.rs\nfn main() {}");
     }
 
     #[test]

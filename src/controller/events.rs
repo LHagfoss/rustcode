@@ -1,4 +1,4 @@
-use super::ControllerSnapshot;
+use super::{ApprovalPrompt, ControllerSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalChoice {
@@ -20,8 +20,16 @@ pub enum ControllerError {
 pub enum TurnUpdate {
     PromptStarted(String),
     TextDelta(String),
-    ToolStarted { id: String, name: String },
-    ToolFinished { id: String, content: String },
+    ToolStarted {
+        id: String,
+        name: String,
+    },
+    ToolFinished {
+        id: String,
+        content: String,
+    },
+    /// The approval prompt batch is available in owned form to the frontend.
+    ApprovalRequested(Vec<ApprovalPrompt>),
     TurnFinished,
     Cancelled,
 }
@@ -75,9 +83,18 @@ pub(crate) fn from_agent_ui_event(
         AgentUiEvent::TurnRecovered { message } => {
             ControllerUpdate::Error(ControllerError::Provider(message))
         }
-        AgentUiEvent::ApprovalRequested { .. } | AgentUiEvent::SubagentUpdated { .. } => {
-            return None;
+        AgentUiEvent::ApprovalRequested { calls } => {
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
+                calls
+                    .into_iter()
+                    .map(|call| ApprovalPrompt {
+                        tool_name: call.name,
+                        description: call.arguments.to_string(),
+                    })
+                    .collect(),
+            ))
         }
+        AgentUiEvent::SubagentUpdated { .. } => return None,
     };
     Some(ControllerEvent { generation, update })
 }
@@ -85,6 +102,29 @@ pub(crate) fn from_agent_ui_event(
 #[cfg(test)]
 mod tests {
     use super::{ControllerUpdate, TurnUpdate, from_agent_ui_event};
+
+    #[test]
+    fn approval_requests_are_observable_and_tagged_with_the_generation() {
+        let event = crate::network::ui_adapter::AgentUiEvent::ApprovalRequested {
+            calls: vec![crate::tools::ToolCall {
+                name: "write_file".to_owned(),
+                arguments: serde_json::json!({ "path": "src/main.rs" }),
+                call_id: Some("call-13".to_owned()),
+            }],
+        };
+        let public = from_agent_ui_event(13, event).expect("approval request should be projected");
+
+        assert_eq!(public.generation, 13);
+        assert_eq!(
+            public.update,
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+                super::super::ApprovalPrompt {
+                    tool_name: "write_file".to_owned(),
+                    description: r#"{"path":"src/main.rs"}"#.to_owned(),
+                },
+            ]))
+        );
+    }
 
     #[test]
     fn internal_tool_events_become_owned_frontend_records() {
