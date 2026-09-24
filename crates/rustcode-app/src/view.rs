@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use gpui_kit::{
     Context, Render, SharedString, Window,
@@ -17,7 +17,7 @@ use gpui_kit::{
     px,
 };
 use rustcode::controller::{
-    ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, TurnUpdate,
+    ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate,
 };
 
 use crate::{
@@ -37,8 +37,6 @@ pub struct AppView {
     snapshot: Option<ControllerSnapshot>,
     chat_state: ChatViewState,
     selected_question_options: Vec<String>,
-    stream_rows: Vec<ProjectionRow>,
-    active_tools: HashMap<String, usize>,
     status: Option<String>,
 }
 
@@ -63,8 +61,6 @@ impl AppView {
             snapshot: None,
             chat_state: ChatViewState::default(),
             selected_question_options: Vec::new(),
-            stream_rows: Vec::new(),
-            active_tools: HashMap::new(),
             status: None,
         }
     }
@@ -82,6 +78,7 @@ impl AppView {
             return;
         }
 
+        self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
                 let previous_question = self
@@ -96,53 +93,15 @@ impl AppView {
                 if previous_question != next_question {
                     self.selected_question_options.clear();
                 }
-                if !snapshot.turn_active {
-                    self.stream_rows.clear();
-                    self.active_tools.clear();
-                }
                 self.snapshot = Some(snapshot);
                 self.status = None;
-                self.chat_state.clear_error();
             }
-            ControllerUpdate::Turn(update) => {
-                self.apply_turn_update(update);
-            }
-            ControllerUpdate::Error(error) => {
-                let message = format!("Controller error: {error:?}");
-                self.chat_state.set_error(message);
+            ControllerUpdate::Turn(_) => {}
+            ControllerUpdate::Error(_) => {
                 self.status = None;
             }
         }
         cx.notify();
-    }
-
-    fn apply_turn_update(&mut self, update: TurnUpdate) {
-        match update {
-            TurnUpdate::PromptStarted(_) => {}
-            TurnUpdate::TextDelta(text) => match self.stream_rows.last_mut() {
-                Some(ProjectionRow::Assistant(content)) => content.push_str(&text),
-                _ => self.stream_rows.push(ProjectionRow::Assistant(text)),
-            },
-            TurnUpdate::ToolStarted { id, name } => {
-                let row = self.stream_rows.len();
-                self.stream_rows.push(ProjectionRow::Tool {
-                    name,
-                    content: "Running…".to_owned(),
-                });
-                self.active_tools.insert(id, row);
-            }
-            TurnUpdate::ToolFinished { id, content } => {
-                if let Some(row) = self.active_tools.remove(&id)
-                    && let Some(ProjectionRow::Tool {
-                        content: current, ..
-                    }) = self.stream_rows.get_mut(row)
-                {
-                    *current = content;
-                }
-            }
-            TurnUpdate::ApprovalRequested(_) | TurnUpdate::TurnFinished | TurnUpdate::Cancelled => {
-            }
-        }
     }
 
     pub fn controller_stopped(&mut self, cx: &mut Context<Self>) {
@@ -151,6 +110,7 @@ impl AppView {
     }
 
     fn start_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        self.chat_state.begin_user_action();
         if let Err(error) = self.backend.controller().send(Command::StartNew(workspace)) {
             self.status = Some(format!("Controller error: {error:?}"));
             cx.notify();
@@ -180,6 +140,7 @@ impl AppView {
     }
 
     fn send_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        self.chat_state.begin_user_action();
         if let Err(error) = self.backend.controller().send(command) {
             let message = format!("Controller error: {error:?}");
             self.chat_state.set_error(message);
@@ -194,12 +155,8 @@ impl AppView {
             .as_ref()
             .map(|snapshot| project_rows(&snapshot.transcript, &snapshot.live_response))
             .unwrap_or_default();
-        if self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.turn_active)
-        {
-            for streamed in &self.stream_rows {
+        if self.chat_state.turn_active() {
+            for streamed in self.chat_state.stream_rows() {
                 match (rows.last_mut(), streamed) {
                     (Some(ProjectionRow::Assistant(visible)), ProjectionRow::Assistant(text))
                         if text.starts_with(visible.as_str()) =>
@@ -282,11 +239,16 @@ impl AppView {
                         .on_click(move |_, window, cx| {
                             if multiple {
                                 let _ = view.update(cx, |this, cx| {
+                                    this.chat_state.begin_user_action();
                                     toggle_option(&mut this.selected_question_options, &answer);
                                     cx.notify();
                                 });
                             } else {
                                 let _ = controller.send(Command::AnswerQuestion(answer.clone()));
+                                let _ = view.update(cx, |this, cx| {
+                                    this.chat_state.begin_user_action();
+                                    cx.notify();
+                                });
                                 composer.update(cx, |state, cx| state.set_value("", window, cx));
                             }
                         })
@@ -305,6 +267,10 @@ impl AppView {
                         return false;
                     }
                     let _ = controller.send(Command::AnswerQuestion(answer));
+                    let _ = view.update(app, |this, cx| {
+                        this.chat_state.begin_user_action();
+                        cx.notify();
+                    });
                     composer.update(app, |state, cx| state.set_value("", window, cx));
                     true
                 }),
@@ -319,6 +285,7 @@ impl AppView {
         let controller = self.backend.controller().clone();
         let approve_controller = controller.clone();
         let view = cx.entity().downgrade();
+        let approve_view = view.clone();
         Some(
             AlertDialog::new(cx)
                 .title(format!("Approve {}?", prompt.tool_name))
@@ -329,13 +296,18 @@ impl AppView {
                         .cancel_text("Deny")
                         .show_cancel(true),
                 )
-                .on_ok(move |_, _, _| {
+                .on_ok(move |_, _, cx| {
                     let _ = approve_controller.send(Command::Approval(ApprovalChoice::Approve));
+                    let _ = approve_view.update(cx, |this, cx| {
+                        this.chat_state.begin_user_action();
+                        cx.notify();
+                    });
                     true
                 })
                 .on_cancel(move |_, _, cx| {
                     let _ = controller.send(Command::Approval(ApprovalChoice::Deny));
                     let _ = view.update(cx, |this, cx| {
+                        this.chat_state.begin_user_action();
                         this.chat_state.set_approval_denied();
                         cx.notify();
                     });
@@ -375,10 +347,7 @@ impl Render for AppView {
             .and_then(|snapshot| snapshot.workspace.as_ref())
             .map(|path| path.display().to_string());
         let status = self.status.clone().unwrap_or_default();
-        let turn_active = self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.turn_active);
+        let turn_active = self.chat_state.turn_active();
         let composer_enabled = self.chat_state.composer_enabled();
         let send_enabled = composer_enabled && can_submit(&self.composer.read(cx).value());
 

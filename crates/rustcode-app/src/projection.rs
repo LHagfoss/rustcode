@@ -1,4 +1,8 @@
-use rustcode::controller::{QuestionPrompt, TranscriptItem};
+use std::collections::HashMap;
+
+use rustcode::controller::{
+    ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem, TurnUpdate,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionRow {
@@ -73,15 +77,85 @@ pub fn toggle_option(selected: &mut Vec<String>, option: &str) {
 pub struct ChatViewState {
     error: Option<String>,
     approval_denied: bool,
+    turn_active: bool,
+    stream_rows: Vec<ProjectionRow>,
+    active_tools: HashMap<String, usize>,
 }
 
 impl ChatViewState {
-    pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
+    pub fn apply_update(&mut self, update: ControllerUpdate) {
+        match update {
+            ControllerUpdate::Snapshot(snapshot) => self.apply_snapshot(snapshot),
+            ControllerUpdate::Turn(update) => self.apply_turn_update(update),
+            ControllerUpdate::Error(error) => {
+                self.set_error(format!("Controller error: {error:?}"));
+            }
+        }
     }
 
-    pub fn clear_error(&mut self) {
+    fn apply_snapshot(&mut self, snapshot: ControllerSnapshot) {
+        self.turn_active = snapshot.turn_active;
+        if !self.turn_active {
+            self.stream_rows.clear();
+            self.active_tools.clear();
+        }
+    }
+
+    fn apply_turn_update(&mut self, update: TurnUpdate) {
+        match update {
+            TurnUpdate::PromptStarted(_) => {
+                self.turn_active = true;
+                self.error = None;
+                self.approval_denied = false;
+                self.stream_rows.clear();
+                self.active_tools.clear();
+            }
+            TurnUpdate::TextDelta(text) => {
+                self.turn_active = true;
+                match self.stream_rows.last_mut() {
+                    Some(ProjectionRow::Assistant(content)) => content.push_str(&text),
+                    _ => self.stream_rows.push(ProjectionRow::Assistant(text)),
+                }
+            }
+            TurnUpdate::ToolStarted { id, name } => {
+                self.turn_active = true;
+                let row = self.stream_rows.len();
+                self.stream_rows.push(ProjectionRow::Tool {
+                    name,
+                    content: "Running…".to_owned(),
+                });
+                self.active_tools.insert(id, row);
+            }
+            TurnUpdate::ToolFinished { id, content } => {
+                self.turn_active = true;
+                if let Some(row) = self.active_tools.remove(&id)
+                    && let Some(ProjectionRow::Tool {
+                        content: current, ..
+                    }) = self.stream_rows.get_mut(row)
+                {
+                    *current = content;
+                }
+            }
+            TurnUpdate::ApprovalRequested(_) => self.turn_active = true,
+            TurnUpdate::TurnFinished | TurnUpdate::Cancelled => self.turn_active = false,
+        }
+    }
+
+    pub fn turn_active(&self) -> bool {
+        self.turn_active
+    }
+
+    pub fn stream_rows(&self) -> &[ProjectionRow] {
+        &self.stream_rows
+    }
+
+    pub fn begin_user_action(&mut self) {
         self.error = None;
+        self.approval_denied = false;
+    }
+
+    pub fn set_error(&mut self, error: String) {
+        self.error = Some(error);
     }
 
     pub fn set_approval_denied(&mut self) {
@@ -103,6 +177,9 @@ impl ChatViewState {
 
 #[cfg(test)]
 mod tests {
+    use rustcode::controller::{
+        ApprovalPrompt, ControllerError, ControllerSnapshot, ControllerUpdate, TurnUpdate,
+    };
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
 
     use super::{
@@ -215,5 +292,110 @@ mod tests {
         assert_eq!(view.approval_status(), Some("Approval denied"));
         assert_eq!(view.error(), Some("provider unavailable"));
         assert!(view.composer_enabled());
+    }
+
+    fn snapshot(turn_active: bool) -> ControllerSnapshot {
+        ControllerSnapshot {
+            generation: 1,
+            workspace: None,
+            session_id: Some("session".to_owned()),
+            sessions: Vec::new(),
+            models: Vec::new(),
+            selected_model: None,
+            transcript: Vec::new(),
+            live_response: String::new(),
+            queued_count: 0,
+            turn_active,
+            pending_question: None,
+            pending_approval: None::<ApprovalPrompt>,
+        }
+    }
+
+    #[test]
+    fn streamed_turn_updates_expose_stop_and_order_live_tool_rows() {
+        let mut view = ChatViewState::default();
+        view.apply_update(ControllerUpdate::Snapshot(snapshot(false)));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::PromptStarted(
+            "run".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
+            "Before ".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolStarted {
+            id: "tool-1".to_owned(),
+            name: "read_file".to_owned(),
+        }));
+
+        assert!(view.turn_active());
+        assert!(stop_available(view.turn_active()));
+        assert_eq!(
+            view.stream_rows(),
+            &[
+                ProjectionRow::Assistant("Before ".to_owned()),
+                ProjectionRow::Tool {
+                    name: "read_file".to_owned(),
+                    content: "Running…".to_owned(),
+                },
+            ]
+        );
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolFinished {
+            id: "tool-1".to_owned(),
+            content: "file contents".to_owned(),
+        }));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
+            "After".to_owned(),
+        )));
+        assert_eq!(
+            view.stream_rows(),
+            &[
+                ProjectionRow::Assistant("Before ".to_owned()),
+                ProjectionRow::Tool {
+                    name: "read_file".to_owned(),
+                    content: "file contents".to_owned(),
+                },
+                ProjectionRow::Assistant("After".to_owned()),
+            ]
+        );
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::TurnFinished));
+        assert!(!view.turn_active());
+        assert!(!stop_available(view.turn_active()));
+    }
+
+    #[test]
+    fn final_snapshot_does_not_clear_provider_error_before_user_action() {
+        let mut view = ChatViewState::default();
+        view.apply_update(ControllerUpdate::Error(ControllerError::Provider(
+            "provider unavailable".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Snapshot(snapshot(false)));
+
+        assert_eq!(
+            view.error(),
+            Some("Controller error: Provider(\"provider unavailable\")")
+        );
+        assert!(view.composer_enabled());
+
+        view.begin_user_action();
+        assert_eq!(view.error(), None);
+
+        view.apply_update(ControllerUpdate::Error(ControllerError::Provider(
+            "provider unavailable".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::PromptStarted(
+            "retry".to_owned(),
+        )));
+        assert_eq!(view.error(), None);
+    }
+
+    #[test]
+    fn denial_status_resets_when_the_next_turn_starts() {
+        let mut view = ChatViewState::default();
+        view.set_approval_denied();
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::PromptStarted(
+            "next".to_owned(),
+        )));
+        assert_eq!(view.approval_status(), None);
     }
 }
