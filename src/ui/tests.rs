@@ -4998,13 +4998,13 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     let breakdown = modals::calculate_context_breakdown(&state.render_snapshot());
     assert!(breakdown.user_tokens > 0);
     assert!(breakdown.assistant_tokens > 0);
-    assert!(breakdown.free_tokens < breakdown.context_window);
+    assert!(breakdown.prompt_headroom_tokens < breakdown.context_window);
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
     assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
     assert!(
-        rendered.contains("Stored history estimate by category"),
+        rendered.contains("Saved history estimate"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
@@ -5012,7 +5012,10 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         rendered.contains("Agent responses"),
         "rendered: {rendered:?}"
     );
-    assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("Estimated headroom"),
+        "rendered: {rendered:?}"
+    );
 
     let lines = rendered.lines().collect::<Vec<_>>();
     let header_row = lines
@@ -5031,12 +5034,12 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .expect("context grid should be rendered");
     let category_header_row = lines
         .iter()
-        .position(|line| line.contains("Stored history estimate by category"))
+        .position(|line| line.contains("Saved history estimate"))
         .expect("category header should be rendered");
-    let free_space_row = lines
+    let headroom_row = lines
         .iter()
-        .position(|line| line.contains("Free space"))
-        .expect("free-space row should be rendered");
+        .position(|line| line.contains("Estimated headroom"))
+        .expect("headroom row should be rendered");
     assert!(header_row > 0);
     assert!(
         lines[header_row - 1].trim().is_empty(),
@@ -5046,9 +5049,9 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert_eq!(first_grid_row, summary_row);
     assert_eq!(category_header_row, summary_row + 2);
     assert_eq!(
-        21usize.saturating_sub(free_space_row + 1),
+        21usize.saturating_sub(headroom_row + 1),
         0,
-        "context modal should not leave bottom padding after its stats: free_space_row={free_space_row}, rendered={rendered:?}"
+        "context modal should not leave bottom padding after its stats: headroom_row={headroom_row}, rendered={rendered:?}"
     );
 }
 
@@ -5082,6 +5085,10 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     );
 
     let breakdown = modals::calculate_context_breakdown(&snapshot);
+    assert_eq!(
+        breakdown.prompt_headroom_tokens, 96_000,
+        "live prompt headroom must be based on provider prompt usage, not the stored transcript estimate"
+    );
     let stored_history_estimate = breakdown
         .user_tokens
         .saturating_add(breakdown.assistant_tokens)
@@ -5097,7 +5104,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
         "context summary must match provider prompt usage: {rendered:?}"
     );
     assert!(
-        rendered.contains("Stored history estimate by category"),
+        rendered.contains("Saved history estimate"),
         "estimated saved history must be distinguished from active prompt usage: {rendered:?}"
     );
 
