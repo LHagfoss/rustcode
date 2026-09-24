@@ -73,6 +73,7 @@ async fn run_compiler_command(
     let _cancel_on_drop = worker_token.clone().drop_guard();
     let request = rustcode_command::CommandRequest {
         command: command_for_exec.command,
+        status_command: None,
         cwd: Some(cwd.to_path_buf()),
         env: vec![("PATH".into(), compiler_augmented_path().into())],
         timeout,

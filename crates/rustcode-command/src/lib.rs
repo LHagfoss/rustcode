@@ -23,6 +23,9 @@ const CAPTURE_TAIL_BYTES: usize = MAX_OUTPUT_BYTES - CAPTURE_HEAD_BYTES;
 #[derive(Clone, Debug)]
 pub struct CommandRequest {
     pub command: String,
+    /// Original shell text used to interpret exit metadata when `command` is
+    /// wrapped by an operating-system sandbox launcher.
+    pub status_command: Option<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(OsString, OsString)>,
     pub timeout: Duration,
@@ -37,6 +40,7 @@ pub struct CommandRequest {
 impl PartialEq for CommandRequest {
     fn eq(&self, other: &Self) -> bool {
         self.command == other.command
+            && self.status_command == other.status_command
             && self.cwd == other.cwd
             && self.env == other.env
             && self.timeout == other.timeout
@@ -353,9 +357,12 @@ fn run_command_internal(
     }
     let stdout = out_handle.join().unwrap_or_default().finish();
     let stderr = err_handle.join().unwrap_or_default().finish();
-    let signal = terminating_signal(&status, &request.command);
-    let downstream_consumer_terminated =
-        is_downstream_consumer_termination(signal, &request.command);
+    let status_command = request
+        .status_command
+        .as_deref()
+        .unwrap_or(&request.command);
+    let signal = terminating_signal(&status, status_command);
+    let downstream_consumer_terminated = is_downstream_consumer_termination(signal, status_command);
     Ok(CommandOutput {
         success: status.success() || downstream_consumer_terminated,
         exit_code: status.code(),
@@ -527,6 +534,7 @@ mod tests {
     fn request(command: &str) -> CommandRequest {
         CommandRequest {
             command: command.to_owned(),
+            status_command: None,
             cwd: None,
             env: Vec::new(),
             timeout: Duration::from_secs(5),
@@ -565,6 +573,25 @@ mod tests {
     #[test]
     fn downstream_sigpipe_is_explicit_and_not_a_command_failure() {
         let output = run_with_timeout(&request("yes | head -n 1"), None).unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.exit_code, Some(141));
+        assert_eq!(output.signal, Some(libc::SIGPIPE));
+        assert!(output.downstream_consumer_terminated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapped_command_uses_original_shell_text_for_sigpipe_classification() {
+        let original = "yes | head -n 1";
+        let wrapped = format!("/bin/bash -o pipefail -c '{}'", original);
+        let request = CommandRequest {
+            command: wrapped,
+            status_command: Some(original.to_owned()),
+            ..request("")
+        };
+
+        let output = run_with_timeout(&request, None).unwrap();
 
         assert!(output.success);
         assert_eq!(output.exit_code, Some(141));

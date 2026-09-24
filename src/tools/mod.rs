@@ -849,6 +849,7 @@ pub(crate) fn spawn_background_task_for_test(
                 rustcode_tasks::SessionId::new(session_id),
                 rustcode_command::CommandRequest {
                     command: command.to_owned(),
+                    status_command: None,
                     cwd: None,
                     env: Vec::new(),
                     timeout: std::time::Duration::from_secs(30),

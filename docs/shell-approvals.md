@@ -15,8 +15,8 @@ or background overrides are ineligible for reusable allow rules. Privilege
 escalation, network clients, package installation/publication,
 deployment/release actions, and known destructive commands are also ineligible.
 The config field `approved_command_prefixes` is retained for compatibility,
-but its entries are treated as exact normalized argv until an operating-system
-sandbox is available. Parent and subagent shell calls use the same saved rules.
+but its entries are treated as exact normalized argv. Parent and subagent
+shell calls use the same saved rules.
 
 Forbid rules persist in `~/.config/rustcode/config.toml` as
 `denied_command_prefixes`, are user-level only, and take precedence over saved
@@ -48,11 +48,27 @@ commands still require approval under the shell guard. RustCode requires
 sandbox setup or the seccomp filter fails, it refuses to run the command.
 Install bubblewrap with your distribution's package manager.
 
-Native sandbox backends for macOS and Windows are not implemented yet. Those
-platforms retain the existing command execution behavior, so approval is not
-an operating-system isolation boundary there. The Linux sandbox isolates
-filesystem writes and IP networking. The seccomp fallback preserves AF_UNIX
-socket creation and socketpairs, but blocks `connect` and server-side network
-syscalls, including for AF_UNIX. Additional Codex controls such as fine-grained
-read restrictions, protected metadata, and approval-aware permission
-escalation remain future work.
+On macOS, shell commands run under Seatbelt through the fixed
+`/usr/bin/sandbox-exec` executable. The policy allows host file reads but
+restricts writes to the canonical active workspace and session scratch
+directory, and denies network connections by default. Temporary-file
+environment variables point inside the workspace so build tools keep their
+temporary output within the writable policy. Symlinked scratch directories,
+working directories outside writable roots, and workspaces resolving to `/`
+are rejected before launch. `.git` remains writable inside the workspace so
+approved Git operations work. If `sandbox-exec` is unavailable or Seatbelt
+rejects the profile, RustCode refuses to run the command; it does not fall
+back to an unsandboxed shell. Apple has deprecated `sandbox-exec`, but it is
+the system Seatbelt interface RustCode currently uses.
+
+Windows does not yet have an operating-system sandbox backend, so shell
+approval is not an isolation boundary there. Linux and macOS currently give
+commands broad host read access while restricting writes and network access;
+fine-grained read restrictions, protected metadata, configurable effective
+sandbox modes, and approval-aware one-shot permission escalation remain
+future work. Reusable command approvals remain separate from operating-system
+permissions and do not widen the sandbox.
+
+On Linux, the seccomp fallback preserves AF_UNIX socket creation and
+socketpairs, but blocks `connect` and server-side network syscalls, including
+for AF_UNIX.
