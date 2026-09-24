@@ -1,16 +1,20 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    Context, PathPromptOptions, Render, Window,
+    Anchor, Context, PathPromptOptions, Render, Window,
     component::{
-        Disableable, IconName, Selectable, StyledExt,
+        Disableable, Icon, IconName, Selectable, StyledExt,
         bubble::Bubble,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Textarea, TextareaState},
+        menu::{DropdownMenu, PopupMenuItem},
         message::{Message, MessageAlignment, MessageContent, MessageHeader},
         message_scroller::{MessageScroller, MessageScrollerState},
-        scroll::ScrollableElement,
+        sidebar::{
+            Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
+            SidebarToggleButton,
+        },
         text::TextView,
     },
     div,
@@ -44,7 +48,7 @@ pub struct AppView {
     pending_model_selection: Option<String>,
     starting_new_session: bool,
     clear_composer_on_render: bool,
-    model_picker_open: bool,
+    sidebar_collapsed: bool,
 }
 
 impl AppView {
@@ -59,8 +63,11 @@ impl AppView {
             .send(Command::ListSessions)
             .err()
             .map(|error| format!("Controller error: {error:?}"));
-        let composer =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder("Ask RustCode anything"));
+        let composer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Ask RustCode anything")
+                .auto_grow(2, 6)
+        });
         let question_answer = cx.new(|cx| TextareaState::new(window, cx));
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
@@ -79,7 +86,7 @@ impl AppView {
             pending_model_selection: None,
             starting_new_session: false,
             clear_composer_on_render: false,
-            model_picker_open: false,
+            sidebar_collapsed: false,
         }
     }
 
@@ -187,6 +194,18 @@ impl AppView {
                 self.pending_prompt = None;
             }
         }
+    }
+
+    fn start_new_chat(&mut self, cx: &mut Context<Self>) {
+        let project = if self.selected_project.is_dir() {
+            self.selected_project.clone()
+        } else if self.launch_dir.is_dir() {
+            self.launch_dir.clone()
+        } else {
+            self.choose_project_and_start(cx);
+            return;
+        };
+        self.start_workspace(project, cx);
     }
 
     fn choose_project_and_start(&mut self, cx: &mut Context<Self>) {
@@ -376,57 +395,143 @@ impl AppView {
             .find(|model| selected.as_deref() == Some(model.id.as_str()))
             .map(|model| model.label.clone())
             .unwrap_or_else(|| "Choose model".to_owned());
-        div()
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap_1()
-            .when(self.model_picker_open, |this| {
-                this.child(
-                    div()
-                        .max_h(px(220.))
-                        .overflow_y_scrollbar()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .p_1()
-                        .bg(rgb(0x202127))
-                        .border_1()
-                        .border_color(rgb(0x353741))
-                        .rounded_lg()
-                        .children(models.into_iter().map(|model| {
-                            let model_id = model.id.clone();
-                            Button::new(format!("model-{}", model.id))
-                                .label(model.label)
-                                .selected(selected.as_deref() == Some(model_id.as_str()))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    let has_active_session = this
-                                        .snapshot
-                                        .as_ref()
-                                        .is_some_and(|snapshot| snapshot.session_id.is_some())
-                                        && !this.starting_new_session;
-                                    if has_active_session {
-                                        this.send_command(
-                                            Command::SelectModel(model_id.clone()),
-                                            cx,
-                                        );
-                                    } else {
-                                        this.pending_model_selection = Some(model_id.clone());
-                                    }
-                                    this.model_picker_open = false;
-                                    cx.notify();
-                                }))
-                        })),
+        let view = cx.entity().downgrade();
+        Button::new("model-picker")
+            .ghost()
+            .compact()
+            .label(selected_label)
+            .dropdown_caret(true)
+            .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                models.iter().fold(
+                    menu.min_w(px(250.)).max_h(px(300.)).scrollable(true),
+                    |menu, model| {
+                        let model_id = model.id.clone();
+                        let view = view.clone();
+                        menu.item(
+                            PopupMenuItem::new(model.label.clone())
+                                .checked(selected.as_deref() == Some(model.id.as_str()))
+                                .on_click(move |_, _, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        let has_active_session =
+                                            this.snapshot.as_ref().is_some_and(|snapshot| {
+                                                snapshot.session_id.is_some()
+                                            }) && !this.starting_new_session;
+                                        if has_active_session {
+                                            this.send_command(
+                                                Command::SelectModel(model_id.clone()),
+                                                cx,
+                                            );
+                                        } else {
+                                            this.pending_model_selection = Some(model_id.clone());
+                                            cx.notify();
+                                        }
+                                    });
+                                }),
+                        )
+                    },
                 )
             })
-            .child(
-                Button::new("model-picker")
-                    .label(format!("{selected_label}  ▾"))
+    }
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let collapsed = self.sidebar_collapsed;
+        let project = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.workspace.as_ref())
+            .unwrap_or(&self.selected_project);
+        let project_name = project
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Choose project".to_owned());
+        let selected_session = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_id.as_deref());
+
+        let header =
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .when(!collapsed, |this| {
+                            this.child(div().font_semibold().child("RustCode"))
+                        })
+                        .child(SidebarToggleButton::new().collapsed(collapsed).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.sidebar_collapsed = !this.sidebar_collapsed;
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("new-chat")
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .p_2()
+                        .rounded_lg()
+                        .text_sm()
+                        .cursor_pointer()
+                        .hover(|this| this.bg(rgb(0x34363a)))
+                        .when(collapsed, |this| this.justify_center())
+                        .child(Icon::new(IconName::Plus).size_4())
+                        .when(!collapsed, |this| this.child("New chat"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.start_new_chat(cx);
+                        })),
+                );
+
+        let projects = SidebarGroup::new("Projects").child(
+            SidebarMenu::new().child(
+                SidebarMenuItem::new(project_name)
+                    .icon(Icon::new(IconName::FolderOpen))
+                    .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.model_picker_open = !this.model_picker_open;
-                        cx.notify();
+                        this.choose_project_and_start(cx);
                     })),
-            )
+            ),
+        );
+        let mut recent_menu = SidebarMenu::new();
+        if self.recent_sessions.is_empty() {
+            recent_menu =
+                recent_menu.child(SidebarMenuItem::new("No recent sessions").disable(true));
+        } else {
+            for session in &self.recent_sessions {
+                let session_id = session.id.clone();
+                recent_menu = recent_menu.child(
+                    SidebarMenuItem::new(session.title.clone())
+                        .icon(Icon::new(IconName::FileText))
+                        .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
+                        .active(selected_session == Some(session.id.as_str()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.resume_session(session_id.clone(), cx);
+                        })),
+                );
+            }
+        }
+
+        Sidebar::new("session-sidebar")
+            .w(px(270.))
+            .bg(rgb(0x222426))
+            .border_color(rgb(0x34363a))
+            .collapsible(SidebarCollapsible::Icon)
+            .collapsed(collapsed)
+            .header(header)
+            .child(projects)
+            .when(!collapsed, |this| {
+                this.child(SidebarGroup::new("Recents").child(recent_menu))
+            })
+            .into_any_element()
     }
 
     fn render_question(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -576,6 +681,14 @@ impl Render for AppView {
             .unwrap_or(&self.selected_project)
             .display()
             .to_string();
+        let project_label = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.workspace.as_ref())
+            .unwrap_or(&self.selected_project)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Choose project".to_owned());
         let status = self.status.clone();
         let turn_active = self.chat_state.turn_active();
         let composer_enabled = self.chat_state.composer_enabled();
@@ -583,7 +696,6 @@ impl Render for AppView {
             && self.pending_prompt.is_none()
             && !self.starting_new_session
             && can_submit(&self.composer.read(cx).value());
-        let sessions = self.recent_sessions.clone();
         let has_session = !should_show_start_screen(self.snapshot.as_ref());
         let pending_question = self.chat_state.pending_question().is_some()
             || self
@@ -591,109 +703,7 @@ impl Render for AppView {
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.pending_question.is_some());
 
-        let sidebar = div()
-            .w(px(252.))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .bg(rgb(0x17181d))
-            .border_r_1()
-            .border_color(rgb(0x292a31))
-            .child(div().text_lg().font_semibold().child("RustCode"))
-            .child(
-                Button::new("new-chat")
-                    .primary()
-                    .icon(IconName::Plus)
-                    .label("New Chat")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let project = if this.selected_project.is_dir() {
-                            this.selected_project.clone()
-                        } else if this.launch_dir.is_dir() {
-                            this.launch_dir.clone()
-                        } else {
-                            this.choose_project_and_start(cx);
-                            return;
-                        };
-                        this.start_workspace(project, cx);
-                    })),
-            )
-            .child(
-                Button::new("choose-project")
-                    .icon(IconName::FolderOpen)
-                    .label("Choose project")
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        let selected = cx.prompt_for_paths(PathPromptOptions {
-                            files: false,
-                            directories: true,
-                            multiple: false,
-                            prompt: Some("Choose workspace".into()),
-                        });
-                        cx.spawn(async move |this, cx| {
-                            let result = selected.await;
-                            let _ = this.update(&mut *cx, |this, cx| match result {
-                                Ok(Ok(Some(paths))) => {
-                                    if let Some(path) = paths.into_iter().next() {
-                                        this.start_workspace(path, cx);
-                                    }
-                                }
-                                Ok(Ok(None)) => {}
-                                Ok(Err(error)) => {
-                                    this.status = Some(format!("Folder picker error: {error}"));
-                                    cx.notify();
-                                }
-                                Err(error) => {
-                                    this.status = Some(format!("Folder picker error: {error}"));
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .detach();
-                    })),
-            )
-            .child(
-                div()
-                    .pt_2()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(rgb(0x92949e))
-                    .child("RECENT"),
-            )
-            .child(if sessions.is_empty() {
-                div()
-                    .text_sm()
-                    .text_color(rgb(0x92949e))
-                    .child("No recent sessions")
-                    .into_any_element()
-            } else {
-                let selected_session = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_id.as_deref());
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .children(sessions.into_iter().map(|session| {
-                        let session_id = session.id.clone();
-                        let label = format!("{}", session.title);
-                        Button::new(format!("resume-session-{}", session.id))
-                            .icon(IconName::FileText)
-                            .label(label)
-                            .selected(selected_session == Some(session.id.as_str()))
-                            .w_full()
-                            .justify_start()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.resume_session(session_id.clone(), cx);
-                            }))
-                    }))
-                    .into_any_element()
-            });
+        let sidebar = self.render_sidebar(cx);
 
         let welcome = div()
             .flex_1()
@@ -720,6 +730,28 @@ impl Render for AppView {
         } else {
             welcome.into_any_element()
         };
+        let context_row = div()
+            .w_full()
+            .max_w(px(860.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(0xb5b7bd))
+            .child(
+                Button::new("composer-project")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::FolderOpen)
+                    .label(project_label)
+                    .tooltip(workspace)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.choose_project_and_start(cx);
+                    })),
+            )
+            .child("Local");
         let composer = div()
             .w_full()
             .max_w(px(860.))
@@ -727,17 +759,15 @@ impl Render for AppView {
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(rgb(0x202127))
+            .bg(rgb(0x2b2c30))
             .border_1()
-            .border_color(rgb(0x353741))
+            .border_color(rgb(0x383a40))
             .rounded_xl()
             .child(
                 Textarea::new(&self.composer)
-                    .h(px(88.))
                     .appearance(false)
                     .bordered(false)
-                    .disabled(!composer_enabled)
-                    .flex_1(),
+                    .disabled(!composer_enabled),
             )
             .when_some(status.clone(), |this, message| {
                 this.child(
@@ -766,25 +796,34 @@ impl Render for AppView {
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
                             .text_xs()
-                            .text_color(rgb(0x92949e))
-                            .child(workspace.clone()),
+                            .text_color(rgb(0xd49b64))
+                            .child("Auto approve"),
                     )
                     .child(self.render_model_picker(cx))
                     .when(stop_available(turn_active), |this| {
-                        this.child(Button::new("stop-turn").label("Stop").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.send_command(Command::Cancel, cx);
-                            },
-                        )))
+                        this.child(
+                            Button::new("stop-turn")
+                                .ghost()
+                                .icon(IconName::CircleX)
+                                .accessibility_label("Stop turn")
+                                .tooltip("Stop turn")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.send_command(Command::Cancel, cx);
+                                })),
+                        )
                     })
                     .child(
                         Button::new("send-message")
                             .primary()
                             .icon(IconName::ArrowUp)
+                            .rounded(px(999.))
+                            .accessibility_label(if pending_question {
+                                "Answer"
+                            } else {
+                                "Send message"
+                            })
                             .disabled(!send_enabled)
-                            .label(if pending_question { "Answer" } else { "Send" })
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.submit_composer(window, cx)),
                             ),
@@ -821,12 +860,21 @@ impl Render for AppView {
             .when_some(self.chat_state.approval_status(), |this, message| {
                 this.child(div().w_full().max_w(px(860.)).text_sm().child(message))
             })
-            .child(composer);
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(860.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(context_row)
+                    .child(composer),
+            );
 
         div()
             .size_full()
             .flex()
-            .bg(rgb(0x111216))
+            .bg(rgb(0x1b1d1f))
             .text_color(rgb(0xe8e9ed))
             .child(sidebar)
             .child(main)
