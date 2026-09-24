@@ -285,6 +285,63 @@ async fn cancelled_turn_can_be_followed_by_a_new_submit() {
     handle.send(Command::Shutdown).expect("shutdown");
 }
 
+#[tokio::test]
+async fn cancel_resolves_pending_approval_and_question_before_followup_submit() {
+    let (approval_tx, approval_rx) = tokio::sync::oneshot::channel();
+    let (question_tx, question_rx) = tokio::sync::oneshot::channel();
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingToolConfirmation;
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "write_file".to_owned(),
+        path: "src/main.rs".to_owned(),
+        content_preview: "fn main() {}".to_owned(),
+        content_bytes: 12,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+    state.tool_confirmation_response = Some(approval_tx);
+    state.pending_question = Some(PendingQuestion::new(
+        "Continue?".to_owned(),
+        vec!["Proceed".to_owned()],
+        false,
+    ));
+    state.question_response = Some(question_tx);
+    let lease = state.claim_orchestrator().expect("active queue lease");
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+    let waiter_state = std::sync::Arc::clone(&state);
+    let turn_task = tokio::spawn(async move {
+        let approval = approval_rx.await.expect("approval should be resolved");
+        let question = question_rx.await.expect("question should be resolved");
+        waiter_state.lock().await.release_orchestrator(&lease);
+        let _ = observed_tx.send((approval, question));
+    });
+    let mut session = super::worker::ActiveSession {
+        generation: 1,
+        state: std::sync::Arc::clone(&state),
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+        turn_task: Some(turn_task),
+    };
+    let (updates, _receiver) = tokio::sync::mpsc::unbounded_channel();
+
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        super::worker::cancel_active_turn(&mut session, &updates),
+    )
+    .await
+    .expect("pending interactions must not block cancellation");
+
+    let (approval, question) = observed_rx.await.expect("waiter result");
+    assert_eq!(approval, crate::app::ToolConfirmationResponse::Deny);
+    assert_eq!(question, "User cancelled prompt.");
+    assert!(!session.cancel_token.is_cancelled());
+    let queued = super::worker::queue_prompt(&session.state, "after cancel".to_owned()).await;
+    let super::worker::QueuePrompt::Start(lease, _) = queued else {
+        panic!("follow-up submit should claim a fresh orchestrator lease");
+    };
+    session.state.lock().await.release_orchestrator(&lease);
+}
+
 async fn read_provider_request(socket: &mut tokio::net::TcpStream) {
     use tokio::io::AsyncReadExt;
 

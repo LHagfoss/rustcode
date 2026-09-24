@@ -28,11 +28,11 @@ impl InteractiveController {
     }
 }
 
-struct ActiveSession {
-    generation: u64,
-    state: Arc<Mutex<AppState>>,
-    cancel_token: CancellationToken,
-    turn_task: Option<JoinHandle<()>>,
+pub(super) struct ActiveSession {
+    pub(super) generation: u64,
+    pub(super) state: Arc<Mutex<AppState>>,
+    pub(super) cancel_token: CancellationToken,
+    pub(super) turn_task: Option<JoinHandle<()>>,
 }
 
 async fn controller_worker(
@@ -124,53 +124,27 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
-                let mut state = session.state.lock().await;
-                let outcome = crate::app::submit_plain_prompt(&mut state, prompt);
-                if outcome == crate::app::SubmitOutcome::Empty {
-                    send_snapshot_locked(&updates, session.generation, &state);
-                    continue;
-                }
-                let lease = if !state.orchestrator_running {
-                    let lease = state.claim_orchestrator();
-                    if lease.is_some() {
-                        state.status = crate::app::AppStatus::Queued;
+                match queue_prompt(&session.state, prompt).await {
+                    QueuePrompt::Empty => {
+                        send_snapshot(&updates, session.generation, &session.state).await;
                     }
-                    lease
-                } else {
-                    None
-                };
-                let starting_history_len = state.history.len();
-                drop(state);
-                if let Some(lease) = lease {
-                    session.turn_task = Some(spawn_turn(
-                        session.generation,
-                        Arc::clone(&session.state),
-                        session.cancel_token.clone(),
-                        client.clone(),
-                        lease,
-                        starting_history_len,
-                        updates.clone(),
-                    ));
+                    QueuePrompt::Queued => {}
+                    QueuePrompt::Start(lease, starting_history_len) => {
+                        session.turn_task = Some(spawn_turn(
+                            session.generation,
+                            Arc::clone(&session.state),
+                            session.cancel_token.clone(),
+                            client.clone(),
+                            lease,
+                            starting_history_len,
+                            updates.clone(),
+                        ));
+                    }
                 }
             }
             Command::Cancel => {
                 if let Some(session) = active.as_mut() {
-                    session.cancel_token.cancel();
-                    if let Some(turn_task) = session.turn_task.take()
-                        && turn_task.await.is_err()
-                    {
-                        send_error(
-                            &updates,
-                            session.generation,
-                            ControllerError::Provider(
-                                "turn worker stopped unexpectedly".to_owned(),
-                            ),
-                        );
-                    }
-                    // The old queue has unwound before this fresh token is
-                    // used for another turn in the same session.
-                    session.cancel_token = CancellationToken::new();
-                    send_snapshot(&updates, session.generation, &session.state).await;
+                    cancel_active_turn(session, &updates).await;
                 } else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                 }
@@ -287,6 +261,69 @@ fn send_error(
         generation,
         update: ControllerUpdate::Error(error),
     });
+}
+
+pub(super) enum QueuePrompt {
+    Empty,
+    Queued,
+    Start(crate::app::OrchestratorLease, usize),
+}
+
+pub(super) async fn queue_prompt(state: &Arc<Mutex<AppState>>, prompt: String) -> QueuePrompt {
+    let mut state = state.lock().await;
+    if crate::app::submit_plain_prompt(&mut state, prompt) == crate::app::SubmitOutcome::Empty {
+        return QueuePrompt::Empty;
+    }
+    let starting_history_len = state.history.len();
+    let lease = if !state.orchestrator_running {
+        let lease = state.claim_orchestrator();
+        if lease.is_some() {
+            state.status = crate::app::AppStatus::Queued;
+        }
+        lease
+    } else {
+        None
+    };
+    lease.map_or(QueuePrompt::Queued, |lease| {
+        QueuePrompt::Start(lease, starting_history_len)
+    })
+}
+
+pub(super) async fn cancel_active_turn(
+    session: &mut ActiveSession,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+) {
+    {
+        let mut state = session.state.lock().await;
+        if let Some(response) = state.tool_confirmation_response.take() {
+            let _ = response.send(crate::app::ToolConfirmationResponse::Deny);
+        }
+        if let Some(response) = state.question_response.take() {
+            let _ = response.send("User cancelled prompt.".to_owned());
+        }
+        state.pending_tool_confirmation = None;
+        state.pending_question = None;
+        state.clear_question_chain();
+    }
+    session.cancel_token.cancel();
+    if let Some(turn_task) = session.turn_task.take()
+        && turn_task.await.is_err()
+    {
+        send_error(
+            updates,
+            session.generation,
+            ControllerError::Provider("turn worker stopped unexpectedly".to_owned()),
+        );
+    }
+    {
+        let mut state = session.state.lock().await;
+        state.enter_idle();
+        state.clear_active_turn_projection();
+    }
+    // The old queue has unwound before this fresh token is used for another
+    // turn in the same session.
+    session.cancel_token = CancellationToken::new();
+    send_snapshot(updates, session.generation, &session.state).await;
 }
 
 pub(super) async fn answer_question(
