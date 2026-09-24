@@ -469,14 +469,37 @@ impl AppView {
         }
         let rendered_rows = rows.clone();
         let expanded_thoughts = self.expanded_thoughts.clone();
+        // Turn timing lives at the end of the last message instead of a
+        // fixed row under the transcript.
+        let tail_note = self.chat_state.turn_elapsed_ms().map(|elapsed| {
+            if self.chat_state.turn_active() {
+                format!("Working · {}", format_duration(elapsed))
+            } else {
+                format!("Turn took {}", format_duration(elapsed))
+            }
+        });
         let view = cx.entity().downgrade();
         MessageScroller::new("conversation", self.messages.clone(), move |index, _, _| {
-            match rendered_rows.get(index).cloned() {
+            let element = match rendered_rows.get(index).cloned() {
                 Some(DisplayRow::Message(row)) => {
                     render_message(row, index, expanded_thoughts.contains(&index), view.clone())
                 }
                 Some(DisplayRow::ToolGroup(tools)) => render_tool_group(tools),
                 None => div().child("Message unavailable").into_any_element(),
+            };
+            let is_last = index + 1 == rendered_rows.len();
+            match (&tail_note, is_last) {
+                (Some(note), true) => div()
+                    .child(element)
+                    .child(
+                        div()
+                            .pt_1()
+                            .text_xs()
+                            .text_color(rgb(0x8c8f98))
+                            .child(note.clone()),
+                    )
+                    .into_any_element(),
+                _ => element,
             }
         })
         // The row wrapper already insets px_3, so keep the viewport flush:
@@ -511,6 +534,7 @@ impl AppView {
         Button::new("model-picker")
             .ghost()
             .compact()
+            .xsmall()
             .label(selected_label)
             .dropdown_caret(true)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
@@ -882,37 +906,37 @@ fn render_message(
                         "Thought".to_owned()
                     };
                     let view = view.clone();
+                    // Button centers its label row internally, so pin the
+                    // toggle to the left with an explicit wrapper.
                     this.child(
-                        Button::new(format!("thought-{index}"))
-                            .ghost()
-                            .compact()
-                            .justify_start()
-                            .icon(if thought_expanded {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .label(label)
-                            .on_click(move |_, _, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    if !this.expanded_thoughts.insert(index) {
-                                        this.expanded_thoughts.remove(&index);
-                                    }
-                                    cx.notify();
-                                });
-                            }),
+                        div().w_full().flex().justify_start().child(
+                            Button::new(format!("thought-{index}"))
+                                .ghost()
+                                .compact()
+                                .icon(if thought_expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .label(label)
+                                .on_click(move |_, _, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        if !this.expanded_thoughts.insert(index) {
+                                            this.expanded_thoughts.remove(&index);
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
                     )
                     .when(thought_expanded && !thought.is_empty(), |this| {
+                        // Flat thought text, no card background.
                         this.child(
                             div()
                                 .w_full()
                                 .min_w_0()
-                                .max_w(px(760.))
-                                .px_3()
-                                .py_2()
-                                .rounded_lg()
-                                .bg(rgb(0x25272a))
-                                .text_color(rgb(0xb7bac2))
+                                .py_1()
+                                .text_color(rgb(0x8c8f98))
                                 .child(TextView::markdown(
                                     format!("thought-content-{index}"),
                                     thought,
@@ -1040,6 +1064,7 @@ impl Render for AppView {
                 Button::new("composer-project")
                     .ghost()
                     .compact()
+                    .xsmall()
                     .icon(IconName::FolderOpen)
                     .label(project_label)
                     .tooltip(workspace)
@@ -1105,6 +1130,7 @@ impl Render for AppView {
                             Button::new("auto-approve")
                                 .ghost()
                                 .compact()
+                                .xsmall()
                                 .w(px(155.))
                                 .justify_start()
                                 .icon(if auto_approve {
@@ -1191,20 +1217,6 @@ impl Render for AppView {
             .when_some(self.chat_state.approval_status(), |this, message| {
                 this.child(div().w_full().max_w(px(860.)).text_sm().child(message))
             })
-            .when_some(self.chat_state.turn_elapsed_ms(), |this, elapsed| {
-                this.child(
-                    div()
-                        .w_full()
-                        .max_w(px(860.))
-                        .text_xs()
-                        .text_color(rgb(0x8c8f98))
-                        .child(if turn_active {
-                            format!("Working · {}", format_duration(elapsed))
-                        } else {
-                            format!("Turn took {}", format_duration(elapsed))
-                        }),
-                )
-            })
             .child(
                 div()
                     .w_full()
@@ -1217,8 +1229,9 @@ impl Render for AppView {
             );
 
         // SidebarToggleButton hardcodes a small button and a 16px icon with
-        // no size override, so use a large ghost button directly for a
-        // bigger, easier target.
+        // no size override, so use a ghost button directly. Large (24px
+        // icon) reads chunky next to the traffic lights; a 28px box lands
+        // the icon at ~21px, between small and large.
         let toggle_icon = if self.sidebar_collapsed {
             IconName::PanelLeftOpen
         } else {
@@ -1230,7 +1243,7 @@ impl Render for AppView {
             .child(
                 Button::new("sidebar-toggle")
                     .ghost()
-                    .large()
+                    .with_size(px(28.))
                     .icon(toggle_icon)
                     .tooltip("Toggle sidebar")
                     .accessibility_label("Toggle sidebar")
