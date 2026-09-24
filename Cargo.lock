@@ -7078,7 +7078,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-app"
-version = "0.55.10"
+version = "0.55.11"
 dependencies = [
  "gpui-kit",
  "rustcode",
