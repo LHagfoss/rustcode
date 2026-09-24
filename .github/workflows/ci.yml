@@ -83,7 +83,7 @@ jobs:
             - name: Install FFmpeg
               run: |
                   sudo apt-get update
-                  sudo apt-get install --no-install-recommends -y ffmpeg
+                  sudo apt-get install --no-install-recommends -y ffmpeg bubblewrap
 
             - name: Verify FFmpeg tools
               run: |

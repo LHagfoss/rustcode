@@ -32,8 +32,27 @@ forbidden action. Remove or edit an entry in the global config to change it.
 One-time approval remains available for commands without a matching saved
 forbid rule.
 
-RustCode does not currently provide an operating-system sandbox for shell
-commands. A one-time or reusable approval authorizes execution in the normal
-RustCode process context; it does not limit filesystem or network access.
-These approval rules improve repeated decisions but do not provide
-Codex-equivalent OS isolation. See follow-up issue #1358 for sandbox backends.
+On Linux, shell commands run through bubblewrap with the host filesystem
+read-only and the active workspace and session scratch directory writable.
+RustCode first probes whether bubblewrap can create a private network
+namespace. When the host denies bubblewrap's loopback setup, RustCode uses the
+same filesystem and process isolation plus a seccomp filter. The filter
+restricts `socket` and `socketpair` to `AF_UNIX`, denies IP and other socket
+families, blocks network syscalls (`connect`, `accept`/`accept4`, `bind`,
+`listen`, peer/name/shutdown/send/receive-mmsg/options calls), and blocks
+`io_uring_setup`, `io_uring_enter`, and `io_uring_register`. `recvfrom` and
+`sendmsg` remain allowed for Unix-domain subprocess IPC. `.git` remains
+writable inside the workspace so approved Git operations work; mutating Git
+commands still require approval under the shell guard. RustCode requires
+`bwrap` in a root-owned system PATH directory and an active workspace; if
+sandbox setup or the seccomp filter fails, it refuses to run the command.
+Install bubblewrap with your distribution's package manager.
+
+Native sandbox backends for macOS and Windows are not implemented yet. Those
+platforms retain the existing command execution behavior, so approval is not
+an operating-system isolation boundary there. The Linux sandbox isolates
+filesystem writes and IP networking. The seccomp fallback preserves AF_UNIX
+socket creation and socketpairs, but blocks `connect` and server-side network
+syscalls, including for AF_UNIX. Additional Codex controls such as fine-grained
+read restrictions, protected metadata, and approval-aware permission
+escalation remain future work.
