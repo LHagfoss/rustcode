@@ -5,7 +5,11 @@ mod view;
 
 use std::path::PathBuf;
 
-use gpui_kit::{AppContext, WindowOptions, component::Root};
+use gpui_kit::{
+    AppContext, WindowBounds, WindowOptions,
+    component::{Root, Theme, ThemeMode},
+    px, size,
+};
 
 use backend::NativeBackend;
 use view::AppView;
@@ -24,29 +28,37 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        let window_bounds = WindowBounds::centered(size(px(1200.), px(800.)), cx);
         let backend = backend.take().expect("native window is opened once");
         cx.spawn(async move |cx| {
-            cx.open_window(WindowOptions::default(), move |window, cx| {
-                let view = cx.new(|cx| AppView::new(backend, launch_dir, window, cx));
-                let updates = view.update(cx, |view, _| view.take_updates());
-                let update_view = view.clone();
-                cx.spawn(async move |cx| {
-                    let mut updates = updates;
-                    while let Some(event) = updates.recv().await {
-                        let mut batch = vec![event];
-                        while let Ok(event) = updates.try_recv() {
-                            batch.push(event);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(window_bounds),
+                    ..WindowOptions::default()
+                },
+                move |window, cx| {
+                    let view = cx.new(|cx| AppView::new(backend, launch_dir, window, cx));
+                    let updates = view.update(cx, |view, _| view.take_updates());
+                    let update_view = view.clone();
+                    cx.spawn(async move |cx| {
+                        let mut updates = updates;
+                        while let Some(event) = updates.recv().await {
+                            let mut batch = vec![event];
+                            while let Ok(event) = updates.try_recv() {
+                                batch.push(event);
+                            }
+                            for event in coalesce_text_deltas(batch) {
+                                update_view.update(cx, |view, cx| view.apply_event(event, cx));
+                            }
                         }
-                        for event in coalesce_text_deltas(batch) {
-                            update_view.update(cx, |view, cx| view.apply_event(event, cx));
-                        }
-                    }
-                    update_view.update(cx, |view, cx| view.controller_stopped(cx));
-                })
-                .detach();
+                        update_view.update(cx, |view, cx| view.controller_stopped(cx));
+                    })
+                    .detach();
 
-                cx.new(|cx| Root::new(view, window, cx))
-            })
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            )
             .expect("failed to open native window");
         })
         .detach();
