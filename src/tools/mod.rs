@@ -74,7 +74,7 @@ pub use rustcode_core::ToolErrorKind;
 pub(crate) use exec::{
     CommandProgressCallback, abort_background_starts, approved_command_prefix_covers_call,
     background_task_manager, command_confirmation_preview, command_requires_confirmation,
-    denied_command_prefix_covers_call, release_background_start,
+    denied_command_prefix_covers_call, persisted_approved_command_prefix, release_background_start,
     rememberable_command_forbid_prefix_for_call, rememberable_command_prefix_for_call,
     run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
     task_event_to_tool_output,

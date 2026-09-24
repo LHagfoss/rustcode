@@ -6,10 +6,12 @@ commands ask for confirmation. A user can approve a command once, save a
 reusable plain-token command-prefix rule, or forbid a matching token sequence
 from the confirmation panel.
 
-Reusable allow rules match complete leading tokens, so `cargo test` covers
-`cargo test --lib` but not `cargo testing`. Whitespace differences are
-normalized. This rule intentionally covers plain arguments after the approved
-prefix; choose a narrow prefix when extra arguments could widen the action.
+Newly saved reusable allow rules match complete leading tokens, so
+`cargo test` covers `cargo test --lib` but not `cargo testing`. Existing saved
+entries without a prefix marker continue to match only the exact normalized
+command the user approved. Whitespace differences are normalized. A new prefix
+rule intentionally covers plain arguments after the approved prefix; choose a
+narrow prefix when extra arguments could widen the action.
 Shell syntax, quotes, substitutions, redirections, globs, tilde expansion, and
 environment or background overrides are ineligible for reusable allow rules.
 Privilege escalation, network clients, package installation/publication,
