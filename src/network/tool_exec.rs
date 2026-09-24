@@ -28,8 +28,8 @@ pub(crate) use preview::{
 };
 pub(crate) use result::{
     bounded_tool_result_history_message, compact_replayed_read_result, finalize_tool_result,
-    replay_cached_view_file_subrange, subagent_tool_history_message, tool_result_from_execution,
-    tool_result_history_message,
+    replay_cached_view_file_subrange, stable_arguments_hash, subagent_tool_history_message,
+    tool_result_from_execution, tool_result_history_message,
 };
 
 fn cached_read_covers_request(
