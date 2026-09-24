@@ -1170,28 +1170,17 @@ fn denied_command_tokens_cover(tokens: &[String], rules: &[Vec<String>], depth: 
     if command_index > 0 {
         return denied_command_tokens_cover(&tokens[command_index..], rules, depth + 1);
     }
-    if tokens.first().is_some_and(|token| {
-        matches!(
-            token.as_str(),
-            "if" | "then"
-                | "elif"
-                | "else"
-                | "fi"
-                | "while"
-                | "until"
-                | "do"
-                | "done"
-                | "for"
-                | "select"
-                | "case"
-                | "esac"
-                | "function"
-                | "coproc"
-        )
-    }) {
-        // Shell control words can make later segments conditional or repeat
-        // them. We do not attempt to interpret that grammar for saved denies.
-        return true;
+    match tokens.first().map(String::as_str) {
+        Some("if" | "then" | "elif" | "else" | "while" | "until" | "do" | "!") => {
+            return if tokens.len() > 1 {
+                denied_command_tokens_cover(&tokens[1..], rules, depth + 1)
+            } else {
+                false
+            };
+        }
+        Some("fi" | "done" | "esac" | "for" | "select") => return false,
+        Some("case" | "function" | "coproc") => return true,
+        _ => {}
     }
     if tokens.first().is_some_and(|executable| {
         executable
@@ -1405,6 +1394,14 @@ fn wrapped_command_payload(tokens: &[String]) -> Option<WrappedCommandPayload> {
             .iter()
             .position(|arg| matches!(arg.as_str(), "-c" | "-e"))
             .and_then(|index| shell_from(index + 1)),
+        "source" | "." => Some(WrappedCommandPayload::Ambiguous),
+        "trap" => match args.first().map(String::as_str) {
+            Some("-p" | "-l") => None,
+            Some("") => None,
+            Some(action) if action.starts_with('-') => Some(WrappedCommandPayload::Ambiguous),
+            Some(action) => Some(WrappedCommandPayload::Shell(action.to_owned())),
+            None => None,
+        },
         "env" => {
             let mut index = 0;
             while index < args.len() {
@@ -1834,9 +1831,13 @@ mod command_prefix_tests {
             ("git push", "sh -c \"$CMD push\""),
             ("git push", "git \"$SUBCOMMAND\""),
             ("git push", "if git push; then echo ok; fi"),
+            ("git push", "for x in a b; do git push; done"),
             ("git push", "! git push"),
             ("git push", "builtin eval 'git push'"),
             ("git push", "builtin exec git push"),
+            ("git push", "source ./push.sh"),
+            ("git push", ". ./push.sh"),
+            ("git push", "trap 'git push' EXIT"),
             ("git push", "eval git push"),
             ("git push", "eval 'git push'"),
             ("git push", "sudo --user root git push"),
@@ -1869,6 +1870,10 @@ mod command_prefix_tests {
             ("git push", "printf log | xargs -J_ git _ -1"),
             ("git push", "rg \"foo\\sbar\""),
             ("git push", "git status 2>/dev/null"),
+            ("git push", "if echo ok; then rg foo; fi"),
+            ("git push", "for x in a b; do echo \"$x\"; done"),
+            ("git push", "! echo ok"),
+            ("git push", "trap 'echo ok' EXIT"),
             ("git push", "wc -l < README.md"),
             ("git push", "echo ok > /tmp/file"),
             ("git push", "echo \"$HOME\""),
