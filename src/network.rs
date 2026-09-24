@@ -180,17 +180,27 @@ pub(crate) async fn prepare_native_tool_schemas(
     Vec<serde_json::Value>,
     crate::tools::McpSchemaSelectionStats,
 ) {
-    let snapshot = {
+    let (snapshot, always_include_servers) = {
         let mut s = state.lock().await;
         let session_id = s.active_session_id.clone();
-        s.prompt_cache
-            .native_tool_schema_snapshot(policy, messages, &session_id)
+        let snapshot = s
+            .prompt_cache
+            .native_tool_schema_snapshot(policy, messages, &session_id);
+        let always_include_servers = s
+            .config
+            .mcp_servers
+            .iter()
+            .filter(|server| server.enabled && server.always_include)
+            .map(|server| server.name.clone())
+            .collect::<Vec<_>>();
+        (snapshot, always_include_servers)
     };
-    let result = crate::tools::native_tools_schema_for_context_with_sticky_at(
+    let result = crate::tools::native_tools_schema_for_context_with_sticky_at_and_reserved_servers(
         snapshot.policy,
         messages,
         &snapshot.sticky_names,
         workspace_root,
+        &always_include_servers,
     );
     {
         let mut s = state.lock().await;

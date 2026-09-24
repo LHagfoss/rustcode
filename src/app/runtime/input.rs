@@ -793,6 +793,12 @@ pub(super) async fn handle_app_event(
                 }
 
                 if s.show_mcp_config {
+                    let existing_mcp_always_include = s
+                        .mcp_edit_state
+                        .as_ref()
+                        .and_then(|edit_state| edit_state.edit_index)
+                        .and_then(|idx| s.config.mcp_servers.get(idx))
+                        .is_some_and(|server| server.always_include);
                     if let Some(ref mut edit_state) = s.mcp_edit_state {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -871,6 +877,7 @@ pub(super) async fn handle_app_event(
                                         args,
                                         env: std::collections::HashMap::new(),
                                         enabled: true,
+                                        always_include: existing_mcp_always_include,
                                     };
 
                                     if edit_state.is_add {

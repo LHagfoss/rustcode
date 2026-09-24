@@ -156,6 +156,7 @@ async fn production_startup_failures_are_retryable_but_missing_snapshots_are_not
         args: vec!["-c".into(), "exit 1".into()],
         env: Default::default(),
         enabled: true,
+        always_include: false,
     };
     let action = JobAction::McpCall {
         server: "teams".into(),
@@ -205,6 +206,7 @@ read -r line
         args: vec!["-c".into(), script.into()],
         env: Default::default(),
         enabled: true,
+        always_include: false,
     };
     let workspace = tempfile::tempdir().unwrap();
     let interactive = crate::mcp::start_owned_server(&config, workspace.path())

@@ -468,6 +468,138 @@ fn mcp_schema_selection_enforces_a_measured_schema_byte_budget() {
 }
 
 #[test]
+fn mcp_always_include_reserves_a_complete_server_toolset_within_the_native_cap() {
+    let mut tools = Vec::new();
+    let mut owners = Vec::new();
+    for name in [
+        "list_emails",
+        "send_email",
+        "reply_email",
+        "download_attachment",
+        "search_emails",
+        "create_draft",
+        "delete_email",
+    ] {
+        tools.push((
+            name.to_string(),
+            "Email operation".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ));
+        owners.push("mail".to_string());
+    }
+    for index in 0..110 {
+        let server = format!("server_{}", index % 6);
+        tools.push((
+            format!("{server}_tool_{index:03}"),
+            "Search Discord messages and channels".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ));
+        owners.push(server);
+    }
+    let messages = vec![serde_json::json!({
+        "role":"user",
+        "content":"Search Discord messages"
+    })];
+
+    let (selected, stats) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &["mail".to_string()],
+            &messages,
+            &[],
+            ToolSchemaPhase::Established,
+        );
+    let selected_names = selected
+        .iter()
+        .map(|index| tools[*index].0.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(tools.len(), 117);
+    assert_eq!(selected.len(), MAX_MCP_NATIVE_SCHEMAS);
+    for name in [
+        "list_emails",
+        "send_email",
+        "reply_email",
+        "download_attachment",
+        "search_emails",
+        "create_draft",
+        "delete_email",
+    ] {
+        assert!(
+            selected_names.contains(name),
+            "reserved mail tool {name} missing"
+        );
+    }
+    assert_eq!(stats.reserved_servers, ["mail"]);
+    assert!(stats.rejected_reservations.is_empty());
+    assert_eq!(stats.omitted_names.len(), 117 - MAX_MCP_NATIVE_SCHEMAS);
+}
+
+#[test]
+fn mcp_always_include_reports_a_reservation_that_exceeds_the_tool_cap() {
+    let mut tools = Vec::new();
+    let mut owners = Vec::new();
+    for index in 0..(MAX_MCP_NATIVE_SCHEMAS + 1) {
+        tools.push((
+            format!("oversize_tool_{index:02}"),
+            "Unrelated".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ));
+        owners.push("oversize".to_string());
+    }
+    let messages = vec![serde_json::json!({"role":"user","content":"unmatched"})];
+
+    let (selected, stats) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &["oversize".to_string()],
+            &messages,
+            &[],
+            ToolSchemaPhase::Established,
+        );
+
+    assert!(selected.is_empty());
+    assert!(stats.reserved_servers.is_empty());
+    assert_eq!(stats.rejected_reservations, ["oversize"]);
+    assert_eq!(stats.omitted_names.len(), tools.len());
+}
+
+#[test]
+fn mcp_always_include_rejects_a_server_toolset_that_exceeds_the_schema_byte_budget() {
+    let tools = vec![
+        (
+            "first_tool".to_string(),
+            "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "second_tool".to_string(),
+            "x".repeat(super::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+    ];
+    let owners = vec!["large".to_string(), "large".to_string()];
+    let messages = vec![serde_json::json!({"role":"user","content":"unmatched"})];
+
+    let (selected, stats) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &["large".to_string()],
+            &messages,
+            &[],
+            ToolSchemaPhase::Established,
+        );
+
+    assert!(selected.is_empty());
+    assert_eq!(stats.rejected_reservations, ["large"]);
+    assert!(stats.schema_budget_exhausted);
+    assert!(stats.mcp_schema_bytes <= stats.mcp_schema_budget_bytes);
+}
+
+#[test]
 fn bootstrap_mcp_selection_does_not_flood_empty_projects_with_discovery_tools() {
     let tools = (0..8)
         .map(|index| {
