@@ -14,6 +14,23 @@ pub(crate) fn resume_session_command(session_id: impl Into<String>, workspace: P
     }
 }
 
+/// Picks the workspace a saved-session resume should run in: the currently
+/// selected project when it is still a live directory, otherwise the launch
+/// directory, otherwise `None` so the UI offers the folder picker before
+/// resuming (issue #1377: never resume in a stale launch directory).
+pub(crate) fn resolve_resume_workspace(
+    selected_project: &std::path::Path,
+    launch_dir: &std::path::Path,
+) -> Option<PathBuf> {
+    if selected_project.is_dir() {
+        Some(selected_project.to_path_buf())
+    } else if launch_dir.is_dir() {
+        Some(launch_dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
 /// Owns the async runtime and the UI-neutral session controller.
 pub struct NativeBackend {
     _runtime: Runtime,
@@ -65,7 +82,9 @@ mod tests {
 
     use rustcode::controller::{Command, ControllerUpdate};
 
-    use super::{NativeBackend, project_selection_command, resume_session_command};
+    use super::{
+        NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
+    };
 
     #[test]
     fn cancelling_project_picker_does_not_start_a_session() {
@@ -91,6 +110,51 @@ mod tests {
                 workspace,
             }
         );
+    }
+
+    #[test]
+    fn resume_prefers_selected_project_over_stale_launch_directory() {
+        let launch_dir = std::env::current_dir().expect("current directory");
+        let selected = unique_test_dir("resume-selected");
+        assert_eq!(
+            resolve_resume_workspace(&selected, &launch_dir),
+            Some(selected.clone())
+        );
+        std::fs::remove_dir(&selected).ok();
+    }
+
+    #[test]
+    fn resume_falls_back_to_launch_directory_when_nothing_is_selected() {
+        let launch_dir = std::env::current_dir().expect("current directory");
+        let missing = launch_dir.join("rustcode-test-missing-project-1377");
+        assert!(!missing.exists());
+        assert_eq!(
+            resolve_resume_workspace(&missing, &launch_dir),
+            Some(launch_dir)
+        );
+    }
+
+    #[test]
+    fn resume_offers_folder_picker_when_no_directory_is_valid() {
+        let missing_selected = PathBuf::from("/definitely/not/a/rustcode-test-project-1377-a");
+        let missing_launch = PathBuf::from("/definitely/not/a/rustcode-test-project-1377-b");
+        assert_eq!(
+            resolve_resume_workspace(&missing_selected, &missing_launch),
+            None
+        );
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rustcode-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).expect("temporary test directory");
+        dir
     }
 
     #[test]

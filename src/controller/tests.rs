@@ -427,8 +427,26 @@ async fn controller_routes_background_completion_to_the_session_and_restarts_its
     handle.send(Command::Shutdown).expect("shutdown");
 }
 
+/// GitHub-hosted Linux runners install bubblewrap but block unprivileged
+/// user namespaces, so `bwrap` fails with `setting up uid map: Permission
+/// denied`. This test exercises workspace plumbing, not sandbox enforcement
+/// (covered in `tools::exec::sandbox::tests`), so skip it where the sandbox
+/// cannot run instead of failing the gate.
+#[cfg(target_os = "linux")]
+fn bubblewrap_can_run() -> bool {
+    std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 #[tokio::test]
 async fn explicit_controller_workspace_is_the_default_tool_working_directory() {
+    #[cfg(target_os = "linux")]
+    if !bubblewrap_can_run() {
+        eprintln!("skipping controller workspace cwd test: bubblewrap cannot run here");
+        return;
+    }
     let workspace = tempfile::tempdir().expect("workspace");
     let workspace = workspace
         .path()
