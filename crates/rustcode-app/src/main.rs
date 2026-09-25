@@ -2,6 +2,8 @@ mod projection;
 
 mod backend;
 mod highlight;
+mod image_attachment;
+mod slash;
 mod view;
 
 use std::path::PathBuf;

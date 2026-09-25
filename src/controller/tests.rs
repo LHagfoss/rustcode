@@ -5,6 +5,68 @@ use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion, ToolConfirma
 use std::time::Duration;
 
 #[tokio::test]
+async fn native_slash_commands_stay_out_of_the_model_queue() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let original_session_id = started.session_id.expect("session id");
+
+    handle.send(Command::Submit("/help".into())).expect("help");
+    let help = updates.recv().await.expect("help snapshot");
+    let ControllerUpdate::Snapshot(help) = help.update else {
+        panic!("expected help snapshot");
+    };
+    assert!(!help.turn_active);
+    assert!(
+        help.transcript
+            .iter()
+            .any(|item| item.content.contains("Native commands:"))
+    );
+    assert!(
+        !help
+            .transcript
+            .iter()
+            .any(|item| item.role == "user" && item.content == "/help")
+    );
+
+    handle
+        .send(Command::Submit("/unsupported".into()))
+        .expect("unknown");
+    let unknown = updates.recv().await.expect("unknown command snapshot");
+    let ControllerUpdate::Snapshot(unknown) = unknown.update else {
+        panic!("expected unknown command snapshot");
+    };
+    assert!(unknown.transcript.iter().any(|item| {
+        item.content
+            .contains("Unknown native command: /unsupported")
+    }));
+
+    handle
+        .send(Command::Submit("/new".into()))
+        .expect("new chat");
+    let fresh = updates.recv().await.expect("new chat snapshot");
+    let ControllerUpdate::Snapshot(fresh) = fresh.update else {
+        panic!("expected new chat snapshot");
+    };
+    assert_ne!(
+        fresh.session_id.as_deref(),
+        Some(original_session_id.as_str())
+    );
+    assert!(fresh.generation > help.generation);
+    assert!(!fresh.turn_active);
+}
+
+#[tokio::test]
 async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
     use tokio::io::AsyncWriteExt;
 
@@ -502,11 +564,15 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     state.current_response = std::sync::Arc::new("live".to_owned());
     state.pending_queue = vec!["queued one".to_owned(), "queued two".to_owned()];
     state.status = AppStatus::AwaitingQuestion;
-    state.pending_question = Some(PendingQuestion::new(
-        "Pick one".to_owned(),
-        vec!["A".to_owned(), "B".to_owned()],
-        false,
-    ));
+    state.pending_question = Some(
+        PendingQuestion::new(
+            "Pick one".to_owned(),
+            vec!["A".to_owned(), "B".to_owned()],
+            false,
+        )
+        .with_header("Source".to_owned())
+        .with_descriptions(vec!["Local files".to_owned(), "Remote API".to_owned()]),
+    );
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
@@ -525,14 +591,16 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         Some(nested_workspace.as_path())
     );
     assert_eq!(snapshot.selected_model.as_deref(), Some("model-7"));
+    assert_eq!(snapshot.sessions[0].id, "session-7");
+    assert_eq!(snapshot.sessions[0].title, "first");
     assert_eq!(
-        snapshot.sessions,
-        [super::SessionChoice {
+        snapshot.sessions[1],
+        super::SessionChoice {
             id: "session-8".to_owned(),
             title: "Saved session".to_owned(),
             when: "today".to_owned(),
             message_count: 4,
-        }]
+        }
     );
     assert_eq!(
         snapshot.models,
@@ -541,7 +609,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
             .models
             .iter()
             .map(|model| super::ModelChoice {
-                id: model.model.clone(),
+                id: model.name.clone(),
                 label: model.name.clone(),
             })
             .collect::<Vec<_>>()
@@ -558,12 +626,41 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert!(snapshot.turn_active);
     assert_eq!(snapshot.live_response, "live");
     let question = snapshot.pending_question.expect("question projection");
+    assert_eq!(question.header, "Source");
     assert_eq!(question.text, "Pick one");
     assert_eq!(question.options, ["A", "B"]);
+    assert_eq!(question.descriptions, ["Local files", "Remote API"]);
     assert!(!question.multiple);
     let approval = snapshot.pending_approval.expect("approval projection");
     assert_eq!(approval.tool_name, "write_file");
     assert_eq!(approval.description, "src/main.rs\nfn main() {}");
+}
+
+#[test]
+fn snapshot_selects_profile_by_model_and_endpoint() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-model"));
+    state.config.models = vec![
+        crate::config::ModelProfile {
+            name: "local".to_owned(),
+            model: "shared-model".to_owned(),
+            url: "http://localhost:1234/v1".to_owned(),
+            ..Default::default()
+        },
+        crate::config::ModelProfile {
+            name: "remote".to_owned(),
+            model: "shared-model".to_owned(),
+            url: "https://example.com/v1".to_owned(),
+            ..Default::default()
+        },
+    ];
+    state.model_name = "shared-model".to_owned();
+    state.api_base_url = "https://example.com/v1".to_owned();
+
+    let snapshot = ControllerSnapshot::from_state(1, &state);
+    assert_eq!(snapshot.selected_model.as_deref(), Some("remote"));
+    assert_eq!(snapshot.models[0].id, "local");
+    assert_eq!(snapshot.models[1].id, "remote");
 }
 
 #[tokio::test]
