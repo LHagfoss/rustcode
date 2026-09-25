@@ -1081,6 +1081,7 @@ impl AppView {
             .compact()
             .label(state.approval_mode_label())
             .dropdown_caret(true)
+            .disabled(!state.has_session)
             .accessibility_label("Select permission mode")
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
                 [(false, "Ask first"), (true, "Auto approve")]
@@ -1109,7 +1110,9 @@ impl AppView {
         } else {
             "Start or open a session to choose a model.".to_owned()
         };
-        let approval_support = if state.auto_approve {
+        let approval_support = if !state.has_session {
+            "Start or open a session to change permission mode."
+        } else if state.auto_approve {
             "Tool calls run without a confirmation prompt for this session."
         } else {
             "RustCode asks before running tool calls for this session."
