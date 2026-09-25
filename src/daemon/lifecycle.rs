@@ -489,15 +489,14 @@ mod tests {
                 .contains("exited before health")
         );
         lifecycle.health_timeout = Duration::from_millis(60);
-        let mut command = tokio::process::Command::new("/bin/sleep");
-        command.arg("10");
+        // The child must remain alive until start's health deadline wins, even
+        // if this test is descheduled longer than a short sleep would last.
+        let mut command = tokio::process::Command::new("/usr/bin/tail");
+        command.args(["-f", "/dev/null"]);
+        let error = lifecycle.start(command).await.unwrap_err();
         assert!(
-            lifecycle
-                .start(command)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("did not become healthy")
+            error.to_string().contains("did not become healthy"),
+            "unexpected startup error: {error:#}"
         );
         assert!(lifecycle.status().await.unwrap().is_none());
     }
@@ -508,7 +507,9 @@ mod tests {
         let lifecycle = DaemonLifecycle::new(dir.path());
         let server = lifecycle.bind().unwrap();
         let task = tokio::spawn(server.run());
-        tokio::task::yield_now().await;
+        // A scheduler yield does not guarantee the server has started polling
+        // its listener. A successful status request proves it is serving.
+        assert!(lifecycle.status().await.unwrap().is_some());
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         assert!(!lifecycle.socket_path().exists());
