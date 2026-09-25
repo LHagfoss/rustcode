@@ -38,7 +38,7 @@ pub struct ToolRowPresentation {
     pub output_expandable: bool,
 }
 
-pub fn tool_row_presentation(status: ToolStatus, output: &str) -> ToolRowPresentation {
+pub fn tool_row_presentation(status: ToolStatus, _output: &str) -> ToolRowPresentation {
     ToolRowPresentation {
         status,
         status_label: match status {
@@ -47,7 +47,7 @@ pub fn tool_row_presentation(status: ToolStatus, output: &str) -> ToolRowPresent
             ToolStatus::Completed => "Done",
             ToolStatus::Failed => "Failed",
         },
-        output_expandable: !output.trim().is_empty(),
+        output_expandable: !matches!(status, ToolStatus::Running | ToolStatus::Pending),
     }
 }
 
@@ -516,6 +516,41 @@ mod tests {
                 output_expandable: true,
             }
         );
+        assert!(tool_row_presentation(ToolStatus::Completed, "").output_expandable);
+        assert!(tool_row_presentation(ToolStatus::Failed, " \n ").output_expandable);
+    }
+
+    #[test]
+    fn completed_and_failed_tool_events_keep_literal_output_for_rendering() {
+        for (id, success, status, content) in [
+            ("completed", true, ToolStatus::Completed, "completed output"),
+            ("failed", false, ToolStatus::Failed, "failed output"),
+        ] {
+            let mut view = ChatViewState::default();
+            view.apply_turn_update(TurnUpdate::ToolStarted {
+                id: id.to_owned(),
+                name: "run_command".to_owned(),
+                detail: None,
+            });
+            view.apply_turn_update(TurnUpdate::ToolFinished {
+                id: id.to_owned(),
+                content: content.to_owned(),
+                success,
+                pending: false,
+            });
+
+            let ProjectionRow::Tool {
+                content: projected,
+                status: projected_status,
+                ..
+            } = &view.stream_rows()[0]
+            else {
+                panic!("tool event must remain a tool row");
+            };
+            assert_eq!(projected_status, &status);
+            assert_eq!(projected, content);
+            assert!(tool_row_presentation(status, projected).output_expandable);
+        }
     }
 
     #[test]
