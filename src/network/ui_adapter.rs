@@ -190,7 +190,7 @@ async fn publish_snapshot(
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
-    approval_sent: &mut bool,
+    last_approval_batch_id: &mut Option<String>,
     previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
 ) {
@@ -201,7 +201,7 @@ async fn publish_snapshot(
         previous_history_len,
         started_tools,
         finished_tools,
-        approval_sent,
+        last_approval_batch_id,
         previous_question,
         previous_subagents,
         false,
@@ -216,7 +216,7 @@ async fn publish_snapshot_with_mode(
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
-    approval_sent: &mut bool,
+    last_approval_batch_id: &mut Option<String>,
     previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
     suppress_synthetic_background_completion: bool,
@@ -355,16 +355,18 @@ async fn publish_snapshot_with_mode(
         }
     }
 
-    if !pending_approval_actions.is_empty() && !*approval_sent {
-        if let Some(batch_id) = pending_approval_batch_id {
+    if !pending_approval_actions.is_empty() {
+        if let Some(batch_id) = pending_approval_batch_id
+            && last_approval_batch_id.as_deref() != Some(batch_id.as_str())
+        {
             sender.send(AgentUiEvent::ApprovalRequested {
-                batch_id,
+                batch_id: batch_id.clone(),
                 actions: pending_approval_actions,
             });
-            *approval_sent = true;
+            *last_approval_batch_id = Some(batch_id);
         }
     } else if pending_approval_actions.is_empty() {
-        *approval_sent = false;
+        *last_approval_batch_id = None;
     }
 
     if *previous_question != pending_question {
@@ -559,7 +561,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
     let mut previous_history_len = starting_history_len;
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();
-    let mut approval_sent = false;
+    let mut last_approval_batch_id = None;
     let mut previous_question = None;
     let mut previous_subagents = std::collections::HashMap::new();
 
@@ -578,7 +580,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
                     &mut previous_history_len,
                     &mut started_tools,
                     &mut finished_tools,
-                    &mut approval_sent,
+                    &mut last_approval_batch_id,
                     &mut previous_question,
                     &mut previous_subagents,
                     suppress_synthetic_background_completion,
@@ -594,7 +596,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
         &mut previous_history_len,
         &mut started_tools,
         &mut finished_tools,
-        &mut approval_sent,
+        &mut last_approval_batch_id,
         &mut previous_question,
         &mut previous_subagents,
         suppress_synthetic_background_completion,
@@ -830,7 +832,7 @@ mod tests {
         let mut response = super::ResponseDeltaTracker::default();
         let mut started = std::collections::HashSet::new();
         let mut finished = std::collections::HashSet::new();
-        let mut approval = false;
+        let mut approval = None;
         let mut question = None;
         let mut subagents = std::collections::HashMap::new();
         publish_snapshot(
@@ -1054,7 +1056,7 @@ mod tests {
         let mut previous_history_len = 0;
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
-        let mut approval_sent = false;
+        let mut last_approval_batch_id = None;
         let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
@@ -1065,7 +1067,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1087,6 +1089,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacing_pending_approval_batch_emits_new_id_once_without_empty_gap() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let confirmation = |request_id: &str, path: &str| crate::app::ToolConfirmation {
+            request_id: Some(request_id.to_owned()),
+            tool_name: "write_file".to_owned(),
+            path: path.to_owned(),
+            content_preview: String::new(),
+            content_bytes: 0,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        };
+        {
+            let mut state = state.lock().await;
+            state.pending_tool_confirmation = Some(vec![confirmation("call-a", "a.txt")]);
+            state.pending_approval_batch_id = Some("batch-a".to_owned());
+        }
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut last_approval_batch_id = None;
+        let mut previous_question = None;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        for expected_id in ["batch-a", "batch-b"] {
+            if expected_id == "batch-b" {
+                let mut state = state.lock().await;
+                state.pending_tool_confirmation = Some(vec![confirmation("call-b", "b.txt")]);
+                state.pending_approval_batch_id = Some(expected_id.to_owned());
+            }
+            publish_snapshot(
+                &state,
+                &sender,
+                &mut previous_response,
+                &mut previous_history_len,
+                &mut started_tools,
+                &mut finished_tools,
+                &mut last_approval_batch_id,
+                &mut previous_question,
+                &mut previous_subagents,
+            )
+            .await;
+            if expected_id == "batch-b" && receiver.is_empty() {
+                panic!("replacement batch B should be emitted directly after A");
+            }
+            if let Ok(AgentUiEvent::ApprovalRequested { batch_id, .. }) = receiver.try_recv() {
+                assert_eq!(batch_id, expected_id);
+                if expected_id == "batch-b" {
+                    publish_snapshot(
+                        &state,
+                        &sender,
+                        &mut previous_response,
+                        &mut previous_history_len,
+                        &mut started_tools,
+                        &mut finished_tools,
+                        &mut last_approval_batch_id,
+                        &mut previous_question,
+                        &mut previous_subagents,
+                    )
+                    .await;
+                    assert!(
+                        receiver.try_recv().is_err(),
+                        "same batch ID must not duplicate"
+                    );
+                }
+            } else if expected_id != "batch-b" {
+                panic!("batch A should be emitted");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn snapshot_delta_tracker_does_not_retain_response_and_resets_on_rewrite() {
         let state = Arc::new(Mutex::new(AppState::new()));
         state
@@ -1098,7 +1173,7 @@ mod tests {
         let mut previous_history_len = 0;
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
-        let mut approval_sent = false;
+        let mut last_approval_batch_id = None;
         let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
@@ -1109,7 +1184,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1135,7 +1210,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1161,7 +1236,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1185,7 +1260,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1222,7 +1297,7 @@ mod tests {
         let mut previous_history_len = 0;
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
-        let mut approval_sent = false;
+        let mut last_approval_batch_id = None;
         let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
@@ -1233,7 +1308,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )

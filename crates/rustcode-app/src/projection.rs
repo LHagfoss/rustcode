@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
 use rustcode::controller::{
-    ApprovalPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
+    ApprovalBatchPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
     TurnUpdate,
 };
 
@@ -163,7 +163,7 @@ pub struct ChatViewState {
     last_turn_elapsed_ms: Option<u64>,
     thinking_started_at: Option<Instant>,
     pending_question: Option<QuestionPrompt>,
-    pending_approval: Option<ApprovalPrompt>,
+    pending_approval: Option<ApprovalBatchPrompt>,
 }
 
 impl ChatViewState {
@@ -181,7 +181,7 @@ impl ChatViewState {
         self.turn_active = snapshot.turn_active;
         self.queued_count = snapshot.queued_count;
         self.pending_question = snapshot.pending_question.clone();
-        self.pending_approval = snapshot.pending_approval.clone();
+        self.pending_approval = snapshot.pending_approval_batch.clone();
         if snapshot.transcript.iter().any(|item| {
             item.role == "user"
                 && self
@@ -285,7 +285,8 @@ impl ChatViewState {
                     *elapsed_ms = Some(started_at.elapsed().as_millis() as u64);
                 }
             }
-            TurnUpdate::ApprovalRequested(approvals) => {
+            TurnUpdate::ApprovalRequested(_) => {}
+            TurnUpdate::ApprovalBatchRequested(approvals) => {
                 self.turn_active = true;
                 self.pending_approval = Some(approvals);
             }
@@ -379,7 +380,7 @@ impl ChatViewState {
         self.pending_question.as_ref()
     }
 
-    pub fn pending_approval(&self) -> Option<&ApprovalPrompt> {
+    pub fn pending_approval(&self) -> Option<&ApprovalBatchPrompt> {
         self.pending_approval.as_ref()
     }
 
@@ -412,7 +413,7 @@ impl ChatViewState {
 #[cfg(test)]
 mod tests {
     use rustcode::controller::{
-        ApprovalAction, ApprovalPrompt, ControllerError, ControllerSnapshot, ControllerUpdate,
+        ApprovalAction, ApprovalBatchPrompt, ControllerError, ControllerSnapshot, ControllerUpdate,
         TurnUpdate,
     };
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
@@ -728,7 +729,8 @@ mod tests {
             turn_active,
             auto_approve: true,
             pending_question: None,
-            pending_approval: None::<ApprovalPrompt>,
+            pending_approval: None,
+            pending_approval_batch: None::<ApprovalBatchPrompt>,
         }
     }
 
@@ -923,7 +925,7 @@ mod tests {
             descriptions: vec![],
             multiple: false,
         };
-        let approval = ApprovalPrompt::new(vec![ApprovalAction::new(
+        let approval = ApprovalBatchPrompt::new(vec![ApprovalAction::new(
             "write-file-1".to_owned(),
             "write_file".to_owned(),
             "write_file · src/main.rs".to_owned(),
@@ -937,7 +939,7 @@ mod tests {
         )));
         assert_eq!(view.pending_question(), Some(&question));
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
             approval.clone(),
         )));
         assert_eq!(view.pending_approval(), Some(&approval));
@@ -947,7 +949,7 @@ mod tests {
     #[test]
     fn streamed_approval_discloses_every_action_and_uses_batch_identity() {
         let mut view = ChatViewState::default();
-        let batch = ApprovalPrompt::new(vec![
+        let batch = ApprovalBatchPrompt::new(vec![
             ApprovalAction::new(
                 "7:call-a".to_owned(),
                 "write_file".to_owned(),
@@ -965,7 +967,9 @@ mod tests {
         ])
         .with_batch_id("controller:7:41".to_owned());
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(batch)));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
+            batch,
+        )));
 
         let batch = view.pending_approval().expect("pending approval batch");
         assert_eq!(batch.actions.len(), 2);
@@ -983,7 +987,7 @@ mod tests {
     #[test]
     fn approval_lifecycle_keeps_the_exact_request_until_resolution_snapshot() {
         let mut view = ChatViewState::default();
-        let approval = ApprovalPrompt::new(vec![ApprovalAction::new(
+        let approval = ApprovalBatchPrompt::new(vec![ApprovalAction::new(
             "9:call-approval".to_owned(),
             "write_file".to_owned(),
             "write_file · src/main.rs".to_owned(),
@@ -992,7 +996,7 @@ mod tests {
         )])
         .with_batch_id("controller:projection:2".to_owned());
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
             approval.clone(),
         )));
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
@@ -1006,12 +1010,12 @@ mod tests {
         assert_eq!(view.pending_approval(), Some(&approval));
 
         let mut still_pending = snapshot(true);
-        still_pending.pending_approval = Some(approval.clone());
+        still_pending.pending_approval_batch = Some(approval.clone());
         view.apply_update(ControllerUpdate::Snapshot(still_pending));
         assert_eq!(view.pending_approval(), Some(&approval));
 
         let mut resolved = snapshot(false);
-        resolved.pending_approval = None;
+        resolved.pending_approval_batch = None;
         view.apply_update(ControllerUpdate::Snapshot(resolved));
         assert_eq!(view.pending_approval(), None);
     }

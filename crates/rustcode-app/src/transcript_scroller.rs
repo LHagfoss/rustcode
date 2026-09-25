@@ -3,8 +3,8 @@ use std::{ops::Range, time::Duration};
 use gpui_kit::{
     AnyElement, App, Axis, Context, ElementId, Entity, FollowMode, InteractiveElement, IntoElement,
     ListAlignment, ListOffset, ListState, ParentElement as _, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div, hsla, list,
-    prelude::FluentBuilder as _, px, rems,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, container_query, div, hsla,
+    list, prelude::FluentBuilder as _, px, rems,
 };
 use gpui_kit::{
     base::motion::{Transition, transition},
@@ -16,8 +16,9 @@ use gpui_kit::{
 };
 
 use crate::position_rail::{
-    MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, RAIL_CONTENT_INSET, RAIL_SCROLLBAR_INSET,
-    active_marker, marker_count, marker_to_row,
+    MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, MIN_MARKER_HIT_TARGET_HEIGHT,
+    RAIL_CONTENT_INSET, RAIL_SCROLLBAR_INSET, active_marker_with_count, marker_count_for_height,
+    marker_to_row_with_count,
 };
 
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
@@ -231,7 +232,7 @@ impl RenderOnce for TranscriptScroller {
         };
         let tokens = cx.theme().semantic_tokens();
         let item_count = list_state.item_count();
-        let rail_visible = self.position_rail && marker_count(self.position_rail_rows) > 0;
+        let rail_visible = self.position_rail && self.position_rail_rows > 1;
         let row_style = self.row_style;
         let mut renderer = self.renderer;
         let mut list_style = self.list_style;
@@ -281,34 +282,42 @@ impl RenderOnce for TranscriptScroller {
 
         if rail_visible {
             let state = self.state.clone();
-            let current_marker = active_marker(logical_top_row, self.position_rail_rows);
-            let markers = marker_count(self.position_rail_rows);
-            let mut rail = div()
-                .id((root_id.clone(), "position-rail"))
-                .absolute()
-                .top_0()
-                .bottom_0()
-                // Keep the marker hit areas just inside the scrollbar overlay.
-                .right(px(RAIL_SCROLLBAR_INSET))
-                .w(px(MARKER_HIT_TARGET_WIDTH))
-                .min_h_0()
-                .py_2()
-                .flex()
-                .flex_col()
-                .items_end();
-            for marker in 0..markers {
-                let active = current_marker == Some(marker);
-                let emphasis = transition(
-                    (root_id.clone(), format!("position-marker-{marker}")),
-                    if active { 1. } else { 0. },
-                    Transition::new(MARKER_TRANSITION),
-                    window,
-                    cx,
-                );
-                let row = marker_to_row(marker, self.position_rail_rows).unwrap_or(0);
-                let state = state.clone();
-                let dash =
-                    Button::new((root_id.clone(), format!("position-marker-button-{marker}")))
+            let row_count = self.position_rail_rows;
+            let rail_id = root_id.clone();
+            root = root.child(
+                container_query(move |size, window, cx| {
+                    let viewport_height = size.height / px(1.);
+                    let markers = marker_count_for_height(row_count, viewport_height);
+                    let current_marker =
+                        active_marker_with_count(logical_top_row, row_count, markers);
+                    let mut rail = div()
+                        .id((rail_id.clone(), "position-rail"))
+                        // Keep the marker hit areas fully clear of the scrollbar strip.
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(RAIL_SCROLLBAR_INSET))
+                        .w(px(MARKER_HIT_TARGET_WIDTH))
+                        .min_h_0()
+                        .py_2()
+                        .flex()
+                        .flex_col()
+                        .items_end();
+                    for marker in 0..markers {
+                        let active = current_marker == Some(marker);
+                        let emphasis = transition(
+                            (rail_id.clone(), format!("position-marker-{marker}")),
+                            if active { 1. } else { 0. },
+                            Transition::new(MARKER_TRANSITION),
+                            window,
+                            cx,
+                        );
+                        let row = marker_to_row_with_count(marker, row_count, markers).unwrap_or(0);
+                        let state = state.clone();
+                        let dash = Button::new((
+                            rail_id.clone(),
+                            format!("position-marker-button-{marker}"),
+                        ))
                         .ghost()
                         .accessibility_label(format!("Scroll to transcript position {}", row + 1))
                         .on_click(move |_, _, cx| {
@@ -319,7 +328,7 @@ impl RenderOnce for TranscriptScroller {
                         .w(px(MARKER_HIT_TARGET_WIDTH))
                         .h_full()
                         .max_h(px(MARKER_HIT_TARGET_HEIGHT))
-                        .min_h_0()
+                        .min_h(px(MIN_MARKER_HIT_TARGET_HEIGHT))
                         .flex_shrink_1()
                         .px_1()
                         .flex()
@@ -332,18 +341,25 @@ impl RenderOnce for TranscriptScroller {
                                 .rounded_full()
                                 .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
                         );
-                rail = rail.child(
-                    div()
-                        .w_full()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .justify_end()
-                        .items_center()
-                        .child(dash),
-                );
-            }
-            root = root.child(rail);
+                        rail = rail.child(
+                            div()
+                                .w_full()
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .child(dash),
+                        );
+                    }
+                    rail
+                })
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .right_0(),
+            );
         }
 
         if self.jump_button && jump_visibility > 0. {
@@ -428,9 +444,9 @@ mod tests {
 
     #[test]
     fn rail_is_bounded_and_has_one_marker_for_each_short_display_row() {
-        assert_eq!(marker_count(2), 2);
-        assert_eq!(marker_count(8), 8);
-        assert_eq!(marker_count(500), crate::position_rail::MAX_MARKERS);
+        assert_eq!(crate::position_rail::marker_count(2), 2);
+        assert_eq!(crate::position_rail::marker_count(8), 8);
+        assert_eq!(crate::position_rail::marker_count(500), MAX_MARKERS);
     }
 
     #[gpui_kit::test]
@@ -446,9 +462,10 @@ mod tests {
 
         for height in [120., 180., 300.] {
             window.simulate_resize(gpui_kit::size(px(600.), px(height)));
-            let marker_bounds = window.update(|window, cx| {
+            let (marker_count, marker_bounds) = window.update(|window, cx| {
                 window.render_frame(cx);
-                (0..marker_count(100))
+                let marker_count = crate::position_rail::marker_count_for_height(100, height);
+                let bounds = (0..marker_count)
                     .map(|marker| {
                         window
                             .find((
@@ -457,12 +474,15 @@ mod tests {
                             ))
                             .bounds()
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (marker_count, bounds)
             });
 
-            assert_eq!(marker_bounds.len(), MAX_MARKERS);
+            assert_eq!(marker_bounds.len(), marker_count);
+            assert!(marker_count <= MAX_MARKERS);
             for bounds in &marker_bounds {
                 assert_eq!(bounds.size.width, px(MARKER_HIT_TARGET_WIDTH));
+                assert!(bounds.size.height >= px(MIN_MARKER_HIT_TARGET_HEIGHT));
                 assert!(bounds.size.height <= px(MARKER_HIT_TARGET_HEIGHT));
                 assert!(bounds.origin.y >= px(RAIL_VERTICAL_INSET));
                 assert!(bounds.origin.y + bounds.size.height <= px(height - RAIL_VERTICAL_INSET));

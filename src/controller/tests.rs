@@ -105,6 +105,40 @@ async fn native_info_command_reports_current_session_model_turn_and_queue() {
 }
 
 #[tokio::test]
+async fn legacy_approval_command_is_rejected_without_a_batch_identity() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let _ = updates.recv().await.expect("session snapshot");
+
+    // Existing callers still compile, but an unbound approval cannot authorize
+    // whichever batch happens to be pending when the command is handled.
+    let legacy = Command::Approval(super::ApprovalChoice::Approve);
+    assert!(matches!(
+        legacy,
+        Command::Approval(super::ApprovalChoice::Approve)
+    ));
+    handle
+        .send(legacy)
+        .expect("legacy command should be accepted by channel");
+    let event = tokio::time::timeout(Duration::from_secs(1), updates.recv())
+        .await
+        .expect("legacy command should fail closed promptly")
+        .expect("controller remains active");
+    assert!(matches!(
+        event.update,
+        ControllerUpdate::Error(super::ControllerError::Provider(message))
+            if message.contains("requires the reviewed batch identity")
+    ));
+}
+
+#[tokio::test]
 async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
     use tokio::io::AsyncWriteExt;
 
@@ -676,7 +710,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(snapshot.generation, 7);
     assert_eq!(
         snapshot
-            .pending_approval
+            .pending_approval_batch
             .as_ref()
             .map(|approval| approval.request_id.as_str()),
         Some("batch:1:14:7:tool-call-13")
@@ -727,7 +761,9 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(question.options, ["A", "B"]);
     assert_eq!(question.descriptions, ["Local files", "Remote API"]);
     assert!(!question.multiple);
-    let approval = snapshot.pending_approval.expect("approval projection");
+    let approval = snapshot
+        .pending_approval_batch
+        .expect("approval projection");
     assert_eq!(approval.actions.len(), 1);
     assert_eq!(approval.actions[0].tool_name, "write_file");
     assert_eq!(approval.actions[0].description, "src/main.rs\nfn main() {}");
@@ -761,7 +797,7 @@ fn snapshot_approval_discloses_full_confirmation_batch_with_bounded_details() {
 
     let snapshot = ControllerSnapshot::from_state(7, &state);
     let batch = snapshot
-        .pending_approval
+        .pending_approval_batch
         .expect("approval batch projection");
 
     assert_eq!(batch.actions.len(), 2);
@@ -791,7 +827,7 @@ fn snapshot_fails_closed_without_a_controller_owned_approval_batch_id() {
     let snapshot = ControllerSnapshot::from_state(7, &state);
 
     assert!(
-        snapshot.pending_approval.is_none(),
+        snapshot.pending_approval_batch.is_none(),
         "an action-derived presentation ID must never be offered as an authorization token"
     );
 }
@@ -894,10 +930,10 @@ fn controller_approval_batch_ids_do_not_reuse_provider_call_ids() {
             "cargo test".to_owned(),
         )
     };
-    let first =
-        super::ApprovalPrompt::new(vec![action()]).with_batch_id(super::next_approval_batch_id());
-    let replacement =
-        super::ApprovalPrompt::new(vec![action()]).with_batch_id(super::next_approval_batch_id());
+    let first = super::ApprovalBatchPrompt::new(vec![action()])
+        .with_batch_id(super::next_approval_batch_id());
+    let replacement = super::ApprovalBatchPrompt::new(vec![action()])
+        .with_batch_id(super::next_approval_batch_id());
 
     assert_eq!(
         first.actions[0].request_id,
