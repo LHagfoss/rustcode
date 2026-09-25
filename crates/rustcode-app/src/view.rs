@@ -93,7 +93,7 @@ pub struct AppView {
     search_input: gpui_kit::Entity<InputState>,
     _search_subscription: gpui_kit::Subscription,
     messages: gpui_kit::Entity<MessageScrollerState>,
-    snapshot: Option<ControllerSnapshot>,
+    navigation: AppNavigation,
     recent_sessions: Vec<SessionChoice>,
     chat_state: ChatViewState,
     selected_question_options: Vec<String>,
@@ -114,7 +114,6 @@ pub struct AppView {
     reset_search_input_on_render: bool,
     focus_search_on_render: bool,
     focus_composer_on_render: bool,
-    destination: AppDestination,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -129,19 +128,33 @@ enum SettingsSection {
     General,
 }
 
-impl AppDestination {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct AppNavigation {
+    destination: AppDestination,
+    chat_snapshot: Option<ControllerSnapshot>,
+}
+
+impl AppNavigation {
+    #[cfg(test)]
+    fn new(chat_snapshot: Option<ControllerSnapshot>) -> Self {
+        Self {
+            destination: AppDestination::Chat,
+            chat_snapshot,
+        }
+    }
+
     fn open_settings(&mut self) {
-        *self = Self::Settings(SettingsSection::General);
+        self.destination = AppDestination::Settings(SettingsSection::General);
     }
 
     fn open_chat(&mut self) {
-        *self = Self::Chat;
+        self.destination = AppDestination::Chat;
     }
 }
 
 impl AppView {
     pub fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.destination.open_settings();
+        self.navigation.open_settings();
         cx.notify();
     }
 
@@ -212,7 +225,7 @@ impl AppView {
             search_input,
             _search_subscription: search_subscription,
             messages,
-            snapshot: None,
+            navigation: AppNavigation::default(),
             recent_sessions: Vec::new(),
             chat_state: ChatViewState::default(),
             selected_question_options: Vec::new(),
@@ -229,7 +242,6 @@ impl AppView {
             reset_search_input_on_render: false,
             focus_search_on_render: false,
             focus_composer_on_render: false,
-            destination: AppDestination::Chat,
         }
     }
 
@@ -239,7 +251,8 @@ impl AppView {
 
     pub fn apply_event(&mut self, event: ControllerEvent, cx: &mut Context<Self>) {
         if self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .is_some_and(|snapshot| event.generation < snapshot.generation)
         {
@@ -265,23 +278,29 @@ impl AppView {
                     self.recent_sessions = snapshot.sessions.clone();
                 }
                 let prior_session_id = self
-                    .snapshot
+                    .navigation
+                    .chat_snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_id.clone());
-                let prior_generation = self.snapshot.as_ref().map(|snapshot| snapshot.generation);
+                let prior_generation = self
+                    .navigation
+                    .chat_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.generation);
                 let session_id = snapshot.session_id.clone();
                 let started_session = session_id.is_some()
                     && (session_id != prior_session_id
                         || prior_generation != Some(snapshot.generation));
                 let previous_question = self
-                    .snapshot
+                    .navigation
+                    .chat_snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.pending_question.as_ref());
                 let next_question = snapshot.pending_question.as_ref();
                 if previous_question != next_question {
                     self.selected_question_options.clear();
                 }
-                self.snapshot = Some(snapshot);
+                self.navigation.chat_snapshot = Some(snapshot);
                 self.status = None;
                 if started_session {
                     self.expanded_thoughts.clear();
@@ -294,7 +313,8 @@ impl AppView {
                     self.starting_new_session = false;
                 }
                 if let Some(workspace) = self
-                    .snapshot
+                    .navigation
+                    .chat_snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.workspace.clone())
                 {
@@ -378,7 +398,7 @@ impl AppView {
     }
 
     fn start_new_chat(&mut self, cx: &mut Context<Self>) {
-        self.destination.open_chat();
+        self.navigation.open_chat();
         let project = if self.selected_project.is_dir() {
             self.selected_project.clone()
         } else if self.launch_dir.is_dir() {
@@ -546,7 +566,7 @@ impl AppView {
     }
 
     fn resume_session(&mut self, session_id: String, cx: &mut Context<Self>) {
-        self.destination.open_chat();
+        self.navigation.open_chat();
         // Never resume in a stale directory: prefer the selected project,
         // fall back to the launch directory, and offer the folder picker
         // when neither is valid (issue #1377).
@@ -613,7 +633,8 @@ impl AppView {
             return;
         }
         let answering_question = self.chat_state.pending_question().or_else(|| {
-            self.snapshot
+            self.navigation
+                .chat_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_question.as_ref())
         });
@@ -631,7 +652,8 @@ impl AppView {
                 .map(Command::AnswerQuestion)
         } else {
             if self
-                .snapshot
+                .navigation
+                .chat_snapshot
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.session_id.is_some())
             {
@@ -678,7 +700,8 @@ impl AppView {
 
     fn display_rows(&self) -> Vec<DisplayRow> {
         let mut rows = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .map(|snapshot| project_rows(&snapshot.transcript, &snapshot.live_response))
             .unwrap_or_default();
@@ -838,12 +861,14 @@ impl AppView {
 
     fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let models = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .map(|snapshot| snapshot.models.clone())
             .unwrap_or_default();
         let selected = self.pending_model_selection.clone().or_else(|| {
-            self.snapshot
+            self.navigation
+                .chat_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.selected_model.clone())
         });
@@ -871,9 +896,9 @@ impl AppView {
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         let has_active_session =
-                                            this.snapshot.as_ref().is_some_and(|snapshot| {
-                                                snapshot.session_id.is_some()
-                                            }) && !this.starting_new_session;
+                                            this.navigation.chat_snapshot.as_ref().is_some_and(
+                                                |snapshot| snapshot.session_id.is_some(),
+                                            ) && !this.starting_new_session;
                                         if has_active_session {
                                             this.send_command(
                                                 Command::SelectModel(model_id.clone()),
@@ -891,8 +916,14 @@ impl AppView {
             })
     }
 
-    fn render_settings_page(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let state = crate::settings::SettingsState::from_snapshot(self.snapshot.as_ref());
+    fn render_settings_page(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let narrow = window.bounds().size.width <= px(1000.);
+        let state =
+            crate::settings::SettingsState::from_snapshot(self.navigation.chat_snapshot.as_ref());
         let models = state.models.clone();
         let selected_model = self
             .pending_model_selection
@@ -934,9 +965,9 @@ impl AppView {
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         let has_active_session =
-                                            this.snapshot.as_ref().is_some_and(|snapshot| {
-                                                snapshot.session_id.is_some()
-                                            }) && !this.starting_new_session;
+                                            this.navigation.chat_snapshot.as_ref().is_some_and(
+                                                |snapshot| snapshot.session_id.is_some(),
+                                            ) && !this.starting_new_session;
                                         if has_active_session {
                                             this.send_command(
                                                 Command::SelectModel(model_id.clone()),
@@ -995,14 +1026,22 @@ impl AppView {
         };
 
         let rail = div()
-            .w(px(SETTINGS_RAIL_WIDTH))
-            .flex_shrink_0()
+            .when(narrow, |this| {
+                this.w_full()
+                    .pb_4()
+                    .border_b_1()
+                    .border_color(rgb(Palette::BORDER_SUBTLE))
+            })
+            .when(!narrow, |this| {
+                this.w(px(SETTINGS_RAIL_WIDTH))
+                    .flex_shrink_0()
+                    .pr_5()
+                    .border_r_1()
+                    .border_color(rgb(Palette::BORDER_SUBTLE))
+            })
             .flex()
             .flex_col()
             .gap_4()
-            .pr_5()
-            .border_r_1()
-            .border_color(rgb(Palette::BORDER_SUBTLE))
             .child(div().text_lg().font_semibold().child("Settings"))
             .child(
                 Button::new("settings-section-general")
@@ -1109,13 +1148,14 @@ impl AppView {
                     .h_full()
                     .min_w_0()
                     .flex()
-                    .gap_6()
+                    .when(narrow, |this| this.flex_col().gap_5())
+                    .when(!narrow, |this| this.flex_row().gap_6())
                     .child(rail)
                     .child(
                         div()
                             .flex_1()
+                            .min_h_0()
                             .min_w_0()
-                            .h_full()
                             .overflow_scrollbar()
                             .child(content),
                     ),
@@ -1126,7 +1166,8 @@ impl AppView {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let collapsed = self.sidebar_collapsed;
         let project = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.workspace.as_ref())
             .unwrap_or(&self.selected_project);
@@ -1135,7 +1176,8 @@ impl AppView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Choose project".to_owned());
         let selected_session = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.session_id.as_deref());
 
@@ -1218,11 +1260,14 @@ impl AppView {
                     .w_full()
                     .icon(IconName::Settings)
                     .label("Settings")
-                    .selected(matches!(self.destination, AppDestination::Settings(_)))
+                    .selected(matches!(
+                        self.navigation.destination,
+                        AppDestination::Settings(_)
+                    ))
                     .accessibility_label("Settings")
                     .tooltip("Settings (⌘,)")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.destination.open_settings();
+                        this.navigation.open_settings();
                         cx.notify();
                     })),
             );
@@ -1242,7 +1287,8 @@ impl AppView {
 
     fn render_question(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let prompt = self.chat_state.pending_question().cloned().or_else(|| {
-            self.snapshot
+            self.navigation
+                .chat_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_question.clone())
         })?;
@@ -1355,7 +1401,8 @@ impl AppView {
 
     fn render_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let prompt = self.chat_state.pending_approval().cloned().or_else(|| {
-            self.snapshot
+            self.navigation
+                .chat_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_approval.clone())
         })?;
@@ -2021,14 +2068,16 @@ impl Render for AppView {
             self.clear_composer_on_render = false;
         }
         let workspace = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.workspace.as_ref())
             .unwrap_or(&self.selected_project)
             .display()
             .to_string();
         let project_label = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.workspace.as_ref())
             .unwrap_or(&self.selected_project)
@@ -2038,13 +2087,15 @@ impl Render for AppView {
         let status = self.status.clone();
         let turn_active = self.chat_state.turn_active();
         let auto_approve = self
-            .snapshot
+            .navigation
+            .chat_snapshot
             .as_ref()
             .is_none_or(|snapshot| snapshot.auto_approve);
         let composer_enabled = self.chat_state.composer_enabled();
         let pending_question = self.chat_state.pending_question().is_some()
             || self
-                .snapshot
+                .navigation
+                .chat_snapshot
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.pending_question.is_some());
         let send_enabled = composer_enabled
@@ -2056,8 +2107,8 @@ impl Render for AppView {
         self.slash_selection = self
             .slash_selection
             .min(slash_suggestions.len().saturating_sub(1));
-        let has_session = !should_show_start_screen(self.snapshot.as_ref());
-        let conversation_title = self.snapshot.as_ref().and_then(|snapshot| {
+        let has_session = !should_show_start_screen(self.navigation.chat_snapshot.as_ref());
+        let conversation_title = self.navigation.chat_snapshot.as_ref().and_then(|snapshot| {
             let id = snapshot.session_id.as_ref()?;
             self.recent_sessions
                 .iter()
@@ -2329,7 +2380,8 @@ impl Render for AppView {
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     let enabled = this
-                                        .snapshot
+                                        .navigation
+                                        .chat_snapshot
                                         .as_ref()
                                         .is_none_or(|snapshot| snapshot.auto_approve);
                                     this.send_command(Command::SetAutoApprove(!enabled), cx);
@@ -2482,9 +2534,11 @@ impl Render for AppView {
                         },
                     ),
             );
-        let main = match self.destination {
+        let main = match self.navigation.destination {
             AppDestination::Chat => chat_main.into_any_element(),
-            AppDestination::Settings(SettingsSection::General) => self.render_settings_page(cx),
+            AppDestination::Settings(SettingsSection::General) => {
+                self.render_settings_page(window, cx)
+            }
         };
 
         let toggle_icon = IconName::PanelLeft;
@@ -2552,27 +2606,53 @@ impl Render for AppView {
 mod tests {
     use std::path::PathBuf;
 
-    use rustcode::controller::{ControllerError, ControllerSnapshot, SessionChoice};
+    use rustcode::controller::{
+        ControllerError, ControllerSnapshot, SessionChoice, TranscriptItem,
+    };
 
     use super::{
-        AppDestination, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
+        AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
         SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen, turn_segments,
     };
 
     #[test]
     fn settings_destination_returns_to_chat_without_replacing_the_active_session() {
-        let session_id = Some("session-42".to_owned());
-        let mut destination = AppDestination::Chat;
+        let mut navigation = AppNavigation::new(Some(ControllerSnapshot {
+            generation: 7,
+            workspace: Some(PathBuf::from("/workspace")),
+            session_id: Some("session-42".to_owned()),
+            sessions: Vec::new(),
+            models: Vec::new(),
+            selected_model: None,
+            transcript: vec![TranscriptItem {
+                role: "user".to_owned(),
+                content: "keep this conversation".to_owned(),
+                tool_name: None,
+                tool_detail: None,
+                tool_success: None,
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            }],
+            live_response: String::new(),
+            queued_count: 0,
+            turn_active: false,
+            auto_approve: false,
+            pending_question: None,
+            pending_approval: None,
+        }));
 
-        destination.open_settings();
+        navigation.open_settings();
         assert_eq!(
-            destination,
+            navigation.destination,
             AppDestination::Settings(SettingsSection::General)
         );
 
-        destination.open_chat();
-        assert_eq!(destination, AppDestination::Chat);
-        assert_eq!(session_id.as_deref(), Some("session-42"));
+        navigation.open_chat();
+        assert_eq!(navigation.destination, AppDestination::Chat);
+        let snapshot = navigation.chat_snapshot.as_ref().expect("active session");
+        assert_eq!(snapshot.session_id.as_deref(), Some("session-42"));
+        assert_eq!(snapshot.transcript[0].content, "keep this conversation");
     }
 
     #[test]
