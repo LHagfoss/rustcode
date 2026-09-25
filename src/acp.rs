@@ -1244,7 +1244,10 @@ mod tests {
 
         let mut state = state;
         state.workspace_root = None;
-        assert_eq!(state.executor_workspace_root().as_deref(), Some(cwd.path()));
+        assert_eq!(
+            state.effective_workspace_root().as_deref(),
+            Some(cwd.path())
+        );
     }
 
     #[test]

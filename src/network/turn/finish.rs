@@ -436,11 +436,13 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         && !ctx.recovery.force_final
         && ctx.recovery.finish_gate_retries < MAX_FINISH_GATE_RETRIES
     {
+        let source_root = state.lock().await.effective_workspace_root();
         let root = ctx
             .compiler
             .edit_root
             .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            .or(source_root)
+            .unwrap_or_default();
         dbg_log!(
             "Finish gate: compile-checking {} before accepting done",
             root.display()

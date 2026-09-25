@@ -716,10 +716,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         Some("batch:1:14:7:tool-call-13")
     );
     assert_eq!(snapshot.session_id.as_deref(), Some("session-7"));
-    assert_eq!(
-        snapshot.workspace.as_deref(),
-        Some(nested_workspace.as_path())
-    );
+    assert_eq!(snapshot.workspace.as_deref(), Some(workspace.path()));
     assert_eq!(snapshot.selected_model.as_deref(), Some("model-7"));
     assert_eq!(snapshot.sessions[0].id, "session-7");
     assert_eq!(snapshot.sessions[0].title, "first");

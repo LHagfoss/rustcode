@@ -8,7 +8,7 @@ fn app_state_separates_source_from_active_workspace_root() {
 
     assert_eq!(state.workspace_root, None);
     assert_eq!(
-        state.executor_workspace_root().as_deref(),
+        state.effective_workspace_root().as_deref(),
         Some(workspace.path())
     );
 }
@@ -20,7 +20,7 @@ fn ordinary_app_state_keeps_the_source_separate_from_active_workspace() {
 
     assert_eq!(state.workspace_root, None);
     assert_eq!(
-        state.executor_workspace_root().as_deref(),
+        state.effective_workspace_root().as_deref(),
         Some(source.as_path())
     );
 }
@@ -34,13 +34,13 @@ fn active_workspace_overrides_source_and_cleanup_falls_back_to_source() {
     state.workspace_root = Some(isolated.path().to_path_buf());
 
     assert_eq!(
-        state.executor_workspace_root().as_deref(),
+        state.effective_workspace_root().as_deref(),
         Some(isolated.path())
     );
 
     state.workspace_root = None;
     assert_eq!(
-        state.executor_workspace_root().as_deref(),
+        state.effective_workspace_root().as_deref(),
         Some(source.path())
     );
 }
@@ -55,7 +55,7 @@ fn deleted_active_workspace_does_not_fall_back_to_source() {
     state.workspace_root = Some(deleted_path.clone());
     drop(deleted);
 
-    assert_eq!(state.executor_workspace_root(), Some(deleted_path));
+    assert_eq!(state.effective_workspace_root(), Some(deleted_path));
 }
 
 #[test]
@@ -4222,7 +4222,7 @@ fn file_context_marks_fresh_and_stale_snapshots() {
 
 #[test]
 fn compiler_diagnostics_include_bounded_source_context_for_known_locations() {
-    let diagnostics = "src/network.rs(1,1): error TS2554: Expected 1 arguments, but got 2.";
+    let diagnostics = "error: mismatched arguments\n --> src/network.rs:1:1";
     let enriched = compiler_diagnostics_with_snippets(diagnostics);
     assert!(enriched.contains(diagnostics));
     assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
