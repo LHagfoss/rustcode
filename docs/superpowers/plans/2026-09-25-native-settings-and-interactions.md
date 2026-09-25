@@ -185,3 +185,28 @@
 - [ ] Fix the root cause so expanding a completed or failed tool row always shows its bounded literal output when the event contains one; show an explicit neutral “No output” state only when the result is genuinely empty.
 - [ ] Visually verify representative assistant content, inline code, selected session, Settings/General rows, slash draft, and expanded tool output at 900×620 and 1200×800.
 - [ ] Run focused palette/tool-output tests, `cargo fmt --check`, `cargo check --tests`, and `cargo test`; commit the bounded feedback fixes.
+
+## Task 9: Bind approval decisions to exact batches and expose full details
+
+**Files:**
+- Modify: `src/controller/command.rs`
+- Modify: `src/controller/worker.rs`
+- Modify: `src/controller/snapshot.rs`
+- Modify: `src/controller/events.rs`
+- Modify: `src/app/state/models.rs`
+- Modify: `src/network/policy.rs`
+- Modify: `src/network/ui_adapter.rs`
+- Modify: `crates/rustcode-app/src/projection.rs`
+- Modify: `crates/rustcode-app/src/view.rs`
+- Test: `src/controller/tests.rs`
+- Test: `src/network/ui_adapter.rs`
+- Test: `crates/rustcode-app/src/projection.rs`
+- Test: `crates/rustcode-app/src/view.rs`
+
+- [ ] Add a failing controller regression that queues approval batch A, replaces/resolves it with batch B, then sends a delayed decision carrying A's ID and proves B is not approved; prove a decision carrying B's exact ID succeeds.
+- [ ] Give every pending confirmation batch a collision-resistant controller-owned identity that cannot alias when providers repeat tool-call IDs within one generation.
+- [ ] Carry the exact batch identity in `Command::Approval` and reject stale/mismatched decisions atomically in the worker immediately before applying the choice.
+- [ ] Preserve complete per-action arguments/details alongside bounded previews; do not derive security decisions or identity from truncated presentation strings.
+- [ ] Add per-action disclosure in the persistent card so a user can inspect complete literal details inside a bounded selectable scroll viewport before applying the batch decision.
+- [ ] Add coverage for repeated provider call IDs, large `run_command` arguments whose decisive tail lies beyond the preview, stale callbacks, current callbacks, and in-flight reconciliation.
+- [ ] Run focused approval tests, `cargo fmt --check`, `cargo check --tests`, and `cargo test`; commit the safety fix.

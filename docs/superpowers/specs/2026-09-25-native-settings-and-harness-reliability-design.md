@@ -120,6 +120,10 @@ When the controller exposes a pending required approval, the desktop app renders
 
 The card sends the existing `Command::Approval` variants and remains visible until state confirms resolution. A streamed `ApprovalRequested` event and a pending approval in a snapshot both drive the same view state. Safe tools continue without prompting under existing policy.
 
+Approval decisions carry the exact controller-owned pending-batch identity. The worker compares that identity atomically against the currently pending batch immediately before resolving it, so a delayed callback cannot authorize a replacement batch. Batch identities do not rely solely on provider tool-call IDs, which may repeat.
+
+Every confirmation-required action in a batch is disclosed. Each action shows a bounded preview in the list and offers an in-card disclosure for the complete literal details inside a bounded selectable scroll area; truncation is never the only way to inspect an action before approving it.
+
 Tests cover controller-event projection into pending approval state and the rendered action surface. If the event adapter fails to recover a real pending tool call, that projection defect is fixed at the adapter boundary rather than masked in the view.
 
 ### Copy-button hover behavior
