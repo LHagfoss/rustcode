@@ -177,12 +177,21 @@ mod tests {
             tool_name: "write_file".to_owned(),
             description: "src/main.rs".to_owned(),
         };
-        let update = TurnUpdate::ApprovalRequested(vec![prompt]);
-        let TurnUpdate::ApprovalRequested(prompts) = update else {
+        let update = super::ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![prompt]));
+        let super::ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(prompts)) = update else {
             unreachable!();
         };
-        assert_eq!(prompts[0].tool_name, "write_file");
-        assert_eq!(prompts[0].description, "src/main.rs");
+        let [
+            super::super::ApprovalPrompt {
+                tool_name,
+                description,
+            },
+        ] = prompts.as_slice()
+        else {
+            unreachable!();
+        };
+        assert_eq!(tool_name, "write_file");
+        assert_eq!(description, "src/main.rs");
     }
 
     #[test]
