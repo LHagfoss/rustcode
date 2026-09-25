@@ -5,7 +5,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, Context, Focusable, PathPromptOptions, Render, Window, actions,
+    Anchor, Context, FocusHandle, Focusable, PathPromptOptions, Render, Window, actions,
     component::{
         Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
         button::{Button, ButtonVariants},
@@ -60,6 +60,7 @@ use crate::{
 
 pub struct AppView {
     backend: NativeBackend,
+    focus_handle: FocusHandle,
     launch_dir: PathBuf,
     selected_project: PathBuf,
     composer: gpui_kit::Entity<TextareaState>,
@@ -138,8 +139,11 @@ impl AppView {
                 }
             });
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
         Self {
             backend,
+            focus_handle,
             git_branch: current_branch(&launch_dir),
             expanded_thoughts: HashSet::new(),
             expanded_tools: HashSet::new(),
@@ -2144,6 +2148,7 @@ impl Render for AppView {
         div()
             .size_full()
             .relative()
+            .track_focus(&self.focus_handle)
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .flex()
