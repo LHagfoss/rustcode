@@ -106,6 +106,12 @@ pub fn stop_available(turn_active: bool) -> bool {
     turn_active
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerAction {
+    Send,
+    Stop,
+}
+
 pub fn answer_for_question(
     _question: &QuestionPrompt,
     selected_option: Option<&str>,
@@ -130,6 +136,7 @@ pub struct ChatViewState {
     error: Option<String>,
     approval_denied: bool,
     turn_active: bool,
+    queued_count: usize,
     stream_rows: Vec<ProjectionRow>,
     active_tools: HashMap<String, (usize, Instant)>,
     turn_started_at: Option<Instant>,
@@ -152,6 +159,7 @@ impl ChatViewState {
 
     fn apply_snapshot(&mut self, snapshot: ControllerSnapshot) {
         self.turn_active = snapshot.turn_active;
+        self.queued_count = snapshot.queued_count;
         self.pending_question = snapshot.pending_question.clone();
         self.pending_approval = snapshot.pending_approval.clone();
         if snapshot.transcript.iter().any(|item| {
@@ -292,6 +300,18 @@ impl ChatViewState {
         self.turn_active
     }
 
+    pub fn composer_action(&self) -> ComposerAction {
+        if self.turn_active {
+            ComposerAction::Stop
+        } else {
+            ComposerAction::Send
+        }
+    }
+
+    pub fn queued_message_label(&self) -> Option<String> {
+        (self.queued_count > 0).then(|| format!("{} queued", self.queued_count))
+    }
+
     pub fn turn_elapsed_ms(&self) -> Option<u64> {
         self.turn_started_at
             .map(|started| started.elapsed().as_millis() as u64)
@@ -377,8 +397,8 @@ mod tests {
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
 
     use super::{
-        ChatViewState, ProjectionRow, ToolStatus, answer_for_question, can_submit, project_rows,
-        stop_available, toggle_option,
+        ChatViewState, ComposerAction, ProjectionRow, ToolStatus, answer_for_question, can_submit,
+        project_rows, stop_available, toggle_option,
     };
 
     fn user(content: &str) -> TranscriptItem {
@@ -692,6 +712,26 @@ mod tests {
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TurnFinished));
         assert!(!view.turn_active());
         assert!(!stop_available(view.turn_active()));
+    }
+
+    #[test]
+    fn composer_action_and_queue_label_follow_the_latest_snapshot() {
+        let mut view = ChatViewState::default();
+        let mut idle = snapshot(false);
+        idle.queued_count = 2;
+        view.apply_update(ControllerUpdate::Snapshot(idle));
+
+        assert_eq!(view.composer_action(), ComposerAction::Send);
+        assert_eq!(view.queued_message_label().as_deref(), Some("2 queued"));
+
+        let mut active = snapshot(true);
+        active.queued_count = 1;
+        view.apply_update(ControllerUpdate::Snapshot(active));
+        assert_eq!(view.composer_action(), ComposerAction::Stop);
+        assert_eq!(view.queued_message_label().as_deref(), Some("1 queued"));
+
+        view.apply_update(ControllerUpdate::Snapshot(snapshot(false)));
+        assert_eq!(view.queued_message_label(), None);
     }
 
     #[test]
