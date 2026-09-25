@@ -8,8 +8,8 @@ use gpui_kit::{
     Anchor, Context, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, Render, Window,
     actions,
     component::{
-        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, Theme, TitleBar,
-        WindowExt as _,
+        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT,
+        Theme, TitleBar, WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
@@ -38,6 +38,19 @@ actions!(
         CloseChatSearch
     ]
 );
+
+const SIDEBAR_WIDTH: f32 = 270.;
+const MAIN_PANE_INSET: f32 = 24.;
+#[cfg(target_os = "macos")]
+const TITLE_BAR_LEFT_PADDING: f32 = 80.;
+#[cfg(not(target_os = "macos"))]
+const TITLE_BAR_LEFT_PADDING: f32 = 12.;
+const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
+const TITLE_BAR_CHILD_GAP: f32 = 8.;
+const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
+    - TITLE_BAR_LEFT_PADDING
+    - SIDEBAR_TOGGLE_SIZE
+    - TITLE_BAR_CHILD_GAP;
 
 fn current_branch(project: &Path) -> Option<String> {
     let output = ProcessCommand::new("git")
@@ -1096,7 +1109,7 @@ impl AppView {
         }
 
         Sidebar::new("session-sidebar")
-            .w(px(270.))
+            .w(px(SIDEBAR_WIDTH))
             .bg(rgb(0x222426))
             .border_color(rgb(0x34363a))
             .collapsible(SidebarCollapsible::Offcanvas)
@@ -2250,29 +2263,9 @@ impl Render for AppView {
             .flex_col()
             .items_center()
             .gap_2()
-            .px_6()
-            .pt(px(50.))
+            .px(px(MAIN_PANE_INSET))
+            .pt(TITLE_BAR_HEIGHT)
             .pb_3()
-            .when_some(conversation_title.filter(|_| has_session), |this, title| {
-                this.child(
-                    div()
-                        .w_full()
-                        .h(px(42.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .border_b_1()
-                        .border_color(rgb(0x34363a))
-                        .text_sm()
-                        .font_medium()
-                        .child(
-                            Icon::new(IconName::FolderOpen)
-                                .size_4()
-                                .text_color(rgb(0xaaaeb6)),
-                        )
-                        .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
-                )
-            })
             .child(
                 div()
                     .w_full()
@@ -2373,16 +2366,47 @@ impl Render for AppView {
         let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
-            .border_color(gpui_kit::rgba(0x00000000))
+            .border_color(rgb(0x34363a))
             .child(
-                Button::new("sidebar-toggle")
-                    .ghost()
-                    .with_size(px(24.))
-                    .icon(toggle_icon)
-                    .text_color(rgb(0x9a9da5))
-                    .tooltip("Toggle sidebar")
-                    .accessibility_label("Toggle sidebar")
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                div()
+                    .h_full()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(TITLE_BAR_CHILD_GAP))
+                    .child(
+                        Button::new("sidebar-toggle")
+                            .ghost()
+                            .with_size(px(SIDEBAR_TOGGLE_SIZE))
+                            .icon(toggle_icon)
+                            .text_color(rgb(0x9a9da5))
+                            .tooltip("Toggle sidebar")
+                            .accessibility_label("Toggle sidebar")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                    )
+                    .when_some(conversation_title.filter(|_| has_session), |this, title| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap_2()
+                                .ml(if self.sidebar_collapsed {
+                                    px(0.)
+                                } else {
+                                    px(SIDEBAR_TITLE_MARGIN)
+                                })
+                                .text_sm()
+                                .font_medium()
+                                .child(
+                                    Icon::new(IconName::FolderOpen)
+                                        .size_4()
+                                        .text_color(rgb(0xaaaeb6)),
+                                )
+                                .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
+                        )
+                    }),
             );
 
         div()
