@@ -251,7 +251,7 @@ impl ControllerSnapshot {
             ),
             transcript,
             live_response: state.current_response.as_ref().clone(),
-            queued_count: state.pending_queue.len(),
+            queued_count: state.pending_queue.len() + state.pending_steers.len(),
             turn_active: matches!(
                 state.status,
                 AppStatus::Streaming

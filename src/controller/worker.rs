@@ -184,7 +184,9 @@ async fn controller_worker(
                     QueuePrompt::Empty => {
                         send_snapshot(&updates, session.generation, &session.state).await;
                     }
-                    QueuePrompt::Queued => {}
+                    QueuePrompt::Queued => {
+                        send_snapshot(&updates, session.generation, &session.state).await;
+                    }
                     QueuePrompt::Start(lease, starting_history_len) => {
                         session.turn_task = Some(spawn_turn(
                             session.generation,
