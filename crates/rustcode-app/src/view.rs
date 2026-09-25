@@ -106,6 +106,10 @@ fn sidebar_shell_for(destination: AppDestination) -> SidebarShell {
     }
 }
 
+fn settings_back_icon() -> IconName {
+    IconName::ChevronLeft
+}
+
 fn sidebar_footer_divider_inset() -> f32 {
     0.
 }
@@ -1008,6 +1012,7 @@ impl AppView {
                 .as_ref()
                 .and_then(|snapshot| snapshot.selected_model.clone())
         });
+        let model_choices = crate::settings::model_menu_choices(&models, selected.as_deref());
         let selected_label = models
             .iter()
             .find(|model| selected.as_deref() == Some(model.id.as_str()))
@@ -1021,14 +1026,14 @@ impl AppView {
             .label(selected_label)
             .dropdown_caret(true)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                models.iter().fold(
+                model_choices.iter().fold(
                     menu.min_w(px(250.)).max_h(px(300.)).scrollable(true),
-                    |menu, model| {
-                        let model_id = model.id.clone();
+                    |menu, choice| {
+                        let model_id = choice.id.clone();
                         let view = view.clone();
                         menu.item(
-                            PopupMenuItem::new(model.label.clone())
-                                .checked(selected.as_deref() == Some(model.id.as_str()))
+                            PopupMenuItem::new(choice.label.clone())
+                                .checked(choice.selected)
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         let has_active_session =
@@ -1076,6 +1081,7 @@ impl AppView {
             .iter()
             .find(|model| selected_model.as_deref() == Some(model.id.as_str()))
             .map(|model| model.id.clone());
+        let model_choices = crate::settings::model_menu_choices(&models, selected_model.as_deref());
         let model_picker_view = cx.entity().downgrade();
         let model_picker = Button::new("settings-model-picker")
             .ghost()
@@ -1089,14 +1095,14 @@ impl AppView {
             .disabled(models.is_empty())
             .accessibility_label("Select model")
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                models.iter().fold(
+                model_choices.iter().fold(
                     menu.min_w(px(220.)).max_h(px(280.)).scrollable(true),
-                    |menu, model| {
-                        let model_id = model.id.clone();
+                    |menu, choice| {
+                        let model_id = choice.id.clone();
                         let view = model_picker_view.clone();
                         menu.item(
-                            PopupMenuItem::new(model.label.clone())
-                                .checked(selected_model.as_deref() == Some(model.id.as_str()))
+                            PopupMenuItem::new(choice.label.clone())
+                                .checked(choice.selected)
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         let has_active_session =
@@ -1297,7 +1303,7 @@ impl AppView {
     ) -> gpui_kit::AnyElement {
         let back = SidebarMenu::new().child(
             SidebarMenuItem::new("Back to app")
-                .icon(Icon::new(IconName::PanelLeft))
+                .icon(Icon::new(settings_back_icon()))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.navigation.open_chat();
                     cx.notify();
@@ -1314,11 +1320,13 @@ impl AppView {
             .bg(rgb(Palette::SIDEBAR))
             .border_color(rgb(Palette::BORDER_SUBTLE))
             .border_r_1()
-            .header(div().w_full().pt(px(30.)).child(back.render(
-                "settings-back-navigation",
-                window,
-                cx,
-            )))
+            .collapsible(SidebarCollapsible::Offcanvas)
+            .collapsed(false)
+            .header(
+                div()
+                    .w_full()
+                    .child(back.render("settings-back-navigation", window, cx)),
+            )
             .child(general)
             .into_any_element()
     }
@@ -3119,6 +3127,14 @@ mod tests {
         assert_eq!(
             super::sidebar_shell_for(AppDestination::Settings(SettingsSection::General)),
             SidebarShell::Settings
+        );
+    }
+
+    #[test]
+    fn settings_back_navigation_uses_a_left_chevron() {
+        assert_eq!(
+            std::mem::discriminant(&super::settings_back_icon()),
+            std::mem::discriminant(&super::IconName::ChevronLeft)
         );
     }
 
