@@ -26,6 +26,8 @@ use rustcode::controller::{
     ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, SessionChoice,
 };
 
+use super::{CloseWindow, MinimizeWindow};
+
 actions!(rustcode_app, [ToggleSidebar]);
 
 fn current_branch(project: &Path) -> Option<String> {
@@ -1898,6 +1900,8 @@ impl Render for AppView {
         div()
             .size_full()
             .relative()
+            .on_action(|_: &CloseWindow, window, _| window.remove_window())
+            .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .flex()
             .bg(rgb(0x1b1d1f))
             .text_color(rgb(0xe8e9ed))
