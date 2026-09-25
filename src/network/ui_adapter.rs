@@ -5,6 +5,7 @@ use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
 use crate::tools::{ToolCall, resolve_tool_calls};
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
@@ -69,6 +70,11 @@ struct ResponseDeltaTracker {
     pointer: usize,
     len: usize,
     revision: u64,
+    /// Latest response text already sent to the UI. Unlike the live response
+    /// projection, this survives the turn's final cleanup so a terminal flush
+    /// can tell whether it still needs to deliver the completed response.
+    emitted_content_len: usize,
+    emitted_content_hash: DefaultHasher,
 }
 
 impl AgentUiEventSender {
@@ -271,10 +277,10 @@ async fn publish_snapshot_with_mode(
     }
 
     let response_pointer = Arc::as_ptr(&response) as usize;
-    let text = if response_revision != previous_response.revision
+    let extends_previous_response = response_revision != previous_response.revision
         && response_last_rewrite_revision <= previous_response.revision
-        && response.len() >= previous_response.len
-    {
+        && response.len() >= previous_response.len;
+    let text = if extends_previous_response {
         response[previous_response.len..].to_owned()
     } else if response_pointer != previous_response.pointer
         || response.len() != previous_response.len
@@ -285,6 +291,21 @@ async fn publish_snapshot_with_mode(
         String::new()
     };
     if !text.is_empty() {
+        let text_len = text.len();
+        if extends_previous_response {
+            previous_response.emitted_content_len = previous_response
+                .emitted_content_len
+                .saturating_add(text_len);
+            previous_response
+                .emitted_content_hash
+                .write(text.as_bytes());
+        } else {
+            previous_response.emitted_content_len = response.len();
+            previous_response.emitted_content_hash = DefaultHasher::new();
+            previous_response
+                .emitted_content_hash
+                .write(response.as_bytes());
+        }
         sender.send(AgentUiEvent::TextDelta { text });
     }
     previous_response.pointer = response_pointer;
@@ -509,7 +530,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
 }
 
 /// Keep the turn and its UI projection advancing on the same task.
-async fn drive_turn_with_snapshots<F: std::future::Future>(
+async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnContext>>(
     mut turn: std::pin::Pin<&mut F>,
     state: &Arc<Mutex<AppState>>,
     sender: &AgentUiEventSender,
@@ -561,8 +582,42 @@ async fn drive_turn_with_snapshots<F: std::future::Future>(
         suppress_synthetic_background_completion,
     )
     .await;
+    flush_final_response_delta(
+        &context.response.final_content,
+        &mut previous_response,
+        sender,
+    );
 
     context
+}
+
+fn flush_final_response_delta(
+    final_content: &str,
+    previous_response: &mut ResponseDeltaTracker,
+    sender: &AgentUiEventSender,
+) {
+    let emitted_prefix_matches = final_content
+        .get(..previous_response.emitted_content_len)
+        .is_some_and(|prefix| {
+            let mut hasher = DefaultHasher::new();
+            hasher.write(prefix.as_bytes());
+            hasher.finish() == previous_response.emitted_content_hash.finish()
+        });
+    let missing_content = if emitted_prefix_matches {
+        &final_content[previous_response.emitted_content_len..]
+    } else {
+        final_content
+    };
+    if !missing_content.is_empty() {
+        sender.send(AgentUiEvent::TextDelta {
+            text: missing_content.to_owned(),
+        });
+    }
+    previous_response.emitted_content_len = final_content.len();
+    previous_response.emitted_content_hash = DefaultHasher::new();
+    previous_response
+        .emitted_content_hash
+        .write(final_content.as_bytes());
 }
 
 #[cfg(test)]
@@ -574,6 +629,59 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn immediate_turn_completion_flushes_final_text() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let mut context = crate::network::TurnContext::new();
+        context.response.final_content = "mock reply".to_owned();
+        let turn_state = Arc::clone(&state);
+        let turn = async move {
+            let mut state = turn_state.lock().await;
+            state.replace_current_response("mock reply");
+            state.clear_current_response();
+            context
+        };
+        let mut turn = Box::pin(turn);
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+
+        super::drive_turn_with_snapshots(turn.as_mut(), &state, &sender, false, 0).await;
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::TextDelta { text }) if text == "mock reply"
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_text_flush_does_not_repeat_previously_emitted_content() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let mut context = crate::network::TurnContext::new();
+        context.response.final_content = "mock reply".to_owned();
+        let turn_state = Arc::clone(&state);
+        let turn = async move {
+            turn_state
+                .lock()
+                .await
+                .replace_current_response("mock reply");
+            tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+            turn_state.lock().await.clear_current_response();
+            context
+        };
+        let mut turn = Box::pin(turn);
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+
+        super::drive_turn_with_snapshots(turn.as_mut(), &state, &sender, false, 0).await;
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::TextDelta { text }) if text == "mock reply"
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "terminal flush must not duplicate text"
+        );
+    }
 
     // The controller can own AppState while the turn queues for its mutex.
     // Once the snapshot timer fires, both futures must continue being polled:
@@ -597,7 +705,7 @@ mod tests {
             if cancel {
                 token.cancelled().await;
             }
-            42
+            crate::network::TurnContext::new()
         };
         tokio::pin!(turn);
         let (sender, mut receiver) = AgentUiEventSender::channel();
@@ -618,7 +726,7 @@ mod tests {
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), driver.as_mut())
             .await
             .expect("snapshot publication must not suspend the turn's mutex waiter");
-        assert_eq!(result, 42);
+        assert!(result.response.final_content.is_empty());
         assert!(matches!(
             receiver.try_recv(),
             Ok(AgentUiEvent::ToolStarted { id, .. }) if id == "call-read"
