@@ -3062,14 +3062,131 @@ fn compiler_outcomes_only_count_verified_source_diagnostics() {
 
 #[test]
 fn repeated_compiler_diagnostics_trigger_the_budget() {
+    let diagnostic = crate::network::compiler::CompilerCheckOutcome::SourceDiagnostics {
+        output: "error[E0425]: cannot find value `missing` in this scope".to_owned(),
+        fingerprint: "error[E0425]: cannot find value `missing` in this scope".to_owned(),
+    };
     let mut ctx = TurnContext::new();
-    ctx.compiler.consecutive_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
+    for _ in 0..MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+        crate::network::compiler::update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    }
+    assert_eq!(
+        ctx.compiler.consecutive_diagnostics,
+        MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS
+    );
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
         }
         other => panic!("expected CompilerDiagnostics limit, got {other:?}"),
     }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn originating_checker_failure_replay_preserves_budget_and_workspace() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, run_compiler_command_outcome,
+        update_compiler_outcome_streak,
+    };
+    use std::time::Duration;
+
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("replay workspace");
+    let mut ctx = TurnContext::new();
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let checker_command = concat!(
+        "printf 'checker temp artifact\\n' > \"$TMPDIR/.replay-check.hm\"; ",
+        "mkdir -p \"$BUN_INSTALL_CACHE_DIR/bunx-501-biome@latest\"; ",
+        "printf '{}\\n' > \"$BUN_INSTALL_CACHE_DIR/bunx-501-biome@latest/package.json\"; ",
+        "printf '%s\\n' 'error: bun is unable to write files to tempdir: PermissionDenied' >&2; ",
+        "exit 1"
+    );
+    let mut unverified_events = 0;
+
+    fn find_checker_artifacts(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("read checker workspace entry") {
+            let entry = entry.expect("checker workspace entry");
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".hm") || name.starts_with("bunx-") {
+                found.push(path);
+            } else if entry
+                .file_type()
+                .expect("inspect checker workspace entry")
+                .is_dir()
+            {
+                find_checker_artifacts(&path, found);
+            }
+        }
+    }
+
+    for mutation in 0..4 {
+        std::fs::write(
+            workspace.path().join(format!("mutation-{mutation}.txt")),
+            format!("applied mutation {mutation}\n"),
+        )
+        .expect("apply replay mutation");
+
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            checker_command,
+            false,
+            Duration::from_secs(5),
+            &cancel_token,
+        )
+        .await;
+        assert!(
+            matches!(
+                &outcome,
+                CompilerCheckOutcome::UnverifiedInfrastructure { reason }
+                    if reason.contains("PermissionDenied")
+            ),
+            "mutation {mutation} should emit an unverified infrastructure event: {outcome:?}"
+        );
+        unverified_events += 1;
+
+        let mut result = ToolResult {
+            tool_name: "delete_file".to_owned(),
+            content: format!("Applied mutation {mutation}"),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        };
+        append_compiler_outcome(&mut result, &outcome);
+        update_compiler_outcome_streak(&mut ctx, &outcome);
+
+        assert!(result.content.contains("could not be verified"));
+        assert!(compiler_diagnostic_fingerprint(&result.content).is_none());
+        assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+        assert!(turn_budget_exceeded(&ctx).is_none());
+    }
+
+    assert_eq!(unverified_events, 4);
+    let mut artifacts = Vec::new();
+    find_checker_artifacts(workspace.path(), &mut artifacts);
+    assert!(
+        artifacts.is_empty(),
+        "checker scratch artifacts leaked into the workspace: {artifacts:?}"
+    );
+
+    let shell = crate::tools::exec::run_command_output_with_workspace(
+        &serde_json::json!({ "command": "pwd" }),
+        Some(workspace.path().to_path_buf()),
+    )
+    .expect("active workspace should permit shell execution");
+    assert!(shell.success, "{}", shell.content);
+    assert!(
+        shell
+            .content
+            .contains(&workspace.path().display().to_string()),
+        "run_command did not execute in the active workspace: {}",
+        shell.content
+    );
 }
 
 #[test]
