@@ -414,20 +414,27 @@ fn has_recognized_source_diagnostic(output: &str) -> bool {
 }
 
 fn is_plausible_source_path(path: &str) -> bool {
-    let path = path.trim();
-    if path.is_empty() || path != path.trim_start() || path.contains(':') {
+    if path.is_empty() || path != path.trim() {
         return false;
     }
-    let has_path_prefix = path.starts_with('/')
-        || path.starts_with("./")
-        || path.starts_with("../")
-        || path.starts_with(".\\")
-        || path.starts_with("..\\")
-        || path
-            .split(['/', '\\'])
-            .next()
-            .is_some_and(|component| matches!(component, "src" | "lib" | "app" | "packages"));
-    !path.chars().any(char::is_whitespace) || has_path_prefix
+    let is_windows_absolute = path.as_bytes().get(1) == Some(&b':')
+        && path
+            .as_bytes()
+            .get(2)
+            .is_some_and(|separator| matches!(separator, b'/' | b'\\'));
+    if path.contains(':') && !is_windows_absolute {
+        return false;
+    }
+    if !path.chars().any(char::is_whitespace) {
+        return true;
+    }
+    if path.starts_with('/') || is_windows_absolute {
+        return true;
+    }
+    let first_component = path.split(['/', '\\']).next().unwrap_or_default();
+    !first_component.is_empty()
+        && !first_component.chars().any(char::is_whitespace)
+        && path.contains(['/', '\\'])
 }
 
 fn fingerprint_compiler_diagnostics(diagnostics: &str) -> String {
@@ -806,6 +813,18 @@ mod compiler_execution_tests {
         assert!(has_recognized_source_diagnostic(
             "src/my file.ts:3:1 lint/suspicious/noConsole ━━━━━"
         ));
+        assert!(has_recognized_source_diagnostic(
+            "tests/my file.ts(3,1): error TS2322: wrong type"
+        ));
+        assert!(has_recognized_source_diagnostic(
+            "crates/tool/src/my file.ts:3:1 lint/suspicious/noConsole"
+        ));
+        assert!(has_recognized_source_diagnostic(
+            r"C:\repo\src\my file.ts(3,1): error TS2322: wrong type"
+        ));
+        assert!(has_recognized_source_diagnostic(
+            r"C:\repo\src\my file.ts:3:1 lint/suspicious/noConsole"
+        ));
         assert!(!has_recognized_source_diagnostic(
             "error: failed to create temporary directory at /tmp/my build: PermissionDenied"
         ));
@@ -817,6 +836,9 @@ mod compiler_execution_tests {
         ));
         assert!(!has_recognized_source_diagnostic(
             "error: failed to write temp file:3:1 lint/suspicious/noConsole"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "runner failed tests/my file.ts:3:1 lint/suspicious/noConsole"
         ));
         assert!(!has_recognized_source_diagnostic(
             "foo(3,1): error TS2322: wrong type"

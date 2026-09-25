@@ -10,6 +10,17 @@ use tokio::sync::Mutex;
 /// that is known to exceed the context budget.
 pub(crate) const CONTEXT_PREFLIGHT_STOP_PREFIX: &str = "context_budget_exceeded:";
 
+fn request_context_roots(
+    state: &AppState,
+) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    let workspace_root = state.effective_workspace_root();
+    let task_working_directory = state
+        .task_working_directory
+        .clone()
+        .or_else(|| workspace_root.clone());
+    (workspace_root, task_working_directory)
+}
+
 pub(crate) fn context_preflight_checkpoint_notice(
     preflight: &compaction::PreflightBudget,
 ) -> String {
@@ -1206,15 +1217,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // environment snapshot is captured first because it touches the filesystem.
     let (workspace_root, task_working_directory) = {
         let s = state.lock().await;
-        let workspace_root = s
-            .workspace_root
-            .clone()
-            .or_else(|| std::env::current_dir().ok());
-        let task_working_directory = s
-            .task_working_directory
-            .clone()
-            .or_else(|| workspace_root.clone());
-        (workspace_root, task_working_directory)
+        request_context_roots(&s)
     };
     let current_snapshot = match (workspace_root.as_deref(), task_working_directory.as_deref()) {
         (Some(workspace_root), Some(task_working_directory)) => {
