@@ -31,6 +31,10 @@ pub const COMMANDS: &[SlashSuggestion] = &[
         name: "/change_title",
         description: "Rename this chat",
     },
+    SlashSuggestion {
+        name: "/info",
+        description: "Show session and turn status",
+    },
 ];
 
 /// Suggestions appear while the first token is being typed. Once the user
@@ -149,6 +153,14 @@ mod tests {
         assert!(suggestions("/model deepseek").is_empty());
         assert!(suggestions("plain prompt").is_empty());
         assert_eq!(complete("/change_title"), "/change_title ");
+        assert_eq!(
+            suggestions("/i")
+                .iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>(),
+            vec!["/info"]
+        );
+        assert_eq!(complete_selection("/i", 0), Some("/info".to_owned()));
     }
 
     #[test]
@@ -166,7 +178,7 @@ mod tests {
     fn arrow_key_names_move_selection_and_wrap() {
         assert_eq!(
             slash_interaction("/", 0, false, "ArrowUp"),
-            SlashInteraction::Move(5)
+            SlashInteraction::Move(6)
         );
         assert_eq!(
             slash_interaction("/", 5, false, "up"),
@@ -174,7 +186,7 @@ mod tests {
         );
         assert_eq!(
             slash_interaction("/", 5, false, "ArrowDown"),
-            SlashInteraction::Move(0)
+            SlashInteraction::Move(6)
         );
         assert_eq!(
             slash_interaction("/", 0, false, "down"),

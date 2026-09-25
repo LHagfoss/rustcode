@@ -5,8 +5,8 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, Context, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, Render, Window,
-    actions,
+    Anchor, Animation, AnimationExt, Context, FocusHandle, Focusable, KeyDownEvent,
+    PathPromptOptions, Render, Window, actions,
     component::{
         Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
         TitleBar,
@@ -104,7 +104,7 @@ use crate::{
     },
     projection::{
         ChatViewState, ComposerAction, ProjectionRow, ToolStatus, can_submit, project_rows,
-        toggle_option,
+        toggle_option, tool_row_presentation,
     },
 };
 
@@ -1972,7 +1972,17 @@ fn render_turn_segment(
                             })
                             .size_4(),
                         )
-                        .child(activity_label)
+                        .child(
+                            div()
+                                .with_animation(
+                                    format!(
+                                        "activity-label-{index}-{segment_index}-{activity_label}"
+                                    ),
+                                    Animation::new(std::time::Duration::from_millis(140)),
+                                    |label, phase| label.opacity(phase),
+                                )
+                                .child(activity_label),
+                        )
                         .on_click(move |_, _, cx| {
                             let _ = toggle_view.update(cx, |this, cx| {
                                 let key = (index, segment_index);
@@ -2126,11 +2136,26 @@ fn render_tool_detail(
     else {
         unreachable!();
     };
-    let (icon, status_label, color) = match status {
-        ToolStatus::Running => (IconName::LoaderCircle, "Running", 0xc9a76b),
-        ToolStatus::Pending => (IconName::Pause, "Pending", 0xc9a76b),
-        ToolStatus::Completed => (IconName::CircleCheck, "Done", 0x91b89b),
-        ToolStatus::Failed => (IconName::CircleX, "Failed", 0xd88d8d),
+    let presentation = tool_row_presentation(status, &content);
+    let (icon, color) = match status {
+        ToolStatus::Running => (IconName::LoaderCircle, 0xc9a76b),
+        ToolStatus::Pending => (IconName::Pause, 0xc9a76b),
+        ToolStatus::Completed => (IconName::CircleCheck, 0x91b89b),
+        ToolStatus::Failed => (IconName::CircleX, 0xd88d8d),
+    };
+    let status_icon = Icon::new(icon).size_4().text_color(rgb(color));
+    let status_icon = if status == ToolStatus::Running {
+        status_icon
+            .with_animation(
+                format!("tool-running-{turn_index}-{tool_index}"),
+                Animation::new(std::time::Duration::from_millis(900))
+                    .repeat()
+                    .with_max_fps(30.),
+                |icon, phase| icon.rotate(gpui_kit::radians(phase * std::f32::consts::TAU)),
+            )
+            .into_any_element()
+    } else {
+        status_icon.into_any_element()
     };
     div()
         .w_full()
@@ -2153,7 +2178,7 @@ fn render_tool_detail(
                     })
                     .size_4(),
                 )
-                .child(Icon::new(icon).size_4().text_color(rgb(color)))
+                .child(status_icon)
                 .child(
                     div()
                         .flex_1()
@@ -2164,7 +2189,20 @@ fn render_tool_detail(
                             None => name.replace('_', " "),
                         }),
                 )
-                .child(div().text_xs().text_color(rgb(color)).child(status_label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(color))
+                        .with_animation(
+                            format!(
+                                "tool-status-{turn_index}-{tool_index}-{}",
+                                presentation.status_label
+                            ),
+                            Animation::new(std::time::Duration::from_millis(140)),
+                            |label, phase| label.opacity(phase),
+                        )
+                        .child(presentation.status_label),
+                )
                 .when_some(elapsed_ms, |this, ms| {
                     this.child(div().text_xs().child(format_duration(ms)))
                 })
@@ -2181,16 +2219,29 @@ fn render_tool_detail(
                     });
                 }),
         )
-        .when(expanded && !content.trim().is_empty(), |this| {
+        .when(expanded && presentation.output_expandable, |this| {
             this.child(
                 div()
                     .ml_6()
                     .max_h(px(180.))
                     .overflow_scrollbar()
-                    .font_family(mono_font)
-                    .text_size(px(12.))
-                    .text_color(rgb(Palette::TEXT_MUTED))
-                    .child(content),
+                    .min_h(px(0.))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(Palette::BORDER_SUBTLE))
+                    .bg(rgb(Palette::SURFACE_ELEVATED))
+                    .px_3()
+                    .py_2()
+                    .child(
+                        TextView::markdown(
+                            format!("tool-output-{turn_index}-{tool_index}"),
+                            content,
+                        )
+                        .text_size(px(12.))
+                        .text_color(rgb(Palette::TEXT_MUTED))
+                        .font_family(mono_font)
+                        .selectable(true),
+                    ),
             )
         })
         .into_any_element()
