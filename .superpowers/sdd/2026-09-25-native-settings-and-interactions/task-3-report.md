@@ -25,4 +25,4 @@
 
 - A direct GPUI focused-input event test is not available through this app's `gpui-kit` facade: it does not expose the GPUI test macro or `TestAppContext`. An exploratory test attempt failed to compile for those missing harness exports, so it was removed. The view routing decision and slash reducer are covered by unit tests, and the `TextareaState::set_cursor_position` call is type-checked; the real rendered focus/event path remains unautomated.
 - IME composition was not changed. Arrow and Escape capture consumes events only when the slash reducer returns `Move` or `Dismiss`; Enter stops propagation only when slash completion is applied. Shift/secondary Enter continues through the existing behavior.
-- Commit: pending.
+- Implementation commit: `59e60aa` (`fix(app): make slash completion keyboard-correct`).
