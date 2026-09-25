@@ -1,5 +1,38 @@
 use super::*;
 
+#[test]
+fn standalone_compiler_source_diagnostics_mark_edit_retryable() {
+    let mut result = crate::tools::ToolExecutionOutput::success("wrote lib.rs".to_owned());
+
+    super::append_standalone_compiler_result(
+        &mut result,
+        "error: this file contains an unclosed delimiter",
+    );
+
+    assert!(result.success);
+    assert_eq!(
+        result.error_kind,
+        Some(crate::tools::ToolErrorKind::CompilerFailed)
+    );
+    assert!(result.retryable);
+    assert!(result.content.contains("Compiler errors/warnings:"));
+}
+
+#[test]
+fn standalone_compiler_infrastructure_keeps_edit_success_and_unverified_notice() {
+    let mut result = crate::tools::ToolExecutionOutput::success("wrote lib.rs".to_owned());
+
+    super::append_standalone_compiler_result(
+        &mut result,
+        "__BUILD_UNVERIFIED__: `cargo check` failed to start",
+    );
+
+    assert!(result.success);
+    assert_eq!(result.error_kind, None);
+    assert!(!result.retryable);
+    assert!(result.content.contains("__BUILD_UNVERIFIED__:"));
+}
+
 fn compiler_project() -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -124,12 +157,25 @@ async fn standalone_edit_preserves_compiler_check() {
     .await;
     assert!(result.success, "{}", result.content);
     assert_eq!(
-        result.error_kind,
-        Some(crate::tools::ToolErrorKind::CompilerFailed)
-    );
-    assert!(result.retryable);
-    assert_eq!(
         result.content.matches("Compiler errors/warnings:").count(),
         1
     );
+    match result.error_kind {
+        Some(crate::tools::ToolErrorKind::CompilerFailed) => {
+            assert!(result.retryable);
+            assert!(!result.content.contains("__BUILD_UNVERIFIED__"));
+        }
+        None => {
+            assert!(!result.retryable);
+            assert!(
+                result.content.contains("__BUILD_UNVERIFIED__:"),
+                "standalone compiler check returned no source diagnostics or explicit unverified status: {}",
+                result.content
+            );
+        }
+        other => panic!(
+            "unexpected standalone edit error kind {other:?}: {}",
+            result.content
+        ),
+    }
 }
