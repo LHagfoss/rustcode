@@ -21,7 +21,7 @@ The work is delivered as two focused pull requests. The native GPUI pull request
 - Make required tool approvals visibly actionable with persistent Approve and Deny controls.
 - Make slash-command selection work with Up, Down, Escape, pointer selection, and Enter.
 - Complete a slash command without submitting it and leave the caret after the inserted command.
-- Render recognized slash-command drafts in bold purple text.
+- Render recognized slash-command drafts in bold high-contrast neutral text.
 - Keep user and assistant copy buttons visible while the pointer moves onto them.
 - Preserve queued follow-up prompts when Stop cancels the active turn and show that a message is queued.
 - Use one contextual Send or Stop control and reduce the composer's default height.
@@ -87,12 +87,12 @@ A native-app palette module defines semantic colors for:
 
 - application, sidebar, elevated, card, hover, and selected surfaces;
 - subtle and strong borders;
-- primary, secondary, muted, danger, and purple-accent text;
+- primary, secondary, muted, danger, and neutral selection text;
 - shared control radii.
 
 The app applies matching gpui-kit theme tokens at initialization for components whose selected state is owned by the toolkit, including `SidebarMenuItem`. App-authored surfaces consume the semantic palette instead of duplicating RGB literals in the touched UI.
 
-This is intentionally desktop-local. The TUI theme system remains independent.
+All app-authored selection, focus, inline-code, command, and active-navigation treatments use neutral graphite/gray/white colors. Purple and blue-purple accents are not part of this theme. This is intentionally desktop-local. The TUI theme system remains independent.
 
 ### Slash-command interaction
 
@@ -106,7 +106,9 @@ Slash suggestions remain derived from `slash.rs`, while keyboard behavior is exp
 
 The GPUI test harness will reproduce key dispatch through the focused composer. The final handler will be attached at the narrowest level demonstrated by the failing test, rather than relying only on pure `move_selection` tests.
 
-The current `Textarea` API cannot apply per-range text styling. While the draft is recognized as a slash-command draft, the textarea therefore applies purple foreground and bold weight to the complete draft. Ordinary prompts retain normal body styling. Arguments typed after a completed command return to ordinary styling when they no longer meet the recognized slash-draft predicate.
+The current `Textarea` API cannot apply per-range text styling. While the draft is recognized as a slash-command draft, the textarea therefore applies high-contrast neutral foreground and bold weight to the complete draft. Ordinary prompts retain normal body styling. Arguments typed after a completed command return to ordinary styling when they no longer meet the recognized slash-draft predicate.
+
+Selected Settings rows use the same compact, left-aligned shape, spacing, typography, and neutral selected surface as selected session rows. The outer sidebar Settings destination and the inner General destination should read as navigation peers, not large centered call-to-action buttons.
 
 ### Approval presentation
 

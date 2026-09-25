@@ -16,7 +16,7 @@
 - Use semantic palette constants; do not scatter replacement color literals through the view.
 - Settings is an in-app destination opened by the sidebar row and `Cmd+,`; it is not a modal or a separate OS window.
 - The General page must remain useful as more settings sections are added later.
-- Slash commands are purple and bold only while the draft is a recognized command token; normal arguments retain normal composer styling.
+- Slash commands are bold with a high-contrast neutral foreground only while the draft is a recognized command token; normal arguments retain normal composer styling.
 - Arrow navigation and Enter completion must work while the composer retains focus, and completion must leave the caret after the inserted text.
 - Pending permission requests must present persistent Approve and Deny controls above the composer until resolved.
 - Copy controls must remain reachable while the pointer travels from message content to the control.
@@ -25,6 +25,7 @@
 - Tool activity motion must use GPUI's reduced-motion-aware animation path and output must remain bounded/selectable.
 - Only native commands backed by real controller behavior may be advertised; `/info` must include the session ID.
 - Use existing icon assets/components, rounded rectangles only where they communicate grouping, and visible keyboard focus/disabled states.
+- Do not use purple or blue-purple accents in app-authored selection, focus, inline-code, command, or active-navigation treatments.
 - Follow test-driven development: add a failing focused test before each behavior change.
 - Run `cargo check --tests` and `cargo test` before the branch is declared complete.
 
@@ -163,3 +164,24 @@
 - [ ] Fix confirmed detector/manual findings in one bounded batch and rerun only the focused tests covering those fixes.
 - [ ] Run `cargo fmt --check`, `cargo check --tests`, and `cargo test` and record exact results.
 - [ ] Review the entire branch diff against issue #1411 and the spec, remove incidental changes, and commit any bounded integration fixes.
+
+## Task 8: Apply preview feedback and restore visible tool results
+
+**Files:**
+- Modify: `crates/rustcode-app/src/theme.rs`
+- Modify: `crates/rustcode-app/src/main.rs`
+- Modify: `crates/rustcode-app/src/view.rs`
+- Modify if root-cause evidence requires it: `crates/rustcode-app/src/projection.rs`
+- Modify if root-cause evidence requires it: `src/controller/events.rs`
+- Modify if root-cause evidence requires it: `src/network/ui_adapter.rs`
+- Test: `crates/rustcode-app/src/theme.rs`
+- Test: `crates/rustcode-app/src/view.rs`
+- Test: projection/controller tests at the layer where tool output is lost
+
+- [ ] Add failing palette tests proving active/selected/focus/inline-code/recognized-command colors are neutral (near-equal RGB channels within a small tolerance) and meet existing contrast requirements; remove app-authored purple and blue-purple tokens/mappings.
+- [ ] Keep recognized slash drafts bold but use primary/white neutral text; use neutral gray surfaces and white/gray text for inline code, selection, focus, Settings, General, and session selection.
+- [ ] Make the sidebar Settings row and Settings-page General row reuse the same compact left-aligned navigation dimensions and neutral active/hover treatment as session selectors.
+- [ ] Reproduce an expanded completed and failed tool call with non-empty output. Trace result data across `ToolFinished`/controller/projection/render boundaries and write a failing regression at the first layer that drops or hides the result.
+- [ ] Fix the root cause so expanding a completed or failed tool row always shows its bounded literal output when the event contains one; show an explicit neutral “No output” state only when the result is genuinely empty.
+- [ ] Visually verify representative assistant content, inline code, selected session, Settings/General rows, slash draft, and expanded tool output at 900×620 and 1200×800.
+- [ ] Run focused palette/tool-output tests, `cargo fmt --check`, `cargo check --tests`, and `cargo test`; commit the bounded feedback fixes.
