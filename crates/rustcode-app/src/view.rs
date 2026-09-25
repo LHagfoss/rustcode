@@ -9,7 +9,7 @@ use gpui_kit::{
     actions,
     component::{
         Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
-        TitleBar, WindowExt as _,
+        TitleBar,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
@@ -47,6 +47,8 @@ const TITLE_BAR_LEFT_PADDING: f32 = 80.;
 const TITLE_BAR_LEFT_PADDING: f32 = 12.;
 const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
 const TITLE_BAR_CHILD_GAP: f32 = 8.;
+const SETTINGS_RAIL_WIDTH: f32 = 180.;
+const SETTINGS_CONTENT_WIDTH: f32 = 680.;
 const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
     - TITLE_BAR_LEFT_PADDING
     - SIDEBAR_TOGGLE_SIZE
@@ -112,178 +114,35 @@ pub struct AppView {
     reset_search_input_on_render: bool,
     focus_search_on_render: bool,
     focus_composer_on_render: bool,
+    destination: AppDestination,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AppDestination {
+    #[default]
+    Chat,
+    Settings(SettingsSection),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+}
+
+impl AppDestination {
+    fn open_settings(&mut self) {
+        *self = Self::Settings(SettingsSection::General);
+    }
+
+    fn open_chat(&mut self) {
+        *self = Self::Chat;
+    }
 }
 
 impl AppView {
-    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let state = crate::settings::SettingsState::from_snapshot(self.snapshot.as_ref());
-        let models = state.models.clone();
-        let selected_model = state.selected_model.clone();
-        let selected_model_label = state
-            .selected_model_label()
-            .unwrap_or("No model selected")
-            .to_owned();
-        let auto_approve = state.auto_approve;
-        let has_session = state.has_session;
-        let controller = self.backend.controller().clone();
-        let view = cx.entity().downgrade();
-
-        window.open_dialog(cx, move |dialog, _, _| {
-            let model_rows = models.iter().map(|model| {
-                let model_id = model.id.clone();
-                let model_label = model.label.clone();
-                let selected = selected_model.as_deref() == Some(model.id.as_str());
-                let view = view.clone();
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(if selected {
-                        rgb(Palette::SIDEBAR_SELECTED)
-                    } else {
-                        rgb(Palette::SURFACE_ELEVATED)
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(div().font_medium().child(model_label.clone()))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(Palette::TEXT_SECONDARY))
-                                    .child(model_id.clone()),
-                            ),
-                    )
-                    .child(
-                        Button::new(format!("settings-model-{}", model.id))
-                            .label(if selected { "Selected" } else { "Use model" })
-                            .selected(selected)
-                            .accessibility_label(format!("Use model {}", model.label))
-                            .on_click(move |_, window, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    if has_session
-                                        && this
-                                            .snapshot
-                                            .as_ref()
-                                            .is_some_and(|snapshot| snapshot.session_id.is_some())
-                                        && !this.starting_new_session
-                                    {
-                                        this.send_command(
-                                            Command::SelectModel(model_id.clone()),
-                                            cx,
-                                        );
-                                    } else {
-                                        this.pending_model_selection = Some(model_id.clone());
-                                        cx.notify();
-                                    }
-                                });
-                                window.close_dialog(cx);
-                            }),
-                    )
-            });
-
-            let approval_controller = controller.clone();
-            let approval_label = if auto_approve {
-                "Automatically approve tool calls"
-            } else {
-                "Ask before tool calls"
-            };
-            let approval_detail = if auto_approve {
-                "Tool calls run without a confirmation prompt for this session."
-            } else {
-                "RustCode asks before running tool calls for this session."
-            };
-            let approval_button_label = if auto_approve { "Turn off" } else { "Turn on" };
-            let approval_button_accessibility = if auto_approve {
-                "Ask before tool calls"
-            } else {
-                "Automatically approve tool calls"
-            };
-
-            dialog.title("Settings").w(px(560.)).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(Palette::TEXT_SECONDARY))
-                            .child("Preferences for the current RustCode session."),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(div().text_xs().font_semibold().child("MODEL"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(Palette::TEXT_SECONDARY))
-                                    .child(format!("Active model: {selected_model_label}")),
-                            )
-                            .when(models.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(Palette::TEXT_SECONDARY))
-                                        .child("Start or open a session to choose a model."),
-                                )
-                            })
-                            .children(model_rows),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(div().text_xs().font_semibold().child("APPROVALS"))
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_4()
-                                    .px_3()
-                                    .py_3()
-                                    .rounded_md()
-                                    .bg(rgb(Palette::SURFACE_ELEVATED))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(div().font_medium().child(approval_label))
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(Palette::TEXT_SECONDARY))
-                                                    .child(approval_detail),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new("settings-toggle-approval")
-                                            .label(approval_button_label)
-                                            .accessibility_label(approval_button_accessibility)
-                                            .on_click(move |_, window, cx| {
-                                                let _ = approval_controller
-                                                    .send(Command::SetAutoApprove(!auto_approve));
-                                                window.close_dialog(cx);
-                                            }),
-                                    ),
-                            ),
-                    ),
-            )
-        });
+    pub fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.destination.open_settings();
+        cx.notify();
     }
 
     pub fn new(
@@ -370,6 +229,7 @@ impl AppView {
             reset_search_input_on_render: false,
             focus_search_on_render: false,
             focus_composer_on_render: false,
+            destination: AppDestination::Chat,
         }
     }
 
@@ -518,6 +378,7 @@ impl AppView {
     }
 
     fn start_new_chat(&mut self, cx: &mut Context<Self>) {
+        self.destination.open_chat();
         let project = if self.selected_project.is_dir() {
             self.selected_project.clone()
         } else if self.launch_dir.is_dir() {
@@ -685,6 +546,7 @@ impl AppView {
     }
 
     fn resume_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+        self.destination.open_chat();
         // Never resume in a stale directory: prefer the selected project,
         // fall back to the launch directory, and offer the folder picker
         // when neither is valid (issue #1377).
@@ -1029,6 +891,238 @@ impl AppView {
             })
     }
 
+    fn render_settings_page(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let state = crate::settings::SettingsState::from_snapshot(self.snapshot.as_ref());
+        let models = state.models.clone();
+        let selected_model = self
+            .pending_model_selection
+            .clone()
+            .or(state.selected_model.clone());
+        let selected_model_label = self
+            .pending_model_selection
+            .as_deref()
+            .and_then(|id| models.iter().find(|model| model.id == id))
+            .map(|model| model.label.as_str())
+            .or_else(|| state.selected_model_label())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "No model selected".to_owned());
+        let selected_model_id = models
+            .iter()
+            .find(|model| selected_model.as_deref() == Some(model.id.as_str()))
+            .map(|model| model.id.clone());
+        let model_picker_view = cx.entity().downgrade();
+        let model_picker = Button::new("settings-model-picker")
+            .ghost()
+            .compact()
+            .label(if models.is_empty() {
+                "Unavailable"
+            } else {
+                &selected_model_label
+            })
+            .dropdown_caret(true)
+            .disabled(models.is_empty())
+            .accessibility_label("Select model")
+            .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                models.iter().fold(
+                    menu.min_w(px(220.)).max_h(px(280.)).scrollable(true),
+                    |menu, model| {
+                        let model_id = model.id.clone();
+                        let view = model_picker_view.clone();
+                        menu.item(
+                            PopupMenuItem::new(model.label.clone())
+                                .checked(selected_model.as_deref() == Some(model.id.as_str()))
+                                .on_click(move |_, _, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        let has_active_session =
+                                            this.snapshot.as_ref().is_some_and(|snapshot| {
+                                                snapshot.session_id.is_some()
+                                            }) && !this.starting_new_session;
+                                        if has_active_session {
+                                            this.send_command(
+                                                Command::SelectModel(model_id.clone()),
+                                                cx,
+                                            );
+                                        } else {
+                                            this.pending_model_selection = Some(model_id.clone());
+                                            cx.notify();
+                                        }
+                                    });
+                                }),
+                        )
+                    },
+                )
+            });
+
+        let approval_view = cx.entity().downgrade();
+        let current_approval = state.auto_approve;
+        let approval_picker = Button::new("settings-approval-picker")
+            .ghost()
+            .compact()
+            .label(state.approval_mode_label())
+            .dropdown_caret(true)
+            .accessibility_label("Select permission mode")
+            .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                [(false, "Ask first"), (true, "Auto approve")]
+                    .into_iter()
+                    .fold(menu.min_w(px(180.)), |menu, (auto_approve, label)| {
+                        let view = approval_view.clone();
+                        menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(current_approval == auto_approve)
+                                .on_click(move |_, _, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.send_command(
+                                            Command::SetAutoApprove(auto_approve),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
+                    })
+            });
+
+        let model_support = if let Some(id) = selected_model_id {
+            format!("{selected_model_label} · {id}")
+        } else if state.has_session {
+            "The current session does not report a selectable model.".to_owned()
+        } else {
+            "Start or open a session to choose a model.".to_owned()
+        };
+        let approval_support = if state.auto_approve {
+            "Tool calls run without a confirmation prompt for this session."
+        } else {
+            "RustCode asks before running tool calls for this session."
+        };
+
+        let rail = div()
+            .w(px(SETTINGS_RAIL_WIDTH))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .pr_5()
+            .border_r_1()
+            .border_color(rgb(Palette::BORDER_SUBTLE))
+            .child(div().text_lg().font_semibold().child("Settings"))
+            .child(
+                Button::new("settings-section-general")
+                    .ghost()
+                    .compact()
+                    .w_full()
+                    .selected(true)
+                    .label("General")
+                    .icon(IconName::Settings)
+                    .accessibility_label("General settings"),
+            );
+
+        let model_row = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_5()
+            .py_4()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().font_medium().child("Model"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
+                            .child(model_support),
+                    ),
+            )
+            .child(model_picker);
+        let approval_row = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_5()
+            .py_4()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().font_medium().child("Permissions"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
+                            .child(approval_support),
+                    ),
+            )
+            .child(approval_picker);
+
+        let content = div()
+            .flex_1()
+            .min_w_0()
+            .max_w(px(SETTINGS_CONTENT_WIDTH))
+            .flex()
+            .flex_col()
+            .gap_5()
+            .child(div().text_2xl().font_semibold().child("General"))
+            .child(
+                div()
+                    .w_full()
+                    .px_5()
+                    .py_1()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(Palette::BORDER_SUBTLE))
+                    .bg(rgb(Palette::SURFACE_ELEVATED))
+                    .child(model_row),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .px_5()
+                    .py_1()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(Palette::BORDER_SUBTLE))
+                    .bg(rgb(Palette::SURFACE_ELEVATED))
+                    .child(approval_row),
+            );
+
+        div()
+            .w_full()
+            .h_full()
+            .min_h_0()
+            .flex()
+            .justify_center()
+            .px_6()
+            .pt(TITLE_BAR_HEIGHT + px(24.))
+            .pb_6()
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(SETTINGS_RAIL_WIDTH + SETTINGS_CONTENT_WIDTH + 48.))
+                    .h_full()
+                    .min_w_0()
+                    .flex()
+                    .gap_6()
+                    .child(rail)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_scrollbar()
+                            .child(content),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let collapsed = self.sidebar_collapsed;
         let project = self
@@ -1109,6 +1203,30 @@ impl AppView {
             }
         }
 
+        let footer = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgb(Palette::BORDER_SUBTLE))
+            .child(
+                Button::new("sidebar-settings")
+                    .ghost()
+                    .compact()
+                    .w_full()
+                    .icon(IconName::Settings)
+                    .label("Settings")
+                    .selected(matches!(self.destination, AppDestination::Settings(_)))
+                    .accessibility_label("Settings")
+                    .tooltip("Settings (⌘,)")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.destination.open_settings();
+                        cx.notify();
+                    })),
+            );
+
         Sidebar::new("session-sidebar")
             .w(px(SIDEBAR_WIDTH))
             .bg(rgb(Palette::SIDEBAR))
@@ -1118,6 +1236,7 @@ impl AppView {
             .header(header)
             .child(projects)
             .child(SidebarGroup::new("Recents").child(recent_menu))
+            .footer(footer)
             .into_any_element()
     }
 
@@ -2256,7 +2375,7 @@ impl Render for AppView {
                     }),
             );
 
-        let main = div()
+        let chat_main = div()
             .flex_1()
             .min_w_0()
             .h_full()
@@ -2363,6 +2482,10 @@ impl Render for AppView {
                         },
                     ),
             );
+        let main = match self.destination {
+            AppDestination::Chat => chat_main.into_any_element(),
+            AppDestination::Settings(SettingsSection::General) => self.render_settings_page(cx),
+        };
 
         let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
@@ -2432,9 +2555,25 @@ mod tests {
     use rustcode::controller::{ControllerError, ControllerSnapshot, SessionChoice};
 
     use super::{
-        ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow, ToolStatus, group_turn_rows,
-        should_show_start_screen, turn_segments,
+        AppDestination, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
+        SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen, turn_segments,
     };
+
+    #[test]
+    fn settings_destination_returns_to_chat_without_replacing_the_active_session() {
+        let session_id = Some("session-42".to_owned());
+        let mut destination = AppDestination::Chat;
+
+        destination.open_settings();
+        assert_eq!(
+            destination,
+            AppDestination::Settings(SettingsSection::General)
+        );
+
+        destination.open_chat();
+        assert_eq!(destination, AppDestination::Chat);
+        assert_eq!(session_id.as_deref(), Some("session-42"));
+    }
 
     #[test]
     fn adjacent_assistant_activity_stays_in_one_turn() {
