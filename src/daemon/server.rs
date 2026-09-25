@@ -167,6 +167,9 @@ struct Ownership {
 impl Drop for Ownership {
     fn drop(&mut self) {
         // The ownership lock prevents a successor from publishing until cleanup ends.
+        // Remove the socket first: stop() waits for the registration to disappear
+        // and must not return while the socket is still on disk.
+        let _ = remove_if_exists(&self.lifecycle.socket_path());
         if DaemonRegistration::read(&self.lifecycle.registration_path())
             .ok()
             .as_ref()
@@ -174,7 +177,6 @@ impl Drop for Ownership {
         {
             let _ = remove_if_exists(&self.lifecycle.registration_path());
         }
-        let _ = remove_if_exists(&self.lifecycle.socket_path());
     }
 }
 
