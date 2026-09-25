@@ -410,7 +410,30 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 }
 
 pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, None, None, None)
+    run_command_output_inner(args, None, None, None, None)
+}
+
+#[cfg(test)]
+pub(crate) fn run_command_output_with_workspace(
+    args: &Value,
+    workspace_root: Option<std::path::PathBuf>,
+) -> Result<super::ToolExecutionOutput, String> {
+    run_command_output_inner(args, None, None, None, Some(workspace_root))
+}
+
+pub(crate) fn run_command_output_with_workspace_for_call(
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+    workspace_root: Option<std::path::PathBuf>,
+) -> super::ToolExecutionOutput {
+    run_command_output_with_workspace_and_progress_for_call(
+        args,
+        None,
+        cancel_token,
+        call_id,
+        workspace_root,
+    )
 }
 
 #[cfg(test)]
@@ -418,7 +441,7 @@ pub(crate) fn run_command_output_cancellable(
     args: &Value,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, None, cancel_token, None) {
+    match run_command_output_inner(args, None, cancel_token, None, None) {
         Ok(output) => Ok(output),
         Err(error) if error == "command cancelled by user" => {
             Ok(super::ToolExecutionOutput::failure_with_kind(
@@ -436,7 +459,7 @@ pub(crate) fn run_command_output_with_call_id(
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     call_id: Option<&str>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, None, cancel_token, call_id) {
+    match run_command_output_inner(args, None, cancel_token, call_id, None) {
         Ok(output) => Ok(output),
         Err(error) if error == "command cancelled by user" => {
             Ok(super::ToolExecutionOutput::failure_with_kind(
@@ -456,16 +479,17 @@ pub(crate) fn run_command_output_with_progress(
     args: &Value,
     progress: CommandProgressCallback,
 ) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, Some(progress), None, None)
+    run_command_output_inner(args, Some(progress), None, None, None)
 }
 
+#[allow(dead_code)] // Legacy callers use thread-local workspace context.
 pub(crate) fn run_command_output_with_progress_cancellable_for_call(
     args: &Value,
     progress: CommandProgressCallback,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     call_id: Option<&str>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, Some(progress), cancel_token, call_id) {
+    match run_command_output_inner(args, Some(progress), cancel_token, call_id, None) {
         Ok(output) => Ok(output),
         Err(error) if error == "command cancelled by user" => {
             Ok(super::ToolExecutionOutput::failure_with_kind(
@@ -478,11 +502,52 @@ pub(crate) fn run_command_output_with_progress_cancellable_for_call(
     }
 }
 
+pub(crate) fn run_command_output_with_progress_cancellable_for_call_and_workspace(
+    args: &Value,
+    progress: CommandProgressCallback,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+    workspace_root: Option<std::path::PathBuf>,
+) -> super::ToolExecutionOutput {
+    run_command_output_with_workspace_and_progress_for_call(
+        args,
+        Some(progress),
+        cancel_token,
+        call_id,
+        workspace_root,
+    )
+}
+
+fn run_command_output_with_workspace_and_progress_for_call(
+    args: &Value,
+    progress: Option<CommandProgressCallback>,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+    workspace_root: Option<std::path::PathBuf>,
+) -> super::ToolExecutionOutput {
+    match run_command_output_inner(args, progress, cancel_token, call_id, Some(workspace_root)) {
+        Ok(output) => output,
+        Err(error) if error == "command cancelled by user" => {
+            super::ToolExecutionOutput::failure_with_kind(
+                "error: tool execution cancelled by user".to_string(),
+                super::ToolErrorKind::Cancelled,
+                true,
+            )
+        }
+        Err(error) => super::ToolExecutionOutput::failure_with_kind(
+            format!("error: {error}"),
+            super::ToolErrorKind::CommandFailed,
+            true,
+        ),
+    }
+}
+
 fn run_command_output_inner(
     args: &Value,
     progress: Option<CommandProgressCallback>,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     call_id: Option<&str>,
+    explicit_workspace_root: Option<Option<std::path::PathBuf>>,
 ) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
@@ -505,6 +570,9 @@ fn run_command_output_inner(
     let env = args.get("env").and_then(|e| e.as_object());
 
     let context = super::current_tool_context();
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    let has_explicit_workspace_root = explicit_workspace_root.is_some();
+    let workspace_root = explicit_workspace_root.unwrap_or_else(|| context.workspace_root.clone());
     let resolved_cwd = match cwd {
         Some("sandbox") | Some("./sandbox") => {
             if let Some(session_id) = get_active_session_id() {
@@ -520,7 +588,7 @@ fn run_command_output_inner(
         None => context
             .task_working_directory
             .clone()
-            .or(context.workspace_root.clone()),
+            .or(workspace_root.clone()),
     };
 
     if let Some(ref cwd_path) = resolved_cwd
@@ -576,20 +644,23 @@ fn run_command_output_inner(
     };
     let session_scratch = get_active_session_id()
         .and_then(|session_id| crate::config::get_active_session_sandbox_dir(&session_id));
-    let workspace_root = context.workspace_root.clone();
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-    let workspace_root = workspace_root.or_else(|| {
-        resolved_cwd.clone().or_else(|| {
-            static TEST_WORKSPACE: std::sync::OnceLock<tempfile::TempDir> =
-                std::sync::OnceLock::new();
-            Some(
-                TEST_WORKSPACE
-                    .get_or_init(|| tempfile::tempdir().expect("test workspace"))
-                    .path()
-                    .to_path_buf(),
-            )
+    let workspace_root = if !has_explicit_workspace_root {
+        workspace_root.or_else(|| {
+            resolved_cwd.clone().or_else(|| {
+                static TEST_WORKSPACE: std::sync::OnceLock<tempfile::TempDir> =
+                    std::sync::OnceLock::new();
+                Some(
+                    TEST_WORKSPACE
+                        .get_or_init(|| tempfile::tempdir().expect("test workspace"))
+                        .path()
+                        .to_path_buf(),
+                )
+            })
         })
-    });
+    } else {
+        workspace_root
+    };
     let mut writable_roots = workspace_root.iter().cloned().collect::<Vec<_>>();
     let session_scratch_roots = session_scratch.iter().cloned().collect::<Vec<_>>();
     writable_roots.extend(session_scratch_roots.iter().cloned());
@@ -1089,6 +1160,58 @@ mod tests {
             process_group: true,
             inherited_fds: Vec::new(),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn explicit_workspace_runs_without_thread_local_context() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let result = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "pwd"}),
+            Some(workspace.path().to_path_buf()),
+        )
+        .expect("explicit workspace permits sandbox construction");
+
+        assert!(result.success, "{}", result.content);
+        assert!(
+            result
+                .content
+                .contains(&workspace.path().display().to_string()),
+            "command did not run in the explicit workspace: {}",
+            result.content
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn explicit_missing_workspace_fails_closed() {
+        let result =
+            super::run_command_output_with_workspace(&serde_json::json!({"command": "pwd"}), None);
+
+        assert!(
+            result
+                .expect_err("explicitly missing workspace must fail closed")
+                .contains("needs an active workspace")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn explicit_deleted_workspace_fails_closed() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let path = workspace.path().to_path_buf();
+        drop(workspace);
+
+        let error = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "pwd"}),
+            Some(path),
+        )
+        .expect_err("deleted workspace must fail closed");
+
+        assert!(
+            error.contains("cwd") && error.contains("not a directory"),
+            "{error}"
+        );
     }
 
     #[test]
