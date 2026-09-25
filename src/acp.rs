@@ -1591,6 +1591,7 @@ mod tests {
         ));
 
         let tool_start = stream.updates(crate::network::AgentUiEvent::ToolStarted {
+            detail: None,
             name: "get_time".to_string(),
             id: "call-1".to_string(),
         });
@@ -1680,6 +1681,7 @@ mod tests {
     fn acp_event_stream_reports_tool_start_and_completion() {
         let mut stream = AcpEventStream::new();
         let started = stream.updates(crate::network::AgentUiEvent::ToolStarted {
+            detail: None,
             name: "grep".to_string(),
             id: "call-1".to_string(),
         });

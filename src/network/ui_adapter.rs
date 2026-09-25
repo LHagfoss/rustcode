@@ -26,6 +26,7 @@ pub(crate) enum AgentUiEvent {
     ToolStarted {
         name: String,
         id: String,
+        detail: Option<String>,
     },
     ApprovalRequested {
         calls: Vec<ToolCall>,
@@ -81,11 +82,17 @@ impl AgentUiEventSender {
     }
 }
 
+pub(crate) fn tool_display_detail(name: &str, arguments: &serde_json::Value) -> Option<String> {
+    let (_, target) = crate::app::activity::summarize_tool_call(name, arguments);
+    (!target.is_empty() && target != "?" && target != name).then_some(target)
+}
+
 #[cfg(test)]
 pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
     match event {
         AgentEvent::TextDelta(text) => Some(AgentUiEvent::TextDelta { text }),
         AgentEvent::ToolCall(call) => Some(AgentUiEvent::ToolStarted {
+            detail: tool_display_detail(&call.name, &call.arguments),
             id: call
                 .call_id
                 .clone()
@@ -286,12 +293,15 @@ async fn publish_snapshot_with_mode(
         // Live keys identify presentation instances, not protocol calls. A
         // provider-less speculative call gets its ID from completed arguments
         // in assistant history below, once the call is authoritative.
-        if let Some(id) = call.provider_call_id.as_ref()
+        if call.execution_started
+            && let Some(id) = call.provider_call_id.as_ref()
             && started_tools.insert(id.clone())
         {
             sender.send(AgentUiEvent::ToolStarted {
                 id: id.clone(),
                 name: call.tool_name.clone(),
+                detail: (!call.target.is_empty() && call.target != "?")
+                    .then(|| call.target.clone()),
             });
         }
     }
@@ -337,6 +347,7 @@ async fn publish_snapshot_with_mode(
                 if started_tools.insert(id.clone()) {
                     sender.send(AgentUiEvent::ToolStarted {
                         id,
+                        detail: tool_display_detail(&call.name, &call.arguments),
                         name: call.name,
                     });
                 }
@@ -352,6 +363,9 @@ async fn publish_snapshot_with_mode(
                 sender.send(AgentUiEvent::ToolStarted {
                     id: id.clone(),
                     name: result.tool_name.clone(),
+                    detail: result.metadata.command.as_ref().and_then(|command| {
+                        tool_display_detail("run_command", &serde_json::json!({"command": command}))
+                    }),
                 });
             }
             sender.send(event);
@@ -667,7 +681,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolStarted { id, .. }) if id == "provider-call")
+            matches!(receiver.try_recv(), Ok(AgentUiEvent::ToolStarted { id, detail, .. }) if id == "provider-call" && detail.as_deref() == Some("a"))
         );
         assert!(receiver.try_recv().is_err());
         {
@@ -721,6 +735,23 @@ mod tests {
     }
 
     #[test]
+    fn display_detail_reuses_bounded_semantic_tool_parameters() {
+        assert_eq!(
+            super::tool_display_detail("view_file", &json!({"path":"src/main.rs"})),
+            Some("src/main.rs".into())
+        );
+        assert_eq!(
+            super::tool_display_detail("grep_search", &json!({"pattern":"TODO", "path":"src"})),
+            Some("TODO in src".into())
+        );
+        assert_eq!(
+            super::tool_display_detail("run_command", &json!({"command":"cargo test\n--lib"})),
+            Some("cargo test --lib".into())
+        );
+        assert_eq!(super::tool_display_detail("view_file", &json!({})), None);
+    }
+
+    #[test]
     fn maps_text_tool_completion_cancellation_and_errors() {
         assert!(matches!(
             map_agent_event(AgentEvent::TextDelta("hello".to_owned())),
@@ -734,7 +765,7 @@ mod tests {
         };
         assert!(matches!(
             map_agent_event(AgentEvent::ToolCall(call)),
-            Some(AgentUiEvent::ToolStarted { id, name }) if id == "call-1" && name == "view_file"
+            Some(AgentUiEvent::ToolStarted { id, name, .. }) if id == "call-1" && name == "view_file"
         ));
 
         let result = ToolResult {

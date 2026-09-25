@@ -1,6 +1,7 @@
 mod projection;
 
 mod backend;
+mod highlight;
 mod view;
 
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ fn main() {
             gpui_kit::init(cx);
             cx.bind_keys([KeyBinding::new("cmd-b", ToggleSidebar, None)]);
             Theme::change(ThemeMode::Dark, None, cx);
+            highlight::install(cx);
             let window_bounds = WindowBounds::centered(size(px(1200.), px(800.)), cx);
             let backend = backend.take().expect("native window is opened once");
             cx.spawn(async move |cx| {

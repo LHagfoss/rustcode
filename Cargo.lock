@@ -7082,6 +7082,7 @@ version = "0.55.11"
 dependencies = [
  "gpui-kit",
  "rustcode",
+ "syntect",
  "tokio",
 ]
 
