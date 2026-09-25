@@ -63,21 +63,21 @@ This pull request is based on issue #1412 and starts from the then-current `main
 
 ### Navigation and page state
 
-`AppView` gains a small explicit page state with at least `Chat` and `Settings(SettingsSection::General)`. This state controls the main pane only; the existing session sidebar remains mounted on both pages.
+`AppView` gains a small explicit page state with at least `Chat` and `Settings(SettingsSection::General)`. Chat mounts the session sidebar. Settings replaces that rail in the same width with a dedicated Settings navigation rail, avoiding a nested three-column layout.
 
-The sidebar becomes a full-height column with its existing header and session groups in a flexible upper region. A divider separates a bottom Settings row with a settings icon and label. Activating a session or New Chat returns to Chat. Activating Settings changes the main pane to General without opening another operating-system window.
+The chat sidebar becomes a full-height column with its existing header and session groups in a flexible upper region. A full-width divider separates a bottom Settings row with a settings icon and label. Activating Settings replaces this rail with a Settings rail containing a clear Back to app action and the compact General destination. Back to app, a session, or New Chat returns to Chat. Settings changes the main content to General without opening another operating-system window.
 
 The existing `OpenSettings` action is retained but changes behavior: `Cmd+,` routes to `Settings(General)`. Reusing the action preserves the macOS menu integration already added by the native app.
 
 ### Settings page
 
-The Settings page uses a constrained, scrollable content column with:
+The Settings page uses a dedicated left rail plus a constrained, scrollable content column modeled after a native preferences surface, with:
 
-- a `Settings` title and `General` section heading;
+- a `General` page title and section headings;
 - a Model card with the active model, model identifier, and a dropdown/popup menu containing available models;
 - a Permissions card with a two-choice control for Ask first and Auto approve, explanatory text, and disabled/session-unavailable states where appropriate.
 
-Cards use consistent generous radii, border colors, spacing, and hover/selected states. The state and commands remain the existing `SettingsState`, `Command::SelectModel`, and `Command::SetAutoApprove`; the redesign does not add a parallel settings backend.
+Grouped settings surfaces use consistent generous radii, subtle borders, compact rows, and clear labels/supporting text like a native preferences page. The state and commands remain the existing `SettingsState`, `Command::SelectModel`, and `Command::SetAutoApprove`; the redesign does not add a parallel settings backend or advertise categories that are not implemented.
 
 The route and section are explicit enums so future sections can be added without replacing the navigation model. Only General is implemented now.
 
@@ -129,6 +129,8 @@ Tests cover controller-event projection into pending approval state and the rend
 ### Copy-button hover behavior
 
 The copy action and the visual message area share one hover hit region. The button may visually sit at the lower edge, but the parent layout reserves its space so moving from content to the button never leaves the hover group. User and assistant messages use the same helper or layout pattern.
+
+The copy action is left-aligned below the message content. Its visible icon is slightly larger than the original and its transparent clickable container adds padding/minimum size as hit slop, without expanding the colored user-message bubble or covering selectable text.
 
 Clipboard behavior and labels remain unchanged.
 
