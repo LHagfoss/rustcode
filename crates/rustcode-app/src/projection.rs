@@ -31,6 +31,26 @@ pub enum ToolStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolRowPresentation {
+    pub status: ToolStatus,
+    pub status_label: &'static str,
+    pub output_expandable: bool,
+}
+
+pub fn tool_row_presentation(status: ToolStatus, output: &str) -> ToolRowPresentation {
+    ToolRowPresentation {
+        status,
+        status_label: match status {
+            ToolStatus::Running => "Running",
+            ToolStatus::Pending => "Pending",
+            ToolStatus::Completed => "Done",
+            ToolStatus::Failed => "Failed",
+        },
+        output_expandable: !output.trim().is_empty(),
+    }
+}
+
 pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<ProjectionRow> {
     let mut cancellation_shown = false;
     let mut rows = transcript
@@ -398,7 +418,7 @@ mod tests {
 
     use super::{
         ChatViewState, ComposerAction, ProjectionRow, ToolStatus, answer_for_question, can_submit,
-        project_rows, stop_available, toggle_option,
+        project_rows, stop_available, toggle_option, tool_row_presentation,
     };
 
     fn user(content: &str) -> TranscriptItem {
@@ -468,6 +488,34 @@ mod tests {
             ]
         );
         assert_eq!(transcript, original);
+    }
+
+    #[test]
+    fn tool_presentation_distinguishes_activity_states_and_expandable_output() {
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Running, ""),
+            super::ToolRowPresentation {
+                status: ToolStatus::Running,
+                status_label: "Running",
+                output_expandable: false,
+            }
+        );
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Completed, "result"),
+            super::ToolRowPresentation {
+                status: ToolStatus::Completed,
+                status_label: "Done",
+                output_expandable: true,
+            }
+        );
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Failed, "failure"),
+            super::ToolRowPresentation {
+                status: ToolStatus::Failed,
+                status_label: "Failed",
+                output_expandable: true,
+            }
+        );
     }
 
     #[test]

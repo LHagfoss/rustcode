@@ -32,6 +32,10 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
             .iter()
             .any(|item| item.content.contains("Native commands:"))
     );
+    assert!(help.transcript.iter().any(|item| {
+        item.content
+            .contains("`/info` — Show session and turn status")
+    }));
     assert!(
         !help
             .transcript
@@ -64,6 +68,40 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
     );
     assert!(fresh.generation > help.generation);
     assert!(!fresh.turn_active);
+}
+
+#[tokio::test]
+async fn native_info_command_reports_current_session_model_turn_and_queue() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let session_id = started.session_id.expect("session id");
+    let model = started.selected_model.expect("selected model");
+
+    handle.send(Command::Submit("/info".into())).expect("info");
+    let info = updates.recv().await.expect("info snapshot");
+    let ControllerUpdate::Snapshot(info) = info.update else {
+        panic!("expected info snapshot");
+    };
+    let notice = info
+        .transcript
+        .iter()
+        .find(|item| item.content.contains("Session:"))
+        .expect("diagnostic notice");
+    assert!(notice.content.contains(&format!("Session: {session_id}")));
+    assert!(notice.content.contains(&format!("Model: {model}")));
+    assert!(notice.content.contains("Turn: inactive"));
+    assert!(notice.content.contains("Queue: 0"));
 }
 
 #[tokio::test]

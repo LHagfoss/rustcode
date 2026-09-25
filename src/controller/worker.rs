@@ -376,6 +376,22 @@ async fn run_native_slash(
             state.set_notice(HELP);
             send_snapshot_locked(updates, session.generation, &state);
         }
+        NativeSlashCommand::Info => {
+            let mut state = session.state.lock().await;
+            let snapshot = ControllerSnapshot::from_state(session.generation, &state);
+            let session_id = snapshot.session_id.as_deref().unwrap_or("none");
+            let model = snapshot.selected_model.as_deref().unwrap_or("unknown");
+            let turn = if snapshot.turn_active {
+                "active"
+            } else {
+                "inactive"
+            };
+            state.set_notice(format!(
+                "Session: {session_id}\nModel: {model}\nTurn: {turn}\nQueue: {}",
+                snapshot.queued_count
+            ));
+            send_snapshot_locked(updates, session.generation, &state);
+        }
         NativeSlashCommand::Model(None) => {
             let mut state = session.state.lock().await;
             let choices = state

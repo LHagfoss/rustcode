@@ -8,6 +8,7 @@ pub(super) enum NativeSlashCommand {
     Cancel,
     Model(Option<String>),
     ChangeTitle(Option<String>),
+    Info,
     Unknown(String),
 }
 
@@ -28,11 +29,12 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
         "/change_title" => {
             NativeSlashCommand::ChangeTitle((!arguments.is_empty()).then(|| arguments.into()))
         }
+        "/info" => NativeSlashCommand::Info,
         _ => NativeSlashCommand::Unknown(name.to_owned()),
     })
 }
 
-pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/change_title <title>` — Rename this chat";
+pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
 
 #[cfg(test)]
 mod tests {
@@ -51,6 +53,7 @@ mod tests {
             )))
         );
         assert_eq!(parse("/model"), Some(NativeSlashCommand::Model(None)));
+        assert_eq!(parse("/info"), Some(NativeSlashCommand::Info));
         assert_eq!(parse("ordinary prompt"), None);
         assert_eq!(
             parse("/not-supported argument"),
