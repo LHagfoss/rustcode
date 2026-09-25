@@ -3,7 +3,7 @@ use super::events::{AgentEvent, FinishReason};
 use super::events::{ToolResult, ToolResultMetadata};
 use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
-use crate::tools::{ToolCall, resolve_tool_calls};
+use crate::tools::resolve_tool_calls;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
@@ -30,7 +30,7 @@ pub(crate) enum AgentUiEvent {
         detail: Option<String>,
     },
     ApprovalRequested {
-        calls: Vec<ToolCall>,
+        actions: Vec<crate::controller::ApprovalAction>,
     },
     QuestionRequested {
         prompt: crate::controller::QuestionPrompt,
@@ -225,7 +225,7 @@ async fn publish_snapshot_with_mode(
         response_revision,
         response_last_rewrite_revision,
         live_tools,
-        pending_approval,
+        pending_approval_actions,
         pending_question,
         protocol,
         history,
@@ -238,7 +238,22 @@ async fn publish_snapshot_with_mode(
             state.current_response_revision,
             state.current_response_last_rewrite_revision,
             Arc::clone(&state.live_tool_calls),
-            state.pending_tool_confirmation.is_some(),
+            state
+                .pending_tool_confirmation
+                .as_ref()
+                .map(|confirmations| {
+                    confirmations
+                        .iter()
+                        .enumerate()
+                        .map(|(index, confirmation)| {
+                            crate::controller::ApprovalAction::from_confirmation(
+                                confirmation,
+                                index,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
             state
                 .pending_question
                 .as_ref()
@@ -329,23 +344,12 @@ async fn publish_snapshot_with_mode(
         }
     }
 
-    if pending_approval && !*approval_sent {
-        let calls = {
-            let state = state.lock().await;
-            state
-                .history
-                .iter()
-                .rev()
-                .find(|message| message.role == "assistant")
-                .map(|message| resolve_tool_calls(message, protocol))
-                .filter(|calls| !calls.is_empty())
-                .unwrap_or_else(|| crate::tools::parse_tool_calls(&response, protocol))
-        };
-        if !calls.is_empty() {
-            sender.send(AgentUiEvent::ApprovalRequested { calls });
-            *approval_sent = true;
-        }
-    } else if !pending_approval {
+    if !pending_approval_actions.is_empty() && !*approval_sent {
+        sender.send(AgentUiEvent::ApprovalRequested {
+            actions: pending_approval_actions,
+        });
+        *approval_sent = true;
+    } else if pending_approval_actions.is_empty() {
         *approval_sent = false;
     }
 
@@ -955,7 +959,9 @@ mod tests {
             status: crate::app::SubAgentStatus::Running,
             active_turn: true,
         });
-        sender.send(AgentUiEvent::ApprovalRequested { calls: Vec::new() });
+        sender.send(AgentUiEvent::ApprovalRequested {
+            actions: Vec::new(),
+        });
         sender.send(AgentUiEvent::TurnRecovered {
             message: "retrying".to_owned(),
         });
@@ -970,12 +976,91 @@ mod tests {
         ));
         assert!(matches!(
             receiver.recv().await,
-            Some(AgentUiEvent::ApprovalRequested { calls }) if calls.is_empty()
+            Some(AgentUiEvent::ApprovalRequested { actions }) if actions.is_empty()
         ));
         assert!(matches!(
             receiver.recv().await,
             Some(AgentUiEvent::TurnRecovered { message }) if message == "retrying"
         ));
+    }
+
+    #[tokio::test]
+    async fn streamed_approval_uses_only_actions_in_the_policy_confirmation_batch() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.history.push(
+                crate::app::ChatMessage::new("assistant", "batch").with_tool_calls(vec![
+                    crate::app::ToolCallRef {
+                        id: "safe-read".to_owned(),
+                        name: "view_file".to_owned(),
+                        arguments: r#"{"path":"README.md"}"#.to_owned(),
+                    },
+                    crate::app::ToolCallRef {
+                        id: "call-a".to_owned(),
+                        name: "write_file".to_owned(),
+                        arguments: r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+                    },
+                    crate::app::ToolCallRef {
+                        id: "call-b".to_owned(),
+                        name: "run_command".to_owned(),
+                        arguments: r#"{"command":"cargo test"}"#.to_owned(),
+                    },
+                ]),
+            );
+            state.pending_tool_confirmation = Some(vec![
+                crate::app::ToolConfirmation {
+                    request_id: Some("call-a".to_owned()),
+                    tool_name: "write_file".to_owned(),
+                    path: "src/a.txt".to_owned(),
+                    content_preview: "first".to_owned(),
+                    content_bytes: 5,
+                    rememberable_prefix: None,
+                    forbidden_prefix: None,
+                },
+                crate::app::ToolConfirmation {
+                    request_id: Some("call-b".to_owned()),
+                    tool_name: "run_command".to_owned(),
+                    path: "cargo test".to_owned(),
+                    content_preview: "command scope".to_owned(),
+                    content_bytes: 10,
+                    rememberable_prefix: None,
+                    forbidden_prefix: None,
+                },
+            ]);
+        }
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut approval_sent = false;
+        let mut previous_question = None;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_question,
+            &mut previous_subagents,
+        )
+        .await;
+
+        let Some(AgentUiEvent::ApprovalRequested { actions }) = receiver.recv().await else {
+            panic!("pending policy batch should produce one approval event");
+        };
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].request_id, "call-a");
+        assert_eq!(actions[0].action_summary, "write_file · src/a.txt");
+        assert_eq!(actions[0].description, "src/a.txt\nfirst");
+        assert_eq!(actions[1].request_id, "call-b");
+        assert_eq!(actions[1].action_summary, "run_command · cargo test");
+        assert_eq!(actions[1].description, "cargo test\ncommand scope");
     }
 
     #[tokio::test]

@@ -15,8 +15,8 @@ pub use events::{
     accepts_generation,
 };
 pub use snapshot::{
-    ApprovalPrompt, Command, ControllerHandle, ControllerSnapshot, ModelChoice, QuestionPrompt,
-    SessionChoice, TranscriptItem,
+    ApprovalAction, ApprovalPrompt, Command, ControllerHandle, ControllerSnapshot, ModelChoice,
+    QuestionPrompt, SessionChoice, TranscriptItem,
 };
 
 pub use worker::InteractiveController;

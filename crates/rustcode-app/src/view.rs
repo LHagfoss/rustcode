@@ -301,14 +301,12 @@ impl AppView {
         {
             self.selected_question_options.clear();
         }
-        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(
-            approvals,
-        )) = &event.update
-            && self.approval_in_flight.as_ref().is_some_and(|request_id| {
-                !approvals
-                    .iter()
-                    .any(|approval| &approval.request_id == request_id)
-            })
+        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(approval)) =
+            &event.update
+            && self
+                .approval_in_flight
+                .as_ref()
+                .is_some_and(|request_id| approval.request_id != *request_id)
         {
             self.approval_in_flight = None;
         }
@@ -1487,6 +1485,41 @@ impl AppView {
         let approve_id = request_id.clone();
         let deny_id = request_id;
         let in_flight = self.approval_in_flight.is_some();
+        let action_count = prompt.actions.len();
+        let action_list = div()
+            .max_h(px(240.))
+            .min_h(px(0.))
+            .overflow_scrollbar()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(prompt.actions.iter().enumerate().map(|(index, action)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .rounded_md()
+                    .bg(rgb(Palette::APP_BACKGROUND))
+                    .p_2()
+                    .child(div().text_sm().font_semibold().child(format!(
+                        "{} of {} · {}",
+                        index + 1,
+                        action_count,
+                        action.action_summary
+                    )))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(Palette::TEXT_MUTED))
+                            .child(action.risk_context.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
+                            .child(action.description.clone()),
+                    )
+            }));
         Some(
             div()
                 .w_full()
@@ -1499,20 +1532,18 @@ impl AppView {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().font_semibold().child("Permission required"))
-                .child(div().text_sm().child(prompt.action_summary))
+                .child(
+                    div()
+                        .font_semibold()
+                        .child(format!("Permission required · {action_count} actions")),
+                )
                 .child(
                     div()
                         .text_sm()
                         .text_color(rgb(Palette::TEXT_MUTED))
-                        .child(prompt.risk_context),
+                        .child("This decision applies to every action in the list."),
                 )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(Palette::TEXT_SECONDARY))
-                        .child(prompt.description),
-                )
+                .child(action_list)
                 .child(
                     div()
                         .flex()
