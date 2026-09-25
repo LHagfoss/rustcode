@@ -5,9 +5,11 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, Context, Focusable, PathPromptOptions, Render, Window, actions,
+    Anchor, Context, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, Render, Window,
+    actions,
     component::{
-        Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
+        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
+        TitleBar, WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
@@ -26,10 +28,29 @@ use rustcode::controller::{
     ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, SessionChoice,
 };
 
+use super::{CloseWindow, MinimizeWindow};
 actions!(
     rustcode_app,
-    [ToggleSidebar, ToggleChatSearch, CloseChatSearch]
+    [
+        ToggleSidebar,
+        OpenSettings,
+        ToggleChatSearch,
+        CloseChatSearch
+    ]
 );
+
+const SIDEBAR_WIDTH: f32 = 270.;
+const MAIN_PANE_INSET: f32 = 24.;
+#[cfg(target_os = "macos")]
+const TITLE_BAR_LEFT_PADDING: f32 = 80.;
+#[cfg(not(target_os = "macos"))]
+const TITLE_BAR_LEFT_PADDING: f32 = 12.;
+const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
+const TITLE_BAR_CHILD_GAP: f32 = 8.;
+const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
+    - TITLE_BAR_LEFT_PADDING
+    - SIDEBAR_TOGGLE_SIZE
+    - TITLE_BAR_CHILD_GAP;
 
 fn current_branch(project: &Path) -> Option<String> {
     let output = ProcessCommand::new("git")
@@ -59,6 +80,7 @@ use crate::{
 
 pub struct AppView {
     backend: NativeBackend,
+    focus_handle: FocusHandle,
     launch_dir: PathBuf,
     selected_project: PathBuf,
     composer: gpui_kit::Entity<TextareaState>,
@@ -77,6 +99,8 @@ pub struct AppView {
     pending_model_selection: Option<String>,
     starting_new_session: bool,
     clear_composer_on_render: bool,
+    slash_selection: usize,
+    slash_picker_dismissed: bool,
     sidebar_collapsed: bool,
     git_branch: Option<String>,
     expanded_thoughts: HashSet<(usize, usize)>,
@@ -90,6 +114,177 @@ pub struct AppView {
 }
 
 impl AppView {
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = crate::settings::SettingsState::from_snapshot(self.snapshot.as_ref());
+        let models = state.models.clone();
+        let selected_model = state.selected_model.clone();
+        let selected_model_label = state
+            .selected_model_label()
+            .unwrap_or("No model selected")
+            .to_owned();
+        let auto_approve = state.auto_approve;
+        let has_session = state.has_session;
+        let controller = self.backend.controller().clone();
+        let view = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let model_rows = models.iter().map(|model| {
+                let model_id = model.id.clone();
+                let model_label = model.label.clone();
+                let selected = selected_model.as_deref() == Some(model.id.as_str());
+                let view = view.clone();
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(if selected {
+                        rgb(0x343a43)
+                    } else {
+                        rgb(0x25272a)
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().font_medium().child(model_label.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xa5a8af))
+                                    .child(model_id.clone()),
+                            ),
+                    )
+                    .child(
+                        Button::new(format!("settings-model-{}", model.id))
+                            .label(if selected { "Selected" } else { "Use model" })
+                            .selected(selected)
+                            .accessibility_label(format!("Use model {}", model.label))
+                            .on_click(move |_, window, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    if has_session
+                                        && this
+                                            .snapshot
+                                            .as_ref()
+                                            .is_some_and(|snapshot| snapshot.session_id.is_some())
+                                        && !this.starting_new_session
+                                    {
+                                        this.send_command(
+                                            Command::SelectModel(model_id.clone()),
+                                            cx,
+                                        );
+                                    } else {
+                                        this.pending_model_selection = Some(model_id.clone());
+                                        cx.notify();
+                                    }
+                                });
+                                window.close_dialog(cx);
+                            }),
+                    )
+            });
+
+            let approval_controller = controller.clone();
+            let approval_label = if auto_approve {
+                "Automatically approve tool calls"
+            } else {
+                "Ask before tool calls"
+            };
+            let approval_detail = if auto_approve {
+                "Tool calls run without a confirmation prompt for this session."
+            } else {
+                "RustCode asks before running tool calls for this session."
+            };
+            let approval_button_label = if auto_approve { "Turn off" } else { "Turn on" };
+            let approval_button_accessibility = if auto_approve {
+                "Ask before tool calls"
+            } else {
+                "Automatically approve tool calls"
+            };
+
+            dialog.title("Settings").w(px(560.)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xa5a8af))
+                            .child("Preferences for the current RustCode session."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_xs().font_semibold().child("MODEL"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xa5a8af))
+                                    .child(format!("Active model: {selected_model_label}")),
+                            )
+                            .when(models.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0xa5a8af))
+                                        .child("Start or open a session to choose a model."),
+                                )
+                            })
+                            .children(model_rows),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_xs().font_semibold().child("APPROVALS"))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_4()
+                                    .px_3()
+                                    .py_3()
+                                    .rounded_md()
+                                    .bg(rgb(0x25272a))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(div().font_medium().child(approval_label))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0xa5a8af))
+                                                    .child(approval_detail),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("settings-toggle-approval")
+                                            .label(approval_button_label)
+                                            .accessibility_label(approval_button_accessibility)
+                                            .on_click(move |_, window, cx| {
+                                                let _ = approval_controller
+                                                    .send(Command::SetAutoApprove(!auto_approve));
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+        });
+    }
+
     pub fn new(
         backend: NativeBackend,
         launch_dir: PathBuf,
@@ -107,8 +302,10 @@ impl AppView {
                 .auto_grow(2, 6)
                 .submit_on_enter(true)
         });
-        let composer_subscription = cx.subscribe(&composer, |_, _, event: &InputEvent, cx| {
+        let composer_subscription = cx.subscribe(&composer, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.slash_selection = 0;
+                this.slash_picker_dismissed = false;
                 cx.notify();
             }
         });
@@ -137,8 +334,11 @@ impl AppView {
                 }
             });
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
         Self {
             backend,
+            focus_handle,
             git_branch: current_branch(&launch_dir),
             expanded_thoughts: HashSet::new(),
             expanded_tools: HashSet::new(),
@@ -161,6 +361,8 @@ impl AppView {
             pending_model_selection: None,
             starting_new_session: false,
             clear_composer_on_render: false,
+            slash_selection: 0,
+            slash_picker_dismissed: false,
             sidebar_collapsed: false,
             chat_search_open: false,
             conversation_search: ConversationSearch::default(),
@@ -536,11 +738,14 @@ impl AppView {
             return;
         }
         let draft = self.composer.read(cx).value().to_string();
-        let suggestions = crate::slash::suggestions(&draft);
-        if suggestions.len() == 1 && draft.trim() != suggestions[0].name {
-            let completed = crate::slash::complete(suggestions[0].name);
+        if !self.slash_picker_dismissed
+            && let Some(completed) = crate::slash::complete_selection(&draft, self.slash_selection)
+        {
             self.composer
                 .update(cx, |state, cx| state.set_value(&completed, window, cx));
+            self.composer
+                .update(cx, |state, cx| state.focus(window, cx));
+            self.slash_picker_dismissed = true;
             cx.notify();
             return;
         }
@@ -904,7 +1109,7 @@ impl AppView {
         }
 
         Sidebar::new("session-sidebar")
-            .w(px(270.))
+            .w(px(SIDEBAR_WIDTH))
             .bg(rgb(0x222426))
             .border_color(rgb(0x34363a))
             .collapsible(SidebarCollapsible::Offcanvas)
@@ -1674,6 +1879,7 @@ fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialogs = Root::render_dialog_layer(window, cx);
         if self.reset_search_input_on_render {
             self.search_input
                 .update(cx, |state, cx| state.set_value("", window, cx));
@@ -1727,6 +1933,9 @@ impl Render for AppView {
             && (can_submit(&self.composer.read(cx).value())
                 || (!pending_question && !self.pending_images.is_empty()));
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
+        self.slash_selection = self
+            .slash_selection
+            .min(slash_suggestions.len().saturating_sub(1));
         let has_session = !should_show_start_screen(self.snapshot.as_ref());
         let conversation_title = self.snapshot.as_ref().and_then(|snapshot| {
             let id = snapshot.session_id.as_ref()?;
@@ -1864,6 +2073,39 @@ impl Render for AppView {
             })
             .child(
                 div()
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        let suggestions =
+                            crate::slash::suggestions(&this.composer.read(cx).value());
+                        if suggestions.is_empty() || this.slash_picker_dismissed {
+                            return;
+                        }
+                        match event.keystroke.key.as_str() {
+                            "up" => {
+                                this.slash_selection = crate::slash::move_selection(
+                                    this.slash_selection,
+                                    suggestions.len(),
+                                    false,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            "down" => {
+                                this.slash_selection = crate::slash::move_selection(
+                                    this.slash_selection,
+                                    suggestions.len(),
+                                    true,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            "escape" => {
+                                this.slash_picker_dismissed = true;
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }))
                     .on_action(cx.listener(|this, action: &Enter, window, cx| {
                         if !action.shift && !action.secondary {
                             this.submit_composer(window, cx);
@@ -2021,29 +2263,9 @@ impl Render for AppView {
             .flex_col()
             .items_center()
             .gap_2()
-            .px_6()
-            .pt(px(50.))
+            .px(px(MAIN_PANE_INSET))
+            .pt(TITLE_BAR_HEIGHT)
             .pb_3()
-            .when_some(conversation_title.filter(|_| has_session), |this, title| {
-                this.child(
-                    div()
-                        .w_full()
-                        .h(px(42.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .border_b_1()
-                        .border_color(rgb(0x34363a))
-                        .text_sm()
-                        .font_medium()
-                        .child(
-                            Icon::new(IconName::FolderOpen)
-                                .size_4()
-                                .text_color(rgb(0xaaaeb6)),
-                        )
-                        .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
-                )
-            })
             .child(
                 div()
                     .w_full()
@@ -2073,81 +2295,132 @@ impl Render for AppView {
                     .gap_0()
                     .child(context_row)
                     .child(composer)
-                    .when(!slash_suggestions.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .w_full()
-                                .absolute()
-                                .bottom_full()
-                                .mb_2()
-                                .p_1()
-                                .rounded_lg()
-                                .border_1()
-                                .border_color(rgb(0x414348))
-                                .bg(rgb(0x292b2e))
-                                .children(slash_suggestions.into_iter().map(|suggestion| {
-                                    let completion = crate::slash::complete(suggestion.name);
-                                    let view = cx.entity().downgrade();
-                                    div()
-                                        .id(format!("slash-{}", suggestion.name))
-                                        .w_full()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .hover(|this| this.bg(rgb(0x393b40)))
-                                        .child(
+                    .when(
+                        !slash_suggestions.is_empty() && !self.slash_picker_dismissed,
+                        |this| {
+                            this.child(
+                                div()
+                                    .w(px(460.))
+                                    .max_w(px(460.))
+                                    .absolute()
+                                    .left_0()
+                                    .bottom_full()
+                                    .mb_2()
+                                    .p_2()
+                                    .rounded(px(23.))
+                                    .border_1()
+                                    .border_color(rgb(0x414348))
+                                    .bg(rgb(0x292b2e))
+                                    .children(slash_suggestions.into_iter().enumerate().map(
+                                        |(index, suggestion)| {
+                                            let completion =
+                                                crate::slash::complete(suggestion.name);
+                                            let view = cx.entity().downgrade();
                                             div()
-                                                .min_w(px(100.))
-                                                .font_medium()
-                                                .child(suggestion.name),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(0xa5a8af))
-                                                .child(suggestion.description),
-                                        )
-                                        .on_click(move |_, window, cx| {
-                                            let _ = view.update(cx, |this, cx| {
-                                                this.composer.update(cx, |state, cx| {
-                                                    state.set_value(&completion, window, cx);
-                                                    state.focus(window, cx);
-                                                });
-                                                cx.notify();
-                                            });
-                                        })
-                                })),
-                        )
-                    }),
+                                                .id(format!("slash-{}", suggestion.name))
+                                                .w_full()
+                                                .flex()
+                                                .items_center()
+                                                .gap_3()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_lg()
+                                                .when(index == self.slash_selection, |this| {
+                                                    this.bg(rgb(0x393b40))
+                                                })
+                                                .cursor_pointer()
+                                                .hover(|this| this.bg(rgb(0x45474d)))
+                                                .child(
+                                                    div()
+                                                        .min_w(px(112.))
+                                                        .font_medium()
+                                                        .child(suggestion.name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(0xa5a8af))
+                                                        .child(suggestion.description),
+                                                )
+                                                .on_click(move |_, window, cx| {
+                                                    let _ = view.update(cx, |this, cx| {
+                                                        this.composer.update(cx, |state, cx| {
+                                                            state.set_value(
+                                                                &completion,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                            state.focus(window, cx);
+                                                        });
+                                                        this.slash_picker_dismissed = true;
+                                                        cx.notify();
+                                                    });
+                                                })
+                                        },
+                                    )),
+                            )
+                        },
+                    ),
             );
 
         let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
-            .border_color(gpui_kit::rgba(0x00000000))
+            .border_color(rgb(0x34363a))
             .child(
-                Button::new("sidebar-toggle")
-                    .ghost()
-                    .with_size(px(24.))
-                    .icon(toggle_icon)
-                    .text_color(rgb(0x9a9da5))
-                    .tooltip("Toggle sidebar")
-                    .accessibility_label("Toggle sidebar")
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                div()
+                    .h_full()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(TITLE_BAR_CHILD_GAP))
+                    .child(
+                        Button::new("sidebar-toggle")
+                            .ghost()
+                            .with_size(px(SIDEBAR_TOGGLE_SIZE))
+                            .icon(toggle_icon)
+                            .text_color(rgb(0x9a9da5))
+                            .tooltip("Toggle sidebar")
+                            .accessibility_label("Toggle sidebar")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                    )
+                    .when_some(conversation_title.filter(|_| has_session), |this, title| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap_2()
+                                .ml(if self.sidebar_collapsed {
+                                    px(0.)
+                                } else {
+                                    px(SIDEBAR_TITLE_MARGIN)
+                                })
+                                .text_sm()
+                                .font_medium()
+                                .child(
+                                    Icon::new(IconName::FolderOpen)
+                                        .size_4()
+                                        .text_color(rgb(0xaaaeb6)),
+                                )
+                                .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
+                        )
+                    }),
             );
 
         div()
             .size_full()
             .relative()
+            .track_focus(&self.focus_handle)
+            .on_action(|_: &CloseWindow, window, _| window.remove_window())
+            .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .flex()
             .bg(rgb(0x1b1d1f))
             .text_color(rgb(0xe8e9ed))
             .child(div().size_full().flex().child(sidebar).child(main))
             .child(div().absolute().top_0().left_0().right_0().child(title_bar))
+            .children(dialogs)
     }
 }
 
