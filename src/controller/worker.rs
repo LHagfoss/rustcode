@@ -176,6 +176,10 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
+                if let Some(command) = super::native_commands::parse(&prompt) {
+                    run_native_slash(command, session, &mut generation, &updates).await;
+                    continue;
+                }
                 match queue_prompt(&session.state, prompt).await {
                     QueuePrompt::Empty => {
                         send_snapshot(&updates, session.generation, &session.state).await;
@@ -224,7 +228,8 @@ async fn controller_worker(
                     .config
                     .models
                     .iter()
-                    .find(|profile| profile.model == model || profile.name == model)
+                    .find(|profile| profile.name == model)
+                    .or_else(|| state.config.models.iter().find(|profile| profile.model == model))
                     .map(|profile| {
                         (
                             profile.model.clone(),
@@ -260,17 +265,16 @@ async fn controller_worker(
                             message_count: session.message_count,
                         })
                         .collect();
-                    if crate::config::session_has_content(&state.history)
-                        && !snapshot
+                    if crate::config::session_has_content(&state.history) {
+                        snapshot
                             .sessions
-                            .iter()
-                            .any(|choice| choice.id == state.active_session_id)
-                    {
+                            .retain(|choice| choice.id != state.active_session_id);
                         snapshot.sessions.insert(
                             0,
                             SessionChoice {
                                 id: state.active_session_id.clone(),
-                                title: crate::config::session_title(&state.history),
+                                title: crate::config::load_session_title(&state.active_session_id)
+                                    .unwrap_or_else(|| crate::config::session_title(&state.history)),
                                 when: state
                                     .history
                                     .first()
@@ -325,6 +329,131 @@ async fn controller_worker(
     }
     if let Some(session) = active {
         retire_session(session, &updates).await;
+    }
+}
+
+async fn run_native_slash(
+    command: super::native_commands::NativeSlashCommand,
+    session: &mut ActiveSession,
+    generation: &mut u64,
+    updates: &mpsc::UnboundedSender<ControllerEvent>,
+) {
+    use super::native_commands::{HELP, NativeSlashCommand};
+
+    match command {
+        NativeSlashCommand::New | NativeSlashCommand::Clear => {
+            if session.turn_task.is_some() {
+                cancel_active_turn_inner(session, updates, false).await;
+            }
+            let mut state = session.state.lock().await;
+            if let Err(error) =
+                crate::app::session_controller::SessionController::default().start_fresh(&mut state)
+            {
+                send_error(
+                    updates,
+                    session.generation,
+                    ControllerError::Session(error.to_string()),
+                );
+                return;
+            }
+            *generation += 1;
+            session.generation = *generation;
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Cancel => {
+            if session.turn_task.is_some() {
+                cancel_active_turn(session, updates).await;
+            } else {
+                let mut state = session.state.lock().await;
+                state.set_notice("No active turn to stop.");
+                send_snapshot_locked(updates, session.generation, &state);
+            }
+        }
+        NativeSlashCommand::Help => {
+            let mut state = session.state.lock().await;
+            state.set_notice(HELP);
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Model(None) => {
+            let mut state = session.state.lock().await;
+            let choices = state
+                .config
+                .models
+                .iter()
+                .map(|profile| {
+                    let selected =
+                        if profile.model == state.model_name && profile.url == state.api_base_url {
+                            " (current)"
+                        } else {
+                            ""
+                        };
+                    format!("{}{}", profile.name, selected)
+                })
+                .collect::<Vec<_>>();
+            state.set_notice(format!(
+                "Model profiles: {}\nUse /model <profile> to switch.",
+                choices.join(", ")
+            ));
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Model(Some(model)) => {
+            let mut state = session.state.lock().await;
+            if let Some((model_name, api_base_url, profile_name)) = state
+                .config
+                .models
+                .iter()
+                .find(|profile| profile.name == model)
+                .or_else(|| {
+                    state
+                        .config
+                        .models
+                        .iter()
+                        .find(|profile| profile.model == model)
+                })
+                .map(|profile| {
+                    (
+                        profile.model.clone(),
+                        profile.url.clone(),
+                        profile.name.clone(),
+                    )
+                })
+            {
+                state.model_name = model_name;
+                state.api_base_url = api_base_url;
+                crate::config::record_session_settings_for_profile(
+                    &state.active_session_id,
+                    &state.config,
+                    &profile_name,
+                );
+                state.set_notice(format!("Switched to model profile '{profile_name}'."));
+                send_snapshot_locked(updates, session.generation, &state);
+            } else {
+                state.set_notice(format!(
+                    "Unknown model profile: {model}. Use /model to list profiles."
+                ));
+                send_snapshot_locked(updates, session.generation, &state);
+            }
+        }
+        NativeSlashCommand::ChangeTitle(None) => {
+            let mut state = session.state.lock().await;
+            state.set_notice("Usage: /change_title <title>");
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::ChangeTitle(Some(title)) => {
+            let mut state = session.state.lock().await;
+            crate::config::save_session_title(&state.active_session_id, &title);
+            state.invalidate_session_title_cache();
+            state.history_picker_sessions = crate::app::actions::build_session_list(&state);
+            state.set_notice(format!("Chat renamed to '{title}'."));
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Unknown(name) => {
+            let mut state = session.state.lock().await;
+            state.set_notice(format!(
+                "Unknown native command: {name}. Use /help to see available commands."
+            ));
+            send_snapshot_locked(updates, session.generation, &state);
+        }
     }
 }
 

@@ -141,8 +141,10 @@ mod tests {
             23,
             crate::network::ui_adapter::AgentUiEvent::QuestionRequested {
                 prompt: crate::controller::QuestionPrompt {
+                    header: "Question".to_owned(),
                     text: "Choose".to_owned(),
                     options: vec!["One".to_owned(), "Two".to_owned()],
+                    descriptions: vec![],
                     multiple: true,
                 },
             },
@@ -154,8 +156,10 @@ mod tests {
             public.update,
             ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
                 crate::controller::QuestionPrompt {
+                    header: "Question".to_owned(),
                     text: "Choose".to_owned(),
                     options: vec!["One".to_owned(), "Two".to_owned()],
+                    descriptions: vec![],
                     multiple: true,
                 }
             ))
