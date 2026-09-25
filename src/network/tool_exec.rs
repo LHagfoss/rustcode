@@ -315,15 +315,22 @@ pub(crate) async fn confirm_and_execute(
         && let Some(cwd) = get_tool_project_root(name, args)
         && let Some(errors) = run_compiler_check(&cwd, cancel_token).await
     {
-        result.content.push_str("\n\nCompiler errors/warnings:\n");
-        result.content.push_str(&errors);
-        if !errors.starts_with("__BUILD_UNVERIFIED__") {
-            result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-            result.retryable = true;
-        }
+        append_standalone_compiler_result(&mut result, &errors);
     }
 
     (result, diff, user_wait)
+}
+
+fn append_standalone_compiler_result(
+    result: &mut crate::tools::ToolExecutionOutput,
+    compiler_output: &str,
+) {
+    result.content.push_str("\n\nCompiler errors/warnings:\n");
+    result.content.push_str(compiler_output);
+    if !compiler_output.starts_with("__BUILD_UNVERIFIED__") {
+        result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+        result.retryable = true;
+    }
 }
 
 pub(crate) async fn confirm_and_execute_for_call(
