@@ -59,6 +59,7 @@ pub struct TranscriptItem {
     pub role: String,
     pub content: String,
     pub tool_name: Option<String>,
+    pub tool_detail: Option<String>,
     pub tool_success: Option<bool>,
     pub tool_pending: bool,
     pub response_time_ms: Option<u64>,
@@ -111,6 +112,71 @@ impl ControllerSnapshot {
                     format!("{}\n{}", confirmation.path, confirmation.content_preview)
                 },
             });
+        let mut details = std::collections::HashMap::new();
+        let transcript = state
+            .history
+            .iter()
+            .map(|message| {
+                if message.role == "assistant" {
+                    for call in
+                        crate::tools::resolve_tool_calls(message, state.active_tool_protocol())
+                    {
+                        let id = call.call_id.clone().unwrap_or_else(|| {
+                            format!(
+                                "local_{}",
+                                crate::network::tool_exec::stable_arguments_hash(&call.arguments)
+                            )
+                        });
+                        details.insert(
+                            id,
+                            crate::network::ui_adapter::tool_display_detail(
+                                &call.name,
+                                &call.arguments,
+                            ),
+                        );
+                    }
+                }
+                let tool_detail = message.tool_result.as_ref().and_then(|record| {
+                    let id = message
+                        .tool_call_id
+                        .clone()
+                        .unwrap_or_else(|| format!("local_{}", record.arguments_hash));
+                    details
+                        .get(&id)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| {
+                            record.command.as_ref().and_then(|command| {
+                                crate::network::ui_adapter::tool_display_detail(
+                                    "run_command",
+                                    &serde_json::json!({"command": command}),
+                                )
+                            })
+                        })
+                        .or_else(|| {
+                            record.changed_paths.first().map(|path| {
+                                crate::app::activity::sanitize_tool_parameter(path, 120)
+                            })
+                        })
+                });
+                TranscriptItem {
+                    role: message.role.clone(),
+                    content: message.content.clone(),
+                    tool_name: message
+                        .tool_result
+                        .as_ref()
+                        .map(|result| result.tool_name.clone()),
+                    tool_detail,
+                    tool_success: message.tool_result.as_ref().map(|result| result.success),
+                    tool_pending: message
+                        .tool_result
+                        .as_ref()
+                        .is_some_and(|result| result.pending),
+                    response_time_ms: message.response_time_ms,
+                    thought_time_ms: message.thought_time_ms,
+                }
+            })
+            .collect();
         Self {
             generation,
             workspace: state
@@ -138,25 +204,7 @@ impl ControllerSnapshot {
                 })
                 .collect(),
             selected_model: Some(state.model_name.clone()),
-            transcript: state
-                .history
-                .iter()
-                .map(|message| TranscriptItem {
-                    role: message.role.clone(),
-                    content: message.content.clone(),
-                    tool_name: message
-                        .tool_result
-                        .as_ref()
-                        .map(|result| result.tool_name.clone()),
-                    tool_success: message.tool_result.as_ref().map(|result| result.success),
-                    tool_pending: message
-                        .tool_result
-                        .as_ref()
-                        .is_some_and(|result| result.pending),
-                    response_time_ms: message.response_time_ms,
-                    thought_time_ms: message.thought_time_ms,
-                })
-                .collect(),
+            transcript,
             live_response: state.current_response.as_ref().clone(),
             queued_count: state.pending_queue.len(),
             turn_active: matches!(
@@ -177,5 +225,77 @@ impl ControllerSnapshot {
                 }),
             pending_approval,
         }
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::ControllerSnapshot;
+    use crate::app::{AppState, ChatMessage, ToolCallRef, ToolResultRecord};
+
+    #[test]
+    fn saved_tool_details_follow_call_ids_not_result_order() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+                ToolCallRef {
+                    id: "read-a".into(),
+                    name: "view_file".into(),
+                    arguments: r#"{"path":"src/a.rs","start_line":3,"end_line":9}"#.into(),
+                },
+                ToolCallRef {
+                    id: "read-b".into(),
+                    name: "view_file".into(),
+                    arguments: r#"{"path":"src/b.rs"}"#.into(),
+                },
+            ]));
+        for id in ["read-b", "read-a"] {
+            state.history.push(
+                ChatMessage::new("tool", "contents")
+                    .answering(Some(id.into()))
+                    .with_tool_result(ToolResultRecord {
+                        tool_name: "view_file".into(),
+                        success: true,
+                        ..Default::default()
+                    }),
+            );
+        }
+        let snapshot = ControllerSnapshot::from_state(1, &state);
+        let details = snapshot
+            .transcript
+            .iter()
+            .filter(|item| item.role == "tool")
+            .map(|item| item.tool_detail.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(details, [Some("src/b.rs"), Some("src/a.rs (lines 3-9)")]);
+    }
+
+    #[test]
+    fn legacy_command_details_are_bounded_and_read_results_are_not_guessed() {
+        let mut state = AppState::new();
+        state.history.push(
+            ChatMessage::new("tool", "output").with_tool_result(ToolResultRecord {
+                tool_name: "run_command".into(),
+                command: Some("cargo check\n--tests".into()),
+                success: true,
+                ..Default::default()
+            }),
+        );
+        state.history.push(
+            ChatMessage::new("tool", "private file contents").with_tool_result(ToolResultRecord {
+                tool_name: "view_file".into(),
+                success: true,
+                ..Default::default()
+            }),
+        );
+        let snapshot = ControllerSnapshot::from_state(1, &state);
+        let tools = snapshot
+            .transcript
+            .iter()
+            .filter(|item| item.role == "tool")
+            .collect::<Vec<_>>();
+        assert_eq!(tools[0].tool_detail.as_deref(), Some("cargo check --tests"));
+        assert_eq!(tools[1].tool_detail, None);
     }
 }

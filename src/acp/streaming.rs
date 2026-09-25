@@ -107,7 +107,7 @@ impl AcpEventStream {
     pub(crate) fn updates(&mut self, event: crate::network::AgentUiEvent) -> Vec<SessionUpdate> {
         match event {
             crate::network::AgentUiEvent::TextDelta { text } => self.process_text_delta(text),
-            crate::network::AgentUiEvent::ToolStarted { name, id } => {
+            crate::network::AgentUiEvent::ToolStarted { name, id, .. } => {
                 let mut updates = self.flush();
                 updates.push(SessionUpdate::ToolCall(
                     AcpToolCall::new(id, name).status(ToolCallStatus::InProgress),

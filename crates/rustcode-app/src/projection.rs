@@ -15,6 +15,7 @@ pub enum ProjectionRow {
     },
     Tool {
         name: String,
+        detail: Option<String>,
         content: String,
         status: ToolStatus,
         elapsed_ms: Option<u64>,
@@ -31,12 +32,29 @@ pub enum ToolStatus {
 }
 
 pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<ProjectionRow> {
+    let mut cancellation_shown = false;
     let mut rows = transcript
         .iter()
-        .map(|item| {
-            if let Some(name) = item.tool_name.as_ref() {
+        .filter_map(|item| {
+            if item.role == "user" {
+                cancellation_shown = false;
+            }
+            if item.role == "system"
+                && matches!(
+                    item.content.trim(),
+                    "Request cancelled by user" | "[harness: turn stopped — cancelled]"
+                )
+            {
+                if cancellation_shown {
+                    return None;
+                }
+                cancellation_shown = true;
+                return Some(ProjectionRow::System("Stopped by you".to_owned()));
+            }
+            Some(if let Some(name) = item.tool_name.as_ref() {
                 ProjectionRow::Tool {
                     name: name.clone(),
+                    detail: item.tool_detail.clone(),
                     content: item.content.clone(),
                     status: if item.tool_pending {
                         ToolStatus::Pending
@@ -57,7 +75,7 @@ pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<P
                     },
                     _ => ProjectionRow::System(item.content.clone()),
                 }
-            }
+            })
         })
         .collect::<Vec<_>>();
 
@@ -200,12 +218,13 @@ impl ChatViewState {
                     }
                 }
             }
-            TurnUpdate::ToolStarted { id, name } => {
+            TurnUpdate::ToolStarted { id, name, detail } => {
                 self.finish_thinking();
                 self.turn_active = true;
                 let row = self.stream_rows.len();
                 self.stream_rows.push(ProjectionRow::Tool {
                     name,
+                    detail,
                     content: String::new(),
                     status: ToolStatus::Running,
                     elapsed_ms: None,
@@ -367,6 +386,7 @@ mod tests {
             role: "user".to_owned(),
             content: content.to_owned(),
             tool_name: None,
+            tool_detail: None,
             tool_success: None,
             tool_pending: false,
             response_time_ms: None,
@@ -379,6 +399,7 @@ mod tests {
             role: "assistant".to_owned(),
             content: content.to_owned(),
             tool_name: None,
+            tool_detail: None,
             tool_success: None,
             tool_pending: false,
             response_time_ms: None,
@@ -391,11 +412,102 @@ mod tests {
             role: "tool".to_owned(),
             content: content.to_owned(),
             tool_name: Some(name.to_owned()),
+            tool_detail: None,
             tool_success: Some(true),
             tool_pending: false,
             response_time_ms: None,
             thought_time_ms: None,
         }
+    }
+
+    fn system(content: &str) -> TranscriptItem {
+        TranscriptItem {
+            role: "system".into(),
+            ..assistant(content)
+        }
+    }
+
+    #[test]
+    fn cancellation_notices_collapse_per_turn_without_changing_history() {
+        let transcript = vec![
+            user("first"),
+            system("Request cancelled by user"),
+            system("[harness: turn stopped — cancelled]"),
+            user("second"),
+            system("[harness: turn stopped — cancelled]"),
+            system("Request cancelled by user"),
+        ];
+        let original = transcript.clone();
+        assert_eq!(
+            project_rows(&transcript, ""),
+            vec![
+                ProjectionRow::User("first".into()),
+                ProjectionRow::System("Stopped by you".into()),
+                ProjectionRow::User("second".into()),
+                ProjectionRow::System("Stopped by you".into()),
+            ]
+        );
+        assert_eq!(transcript, original);
+    }
+
+    #[test]
+    fn cancellation_projection_preserves_other_errors_and_quoted_markers() {
+        let budget = "[harness: stopped after 10 tool round(s) — budget exhausted]";
+        let error = "Error from LLM Provider: timeout";
+        let marker = "[harness: turn stopped — cancelled]";
+        assert_eq!(
+            project_rows(
+                &[
+                    user(marker),
+                    assistant(marker),
+                    system("Request cancelled by user"),
+                    system(error),
+                    system(marker),
+                    system(budget),
+                    system("[harness: turn stopped — dependency unavailable]"),
+                ],
+                ""
+            ),
+            vec![
+                ProjectionRow::User(marker.into()),
+                ProjectionRow::Assistant {
+                    content: marker.into(),
+                    response_time_ms: None,
+                    thought_time_ms: None
+                },
+                ProjectionRow::System("Stopped by you".into()),
+                ProjectionRow::System(error.into()),
+                ProjectionRow::System(budget.into()),
+                ProjectionRow::System("[harness: turn stopped — dependency unavailable]".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_context_survives_completion_and_saved_projection() {
+        let detail = Some("src/main.rs".to_owned());
+        let mut view = ChatViewState::default();
+        view.apply_turn_update(TurnUpdate::ToolStarted {
+            id: "read".into(),
+            name: "view_file".into(),
+            detail: detail.clone(),
+        });
+        view.apply_turn_update(TurnUpdate::ToolFinished {
+            id: "read".into(),
+            content: "file contents".into(),
+            success: true,
+            pending: false,
+        });
+        assert!(
+            matches!(&view.stream_rows()[0], ProjectionRow::Tool { detail: actual, status: ToolStatus::Completed, .. } if actual == &detail)
+        );
+        let saved = TranscriptItem {
+            tool_detail: detail.clone(),
+            ..tool("file contents", "view_file")
+        };
+        assert!(
+            matches!(&project_rows(&[saved], "")[0], ProjectionRow::Tool { detail: actual, .. } if actual == &detail)
+        );
     }
 
     #[test]
@@ -436,6 +548,7 @@ mod tests {
                 ProjectionRow::User("Run".to_owned()),
                 ProjectionRow::Tool {
                     name: "run_command".to_owned(),
+                    detail: None,
                     content: "done".to_owned(),
                     status: ToolStatus::Completed,
                     elapsed_ms: None,
@@ -526,6 +639,7 @@ mod tests {
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolStarted {
             id: "tool-1".to_owned(),
             name: "read_file".to_owned(),
+            detail: None,
         }));
 
         assert!(view.turn_active());
@@ -541,6 +655,7 @@ mod tests {
                 },
                 ProjectionRow::Tool {
                     name: "read_file".to_owned(),
+                    detail: None,
                     content: String::new(),
                     status: ToolStatus::Running,
                     elapsed_ms: None,
@@ -560,7 +675,7 @@ mod tests {
         assert_eq!(view.stream_rows().len(), 4);
         assert!(matches!(
             &view.stream_rows()[2],
-            ProjectionRow::Tool { name, content, status: ToolStatus::Completed, elapsed_ms: Some(_) }
+            ProjectionRow::Tool { name, content, status: ToolStatus::Completed, elapsed_ms: Some(_), .. }
                 if name == "read_file" && content == "file contents"
         ));
         assert_eq!(
@@ -609,6 +724,7 @@ mod tests {
             view.apply_turn_update(TurnUpdate::ToolStarted {
                 id: id.into(),
                 name: "view_file".into(),
+                detail: None,
             });
         }
         let mut active = snapshot(true);
@@ -640,6 +756,7 @@ mod tests {
         view.apply_turn_update(TurnUpdate::ToolStarted {
             id: "read".into(),
             name: "view_file".into(),
+            detail: None,
         });
         assert!(view.thinking_started_at.is_none());
         assert!(
@@ -657,6 +774,7 @@ mod tests {
         view.apply_turn_update(TurnUpdate::ToolStarted {
             id: "read".into(),
             name: "view_file".into(),
+            detail: None,
         });
         assert_eq!(view.thought_elapsed_ms(), None);
         view.apply_turn_update(TurnUpdate::TextDelta("<think>Second step".into()));
