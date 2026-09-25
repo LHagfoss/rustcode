@@ -12,7 +12,7 @@ use gpui_kit::{
         TitleBar,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{Enter, Input, InputEvent, InputState, Position, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         message_scroller::{MessageScroller, MessageScrollerState},
         scroll::ScrollableElement,
@@ -53,6 +53,15 @@ const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
     - TITLE_BAR_LEFT_PADDING
     - SIDEBAR_TOGGLE_SIZE
     - TITLE_BAR_CHILD_GAP;
+
+fn slash_menu_key_decision(
+    draft: &str,
+    selected: usize,
+    dismissed: bool,
+    key: &str,
+) -> crate::slash::SlashInteraction {
+    crate::slash::slash_interaction(draft, selected, dismissed, key)
+}
 
 fn current_branch(project: &Path) -> Option<String> {
     let output = ProcessCommand::new("git")
@@ -613,24 +622,25 @@ impl AppView {
         .detach();
     }
 
-    fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.pending_prompt.is_some()
             || self.starting_new_session
             || !self.chat_state.composer_enabled()
         {
-            return;
+            return false;
         }
         let draft = self.composer.read(cx).value().to_string();
-        if !self.slash_picker_dismissed
-            && let Some(completed) = crate::slash::complete_selection(&draft, self.slash_selection)
-        {
-            self.composer
-                .update(cx, |state, cx| state.set_value(&completed, window, cx));
-            self.composer
-                .update(cx, |state, cx| state.focus(window, cx));
-            self.slash_picker_dismissed = true;
-            cx.notify();
-            return;
+        if let crate::slash::SlashInteraction::Complete {
+            value,
+            cursor_offset,
+        } = slash_menu_key_decision(
+            &draft,
+            self.slash_selection,
+            self.slash_picker_dismissed,
+            "Enter",
+        ) {
+            self.apply_slash_completion(value, cursor_offset, window, cx);
+            return true;
         }
         let answering_question = self.chat_state.pending_question().or_else(|| {
             self.navigation
@@ -645,7 +655,7 @@ impl AppView {
             crate::image_attachment::prompt_with_images(&draft, &self.pending_images)
         };
         if !can_submit(&text) {
-            return;
+            return false;
         }
         let command = if let Some(question) = answering_question {
             crate::projection::answer_for_question(question, None, &text)
@@ -683,6 +693,23 @@ impl AppView {
             }
             cx.notify();
         }
+        false
+    }
+
+    fn apply_slash_completion(
+        &mut self,
+        value: String,
+        cursor_offset: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer.update(cx, |state, cx| {
+            state.set_value(&value, window, cx);
+            state.set_cursor_position(Position::new(0, cursor_offset as u32), window, cx);
+            state.focus(window, cx);
+        });
+        self.slash_picker_dismissed = true;
+        cx.notify();
     }
 
     fn send_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
@@ -2245,41 +2272,32 @@ impl Render for AppView {
             .child(
                 div()
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        let suggestions =
-                            crate::slash::suggestions(&this.composer.read(cx).value());
-                        if suggestions.is_empty() || this.slash_picker_dismissed {
-                            return;
-                        }
-                        match event.keystroke.key.as_str() {
-                            "up" => {
-                                this.slash_selection = crate::slash::move_selection(
-                                    this.slash_selection,
-                                    suggestions.len(),
-                                    false,
-                                );
+                        let draft = this.composer.read(cx).value().to_string();
+                        match slash_menu_key_decision(
+                            &draft,
+                            this.slash_selection,
+                            this.slash_picker_dismissed,
+                            &event.keystroke.key,
+                        ) {
+                            crate::slash::SlashInteraction::Move(index) => {
+                                this.slash_selection = index;
                                 cx.stop_propagation();
                                 cx.notify();
                             }
-                            "down" => {
-                                this.slash_selection = crate::slash::move_selection(
-                                    this.slash_selection,
-                                    suggestions.len(),
-                                    true,
-                                );
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
-                            "escape" => {
+                            crate::slash::SlashInteraction::Dismiss => {
                                 this.slash_picker_dismissed = true;
                                 cx.stop_propagation();
                                 cx.notify();
                             }
-                            _ => {}
+                            crate::slash::SlashInteraction::Complete { .. }
+                            | crate::slash::SlashInteraction::Ignore => {}
                         }
                     }))
                     .on_action(cx.listener(|this, action: &Enter, window, cx| {
                         if !action.shift && !action.secondary {
-                            this.submit_composer(window, cx);
+                            if this.submit_composer(window, cx) {
+                                cx.stop_propagation();
+                            }
                         }
                     }))
                     .child(
@@ -2287,6 +2305,15 @@ impl Render for AppView {
                             .appearance(false)
                             .bordered(false)
                             .disabled(!composer_enabled)
+                            .when(
+                                crate::slash::is_recognized_command(
+                                    &self.composer.read(cx).value(),
+                                ),
+                                |this| {
+                                    this.text_color(rgb(Palette::COMMAND_ACCENT))
+                                        .font_weight(gpui_kit::FontWeight::BOLD)
+                                },
+                            )
                             .on_paste(move |item, _, cx| {
                                 if pending_question
                                     && crate::image_attachment::contains_images(item)
@@ -2421,7 +2448,7 @@ impl Render for AppView {
                                 })
                                 .disabled(!send_enabled)
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.submit_composer(window, cx)
+                                    this.submit_composer(window, cx);
                                 })),
                         )
                     }),
@@ -2483,11 +2510,13 @@ impl Render for AppView {
                                     .border_1()
                                     .border_color(rgb(Palette::BORDER_STRONG))
                                     .bg(rgb(Palette::SURFACE_ELEVATED))
+                                    .max_h(px(300.))
                                     .children(slash_suggestions.into_iter().enumerate().map(
                                         |(index, suggestion)| {
                                             let completion =
                                                 crate::slash::complete(suggestion.name);
                                             let view = cx.entity().downgrade();
+                                            let hover_view = view.clone();
                                             div()
                                                 .id(format!("slash-{}", suggestion.name))
                                                 .w_full()
@@ -2502,6 +2531,15 @@ impl Render for AppView {
                                                 })
                                                 .cursor_pointer()
                                                 .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
+                                                .on_hover(move |hovered, _, cx| {
+                                                    if !*hovered {
+                                                        return;
+                                                    }
+                                                    let _ = hover_view.update(cx, |this, cx| {
+                                                        this.slash_selection = index;
+                                                        cx.notify();
+                                                    });
+                                                })
                                                 .child(
                                                     div()
                                                         .min_w(px(112.))
@@ -2516,16 +2554,14 @@ impl Render for AppView {
                                                 )
                                                 .on_click(move |_, window, cx| {
                                                     let _ = view.update(cx, |this, cx| {
-                                                        this.composer.update(cx, |state, cx| {
-                                                            state.set_value(
-                                                                &completion,
-                                                                window,
-                                                                cx,
-                                                            );
-                                                            state.focus(window, cx);
-                                                        });
-                                                        this.slash_picker_dismissed = true;
-                                                        cx.notify();
+                                                        let cursor_offset =
+                                                            completion.chars().count();
+                                                        this.apply_slash_completion(
+                                                            completion.clone(),
+                                                            cursor_offset,
+                                                            window,
+                                                            cx,
+                                                        );
                                                     });
                                                 })
                                         },
@@ -2612,8 +2648,21 @@ mod tests {
 
     use super::{
         AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
-        SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen, turn_segments,
+        SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen,
+        slash_menu_key_decision, turn_segments,
     };
+
+    #[test]
+    fn composer_routes_gpui_arrow_names_to_slash_navigation() {
+        assert_eq!(
+            slash_menu_key_decision("/", 0, false, "ArrowDown"),
+            crate::slash::SlashInteraction::Move(1)
+        );
+        assert_eq!(
+            slash_menu_key_decision("ordinary text", 0, false, "ArrowDown"),
+            crate::slash::SlashInteraction::Ignore
+        );
+    }
 
     #[test]
     fn settings_destination_returns_to_chat_without_replacing_the_active_session() {
