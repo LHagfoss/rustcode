@@ -22,6 +22,9 @@ use std::{
     time::Duration,
 };
 
+// A descriptor marked close-on-exec can still be inherited between fork and exec.
+const START_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonRegistration {
     pub pid: u32,
@@ -208,12 +211,30 @@ impl DaemonLifecycle {
                 continue;
             }
             if error.kind() == std::io::ErrorKind::WouldBlock {
-                bail!("daemon lock {} is busy: {error}", lock_path.display());
+                return Err(error)
+                    .with_context(|| format!("daemon lock {} is busy", lock_path.display()));
             }
             return Err(error)
                 .with_context(|| format!("failed to acquire daemon lock {}", lock_path.display()));
         }
         Ok(file)
+    }
+
+    async fn start_lock(&self) -> Result<File> {
+        let deadline = tokio::time::Instant::now() + START_LOCK_WAIT_TIMEOUT;
+        loop {
+            match self.lock("start.lock") {
+                Ok(lock) => return Ok(lock),
+                Err(error) if is_lock_busy(&error) => {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
+                        return Err(error);
+                    }
+                    tokio::time::sleep((deadline - now).min(Duration::from_millis(10))).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     fn registration(&self) -> Result<Option<DaemonRegistration>> {
@@ -323,7 +344,7 @@ impl DaemonLifecycle {
     /// Spawn an explicitly constructed foreground command (future CLI: `daemon run`).
     /// No shell interpolation. The caller supplies config-root arguments/environment.
     pub async fn start(&self, mut command: tokio::process::Command) -> Result<DaemonStatus> {
-        let _start_lock = self.lock("start.lock")?;
+        let _start_lock = self.start_lock().await?;
         if let Some(status) = self.status().await? {
             return Ok(status);
         }
@@ -368,6 +389,14 @@ impl DaemonLifecycle {
     }
 }
 
+fn is_lock_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+    })
+}
+
 struct StartingChild(Option<tokio::process::Child>);
 impl Drop for StartingChild {
     fn drop(&mut self) {
@@ -389,7 +418,52 @@ pub(crate) fn remove_if_exists(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::daemon::{client::DaemonClient, protocol::DaemonRequest};
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::{fd::RawFd, unix::fs::PermissionsExt};
+
+    fn fork_waiting_with_lock(lock_fd: RawFd) -> (libc::pid_t, libc::c_int) {
+        let mut release_pipe = [0; 2];
+        // SAFETY: release_pipe points to two writable integers.
+        assert_eq!(unsafe { libc::pipe(release_pipe.as_mut_ptr()) }, 0);
+
+        // SAFETY: the child only uses async-signal-safe close/read/_exit calls.
+        let child = unsafe { libc::fork() };
+        assert!(
+            child >= 0,
+            "fork failed: {}",
+            std::io::Error::last_os_error()
+        );
+        if child == 0 {
+            // SAFETY: these are valid descriptors inherited from the parent.
+            unsafe {
+                libc::close(release_pipe[1]);
+                let mut release = 0u8;
+                let read_result = libc::read(release_pipe[0], (&mut release as *mut u8).cast(), 1);
+                libc::close(lock_fd);
+                libc::close(release_pipe[0]);
+                libc::_exit(if read_result == 1 && release == 1 {
+                    0
+                } else {
+                    1
+                });
+            }
+        }
+
+        // SAFETY: the parent closes its copy of the pipe's read end.
+        unsafe { libc::close(release_pipe[0]) };
+        (child, release_pipe[1])
+    }
+
+    fn release_forked_lock(child: libc::pid_t, release_fd: libc::c_int) {
+        // SAFETY: release the child and reap it before assertions can unwind.
+        unsafe {
+            assert_eq!(libc::write(release_fd, [1u8].as_ptr().cast(), 1), 1);
+            libc::close(release_fd);
+            let mut status = 0;
+            assert_eq!(libc::waitpid(child, &mut status, 0), child);
+            assert!(libc::WIFEXITED(status));
+            assert_eq!(libc::WEXITSTATUS(status), 0);
+        }
+    }
 
     #[tokio::test]
     async fn live_status_stop_and_exclusive_ownership() {
@@ -428,8 +502,23 @@ mod tests {
         assert!(!registration.is_live().unwrap());
         assert!(lifecycle.stop().await.unwrap().is_none());
         assert!(!lifecycle.registration_path().exists());
-        let server = lifecycle.bind().unwrap();
-        drop(server);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match lifecycle.bind() {
+                Ok(server) => {
+                    drop(server);
+                    break;
+                }
+                Err(error) if is_lock_busy(&error) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "owner lock not released after stale registration cleanup: {error:#}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => panic!("unexpected bind error: {error:#}"),
+            }
+        }
         assert!(!lifecycle.socket_path().exists());
     }
 
@@ -459,6 +548,60 @@ mod tests {
         let error = lifecycle.lock("start.lock").unwrap_err();
         assert!(error.to_string().contains("start.lock"), "{error:#}");
         assert!(error.to_string().contains("busy"), "{error:#}");
+    }
+
+    #[test]
+    fn inherited_lock_descriptor_keeps_start_lock_busy_until_child_closes_it() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let lifecycle = DaemonLifecycle::new(dir.path());
+        let held_lock = lifecycle.lock("start.lock").unwrap();
+        let (child, release_fd) = fork_waiting_with_lock(held_lock.as_raw_fd());
+        drop(held_lock);
+        let busy = lifecycle.lock("start.lock").unwrap_err();
+
+        release_forked_lock(child, release_fd);
+        assert!(is_lock_busy(&busy));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match lifecycle.lock("start.lock") {
+                Ok(lock) => {
+                    drop(lock);
+                    break;
+                }
+                Err(error) if is_lock_busy(&error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "inherited lock descriptors did not close: {error:#}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("unexpected lock error: {error:#}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn start_retries_transient_inherited_start_lock_contention() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut lifecycle = DaemonLifecycle::new(dir.path());
+        lifecycle.health_timeout = Duration::from_millis(60);
+        let held_lock = lifecycle.lock("start.lock").unwrap();
+        let (child, release_fd) = fork_waiting_with_lock(held_lock.as_raw_fd());
+        drop(held_lock);
+        let start = tokio::spawn(async move {
+            let mut command = tokio::process::Command::new("/usr/bin/tail");
+            command.args(["-f", "/dev/null"]);
+            lifecycle.start(command).await
+        });
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        release_forked_lock(child, release_fd);
+
+        let error = start.await.unwrap().unwrap_err();
+        assert!(
+            error.to_string().contains("did not become healthy"),
+            "unexpected startup error: {error:#}"
+        );
     }
 
     #[tokio::test]
