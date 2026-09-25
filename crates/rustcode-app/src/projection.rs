@@ -961,7 +961,8 @@ mod tests {
                 "This action requires your approval before it can continue.".to_owned(),
                 r#"{"command":"cargo test"}"#.to_owned(),
             ),
-        ]);
+        ])
+        .with_batch_id("controller:7:41".to_owned());
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(batch)));
 
@@ -971,8 +972,9 @@ mod tests {
         assert_eq!(batch.actions[1].action_summary, "run_command · cargo test");
         assert_eq!(
             batch.request_id, "batch:2:8:7:call-a:8:7:call-b",
-            "the decision identity must represent the exact disclosed batch"
+            "the presentation signature should preserve the disclosed action IDs"
         );
+        assert_eq!(batch.batch_id, "controller:7:41");
         assert!(batch.actions[0].description.contains("src/a.txt"));
         assert!(batch.actions[1].description.contains("cargo test"));
     }

@@ -18,7 +18,10 @@ pub enum Command {
     SetAutoApprove(bool),
     SelectModel(String),
     AnswerQuestion(String),
-    Approval(ApprovalChoice),
+    Approval {
+        batch_id: String,
+        choice: ApprovalChoice,
+    },
     Shutdown,
 }
 
@@ -82,6 +85,8 @@ pub struct ApprovalAction {
     pub action_summary: String,
     pub risk_context: String,
     pub description: String,
+    /// Complete literal arguments, retained independently of the preview.
+    pub full_details: String,
 }
 
 impl ApprovalAction {
@@ -98,6 +103,7 @@ impl ApprovalAction {
             action_summary: bounded_preview(&action_summary, 160),
             risk_context,
             description: bounded_preview(&description, 320),
+            full_details: description,
         }
     }
 
@@ -133,8 +139,10 @@ impl ApprovalAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPrompt {
-    /// Exact, stable identity for the complete disclosed batch.
+    /// Presentation signature for the action request IDs in this batch.
     pub request_id: String,
+    /// Controller-owned authorization token for this exact pending batch.
+    pub batch_id: String,
     pub actions: Vec<ApprovalAction>,
 }
 
@@ -149,9 +157,15 @@ impl ApprovalPrompt {
             ));
         }
         Self {
+            batch_id: request_id.clone(),
             request_id,
             actions,
         }
+    }
+
+    pub fn with_batch_id(mut self, batch_id: String) -> Self {
+        self.batch_id = batch_id;
+        self
     }
 }
 
@@ -190,16 +204,28 @@ impl ControllerSnapshot {
             .pending_tool_confirmation
             .as_ref()
             .map(|confirmations| {
-                ApprovalPrompt::new(
-                    confirmations
-                        .iter()
-                        .enumerate()
-                        .map(|(index, confirmation)| {
-                            ApprovalAction::from_confirmation(confirmation, index)
-                                .with_generation(generation)
-                        })
-                        .collect(),
-                )
+                let actions = confirmations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, confirmation)| {
+                        let mut action = ApprovalAction::from_confirmation(confirmation, index);
+                        if let Some(full_details) = state
+                            .pending_approval_details
+                            .as_ref()
+                            .and_then(|details| details.get(index))
+                        {
+                            action.full_details = full_details.clone();
+                        }
+                        action.with_generation(generation)
+                    })
+                    .collect();
+                let prompt = ApprovalPrompt::new(actions);
+                state
+                    .pending_approval_batch_id
+                    .as_ref()
+                    .map_or(prompt.clone(), |batch_id| {
+                        prompt.with_batch_id(batch_id.clone())
+                    })
             });
         let mut details = std::collections::HashMap::new();
         let transcript = state

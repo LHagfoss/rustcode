@@ -838,19 +838,99 @@ async fn controller_approval_resolves_the_existing_response_channel() {
         rememberable_prefix: None,
         forbidden_prefix: None,
     }]);
+    state.pending_approval_batch_id = Some("controller-batch-current".to_owned());
     state.tool_confirmation_response = Some(tx);
     let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
     let mut cancel_token = tokio_util::sync::CancellationToken::new();
 
-    super::worker::apply_approval(&state, &mut cancel_token, super::ApprovalChoice::Approve)
-        .await
-        .expect("pending approval should accept a choice");
+    super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-current",
+        super::ApprovalChoice::Approve,
+    )
+    .await
+    .expect("pending approval should accept a choice");
 
     assert_eq!(
         rx.await.expect("approval response"),
         crate::app::ToolConfirmationResponse::Approve
     );
     assert!(state.lock().await.pending_tool_confirmation.is_none());
+}
+
+#[test]
+fn controller_approval_batch_ids_do_not_reuse_provider_call_ids() {
+    let action = || {
+        super::ApprovalAction::new(
+            "repeated-provider-call".to_owned(),
+            "run_command".to_owned(),
+            "run_command · cargo test".to_owned(),
+            "confirmation required".to_owned(),
+            "cargo test".to_owned(),
+        )
+    };
+    let first =
+        super::ApprovalPrompt::new(vec![action()]).with_batch_id(super::next_approval_batch_id());
+    let replacement =
+        super::ApprovalPrompt::new(vec![action()]).with_batch_id(super::next_approval_batch_id());
+
+    assert_eq!(
+        first.actions[0].request_id,
+        replacement.actions[0].request_id
+    );
+    assert_ne!(first.batch_id, replacement.batch_id);
+}
+
+#[tokio::test]
+async fn stale_approval_batch_id_cannot_resolve_a_replacement_batch() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut app = AppState::new_with_workspace_session(workspace.path(), Some("approval-batches"));
+    app.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("same-provider-call".to_owned()),
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: "preview".to_owned(),
+        content_bytes: 7,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+    app.pending_approval_batch_id = Some("controller-batch-a".to_owned());
+    let (tx_a, rx_a) = tokio::sync::oneshot::channel();
+    app.tool_confirmation_response = Some(tx_a);
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(app));
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    let (tx_b, rx_b) = tokio::sync::oneshot::channel();
+    {
+        let mut state = state.lock().await;
+        state.pending_approval_batch_id = Some("controller-batch-b".to_owned());
+        state.tool_confirmation_response = Some(tx_b);
+    }
+    assert!(rx_a.await.is_err(), "replacing batch A drops its responder");
+
+    let stale = super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-a",
+        super::ApprovalChoice::Approve,
+    )
+    .await;
+    assert!(stale.is_err(), "a delayed decision for A must be rejected");
+    assert!(state.lock().await.pending_tool_confirmation.is_some());
+
+    super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-b",
+        super::ApprovalChoice::Approve,
+    )
+    .await
+    .expect("the current batch identity should resolve");
+    assert_eq!(
+        rx_b.await.expect("approval response"),
+        crate::app::ToolConfirmationResponse::Approve
+    );
 }
 
 #[tokio::test]

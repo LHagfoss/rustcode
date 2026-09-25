@@ -89,12 +89,14 @@ pub(crate) fn from_agent_ui_event(
         AgentUiEvent::TurnRecovered { message } => {
             ControllerUpdate::Error(ControllerError::Provider(message))
         }
-        AgentUiEvent::ApprovalRequested { actions } => {
+        AgentUiEvent::ApprovalRequested { batch_id, actions } => {
             let actions = actions
                 .into_iter()
                 .map(|action| action.with_generation(generation))
                 .collect();
-            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(ApprovalPrompt::new(actions)))
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
+                ApprovalPrompt::new(actions).with_batch_id(batch_id),
+            ))
         }
         AgentUiEvent::QuestionRequested { prompt } => {
             ControllerUpdate::Turn(TurnUpdate::QuestionRequested(prompt))
@@ -111,6 +113,7 @@ mod tests {
     #[test]
     fn approval_requests_are_observable_and_tagged_with_the_generation() {
         let event = crate::network::ui_adapter::AgentUiEvent::ApprovalRequested {
+            batch_id: "controller:13:1".to_owned(),
             actions: vec![super::super::ApprovalAction::new(
                 "call-13".to_owned(),
                 "write_file".to_owned(),
@@ -131,13 +134,15 @@ mod tests {
                     "write_file · src/main.rs".to_owned(),
                     "This action requires your approval before it can continue.".to_owned(),
                     r#"{"path":"src/main.rs"}"#.to_owned(),
-                )]),
+                )])
+                .with_batch_id("controller:13:1".to_owned()),
             ))
         );
         let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approval)) = public.update else {
             unreachable!();
         };
         assert_eq!(approval.request_id, "batch:1:10:13:call-13");
+        assert_eq!(approval.batch_id, "controller:13:1");
         let action = &approval.actions[0];
         assert_eq!(action.request_id, "13:call-13");
         assert_eq!(action.action_summary, "write_file · src/main.rs");
@@ -151,6 +156,7 @@ mod tests {
         let public = from_agent_ui_event(
             7,
             crate::network::ui_adapter::AgentUiEvent::ApprovalRequested {
+                batch_id: "controller:7:1".to_owned(),
                 actions: vec![
                     super::super::ApprovalAction::new(
                         "call-a".to_owned(),

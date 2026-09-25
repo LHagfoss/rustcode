@@ -92,10 +92,24 @@ fn copy_control_stays_in_hover_region(bottom_offset: f32, reserved_height: f32) 
 }
 
 fn approval_in_flight_after_snapshot(
-    current_request_id: Option<String>,
-    pending_request_id: Option<&str>,
+    current_batch_id: Option<String>,
+    pending_batch_id: Option<&str>,
 ) -> Option<String> {
-    current_request_id.filter(|request_id| Some(request_id.as_str()) == pending_request_id)
+    current_batch_id.filter(|batch_id| Some(batch_id.as_str()) == pending_batch_id)
+}
+
+fn toggle_approval_detail(
+    expanded: &mut HashSet<(String, usize)>,
+    batch_id: &str,
+    action_index: usize,
+) -> bool {
+    let key = (batch_id.to_owned(), action_index);
+    if expanded.remove(&key) {
+        false
+    } else {
+        expanded.insert(key);
+        true
+    }
 }
 
 use crate::search::ConversationSearch;
@@ -144,6 +158,7 @@ pub struct AppView {
     focus_search_on_render: bool,
     focus_composer_on_render: bool,
     approval_in_flight: Option<String>,
+    expanded_approval_actions: HashSet<(String, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -273,6 +288,7 @@ impl AppView {
             focus_search_on_render: false,
             focus_composer_on_render: false,
             approval_in_flight: None,
+            expanded_approval_actions: HashSet::new(),
         }
     }
 
@@ -301,25 +317,33 @@ impl AppView {
         {
             self.selected_question_options.clear();
         }
-        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(approval)) =
-            &event.update
-            && self
+        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(
+            approval,
+        )) = &event.update
+        {
+            self.expanded_approval_actions
+                .retain(|(batch_id, _)| batch_id == &approval.batch_id);
+            if self
                 .approval_in_flight
                 .as_ref()
-                .is_some_and(|request_id| approval.request_id != *request_id)
-        {
-            self.approval_in_flight = None;
+                .is_some_and(|batch_id| approval.batch_id != *batch_id)
+            {
+                self.approval_in_flight = None;
+            }
         }
 
         self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
+                let pending_batch_id = snapshot
+                    .pending_approval
+                    .as_ref()
+                    .map(|approval| approval.batch_id.as_str());
+                self.expanded_approval_actions
+                    .retain(|(batch_id, _)| Some(batch_id.as_str()) == pending_batch_id);
                 self.approval_in_flight = approval_in_flight_after_snapshot(
                     self.approval_in_flight.take(),
-                    snapshot
-                        .pending_approval
-                        .as_ref()
-                        .map(|approval| approval.request_id.as_str()),
+                    pending_batch_id,
                 );
                 if !snapshot.sessions.is_empty() {
                     self.recent_sessions = snapshot.sessions.clone();
@@ -1477,15 +1501,16 @@ impl AppView {
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_approval.clone())
         })?;
-        let request_id = prompt.request_id.clone();
+        let batch_id = prompt.batch_id.clone();
         let approve_view = cx.entity().downgrade();
         let deny_view = approve_view.clone();
         let approve_controller = self.backend.controller().clone();
         let deny_controller = approve_controller.clone();
-        let approve_id = request_id.clone();
-        let deny_id = request_id;
+        let approve_id = batch_id.clone();
+        let deny_id = batch_id.clone();
         let in_flight = self.approval_in_flight.is_some();
         let action_count = prompt.actions.len();
+        let detail_view = cx.entity().downgrade();
         let action_list = div()
             .max_h(px(240.))
             .min_h(px(0.))
@@ -1494,6 +1519,12 @@ impl AppView {
             .flex_col()
             .gap_2()
             .children(prompt.actions.iter().enumerate().map(|(index, action)| {
+                let expanded = self
+                    .expanded_approval_actions
+                    .contains(&(batch_id.clone(), index));
+                let detail_id = batch_id.clone();
+                let detail_view = detail_view.clone();
+                let full_details = action.full_details.clone();
                 div()
                     .flex()
                     .flex_col()
@@ -1519,6 +1550,42 @@ impl AppView {
                             .text_color(rgb(Palette::TEXT_SECONDARY))
                             .child(action.description.clone()),
                     )
+                    .child(
+                        Button::new(format!("approval-details-{index}"))
+                            .label(if expanded {
+                                "Hide full details"
+                            } else {
+                                "Show full details"
+                            })
+                            .on_click(move |_, _, cx| {
+                                let _ = detail_view.update(cx, |this, cx| {
+                                    toggle_approval_detail(
+                                        &mut this.expanded_approval_actions,
+                                        &detail_id,
+                                        index,
+                                    );
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .when(expanded, |this| {
+                        this.child(
+                            div()
+                                .max_h(px(180.))
+                                .min_h(px(0.))
+                                .overflow_scrollbar()
+                                .rounded_md()
+                                .bg(rgb(Palette::APP_BACKGROUND))
+                                .p_2()
+                                .child(
+                                    TextView::markdown(
+                                        format!("approval-full-details-{index}"),
+                                        literal_tool_output_markdown(&full_details),
+                                    )
+                                    .selectable(true),
+                                ),
+                        )
+                    })
             }));
         Some(
             div()
@@ -1553,26 +1620,30 @@ impl AppView {
                                 .label(if in_flight { "Denying…" } else { "Deny" })
                                 .disabled(in_flight)
                                 .on_click(move |_, _, cx| {
-                                    let _ =
-                                        deny_view.update(cx, |this, cx| {
-                                            if this.chat_state.pending_approval().is_some_and(
-                                                |pending| pending.request_id == deny_id,
-                                            ) && this.approval_in_flight.is_none()
+                                    let _ = deny_view.update(cx, |this, cx| {
+                                        if this
+                                            .chat_state
+                                            .pending_approval()
+                                            .is_some_and(|pending| pending.batch_id == deny_id)
+                                            && this.approval_in_flight.is_none()
+                                        {
+                                            this.approval_in_flight = Some(deny_id.clone());
+                                            this.chat_state.begin_user_action();
+                                            this.chat_state.set_approval_denied();
+                                            if let Err(error) =
+                                                deny_controller.send(Command::Approval {
+                                                    batch_id: deny_id.clone(),
+                                                    choice: ApprovalChoice::Deny,
+                                                })
                                             {
-                                                this.approval_in_flight = Some(deny_id.clone());
-                                                this.chat_state.begin_user_action();
-                                                this.chat_state.set_approval_denied();
-                                                if let Err(error) = deny_controller
-                                                    .send(Command::Approval(ApprovalChoice::Deny))
-                                                {
-                                                    this.approval_in_flight = None;
-                                                    this.status = Some(format!(
-                                                        "Could not deny approval: {error:?}"
-                                                    ));
-                                                }
-                                                cx.notify();
+                                                this.approval_in_flight = None;
+                                                this.status = Some(format!(
+                                                    "Could not deny approval: {error:?}"
+                                                ));
                                             }
-                                        });
+                                            cx.notify();
+                                        }
+                                    });
                                 }),
                         )
                         .child(
@@ -1584,14 +1655,17 @@ impl AppView {
                                     let _ =
                                         approve_view.update(cx, |this, cx| {
                                             if this.chat_state.pending_approval().is_some_and(
-                                                |pending| pending.request_id == approve_id,
+                                                |pending| pending.batch_id == approve_id,
                                             ) && this.approval_in_flight.is_none()
                                             {
                                                 this.approval_in_flight = Some(approve_id.clone());
                                                 this.chat_state.begin_user_action();
-                                                if let Err(error) = approve_controller.send(
-                                                    Command::Approval(ApprovalChoice::Approve),
-                                                ) {
+                                                if let Err(error) =
+                                                    approve_controller.send(Command::Approval {
+                                                        batch_id: approve_id.clone(),
+                                                        choice: ApprovalChoice::Approve,
+                                                    })
+                                                {
                                                     this.approval_in_flight = None;
                                                     this.status = Some(format!(
                                                         "Could not approve action: {error:?}"
@@ -2928,6 +3002,7 @@ impl Render for AppView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     use rustcode::controller::{
@@ -2976,7 +3051,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_pending_approval_releases_only_the_old_in_flight_request() {
+    fn replacing_pending_approval_releases_only_the_old_in_flight_batch() {
         assert_eq!(
             super::approval_in_flight_after_snapshot(Some("request-a".into()), Some("request-a")),
             Some("request-a".into()),
@@ -2992,6 +3067,17 @@ mod tests {
             None,
             "a resolved approval clears the in-flight state"
         );
+    }
+
+    #[test]
+    fn approval_full_details_expand_per_action_and_remain_batch_scoped() {
+        let mut expanded = HashSet::new();
+        assert!(super::toggle_approval_detail(&mut expanded, "batch-b", 1));
+        assert!(expanded.contains(&("batch-b".to_owned(), 1)));
+        assert!(!expanded.contains(&("batch-b".to_owned(), 0)));
+        assert!(!expanded.contains(&("batch-a".to_owned(), 1)));
+        assert!(!super::toggle_approval_detail(&mut expanded, "batch-b", 1));
+        assert!(expanded.is_empty());
     }
 
     #[test]

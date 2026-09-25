@@ -719,6 +719,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     .then(|| crate::tools::rememberable_command_forbid_prefix_for_call(args))
                     .flatten(),
             }]);
+            s.pending_approval_details = Some(vec![args.to_string()]);
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
             s.request_redraw();

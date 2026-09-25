@@ -57,6 +57,7 @@ impl InteractivePolicy {
         assessments: &crate::tools::ShellAssessmentCache,
     ) -> bool {
         let mut confirmations = Vec::new();
+        let mut confirmation_details = Vec::new();
         let (auto_confirm, task_working_directory, workspace_root, sandbox_mode) = {
             let state = state.lock().await;
             (
@@ -190,6 +191,7 @@ impl InteractivePolicy {
                             })
                             .flatten(),
                     });
+                    confirmation_details.push(call.arguments.to_string());
                 }
             }
         }
@@ -202,6 +204,8 @@ impl InteractivePolicy {
                 s.modal_scroll_row = 0;
                 s.tool_confirmation_selected = 0;
                 s.pending_tool_confirmation = Some(confirmations);
+                s.pending_approval_details = Some(confirmation_details);
+                s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
                 s.tool_confirmation_response = Some(tx);
                 s.status = AppStatus::AwaitingToolConfirmation;
                 s.request_redraw();
@@ -438,6 +442,9 @@ mod tests {
     async fn policy_batch_projects_every_action_before_one_deny_decision() {
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));
         let policy_state = Arc::clone(&state);
+        let decisive_tail = "--approval-review-tail";
+        let long_command = format!("{} {decisive_tail}", "cargo test ".repeat(80));
+        let second_call = long_command.clone();
         let task = tokio::spawn(async move {
             let calls = [
                 ToolCall {
@@ -447,7 +454,7 @@ mod tests {
                 },
                 ToolCall {
                     name: "run_command".to_owned(),
-                    arguments: serde_json::json!({ "command": "cargo fmt --check" }),
+                    arguments: serde_json::json!({ "command": second_call }),
                     call_id: Some("call-b".to_owned()),
                 },
             ];
@@ -480,11 +487,24 @@ mod tests {
             approval.actions[0].action_summary,
             "run_command · cargo test --lib"
         );
-        assert_eq!(
-            approval.actions[1].action_summary,
-            "run_command · cargo fmt --check"
+        assert!(
+            approval.actions[1]
+                .action_summary
+                .starts_with("run_command · cargo test")
         );
+        assert!(approval.actions[1].description.contains("[truncated]"));
+        assert!(approval.actions[1].full_details.contains(decisive_tail));
         assert_eq!(approval.request_id, "batch:2:8:7:call-a:8:7:call-b");
+        assert!(approval.batch_id.starts_with("controller:"));
+        let stable_batch_id = approval.batch_id.clone();
+        assert_eq!(
+            crate::controller::ControllerSnapshot::from_state(7, &*state.lock().await)
+                .pending_approval
+                .expect("approval should remain pending")
+                .batch_id,
+            stable_batch_id,
+            "snapshots must preserve the token while the same batch is in flight"
+        );
 
         state
             .lock()
