@@ -3,6 +3,7 @@ use super::events::ToolResult;
 use super::text::strip_ansi_escapes;
 use crate::platform::{compiler_augmented_path, resolve_bin};
 use regex::Regex;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use tokio_util::sync::CancellationToken;
 
@@ -93,29 +94,12 @@ pub(super) async fn run_compiler_command_outcome(
     if cancel_token.is_cancelled() {
         return record_unverified_event(unverified("was cancelled".to_string()), command);
     }
-    let scratch_container = match tempfile::Builder::new()
-        .prefix("rustcode-compiler-check-")
-        .tempdir()
-    {
+    let (scratch_container, scratch_path) = match create_compiler_scratch(cwd) {
         Ok(scratch) => scratch,
         Err(error) => {
-            return record_unverified_event(
-                unverified(format!(
-                    "could not create checker scratch directory ({error})"
-                )),
-                command,
-            );
+            return record_unverified_event(unverified(error), command);
         }
     };
-    let scratch_path = scratch_container.path().join("sandbox");
-    if let Err(error) = std::fs::create_dir(&scratch_path) {
-        return record_unverified_event(
-            unverified(format!(
-                "could not create checker scratch directory ({error})"
-            )),
-            command,
-        );
-    }
     let writable_roots = [cwd.to_path_buf(), scratch_path.clone()];
     let session_scratch_roots = [scratch_path.clone()];
     let command_for_exec = match crate::tools::exec::sandbox::command(
@@ -163,7 +147,7 @@ pub(super) async fn run_compiler_command_outcome(
         process_group: true,
         inherited_fds: command_for_exec.inherited_fds,
     };
-    let output = tokio::task::spawn_blocking(move || {
+    let output = spawn_compiler_worker(scratch_container, move || {
         rustcode_command::run_with_timeout_cancellable(
             &request,
             None,
@@ -184,6 +168,109 @@ pub(super) async fn run_compiler_command_outcome(
         Err(error) => unverified(format!("could not complete ({error})")),
     };
     record_unverified_event(outcome, command)
+}
+
+fn create_compiler_scratch(cwd: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
+    let workspace = cwd.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve checker workspace '{}' ({error})",
+            cwd.display()
+        )
+    })?;
+    create_compiler_scratch_in(&workspace, &compiler_scratch_bases())
+}
+
+fn compiler_scratch_bases() -> Vec<PathBuf> {
+    let mut bases = vec![std::env::temp_dir()];
+    #[cfg(unix)]
+    bases.extend([PathBuf::from("/tmp"), PathBuf::from("/var/tmp")]);
+    #[cfg(windows)]
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        bases.push(PathBuf::from(system_root).join("Temp"));
+    }
+    bases
+}
+
+fn create_compiler_scratch_in(
+    workspace: &Path,
+    candidate_bases: &[PathBuf],
+) -> Result<(tempfile::TempDir, PathBuf), String> {
+    let workspace = workspace.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve checker workspace '{}' ({error})",
+            workspace.display()
+        )
+    })?;
+    let mut failures = Vec::new();
+    for candidate in candidate_bases {
+        let base = match candidate.canonicalize() {
+            Ok(base) if base.is_dir() => base,
+            Ok(_) => continue,
+            Err(error) => {
+                failures.push(format!("{}: {error}", candidate.display()));
+                continue;
+            }
+        };
+        if base.starts_with(&workspace) {
+            failures.push(format!(
+                "{} is inside the checker workspace",
+                base.display()
+            ));
+            continue;
+        }
+        let container = match tempfile::Builder::new()
+            .prefix("rustcode-compiler-check-")
+            .tempdir_in(&base)
+        {
+            Ok(container) => container,
+            Err(error) => {
+                failures.push(format!("{}: {error}", base.display()));
+                continue;
+            }
+        };
+        let scratch_candidate = container.path().join("sandbox");
+        if let Err(error) = std::fs::create_dir(&scratch_candidate) {
+            failures.push(format!("{}: {error}", scratch_candidate.display()));
+            continue;
+        }
+        let scratch = match scratch_candidate.canonicalize() {
+            Ok(scratch) => scratch,
+            Err(error) => {
+                failures.push(format!("{}: {error}", scratch_candidate.display()));
+                continue;
+            }
+        };
+        if scratch == workspace || scratch.starts_with(&workspace) {
+            failures.push(format!(
+                "{} resolves inside the checker workspace",
+                scratch.display()
+            ));
+            continue;
+        }
+        return Ok((container, scratch));
+    }
+    let detail = if failures.is_empty() {
+        "no usable temporary base was available".to_string()
+    } else {
+        failures.join("; ")
+    };
+    Err(format!(
+        "could not create checker scratch outside workspace '{}': {detail}",
+        workspace.display()
+    ))
+}
+
+fn spawn_compiler_worker<T>(
+    scratch: tempfile::TempDir,
+    worker: impl FnOnce() -> T + Send + 'static,
+) -> tokio::task::JoinHandle<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let _scratch = scratch;
+        worker()
+    })
 }
 
 fn record_unverified_event(outcome: CompilerCheckOutcome, command: &str) -> CompilerCheckOutcome {
@@ -434,6 +521,69 @@ const COMPILER_DIAGNOSTIC_MARKER: &str = "LSP/Compiler errors detected in worksp
 mod compiler_execution_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn compiler_scratch_skips_a_project_local_temp_base() {
+        let project = tempfile::tempdir().unwrap();
+        let local_temp = project.path().join("tmp");
+        std::fs::create_dir(&local_temp).unwrap();
+        let external_temp = tempfile::tempdir().unwrap();
+
+        let (container, scratch_path) = create_compiler_scratch_in(
+            project.path(),
+            &[local_temp, external_temp.path().to_path_buf()],
+        )
+        .unwrap();
+
+        assert!(
+            !scratch_path.starts_with(project.path()),
+            "scratch {} is inside project {}",
+            scratch_path.display(),
+            project.path().display()
+        );
+        assert!(
+            scratch_path.starts_with(external_temp.path().canonicalize().unwrap()),
+            "scratch {} did not use external base {}",
+            scratch_path.display(),
+            external_temp.path().display()
+        );
+        assert_eq!(
+            scratch_path,
+            container.path().join("sandbox").canonicalize().unwrap()
+        );
+        drop(container);
+        assert!(!scratch_path.exists());
+    }
+
+    #[tokio::test]
+    async fn compiler_worker_retains_scratch_until_blocking_work_finishes() {
+        let scratch = tempfile::tempdir().unwrap();
+        let scratch_path = scratch.path().to_path_buf();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = spawn_compiler_worker(scratch, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        tokio::task::spawn_blocking(move || started_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        worker.abort();
+        assert!(
+            scratch_path.exists(),
+            "worker-owned scratch was removed early"
+        );
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while scratch_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("scratch was not removed after blocking work finished");
+    }
 
     #[test]
     fn compiler_output_classification_separates_pass_source_and_infrastructure() {
