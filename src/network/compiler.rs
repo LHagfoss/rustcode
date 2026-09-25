@@ -82,7 +82,7 @@ async fn run_compiler_command(
         .legacy_output(command)
 }
 
-async fn run_compiler_command_outcome(
+pub(super) async fn run_compiler_command_outcome(
     cwd: &std::path::Path,
     command: &str,
     cargo: bool,
@@ -93,14 +93,38 @@ async fn run_compiler_command_outcome(
     if cancel_token.is_cancelled() {
         return record_unverified_event(unverified("was cancelled".to_string()), command);
     }
-    let writable_roots = [cwd.to_path_buf()];
+    let scratch_container = match tempfile::Builder::new()
+        .prefix("rustcode-compiler-check-")
+        .tempdir()
+    {
+        Ok(scratch) => scratch,
+        Err(error) => {
+            return record_unverified_event(
+                unverified(format!(
+                    "could not create checker scratch directory ({error})"
+                )),
+                command,
+            );
+        }
+    };
+    let scratch_path = scratch_container.path().join("sandbox");
+    if let Err(error) = std::fs::create_dir(&scratch_path) {
+        return record_unverified_event(
+            unverified(format!(
+                "could not create checker scratch directory ({error})"
+            )),
+            command,
+        );
+    }
+    let writable_roots = [cwd.to_path_buf(), scratch_path.clone()];
+    let session_scratch_roots = [scratch_path.clone()];
     let command_for_exec = match crate::tools::exec::sandbox::command(
         command,
         crate::tools::exec::sandbox::SandboxPolicy {
             command_cwd: Some(cwd),
             workspace_root: Some(cwd),
             writable_roots: &writable_roots,
-            session_scratch_roots: &[],
+            session_scratch_roots: &session_scratch_roots,
             one_shot_writable_roots: &[],
             write_access: true,
             network_access: false,
@@ -117,7 +141,24 @@ async fn run_compiler_command_outcome(
         status_command: None,
         sandboxed_shell: true,
         cwd: Some(cwd.to_path_buf()),
-        env: vec![("PATH".into(), compiler_augmented_path().into())],
+        env: vec![
+            ("PATH".into(), compiler_augmented_path().into()),
+            ("TMPDIR".into(), scratch_path.clone().into_os_string()),
+            ("TMP".into(), scratch_path.clone().into_os_string()),
+            ("TEMP".into(), scratch_path.clone().into_os_string()),
+            (
+                "XDG_CACHE_HOME".into(),
+                scratch_path.join("cache").into_os_string(),
+            ),
+            (
+                "NPM_CONFIG_CACHE".into(),
+                scratch_path.join("npm-cache").into_os_string(),
+            ),
+            (
+                "BUN_INSTALL_CACHE_DIR".into(),
+                scratch_path.join("bun-cache").into_os_string(),
+            ),
+        ],
         timeout,
         process_group: true,
         inherited_fds: command_for_exec.inherited_fds,

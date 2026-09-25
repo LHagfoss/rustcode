@@ -3611,6 +3611,31 @@ async fn test_run_compiler_check_success() {
     assert!(check.is_none());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn compiler_check_uses_disposable_temp_outside_workspace() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+    use super::compiler::{CompilerCheckOutcome, run_compiler_command_outcome};
+    use std::time::Duration;
+
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+    let token = tokio_util::sync::CancellationToken::new();
+    let outcome = run_compiler_command_outcome(
+        project.path(),
+        "test -f Cargo.toml && touch \"$TMPDIR/checker-cache\" && test \"$TMPDIR\" != \"$PWD\"",
+        false,
+        Duration::from_secs(5),
+        &token,
+    )
+    .await;
+
+    assert_eq!(outcome, CompilerCheckOutcome::Passed);
+    assert!(!project.path().join("checker-cache").exists());
+}
+
 #[test]
 fn proactive_history_budget_leaves_soft_target_headroom() {
     let profile = crate::config::ModelProfile {
