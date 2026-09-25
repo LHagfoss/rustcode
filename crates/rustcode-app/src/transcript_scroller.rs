@@ -291,10 +291,10 @@ impl RenderOnce for TranscriptScroller {
                 // Keep the marker hit areas just inside the scrollbar overlay.
                 .right(px(RAIL_SCROLLBAR_INSET))
                 .w(px(MARKER_HIT_TARGET_WIDTH))
+                .min_h_0()
                 .py_2()
                 .flex()
                 .flex_col()
-                .justify_between()
                 .items_end();
             for marker in 0..markers {
                 let active = current_marker == Some(marker);
@@ -317,7 +317,10 @@ impl RenderOnce for TranscriptScroller {
                             });
                         })
                         .w(px(MARKER_HIT_TARGET_WIDTH))
-                        .h(px(MARKER_HIT_TARGET_HEIGHT))
+                        .h_full()
+                        .max_h(px(MARKER_HIT_TARGET_HEIGHT))
+                        .min_h_0()
+                        .flex_shrink_1()
                         .px_1()
                         .flex()
                         .justify_end()
@@ -329,7 +332,16 @@ impl RenderOnce for TranscriptScroller {
                                 .rounded_full()
                                 .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
                         );
-                rail = rail.child(dash);
+                rail = rail.child(
+                    div()
+                        .w_full()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .justify_end()
+                        .items_center()
+                        .child(dash),
+                );
             }
             root = root.child(rail);
         }
@@ -370,7 +382,22 @@ impl RenderOnce for TranscriptScroller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::AppContext as _;
+    use crate::position_rail::{MAX_MARKERS, RAIL_VERTICAL_INSET};
+    use gpui_kit::{AppContext as _, Render};
+
+    struct RailHarness {
+        state: Entity<TranscriptScrollerState>,
+    }
+
+    impl Render for RailHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            TranscriptScroller::new("conversation", self.state.clone(), |index, _, _| {
+                div().h(px(32.)).child(format!("Row {index}"))
+            })
+            .with_position_rail(100)
+            .size_full()
+        }
+    }
 
     #[gpui_kit::test]
     fn state_preserves_virtual_list_mutation_and_scroll_behavior(
@@ -404,5 +431,46 @@ mod tests {
         assert_eq!(marker_count(2), 2);
         assert_eq!(marker_count(8), 8);
         assert_eq!(marker_count(500), crate::position_rail::MAX_MARKERS);
+    }
+
+    #[gpui_kit::test]
+    fn marker_hit_targets_fit_without_overlapping_scrollbar_at_constrained_heights(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt as _;
+
+        cx.update(gpui_kit::init);
+        let (_, window) = cx.add_window_view(|_, cx| RailHarness {
+            state: cx.new(|cx| TranscriptScrollerState::new(100, cx)),
+        });
+
+        for height in [120., 180., 300.] {
+            window.simulate_resize(gpui_kit::size(px(600.), px(height)));
+            let marker_bounds = window.update(|window, cx| {
+                window.render_frame(cx);
+                (0..marker_count(100))
+                    .map(|marker| {
+                        window
+                            .find((
+                                ElementId::from("conversation"),
+                                format!("position-marker-button-{marker}"),
+                            ))
+                            .bounds()
+                    })
+                    .collect::<Vec<_>>()
+            });
+
+            assert_eq!(marker_bounds.len(), MAX_MARKERS);
+            for bounds in &marker_bounds {
+                assert_eq!(bounds.size.width, px(MARKER_HIT_TARGET_WIDTH));
+                assert!(bounds.size.height <= px(MARKER_HIT_TARGET_HEIGHT));
+                assert!(bounds.origin.y >= px(RAIL_VERTICAL_INSET));
+                assert!(bounds.origin.y + bounds.size.height <= px(height - RAIL_VERTICAL_INSET));
+                assert!(bounds.origin.x + bounds.size.width <= px(600. - RAIL_SCROLLBAR_INSET));
+            }
+            for pair in marker_bounds.windows(2) {
+                assert!(pair[0].origin.y + pair[0].size.height <= pair[1].origin.y);
+            }
+        }
     }
 }
