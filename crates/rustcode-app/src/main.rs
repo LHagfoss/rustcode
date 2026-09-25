@@ -1,5 +1,6 @@
 mod projection;
 mod search;
+mod settings;
 
 mod backend;
 mod highlight;
@@ -16,7 +17,7 @@ use gpui_kit::{
 };
 
 use backend::NativeBackend;
-use view::{AppView, CloseChatSearch, ToggleChatSearch, ToggleSidebar};
+use view::{AppView, CloseChatSearch, OpenSettings, ToggleChatSearch, ToggleSidebar};
 
 fn main() {
     let launch_dir = std::env::args_os()
@@ -36,6 +37,7 @@ fn main() {
             gpui_kit::init(cx);
             cx.bind_keys([
                 KeyBinding::new("cmd-b", ToggleSidebar, None),
+                KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", ToggleChatSearch, None),
                 KeyBinding::new("escape", CloseChatSearch, None),
             ]);
@@ -55,6 +57,20 @@ fn main() {
                         let toggle_view = view.downgrade();
                         cx.on_action(move |_: &ToggleSidebar, cx| {
                             let _ = toggle_view.update(cx, |view, cx| view.toggle_sidebar(cx));
+                        });
+                        let settings_window = window.window_handle();
+                        let settings_view = view.downgrade();
+                        cx.on_action(move |_: &OpenSettings, cx| {
+                            let settings_view = settings_view.clone();
+                            cx.defer(move |cx| {
+                                // Global actions run while the active window is being dispatched.
+                                // Defer until GPUI has returned it to the app before updating it.
+                                let _ = cx.update_window(settings_window, |_, window, cx| {
+                                    let _ = settings_view.update(cx, |view, cx| {
+                                        view.open_settings(window, cx);
+                                    });
+                                });
+                            });
                         });
                         let search_view = view.downgrade();
                         cx.on_action(move |_: &ToggleChatSearch, cx| {
