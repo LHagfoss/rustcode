@@ -14,7 +14,7 @@
 - Work only in the isolated task worktree and keep the user's checkout untouched.
 - Preserve existing settings persistence, session loading, chat streaming, and command semantics.
 - Use semantic palette constants; do not scatter replacement color literals through the view.
-- Settings is an in-app destination opened by the sidebar row and `Cmd+,`; it is not a modal or a separate OS window.
+- Settings is an in-app destination opened by the sidebar row and `Cmd+,`; it is not a modal or a separate OS window. Its dedicated navigation rail replaces the session rail instead of nesting inside it.
 - The General page must remain useful as more settings sections are added later.
 - Slash commands are bold with a high-contrast neutral foreground only while the draft is a recognized command token; normal arguments retain normal composer styling.
 - Arrow navigation and Enter completion must work while the composer retains focus, and completion must leave the caret after the inserted text.
@@ -210,3 +210,17 @@
 - [ ] Add per-action disclosure in the persistent card so a user can inspect complete literal details inside a bounded selectable scroll viewport before applying the batch decision.
 - [ ] Add coverage for repeated provider call IDs, large `run_command` arguments whose decisive tail lies beyond the preview, stale callbacks, current callbacks, and in-flight reconciliation.
 - [ ] Run focused approval tests, `cargo fmt --check`, `cargo check --tests`, and `cargo test`; commit the safety fix.
+
+## Task 10: Match the approved settings shell and copy affordance
+
+**Files:**
+- Modify: `crates/rustcode-app/src/view.rs`
+- Test: `crates/rustcode-app/src/view.rs`
+
+- [ ] Add failing pure layout/navigation tests proving Chat uses the session sidebar while Settings replaces it with one dedicated settings rail and Back to app returns to Chat without losing the active session.
+- [ ] Remove the nested Settings sub-rail from the main pane. Render the dedicated Settings rail in the sidebar width with a compact Back to app action and General selected using the same neutral navigation language as session rows.
+- [ ] Keep the session sidebar bottom Settings row, but make its divider span the rail width flush to both sides while row content retains comfortable inset alignment.
+- [ ] Recompose the General content like the reference native preferences page: one clear General title, section headings, subtle grouped surfaces, compact row dividers, left labels/supporting copy, and right-aligned controls. Do not invent unimplemented categories or preferences.
+- [ ] Move user and assistant copy actions to the left beneath content. Increase the icon slightly and provide a padded/minimum-size transparent click target as hit slop while preserving the shared hover bridge and selectable text.
+- [ ] Add structural tests for left-aligned copy target/minimum hit size and flush divider policy; visually verify Settings and both message types at 900×620 and 1200×800.
+- [ ] Run focused view tests, `cargo fmt --check`, `cargo check -p rustcode-app --tests`, and `cargo test -p rustcode-app`; commit the feedback changes.
