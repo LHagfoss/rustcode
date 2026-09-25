@@ -110,6 +110,66 @@ fn settings_back_icon() -> IconName {
     IconName::ChevronLeft
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserMessageGroupSizing {
+    ShrinkToContent,
+    FillAvailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct UserMessageLayoutPolicy {
+    max_group_width: f32,
+    group_sizing: UserMessageGroupSizing,
+    right_align_group: bool,
+}
+
+fn user_message_layout_policy() -> UserMessageLayoutPolicy {
+    UserMessageLayoutPolicy {
+        max_group_width: 620.,
+        group_sizing: UserMessageGroupSizing::ShrinkToContent,
+        right_align_group: true,
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct UserMessageGeometry {
+    group_left: f32,
+    group_width: f32,
+    bubble_left: f32,
+    footer_left: f32,
+    footer_width: f32,
+    copy_target_left: f32,
+}
+
+#[cfg(test)]
+fn user_message_geometry(available_width: f32, bubble_intrinsic_width: f32) -> UserMessageGeometry {
+    let policy = user_message_layout_policy();
+    let bubble_width = bubble_intrinsic_width
+        .min(policy.max_group_width)
+        .min(available_width);
+    let group_width = match policy.group_sizing {
+        UserMessageGroupSizing::ShrinkToContent => bubble_width,
+        UserMessageGroupSizing::FillAvailable => policy.max_group_width.min(available_width),
+    };
+    let group_left = if policy.right_align_group {
+        available_width - group_width
+    } else {
+        0.
+    };
+    let bubble_left = group_left + group_width - bubble_width;
+    let footer_left = group_left;
+
+    UserMessageGeometry {
+        group_left,
+        group_width,
+        bubble_left,
+        footer_left,
+        footer_width: group_width,
+        copy_target_left: footer_left,
+    }
+}
+
 fn sidebar_footer_divider_inset() -> f32 {
     0.
 }
@@ -1866,14 +1926,16 @@ fn tool_summary(tools: &[ProjectionRow]) -> String {
 fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
     let copy_text = text.clone();
     let parts = crate::image_attachment::user_parts(&text);
+    let layout = user_message_layout_policy();
+    let fill_group_width = layout.group_sizing == UserMessageGroupSizing::FillAvailable;
     div()
         .w_full()
         .flex()
-        .justify_end()
+        .when(layout.right_align_group, |this| this.justify_end())
         .child(
             div()
-                .max_w(px(620.))
-                .w_full()
+                .max_w(px(layout.max_group_width))
+                .when(fill_group_width, |this| this.w_full())
                 .relative()
                 .group("user-message")
                 .flex()
@@ -1939,7 +2001,6 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                         ))
                         .w_full()
                         .flex()
-                        .pl_6()
                         .justify_start()
                         .invisible()
                         .group_hover("user-message", |this| this.visible())
@@ -3154,6 +3215,27 @@ mod tests {
         assert!(layout.hit_height >= 32.);
         assert!(layout.icon_size > 16.);
         assert!(layout.hit_area_is_transparent);
+    }
+
+    #[test]
+    fn user_copy_footer_tracks_the_shrinkwrapped_bubble_in_a_right_aligned_group() {
+        let short = super::user_message_geometry(800., 128.);
+        assert_eq!(short.group_width, 128.);
+        assert_eq!(short.group_left, 672.);
+        assert_eq!(short.bubble_left, short.group_left);
+        assert_eq!(short.footer_left, short.bubble_left);
+        assert_eq!(short.footer_width, short.group_width);
+        assert_eq!(short.copy_target_left, short.bubble_left);
+        assert_eq!(short.group_left + short.group_width, 800.);
+
+        let long = super::user_message_geometry(800., 760.);
+        assert_eq!(long.group_width, 620.);
+        assert_eq!(long.group_left, 180.);
+        assert_eq!(long.bubble_left, long.group_left);
+        assert_eq!(long.footer_left, long.bubble_left);
+        assert_eq!(long.footer_width, long.group_width);
+        assert_eq!(long.copy_target_left, long.bubble_left);
+        assert_eq!(long.group_left + long.group_width, 800.);
     }
 
     #[test]
