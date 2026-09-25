@@ -2,11 +2,60 @@ use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prom
 use super::*;
 
 #[test]
-fn app_state_preserves_the_session_workspace_root() {
+fn app_state_separates_source_from_active_workspace_root() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let state = AppState::new_with_workspace_session(workspace.path(), Some("workspace-root-test"));
 
-    assert_eq!(state.workspace_root.as_deref(), Some(workspace.path()));
+    assert_eq!(state.workspace_root, None);
+    assert_eq!(
+        state.executor_workspace_root().as_deref(),
+        Some(workspace.path())
+    );
+}
+
+#[test]
+fn ordinary_app_state_keeps_the_source_separate_from_active_workspace() {
+    let source = std::env::current_dir().expect("current source workspace");
+    let state = AppState::new();
+
+    assert_eq!(state.workspace_root, None);
+    assert_eq!(
+        state.executor_workspace_root().as_deref(),
+        Some(source.as_path())
+    );
+}
+
+#[test]
+fn active_workspace_overrides_source_and_cleanup_falls_back_to_source() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let isolated = tempfile::tempdir().expect("isolated workspace");
+    let mut state =
+        AppState::new_with_workspace_session(source.path(), Some("workspace-root-test"));
+    state.workspace_root = Some(isolated.path().to_path_buf());
+
+    assert_eq!(
+        state.executor_workspace_root().as_deref(),
+        Some(isolated.path())
+    );
+
+    state.workspace_root = None;
+    assert_eq!(
+        state.executor_workspace_root().as_deref(),
+        Some(source.path())
+    );
+}
+
+#[test]
+fn deleted_active_workspace_does_not_fall_back_to_source() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let deleted = tempfile::tempdir().expect("isolated workspace");
+    let deleted_path = deleted.path().to_path_buf();
+    let mut state =
+        AppState::new_with_workspace_session(source.path(), Some("workspace-root-test"));
+    state.workspace_root = Some(deleted_path.clone());
+    drop(deleted);
+
+    assert_eq!(state.executor_workspace_root(), Some(deleted_path));
 }
 
 #[test]

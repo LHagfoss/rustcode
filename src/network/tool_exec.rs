@@ -429,14 +429,18 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     } else {
         args
     };
-    let (agent_mode, auto_confirm, task_working_directory) = {
+    let (agent_mode, auto_confirm, task_working_directory, execution_workspace_root) = {
         let s = state.lock().await;
+        let execution_workspace_root = workspace_root
+            .clone()
+            .or_else(|| s.executor_workspace_root());
         (
             s.agent_mode,
             s.auto_confirm,
             s.task_working_directory
                 .clone()
-                .or_else(|| s.workspace_root.clone()),
+                .or_else(|| execution_workspace_root.clone()),
+            execution_workspace_root,
         )
     };
     let mut authorization = crate::tools::execution_authorization(
@@ -533,7 +537,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let call_id_owned = call_id.map(str::to_owned);
         let session_id = { state.lock().await.active_session_id.clone() };
         let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
-        let workspace_root_for_task = workspace_root.clone();
+        let workspace_root_for_task = execution_workspace_root.clone();
         let task_working_directory_for_task = task_working_directory.clone();
         let live_key_owned = live_key.map(str::to_owned);
         let cancel_token_for_task = cancel_token.clone();
@@ -801,7 +805,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let call_id_owned = call_id.map(str::to_owned);
                 let session_id = { state.lock().await.active_session_id.clone() };
                 let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
-                let workspace_root_for_task = workspace_root.clone();
+                let workspace_root_for_task = execution_workspace_root.clone();
                 let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
                 let live_key_for_task = live_key.map(str::to_owned);
@@ -1605,7 +1609,8 @@ mod workspace_propagation_tests {
             workspace.path(),
             Some("workspace-propagation-test"),
         )));
-        let active_workspace = state.lock().await.workspace_root.clone();
+        let active_workspace = state.lock().await.executor_workspace_root();
+        assert_eq!(state.lock().await.workspace_root, None);
         let (output, _, _) = confirm_and_execute_for_call_with_assessment(
             &reqwest::Client::new(),
             &state,
@@ -1639,7 +1644,7 @@ mod workspace_propagation_tests {
             workspace.path(),
             Some("approved-workspace-propagation-test"),
         )));
-        let active_workspace = state.lock().await.workspace_root.clone();
+        let active_workspace = state.lock().await.executor_workspace_root();
         let state_for_task = Arc::clone(&state);
         let command_for_task = format!("pwd && touch '{}'", output_path.display());
         let task = tokio::spawn(async move {
@@ -1681,6 +1686,45 @@ mod workspace_propagation_tests {
                 .contains(&workspace.path().display().to_string())
         );
         assert!(output_path.is_file());
+    }
+
+    #[tokio::test]
+    async fn run_command_uses_source_workspace_after_isolated_workspace_cleanup() {
+        let source = tempfile::tempdir().expect("source workspace");
+        let isolated = tempfile::tempdir().expect("isolated workspace");
+        let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+            source.path(),
+            Some("workspace-cleanup-fallback-test"),
+        )));
+        state.lock().await.workspace_root = Some(isolated.path().to_path_buf());
+        // `/workspace cleanup confirm` clears only the active managed boundary.
+        state.lock().await.workspace_root = None;
+        let execution_workspace = state.lock().await.executor_workspace_root();
+        assert_eq!(execution_workspace.as_deref(), Some(source.path()));
+
+        let (output, _, _) = confirm_and_execute_for_call_with_assessment(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "run_command",
+            &serde_json::json!({"command": "pwd"}),
+            "run_command",
+            true,
+            None,
+            None,
+            Some("workspace-cleanup-fallback-call"),
+            None,
+        )
+        .await;
+
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output
+                .content
+                .contains(&source.path().display().to_string()),
+            "command did not fall back to the source workspace: {}",
+            output.content
+        );
     }
 }
 
