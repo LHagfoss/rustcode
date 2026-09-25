@@ -59,6 +59,24 @@ fn deleted_active_workspace_does_not_fall_back_to_source() {
 }
 
 #[test]
+fn request_context_uses_effective_boundary_and_preserves_task_scope() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let active = tempfile::tempdir().expect("active workspace");
+    let task_scope = tempfile::tempdir().expect("task working directory");
+    let mut state = AppState::new_with_workspace_session(source.path(), Some("request-roots"));
+    state.task_working_directory = Some(task_scope.path().to_path_buf());
+
+    let (boundary, scope) = super::request_context_roots(&state);
+    assert_eq!(boundary.as_deref(), Some(source.path()));
+    assert_eq!(scope.as_deref(), Some(task_scope.path()));
+
+    state.workspace_root = Some(active.path().to_path_buf());
+    let (boundary, scope) = super::request_context_roots(&state);
+    assert_eq!(boundary.as_deref(), Some(active.path()));
+    assert_eq!(scope.as_deref(), Some(task_scope.path()));
+}
+
+#[test]
 fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
     let history = vec![
         ChatMessage::new("user", "first task"),

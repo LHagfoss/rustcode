@@ -341,7 +341,10 @@ impl ControllerSnapshot {
         }
         Self {
             generation,
-            workspace: state.effective_workspace_root(),
+            workspace: state
+                .task_working_directory
+                .clone()
+                .or_else(|| state.effective_workspace_root()),
             session_id: Some(state.active_session_id.clone()),
             sessions,
             models: state
