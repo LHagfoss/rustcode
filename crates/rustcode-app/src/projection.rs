@@ -820,6 +820,41 @@ mod tests {
     }
 
     #[test]
+    fn approval_lifecycle_keeps_the_exact_request_until_resolution_snapshot() {
+        let mut view = ChatViewState::default();
+        let approval = ApprovalPrompt {
+            request_id: "9:call-approval".to_owned(),
+            tool_name: "write_file".to_owned(),
+            action_summary: "write_file · src/main.rs".to_owned(),
+            risk_context: "This action requires your approval before it can continue.".to_owned(),
+            description: "src/main.rs".to_owned(),
+        };
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+            approval.clone(),
+        ])));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
+            "progress while waiting".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolStarted {
+            id: "other-tool".to_owned(),
+            name: "read_file".to_owned(),
+            detail: Some("README.md".to_owned()),
+        }));
+        assert_eq!(view.pending_approval(), Some(&approval));
+
+        let mut still_pending = snapshot(true);
+        still_pending.pending_approval = Some(approval.clone());
+        view.apply_update(ControllerUpdate::Snapshot(still_pending));
+        assert_eq!(view.pending_approval(), Some(&approval));
+
+        let mut resolved = snapshot(false);
+        resolved.pending_approval = None;
+        view.apply_update(ControllerUpdate::Snapshot(resolved));
+        assert_eq!(view.pending_approval(), None);
+    }
+
+    #[test]
     fn final_snapshot_does_not_clear_provider_error_before_user_action() {
         let mut view = ChatViewState::default();
         view.apply_update(ControllerUpdate::Error(ControllerError::Provider(
