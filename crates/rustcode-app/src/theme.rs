@@ -76,11 +76,14 @@ mod tests {
             let red = (color >> 16) & 0xff;
             let green = (color >> 8) & 0xff;
             let blue = color & 0xff;
-            red.abs_diff(green) <= 8 && green.abs_diff(blue) <= 8
+            red.abs_diff(green) <= 8 && green.abs_diff(blue) <= 8 && red.abs_diff(blue) <= 8
         };
 
         for (name, color) in [
             ("recognized command", NativePalette::COMMAND_ACCENT),
+            ("selected surface", NativePalette::SURFACE_SELECTED),
+            ("hover surface", NativePalette::SURFACE_HOVER),
+            ("sidebar hover", NativePalette::SIDEBAR_HOVER),
             ("selection", NativePalette::SIDEBAR_SELECTED),
             ("focus", NativePalette::FOCUS_RING),
             ("inline code", NativePalette::INLINE_CODE_BACKGROUND),
