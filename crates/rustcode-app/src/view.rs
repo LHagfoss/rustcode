@@ -59,8 +59,13 @@ fn slash_menu_key_decision(
     selected: usize,
     dismissed: bool,
     key: &str,
+    composer_focused: bool,
 ) -> crate::slash::SlashInteraction {
-    crate::slash::slash_interaction(draft, selected, dismissed, key)
+    if composer_focused {
+        crate::slash::slash_interaction(draft, selected, dismissed, key)
+    } else {
+        crate::slash::SlashInteraction::Ignore
+    }
 }
 
 fn current_branch(project: &Path) -> Option<String> {
@@ -633,7 +638,7 @@ impl AppView {
         if let crate::slash::SlashInteraction::Complete {
             value,
             cursor_offset,
-        } = slash_menu_key_decision(
+        } = crate::slash::slash_interaction(
             &draft,
             self.slash_selection,
             self.slash_picker_dismissed,
@@ -2271,13 +2276,20 @@ impl Render for AppView {
             })
             .child(
                 div()
-                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         let draft = this.composer.read(cx).value().to_string();
+                        let composer_focused = this
+                            .composer
+                            .read(cx)
+                            .presentation()
+                            .focus_handle()
+                            .is_focused(window);
                         match slash_menu_key_decision(
                             &draft,
                             this.slash_selection,
                             this.slash_picker_dismissed,
                             &event.keystroke.key,
+                            composer_focused,
                         ) {
                             crate::slash::SlashInteraction::Move(index) => {
                                 this.slash_selection = index;
@@ -2655,11 +2667,15 @@ mod tests {
     #[test]
     fn composer_routes_gpui_arrow_names_to_slash_navigation() {
         assert_eq!(
-            slash_menu_key_decision("/", 0, false, "ArrowDown"),
+            slash_menu_key_decision("/", 0, false, "ArrowDown", true),
             crate::slash::SlashInteraction::Move(1)
         );
         assert_eq!(
-            slash_menu_key_decision("ordinary text", 0, false, "ArrowDown"),
+            slash_menu_key_decision("ordinary text", 0, false, "ArrowDown", true),
+            crate::slash::SlashInteraction::Ignore
+        );
+        assert_eq!(
+            slash_menu_key_decision("/", 0, false, "ArrowDown", false),
             crate::slash::SlashInteraction::Ignore
         );
     }
