@@ -3620,20 +3620,43 @@ async fn compiler_check_uses_disposable_temp_outside_workspace() {
     use super::compiler::{CompilerCheckOutcome, run_compiler_command_outcome};
     use std::time::Duration;
 
+    const CHILD_WORKSPACE: &str = "RUSTCODE_COMPILER_SCRATCH_TEST_WORKSPACE";
+    if let Some(workspace) = std::env::var_os(CHILD_WORKSPACE) {
+        let workspace = std::path::PathBuf::from(workspace);
+        let command = "test -f Cargo.toml || exit 20; for path in \"$TMPDIR\" \"$TMP\" \"$TEMP\" \"$XDG_CACHE_HOME\" \"$NPM_CONFIG_CACHE\" \"$BUN_INSTALL_CACHE_DIR\"; do case \"$path\" in \"$PWD\"|\"$PWD\"/*) exit 21;; esac; case \"$path\" in \"$TMPDIR\"|\"$TMPDIR\"/*) ;; *) exit 22;; esac; done; touch \"$TMPDIR/checker-cache\"";
+        let outcome = run_compiler_command_outcome(
+            &workspace,
+            command,
+            false,
+            Duration::from_secs(5),
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(outcome, CompilerCheckOutcome::Passed);
+        assert!(!workspace.join("checker-cache").exists());
+        return;
+    }
+
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-    let token = tokio_util::sync::CancellationToken::new();
-    let outcome = run_compiler_command_outcome(
-        project.path(),
-        "test -f Cargo.toml && touch \"$TMPDIR/checker-cache\" && test \"$TMPDIR\" != \"$PWD\"",
-        false,
-        Duration::from_secs(5),
-        &token,
-    )
-    .await;
-
-    assert_eq!(outcome, CompilerCheckOutcome::Passed);
-    assert!(!project.path().join("checker-cache").exists());
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "network::tests::compiler_check_uses_disposable_temp_outside_workspace",
+            "--nocapture",
+        ])
+        .env(CHILD_WORKSPACE, project.path())
+        .env("TMPDIR", project.path())
+        .env("TMP", project.path())
+        .env("TEMP", project.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child checker test failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
