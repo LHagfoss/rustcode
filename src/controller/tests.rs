@@ -70,6 +70,21 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
 async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
     use tokio::io::AsyncWriteExt;
 
+    macro_rules! recv_update {
+        ($updates:expr, $phase:literal) => {
+            tokio::time::timeout(Duration::from_secs(10), $updates.recv())
+                .await
+                .unwrap_or_else(|_| panic!(concat!("timed out waiting for ", $phase, " update")))
+                .unwrap_or_else(|| {
+                    panic!(concat!(
+                        "controller worker stopped before ",
+                        $phase,
+                        " update"
+                    ))
+                })
+        };
+    }
+
     let workspace = tempfile::tempdir().expect("temporary workspace");
     std::fs::create_dir(workspace.path().join(".rustcode")).expect("project config directory");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -114,11 +129,11 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
         &tokio::runtime::Handle::current(),
         workspace.path().to_path_buf(),
     );
-    let _initial = updates.recv().await.expect("initial snapshot");
+    let _initial = recv_update!(&mut updates, "initial snapshot");
     handle
         .send(Command::StartNew(workspace.path().to_path_buf()))
         .expect("start saved session");
-    let started = updates.recv().await.expect("start snapshot");
+    let started = recv_update!(&mut updates, "start snapshot");
     let ControllerUpdate::Snapshot(started) = started.update else {
         panic!("StartNew should return a snapshot");
     };
@@ -126,18 +141,29 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     handle
         .send(Command::Submit("saved prompt".to_owned()))
         .expect("save a conversation turn");
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let saved_completed = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = updates.recv().await {
-            if matches!(event.update, ControllerUpdate::Snapshot(snapshot) if !snapshot.turn_active)
-            {
-                break;
+            if matches!(
+                event.update,
+                ControllerUpdate::Snapshot(snapshot)
+                    if !snapshot.turn_active
+                        && snapshot.transcript.iter().any(|item| {
+                            item.role == "assistant" && item.content.contains("saved answer")
+                        })
+            ) {
+                return true;
             }
         }
+        false
     })
     .await
-    .expect("saved turn completion");
+    .unwrap_or_else(|_| panic!("timed out waiting for saved turn completion"));
+    assert!(
+        saved_completed,
+        "controller worker stopped before saved turn completed"
+    );
     handle.send(Command::ListSessions).expect("list sessions");
-    let listed = updates.recv().await.expect("session list snapshot");
+    let listed = recv_update!(&mut updates, "session list snapshot");
     let ControllerUpdate::Snapshot(listed) = listed.update else {
         panic!("ListSessions should return a snapshot");
     };
@@ -153,12 +179,26 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
             workspace: workspace.path().to_path_buf(),
         })
         .expect("resume saved session");
-    let resumed = loop {
-        let event = updates.recv().await.expect("resumed snapshot");
-        if event.generation > listed.generation {
-            break event;
+    let resumed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = updates
+                .recv()
+                .await
+                .ok_or_else(|| "controller worker stopped before resume completed".to_owned())?;
+            match &event.update {
+                ControllerUpdate::Snapshot(_) if event.generation > listed.generation => {
+                    return Ok(event);
+                }
+                ControllerUpdate::Error(error) => {
+                    return Err(format!("resume failed: {error:?}"));
+                }
+                _ => {}
+            }
         }
-    };
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for resumed session snapshot"))
+    .unwrap_or_else(|error| panic!("{error}"));
     let ControllerUpdate::Snapshot(resumed) = resumed.update else {
         panic!("Resume should return a snapshot");
     };
@@ -179,27 +219,36 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     handle
         .send(Command::Submit("continue saved session".to_owned()))
         .expect("continue resumed session");
-    let mut continued = false;
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let continued = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = updates.recv().await {
             if let ControllerUpdate::Snapshot(snapshot) = event.update
+                && !snapshot.turn_active
                 && snapshot.transcript.iter().any(|item| {
                     item.role == "assistant" && item.content.contains("continued answer")
                 })
             {
-                continued = true;
-                break;
+                return true;
             }
         }
+        false
     })
     .await
-    .expect("continuation completion timeout");
-    assert!(continued, "resumed session should accept a continuation");
-    server.await.expect("mock provider");
+    .unwrap_or_else(|_| panic!("timed out waiting for continuation completion"));
+    assert!(
+        continued,
+        "controller worker stopped before continuation completed"
+    );
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for mock provider server"))
+        .expect("mock provider");
 
     handle.send(Command::Shutdown).expect("shutdown");
     assert!(
-        updates.recv().await.is_none(),
+        tokio::time::timeout(Duration::from_secs(10), updates.recv())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for controller shutdown"))
+            .is_none(),
         "shutdown should finish worker"
     );
     let persisted = crate::config::load_session_history_direct(&saved_id);
