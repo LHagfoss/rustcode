@@ -5,13 +5,13 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, Context, PathPromptOptions, Render, Window, actions,
+    Anchor, Context, Focusable, PathPromptOptions, Render, Window, actions,
     component::{
         Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, Theme, TitleBar,
         WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Enter, InputEvent, Textarea, TextareaState},
+        input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         message_scroller::{MessageScroller, MessageScrollerState},
         scroll::ScrollableElement,
@@ -27,7 +27,15 @@ use rustcode::controller::{
     ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, SessionChoice,
 };
 
-actions!(rustcode_app, [ToggleSidebar, OpenSettings]);
+actions!(
+    rustcode_app,
+    [
+        ToggleSidebar,
+        OpenSettings,
+        ToggleChatSearch,
+        CloseChatSearch
+    ]
+);
 
 fn current_branch(project: &Path) -> Option<String> {
     let output = ProcessCommand::new("git")
@@ -44,6 +52,7 @@ fn current_branch(project: &Path) -> Option<String> {
     (!branch.is_empty()).then(|| branch.to_owned())
 }
 
+use crate::search::ConversationSearch;
 use crate::{
     backend::{
         NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
@@ -62,6 +71,8 @@ pub struct AppView {
     _composer_subscription: gpui_kit::Subscription,
     pending_images: Vec<crate::image_attachment::ImageAttachment>,
     question_answer: gpui_kit::Entity<TextareaState>,
+    search_input: gpui_kit::Entity<InputState>,
+    _search_subscription: gpui_kit::Subscription,
     messages: gpui_kit::Entity<MessageScrollerState>,
     snapshot: Option<ControllerSnapshot>,
     recent_sessions: Vec<SessionChoice>,
@@ -77,6 +88,11 @@ pub struct AppView {
     expanded_thoughts: HashSet<(usize, usize)>,
     expanded_tools: HashSet<(usize, usize)>,
     turn_timer_epoch: u64,
+    chat_search_open: bool,
+    conversation_search: ConversationSearch,
+    reset_search_input_on_render: bool,
+    focus_search_on_render: bool,
+    focus_composer_on_render: bool,
 }
 
 impl AppView {
@@ -278,6 +294,25 @@ impl AppView {
                 .placeholder("Or type your answer")
                 .auto_grow(1, 3)
         });
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversation"));
+        let search_view = cx.entity().downgrade();
+        let search_subscription =
+            cx.subscribe(&search_input, move |_, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let query = input.read(cx).value().to_string();
+                    let search_view = search_view.clone();
+                    cx.defer(move |cx| {
+                        let _ = search_view.update(cx, |view, cx| {
+                            let rows = view.display_rows();
+                            let rows = Self::searchable_rows(&rows);
+                            view.conversation_search.set_query(query, &rows);
+                            view.scroll_to_current_match(cx);
+                            cx.notify();
+                        });
+                    });
+                }
+            });
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
             backend,
@@ -291,6 +326,8 @@ impl AppView {
             _composer_subscription: composer_subscription,
             pending_images: Vec::new(),
             question_answer,
+            search_input,
+            _search_subscription: search_subscription,
             messages,
             snapshot: None,
             recent_sessions: Vec::new(),
@@ -302,6 +339,11 @@ impl AppView {
             starting_new_session: false,
             clear_composer_on_render: false,
             sidebar_collapsed: false,
+            chat_search_open: false,
+            conversation_search: ConversationSearch::default(),
+            reset_search_input_on_render: false,
+            focus_search_on_render: false,
+            focus_composer_on_render: false,
         }
     }
 
@@ -359,6 +401,10 @@ impl AppView {
                     self.expanded_thoughts.clear();
                     self.expanded_tools.clear();
                     self.chat_state.clear_turn_elapsed();
+                    self.chat_search_open = false;
+                    self.conversation_search.clear();
+                    self.reset_search_input_on_render = true;
+                    self.focus_composer_on_render = true;
                     self.starting_new_session = false;
                 }
                 if let Some(workspace) = self
@@ -460,6 +506,123 @@ impl AppView {
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
+    }
+
+    pub(crate) fn toggle_chat_search(&mut self, cx: &mut Context<Self>) {
+        if self.chat_search_open {
+            self.close_chat_search(cx);
+            return;
+        }
+        if self.search_input.read(cx).value().as_ref() != self.conversation_search.query() {
+            self.reset_search_input_on_render = true;
+            self.conversation_search.clear();
+        }
+        self.chat_search_open = true;
+        self.focus_search_on_render = true;
+        cx.notify();
+    }
+
+    pub(crate) fn close_chat_search(&mut self, cx: &mut Context<Self>) {
+        if !self.chat_search_open {
+            return;
+        }
+        self.chat_search_open = false;
+        self.conversation_search.clear();
+        self.reset_search_input_on_render = true;
+        self.focus_composer_on_render = true;
+        cx.notify();
+    }
+
+    fn navigate_search(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if forward {
+            self.conversation_search.next();
+        } else {
+            self.conversation_search.previous();
+        }
+        self.scroll_to_current_match(cx);
+        cx.notify();
+    }
+
+    fn render_chat_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let result = match (
+            self.conversation_search.current_number(),
+            self.conversation_search.count(),
+        ) {
+            (Some(current), count) => format!("{current} of {count}"),
+            (None, 0) if self.conversation_search.query().is_empty() => String::new(),
+            _ => "No matches".to_owned(),
+        };
+        let previous_view = cx.entity().downgrade();
+        let next_view = cx.entity().downgrade();
+        let close_view = cx.entity().downgrade();
+        div()
+            .w_full()
+            .max_w(px(760.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_1()
+            .border_color(rgb(0x3c3e43))
+            .rounded_lg()
+            .bg(rgb(0x282a2d))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .on_action(cx.listener(|this, action: &Enter, _, cx| {
+                        this.navigate_search(!action.shift, cx);
+                    }))
+                    .child(
+                        Input::new(&self.search_input)
+                            .id("conversation-search-input")
+                            .appearance(false)
+                            .bordered(false)
+                            .w_full(),
+                    ),
+            )
+            .child(
+                div()
+                    .min_w(px(74.))
+                    .text_xs()
+                    .text_color(rgb(0xa5a8af))
+                    .child(result),
+            )
+            .child(
+                Button::new("search-previous")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronUp)
+                    .accessibility_label("Previous match")
+                    .tooltip("Previous match (Shift+Enter)")
+                    .on_click(move |_, _, cx| {
+                        let _ =
+                            previous_view.update(cx, |this, cx| this.navigate_search(false, cx));
+                    }),
+            )
+            .child(
+                Button::new("search-next")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronDown)
+                    .accessibility_label("Next match")
+                    .tooltip("Next match (Enter)")
+                    .on_click(move |_, _, cx| {
+                        let _ = next_view.update(cx, |this, cx| this.navigate_search(true, cx));
+                    }),
+            )
+            .child(
+                Button::new("search-close")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .accessibility_label("Close search")
+                    .tooltip("Close search (Esc)")
+                    .on_click(move |_, _, cx| {
+                        let _ = close_view.update(cx, |this, cx| this.close_chat_search(cx));
+                    }),
+            )
     }
 
     fn choose_project_and_start(&mut self, cx: &mut Context<Self>) {
@@ -622,7 +785,7 @@ impl AppView {
         }
     }
 
-    fn render_transcript(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn display_rows(&self) -> Vec<DisplayRow> {
         let mut rows = self
             .snapshot
             .as_ref()
@@ -656,7 +819,50 @@ impl AppView {
         {
             *thought_time_ms = self.chat_state.thought_elapsed_ms();
         }
-        let rows = group_turn_rows(rows);
+        group_turn_rows(rows)
+    }
+
+    fn searchable_rows(rows: &[DisplayRow]) -> Vec<(usize, String)> {
+        rows.iter()
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, row)| match row {
+                DisplayRow::User(text) => crate::image_attachment::user_parts(text)
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        crate::image_attachment::UserPart::Text(text) => Some((index, text)),
+                        crate::image_attachment::UserPart::Image(_) => None,
+                    })
+                    .collect(),
+                DisplayRow::Turn(parts) => parts
+                    .iter()
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        ProjectionRow::Assistant { content, .. } => {
+                            let visible = split_thinking(content).0;
+                            (!visible.trim().is_empty()).then_some((index, visible))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                DisplayRow::System(_) => Vec::new(),
+            })
+            .collect()
+    }
+
+    fn scroll_to_current_match(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.conversation_search.current_row() {
+            self.messages.update(cx, |state, cx| {
+                state.scroll_to_item(row, cx);
+            });
+        }
+    }
+
+    fn render_transcript(
+        &mut self,
+        cx: &mut Context<Self>,
+        rows: Vec<DisplayRow>,
+    ) -> impl IntoElement {
         let streaming_tail = !self.chat_state.stream_rows().is_empty() && !rows.is_empty();
         if self.messages.read(cx).item_count() != rows.len() {
             self.messages
@@ -673,6 +879,7 @@ impl AppView {
         let rendered_rows = rows.clone();
         let expanded_thoughts = self.expanded_thoughts.clone();
         let expanded_tools = self.expanded_tools.clone();
+        let current_match_row = self.conversation_search.current_row();
         let mono_font = Theme::global(cx).mono_font_family.clone();
         // Turn timing lives at the end of the last message instead of a
         // fixed row under the transcript.
@@ -701,7 +908,7 @@ impl AppView {
                 None => div().child("Message unavailable").into_any_element(),
             };
             let is_last = index + 1 == rendered_rows.len();
-            match (&tail_note, is_last) {
+            let element = match (&tail_note, is_last) {
                 (Some(note), true) => div()
                     .child(element)
                     .child(
@@ -713,6 +920,20 @@ impl AppView {
                     )
                     .into_any_element(),
                 _ => element,
+            };
+            if current_match_row == Some(index) {
+                div()
+                    .w_full()
+                    .px_2()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(0xd8b66f))
+                    .bg(rgb(0x292b2e))
+                    .child(element)
+                    .into_any_element()
+            } else {
+                element
             }
         })
         // The row wrapper already insets px_3, so keep the viewport flush:
@@ -1631,6 +1852,21 @@ fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dialogs = Root::render_dialog_layer(window, cx);
+        if self.reset_search_input_on_render {
+            self.search_input
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            self.reset_search_input_on_render = false;
+        }
+        if self.focus_search_on_render {
+            let focus_handle = self.search_input.read(cx).focus_handle(cx);
+            window.on_next_frame(move |window, cx| window.focus(&focus_handle, cx));
+            self.focus_search_on_render = false;
+        }
+        if self.focus_composer_on_render {
+            let focus_handle = self.composer.read(cx).focus_handle(cx);
+            window.on_next_frame(move |window, cx| window.focus(&focus_handle, cx));
+            self.focus_composer_on_render = false;
+        }
         if self.clear_composer_on_render {
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
@@ -1707,7 +1943,21 @@ impl Render for AppView {
             );
 
         let center = if has_session {
-            self.render_transcript(cx).into_any_element()
+            let rows = self.display_rows();
+            self.conversation_search
+                .update_rows(&Self::searchable_rows(&rows));
+            let search_bar = self
+                .chat_search_open
+                .then(|| self.render_chat_search(cx).into_any_element());
+            let transcript = self.render_transcript(cx, rows);
+            div()
+                .size_full()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .when_some(search_bar, |this, bar| this.child(bar))
+                .child(transcript)
+                .into_any_element()
         } else {
             welcome.into_any_element()
         };
