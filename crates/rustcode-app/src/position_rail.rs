@@ -1,10 +1,19 @@
 pub const MAX_MARKERS: usize = 14;
 pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
 pub const MARKER_HIT_TARGET_HEIGHT: f32 = 20.;
-pub const RAIL_SCROLLBAR_INSET: f32 = 9.;
+pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
+pub const RAIL_VERTICAL_INSET: f32 = 8.;
 pub const RAIL_CONTENT_GAP: f32 = 3.;
 pub const RAIL_CONTENT_INSET: f32 =
     MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP;
+
+pub fn marker_slot_height(viewport_height: f32, markers: usize) -> f32 {
+    if markers == 0 {
+        return 0.;
+    }
+    ((viewport_height - 2. * RAIL_VERTICAL_INSET).max(0.) / markers as f32)
+        .min(MARKER_HIT_TARGET_HEIGHT)
+}
 
 pub fn marker_count(row_count: usize) -> usize {
     if row_count < 2 {
@@ -108,7 +117,43 @@ mod tests {
         );
         // Fourteen 20px targets plus the rail's 8px top/bottom inset fit in
         // a compact 300px transcript viewport without vertical overlap.
-        assert!(MAX_MARKERS as f32 * MARKER_HIT_TARGET_HEIGHT + 16. <= 300.);
+        assert!(MAX_MARKERS as f32 * MARKER_HIT_TARGET_HEIGHT + 2. * RAIL_VERTICAL_INSET <= 300.);
+    }
+
+    #[test]
+    fn flexible_marker_slots_fit_constrained_transcript_heights() {
+        assert_eq!(RAIL_SCROLLBAR_INSET, 20.);
+        assert_eq!(
+            RAIL_CONTENT_INSET,
+            MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + 3.
+        );
+
+        for viewport_height in [120., 180., 300.] {
+            let slot = marker_slot_height(viewport_height, MAX_MARKERS);
+            assert!(slot > 0.);
+            assert!(slot <= MARKER_HIT_TARGET_HEIGHT);
+            assert!(
+                2. * RAIL_VERTICAL_INSET + MAX_MARKERS as f32 * slot <= viewport_height + 0.01,
+                "marker slots overflow a {viewport_height}px viewport"
+            );
+        }
+        assert!(
+            (marker_slot_height(120., MAX_MARKERS)
+                - (120. - 2. * RAIL_VERTICAL_INSET) / MAX_MARKERS as f32)
+                .abs()
+                < 0.01
+        );
+        assert!(
+            (marker_slot_height(180., MAX_MARKERS)
+                - (180. - 2. * RAIL_VERTICAL_INSET) / MAX_MARKERS as f32)
+                .abs()
+                < 0.01
+        );
+        assert_eq!(
+            marker_slot_height(300., MAX_MARKERS),
+            MARKER_HIT_TARGET_HEIGHT
+        );
+        assert_eq!(marker_slot_height(120., 0), 0.);
     }
 
     #[test]
