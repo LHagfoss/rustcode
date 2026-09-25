@@ -15,7 +15,10 @@ use gpui_kit::{
     },
 };
 
-use crate::position_rail::{active_marker, marker_count, marker_to_row};
+use crate::position_rail::{
+    MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, RAIL_CONTENT_INSET, RAIL_SCROLLBAR_INSET,
+    active_marker, marker_count, marker_to_row,
+};
 
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
 const JUMP_BUTTON_TRANSITION: Duration = Duration::from_millis(200);
@@ -228,11 +231,18 @@ impl RenderOnce for TranscriptScroller {
         };
         let tokens = cx.theme().semantic_tokens();
         let item_count = list_state.item_count();
+        let rail_visible = self.position_rail && marker_count(self.position_rail_rows) > 0;
         let row_style = self.row_style;
         let mut renderer = self.renderer;
         let mut list_style = self.list_style;
         let row_inset_left = list_style.padding.left.take();
-        let row_inset_right = list_style.padding.right.take();
+        // Keep the wider marker hit boxes in their own strip instead of over
+        // message text; explicit caller insets still take precedence.
+        let row_inset_right = list_style
+            .padding
+            .right
+            .take()
+            .or_else(|| rail_visible.then_some(px(RAIL_CONTENT_INSET).into()));
         let list = list(list_state.clone(), move |index, window, cx| {
             div()
                 .w_full()
@@ -269,7 +279,7 @@ impl RenderOnce for TranscriptScroller {
             .child(viewport)
             .child(ScrollableMask::new(Axis::Vertical, &list_state).id(root_id.clone()));
 
-        if self.position_rail && marker_count(self.position_rail_rows) > 0 {
+        if rail_visible {
             let state = self.state.clone();
             let current_marker = active_marker(logical_top_row, self.position_rail_rows);
             let markers = marker_count(self.position_rail_rows);
@@ -279,8 +289,8 @@ impl RenderOnce for TranscriptScroller {
                 .top_0()
                 .bottom_0()
                 // Keep the marker hit areas just inside the scrollbar overlay.
-                .right(px(9.))
-                .w(px(22.))
+                .right(px(RAIL_SCROLLBAR_INSET))
+                .w(px(MARKER_HIT_TARGET_WIDTH))
                 .py_2()
                 .flex()
                 .flex_col()
@@ -299,14 +309,15 @@ impl RenderOnce for TranscriptScroller {
                 let state = state.clone();
                 let dash =
                     Button::new((root_id.clone(), format!("position-marker-button-{marker}")))
+                        .ghost()
                         .accessibility_label(format!("Scroll to transcript position {}", row + 1))
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| {
                                 state.scroll_to_item(row, cx);
                             });
                         })
-                        .w(px(22.))
-                        .h(px(12.))
+                        .w(px(MARKER_HIT_TARGET_WIDTH))
+                        .h(px(MARKER_HIT_TARGET_HEIGHT))
                         .px_1()
                         .flex()
                         .justify_end()

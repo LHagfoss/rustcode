@@ -1,4 +1,10 @@
-pub const MAX_MARKERS: usize = 22;
+pub const MAX_MARKERS: usize = 14;
+pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
+pub const MARKER_HIT_TARGET_HEIGHT: f32 = 20.;
+pub const RAIL_SCROLLBAR_INSET: f32 = 9.;
+pub const RAIL_CONTENT_GAP: f32 = 3.;
+pub const RAIL_CONTENT_INSET: f32 =
+    MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP;
 
 pub fn marker_count(row_count: usize) -> usize {
     if row_count < 2 {
@@ -84,9 +90,25 @@ mod tests {
     #[test]
     fn maps_middle_rows_to_nearest_representative() {
         let row_count = 100;
-        assert_eq!(row_to_marker(49, row_count), Some(10));
-        assert_eq!(marker_to_row(11, row_count), Some(52));
-        assert_eq!(active_marker(49, row_count), Some(10));
+        assert_eq!(row_to_marker(49, row_count), Some(6));
+        assert_eq!(marker_to_row(11, row_count), Some(84));
+        assert_eq!(active_marker(49, row_count), Some(6));
+    }
+
+    #[test]
+    fn dense_rail_keeps_large_fixed_hit_targets_clear_of_transcript_content() {
+        assert_eq!(MAX_MARKERS, 14);
+        assert_eq!(marker_count(14), 14);
+        assert_eq!(marker_count(15), 14);
+        assert_eq!(MARKER_HIT_TARGET_WIDTH, 30.);
+        assert_eq!(MARKER_HIT_TARGET_HEIGHT, 20.);
+        assert_eq!(
+            RAIL_CONTENT_INSET,
+            MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP
+        );
+        // Fourteen 20px targets plus the rail's 8px top/bottom inset fit in
+        // a compact 300px transcript viewport without vertical overlap.
+        assert!(MAX_MARKERS as f32 * MARKER_HIT_TARGET_HEIGHT + 16. <= 300.);
     }
 
     #[test]
