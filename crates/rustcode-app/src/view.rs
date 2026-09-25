@@ -68,6 +68,7 @@ fn current_branch(project: &Path) -> Option<String> {
 }
 
 use crate::search::ConversationSearch;
+use crate::theme::NativePalette as Palette;
 use crate::{
     backend::{
         NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
@@ -143,9 +144,9 @@ impl AppView {
                     .py_2()
                     .rounded_md()
                     .bg(if selected {
-                        rgb(0x343a43)
+                        rgb(Palette::SIDEBAR_SELECTED)
                     } else {
-                        rgb(0x25272a)
+                        rgb(Palette::SURFACE_ELEVATED)
                     })
                     .child(
                         div()
@@ -156,7 +157,7 @@ impl AppView {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(rgb(0xa5a8af))
+                                    .text_color(rgb(Palette::TEXT_SECONDARY))
                                     .child(model_id.clone()),
                             ),
                     )
@@ -214,7 +215,7 @@ impl AppView {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(rgb(0xa5a8af))
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
                             .child("Preferences for the current RustCode session."),
                     )
                     .child(
@@ -226,14 +227,14 @@ impl AppView {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(rgb(0xa5a8af))
+                                    .text_color(rgb(Palette::TEXT_SECONDARY))
                                     .child(format!("Active model: {selected_model_label}")),
                             )
                             .when(models.is_empty(), |this| {
                                 this.child(
                                     div()
                                         .text_sm()
-                                        .text_color(rgb(0xa5a8af))
+                                        .text_color(rgb(Palette::TEXT_SECONDARY))
                                         .child("Start or open a session to choose a model."),
                                 )
                             })
@@ -255,7 +256,7 @@ impl AppView {
                                     .px_3()
                                     .py_3()
                                     .rounded_md()
-                                    .bg(rgb(0x25272a))
+                                    .bg(rgb(Palette::SURFACE_ELEVATED))
                                     .child(
                                         div()
                                             .flex()
@@ -265,7 +266,7 @@ impl AppView {
                                             .child(
                                                 div()
                                                     .text_xs()
-                                                    .text_color(rgb(0xa5a8af))
+                                                    .text_color(rgb(Palette::TEXT_SECONDARY))
                                                     .child(approval_detail),
                                             ),
                                     )
@@ -589,9 +590,9 @@ impl AppView {
             .px_3()
             .py_2()
             .border_1()
-            .border_color(rgb(0x3c3e43))
+            .border_color(rgb(Palette::BORDER_SUBTLE))
             .rounded_lg()
-            .bg(rgb(0x282a2d))
+            .bg(rgb(Palette::SURFACE_ELEVATED))
             .child(
                 div()
                     .flex_1()
@@ -611,7 +612,7 @@ impl AppView {
                 div()
                     .min_w(px(74.))
                     .text_xs()
-                    .text_color(rgb(0xa5a8af))
+                    .text_color(rgb(Palette::TEXT_SECONDARY))
                     .child(result),
             )
             .child(
@@ -943,7 +944,7 @@ impl AppView {
                         div()
                             .pt_1()
                             .text_xs()
-                            .text_color(rgb(0x8c8f98))
+                            .text_color(rgb(Palette::TEXT_MUTED))
                             .child(note.clone()),
                     )
                     .into_any_element(),
@@ -956,8 +957,8 @@ impl AppView {
                     .py_2()
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(0xd8b66f))
-                    .bg(rgb(0x292b2e))
+                    .border_color(rgb(Palette::APPROVAL))
+                    .bg(rgb(Palette::SURFACE_ELEVATED))
                     .child(element)
                     .into_any_element()
             } else {
@@ -1055,7 +1056,7 @@ impl AppView {
                 .rounded_lg()
                 .text_sm()
                 .cursor_pointer()
-                .hover(|this| this.bg(rgb(0x34363a)))
+                .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
                 .child(Icon::new(IconName::Plus).size_4())
                 .child("New chat")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1110,8 +1111,8 @@ impl AppView {
 
         Sidebar::new("session-sidebar")
             .w(px(SIDEBAR_WIDTH))
-            .bg(rgb(0x222426))
-            .border_color(rgb(0x34363a))
+            .bg(rgb(Palette::SIDEBAR))
+            .border_color(rgb(Palette::BORDER_SUBTLE))
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(collapsed)
             .header(header)
@@ -1195,7 +1196,7 @@ impl AppView {
                                     div()
                                         .pl_2()
                                         .text_xs()
-                                        .text_color(rgb(0xa5a8af))
+                                        .text_color(rgb(Palette::TEXT_SECONDARY))
                                         .child(description.clone()),
                                 )
                             },
@@ -1349,8 +1350,8 @@ fn markdown_style() -> TextViewStyle {
     .table(scrollable_block)
     .table_head(
         gpui_kit::StyleRefinement::default()
-            .bg(rgb(0x292c30))
-            .text_color(rgb(0xdfe1e5))
+            .bg(rgb(Palette::SURFACE_ELEVATED))
+            .text_color(rgb(Palette::TEXT_PRIMARY))
             .font_semibold(),
     )
 }
@@ -1394,7 +1395,7 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                 .px_4()
                 .py_3()
                 .rounded_xl()
-                .bg(rgb(0x303236))
+                .bg(rgb(Palette::SURFACE_COMPOSER))
                 .text_size(px(15.))
                 .line_height(px(22.))
                 .flex()
@@ -1419,7 +1420,7 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                         } else {
                             div()
                                 .text_xs()
-                                .text_color(rgb(0x9a9da5))
+                                .text_color(rgb(Palette::TEXT_MUTED))
                                 .child("Image unavailable")
                                 .into_any_element()
                         }
@@ -1452,12 +1453,12 @@ fn render_system_message(text: String, index: usize) -> gpui_kit::AnyElement {
     div()
         .w_full()
         .text_size(px(14.))
-        .text_color(rgb(0x9a9da5))
+        .text_color(rgb(Palette::TEXT_MUTED))
         .child(
             TextView::markdown(format!("system-{index}"), text)
                 .style(markdown_style())
                 .text_size(px(13.))
-                .text_color(rgb(0x92969e)),
+                .text_color(rgb(Palette::TEXT_MUTED)),
         )
         .into_any_element()
 }
@@ -1679,12 +1680,12 @@ fn render_turn_segment(
                             .ml_6()
                             .pl_3()
                             .border_l_1()
-                            .border_color(rgb(0x383b40))
+                            .border_color(rgb(Palette::BORDER_SUBTLE))
                             .flex()
                             .flex_col()
                             .gap_3()
                             .text_size(px(13.))
-                            .text_color(rgb(0xa4a7ae))
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
                             .children(thoughts.into_iter().enumerate().map(
                                 |(thought_index, thought)| {
                                     TextView::markdown(
@@ -1695,7 +1696,7 @@ fn render_turn_segment(
                                     .text_size(px(13.))
                                     .line_height(px(19.))
                                     .font_weight(gpui_kit::FontWeight::NORMAL)
-                                    .text_color(rgb(0xa4a7ae))
+                                    .text_color(rgb(Palette::TEXT_SECONDARY))
                                     .into_any_element()
                                 },
                             ))
@@ -1722,13 +1723,13 @@ fn render_turn_segment(
         .flex()
         .flex_col()
         .gap_3()
-        .text_color(rgb(0xdfe1e5))
+        .text_color(rgb(Palette::TEXT_PRIMARY))
         .when(segment_index == 0, |this| {
             this.child(
                 div()
                     .text_size(px(12.))
                     .font_medium()
-                    .text_color(rgb(0x92969e))
+                    .text_color(rgb(Palette::TEXT_MUTED))
                     .child("RustCode"),
             )
         })
@@ -1755,7 +1756,7 @@ fn render_turn_segment(
                             .text_size(px(15.))
                             .line_height(px(23.))
                             .font_weight(gpui_kit::FontWeight::NORMAL)
-                            .text_color(rgb(0xdfe1e5)),
+                            .text_color(rgb(Palette::TEXT_PRIMARY)),
                         )
                         .child(
                             div()
@@ -1866,7 +1867,7 @@ fn render_tool_detail(
                     .overflow_scrollbar()
                     .font_family(mono_font)
                     .text_size(px(12.))
-                    .text_color(rgb(0x92969e))
+                    .text_color(rgb(Palette::TEXT_MUTED))
                     .child(content),
             )
         })
@@ -1969,7 +1970,7 @@ impl Render for AppView {
             .child(
                 div()
                     .text_base()
-                    .text_color(rgb(0x92949e))
+                    .text_color(rgb(Palette::TEXT_MUTED))
                     .child("Choose a project, then ask RustCode to get started."),
             );
 
@@ -2001,7 +2002,7 @@ impl Render for AppView {
             .px_3()
             .py_1()
             .text_xs()
-            .text_color(rgb(0xb5b7bd))
+            .text_color(rgb(Palette::TEXT_SECONDARY))
             .child(
                 Button::new("composer-project")
                     .ghost()
@@ -2026,9 +2027,9 @@ impl Render for AppView {
             .flex_col()
             .gap_3()
             .p_4()
-            .bg(rgb(0x303236))
+            .bg(rgb(Palette::SURFACE_COMPOSER))
             .border_1()
-            .border_color(rgb(0x3c3e43))
+            .border_color(rgb(Palette::BORDER_SUBTLE))
             .rounded(px(23.))
             .when(!self.pending_images.is_empty(), |this| {
                 this.child(
@@ -2044,7 +2045,7 @@ impl Render for AppView {
                                     .rounded_lg()
                                     .overflow_hidden()
                                     .border_1()
-                                    .border_color(rgb(0x55585e))
+                                    .border_color(rgb(Palette::BORDER_STRONG))
                                     .child(
                                         gpui_kit::img(image.path.clone())
                                             .size_full()
@@ -2155,7 +2156,7 @@ impl Render for AppView {
                     div()
                         .px_1()
                         .text_sm()
-                        .text_color(rgb(0xf0a0a0))
+                        .text_color(rgb(Palette::DESTRUCTIVE))
                         .child(message),
                 )
             })
@@ -2164,7 +2165,7 @@ impl Render for AppView {
                     div()
                         .px_1()
                         .text_sm()
-                        .text_color(rgb(0xf0a0a0))
+                        .text_color(rgb(Palette::DESTRUCTIVE))
                         .child(error),
                 )
             })
@@ -2186,7 +2187,7 @@ impl Render for AppView {
                                 .rounded_md()
                                 .cursor_pointer()
                                 .text_xs()
-                                .hover(|this| this.bg(rgb(0x3b3d42)))
+                                .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
                                 .child(
                                     Icon::new(if auto_approve {
                                         IconName::CircleCheck
@@ -2309,8 +2310,8 @@ impl Render for AppView {
                                     .p_2()
                                     .rounded(px(23.))
                                     .border_1()
-                                    .border_color(rgb(0x414348))
-                                    .bg(rgb(0x292b2e))
+                                    .border_color(rgb(Palette::BORDER_STRONG))
+                                    .bg(rgb(Palette::SURFACE_ELEVATED))
                                     .children(slash_suggestions.into_iter().enumerate().map(
                                         |(index, suggestion)| {
                                             let completion =
@@ -2326,10 +2327,10 @@ impl Render for AppView {
                                                 .py_1()
                                                 .rounded_lg()
                                                 .when(index == self.slash_selection, |this| {
-                                                    this.bg(rgb(0x393b40))
+                                                    this.bg(rgb(Palette::SURFACE_SELECTED))
                                                 })
                                                 .cursor_pointer()
-                                                .hover(|this| this.bg(rgb(0x45474d)))
+                                                .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
                                                 .child(
                                                     div()
                                                         .min_w(px(112.))
@@ -2339,7 +2340,7 @@ impl Render for AppView {
                                                 .child(
                                                     div()
                                                         .text_xs()
-                                                        .text_color(rgb(0xa5a8af))
+                                                        .text_color(rgb(Palette::TEXT_SECONDARY))
                                                         .child(suggestion.description),
                                                 )
                                                 .on_click(move |_, window, cx| {
@@ -2366,7 +2367,7 @@ impl Render for AppView {
         let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
-            .border_color(rgb(0x34363a))
+            .border_color(rgb(Palette::BORDER_SUBTLE))
             .child(
                 div()
                     .h_full()
@@ -2379,7 +2380,7 @@ impl Render for AppView {
                             .ghost()
                             .with_size(px(SIDEBAR_TOGGLE_SIZE))
                             .icon(toggle_icon)
-                            .text_color(rgb(0x9a9da5))
+                            .text_color(rgb(Palette::TEXT_MUTED))
                             .tooltip("Toggle sidebar")
                             .accessibility_label("Toggle sidebar")
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
@@ -2402,7 +2403,7 @@ impl Render for AppView {
                                 .child(
                                     Icon::new(IconName::FolderOpen)
                                         .size_4()
-                                        .text_color(rgb(0xaaaeb6)),
+                                        .text_color(rgb(Palette::TEXT_SECONDARY)),
                                 )
                                 .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
                         )
@@ -2416,8 +2417,8 @@ impl Render for AppView {
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .flex()
-            .bg(rgb(0x1b1d1f))
-            .text_color(rgb(0xe8e9ed))
+            .bg(rgb(Palette::APP_BACKGROUND))
+            .text_color(rgb(Palette::TEXT_PRIMARY))
             .child(div().size_full().flex().child(sidebar).child(main))
             .child(div().absolute().top_0().left_0().right_0().child(title_bar))
             .children(dialogs)

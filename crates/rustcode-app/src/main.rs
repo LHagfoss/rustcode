@@ -6,6 +6,7 @@ mod backend;
 mod highlight;
 mod image_attachment;
 mod slash;
+pub mod theme;
 mod view;
 
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use gpui_kit::{
     AppContext, KeyBinding, WindowBounds, WindowOptions,
     component::{Root, Theme, ThemeMode, TitleBar},
-    px, size,
+    px, rgb, size,
 };
 
 use backend::NativeBackend;
@@ -54,6 +55,49 @@ fn main() {
             })
             .detach();
             Theme::change(ThemeMode::Dark, None, cx);
+            {
+                use theme::NativePalette as Palette;
+
+                let colors = &mut Theme::global_mut(cx).colors;
+                colors.background = rgb(Palette::APP_BACKGROUND).into();
+                colors.foreground = rgb(Palette::TEXT_PRIMARY).into();
+                colors.border = rgb(Palette::BORDER_SUBTLE).into();
+                colors.input = rgb(Palette::BORDER_STRONG).into();
+                colors.ring = rgb(Palette::FOCUS_RING).into();
+                colors.sidebar = rgb(Palette::SIDEBAR).into();
+                colors.sidebar_border = rgb(Palette::BORDER_SUBTLE).into();
+                colors.sidebar_foreground = rgb(Palette::TEXT_SECONDARY).into();
+                colors.sidebar_accent = rgb(Palette::SIDEBAR_SELECTED).into();
+                colors.sidebar_accent_foreground = rgb(Palette::TEXT_PRIMARY).into();
+                colors.list = rgb(Palette::SURFACE_ELEVATED).into();
+                colors.list_active = rgb(Palette::SIDEBAR_SELECTED).into();
+                colors.list_active_border = rgb(Palette::BORDER_STRONG).into();
+                colors.list_hover = rgb(Palette::SIDEBAR_HOVER).into();
+                colors.muted = rgb(Palette::SURFACE_ELEVATED).into();
+                colors.muted_foreground = rgb(Palette::TEXT_MUTED).into();
+                colors.secondary_foreground = rgb(Palette::TEXT_SECONDARY).into();
+                colors.accent = rgb(Palette::COMMAND_ACCENT).into();
+                colors.accent_foreground = rgb(Palette::TEXT_PRIMARY).into();
+                colors.primary = rgb(Palette::COMMAND_ACCENT).into();
+                colors.primary_hover = rgb(Palette::COMMAND_ACCENT_HOVER).into();
+                colors.primary_foreground = rgb(Palette::TEXT_PRIMARY).into();
+                colors.button_primary = rgb(Palette::COMMAND_ACCENT).into();
+                colors.button_primary_hover = rgb(Palette::COMMAND_ACCENT_HOVER).into();
+                colors.button_primary_foreground = rgb(Palette::TEXT_PRIMARY).into();
+                colors.danger = rgb(Palette::DESTRUCTIVE_SURFACE).into();
+                colors.danger_hover = rgb(Palette::DESTRUCTIVE_SURFACE).into();
+                colors.danger_foreground = rgb(Palette::DESTRUCTIVE).into();
+                colors.button_danger = rgb(Palette::DESTRUCTIVE_SURFACE).into();
+                colors.button_danger_hover = rgb(Palette::DESTRUCTIVE_SURFACE).into();
+                colors.button_danger_foreground = rgb(Palette::DESTRUCTIVE).into();
+                colors.warning = rgb(Palette::APPROVAL_SURFACE).into();
+                colors.warning_foreground = rgb(Palette::APPROVAL).into();
+                colors.button_warning = rgb(Palette::APPROVAL_SURFACE).into();
+                colors.button_warning_foreground = rgb(Palette::APPROVAL).into();
+            }
+            let theme = Theme::global_mut(cx);
+            theme.tokens = theme.colors.into();
+            Theme::sync_base(cx);
             highlight::install(cx);
             let window_bounds = WindowBounds::centered(size(px(1200.), px(800.)), cx);
             let backend = backend.take().expect("native window is opened once");
