@@ -866,6 +866,21 @@ async fn cancelled_turn_can_be_followed_by_a_new_submit() {
     handle
         .send(Command::Submit("second prompt".to_owned()))
         .expect("queue second prompt while first turn is streaming");
+
+    let mut saw_queued_prompt = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = updates.recv().await {
+            if matches!(event.update, ControllerUpdate::Snapshot(snapshot) if snapshot.turn_active && snapshot.queued_count == 1)
+            {
+                saw_queued_prompt = true;
+                break;
+            }
+        }
+    })
+    .await
+    .expect("queued prompt snapshot timeout");
+    assert!(saw_queued_prompt);
+
     handle.send(Command::Cancel).expect("cancel active turn");
     let _ = release_first_tx.send(());
 
