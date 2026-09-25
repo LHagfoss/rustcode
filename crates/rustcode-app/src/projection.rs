@@ -929,7 +929,8 @@ mod tests {
             "write_file · src/main.rs".to_owned(),
             "This action requires your approval before it can continue.".to_owned(),
             "src/main.rs".to_owned(),
-        )]);
+        )])
+        .with_batch_id("controller:projection:1".to_owned());
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
             question.clone(),
@@ -988,7 +989,8 @@ mod tests {
             "write_file · src/main.rs".to_owned(),
             "This action requires your approval before it can continue.".to_owned(),
             "src/main.rs".to_owned(),
-        )]);
+        )])
+        .with_batch_id("controller:projection:2".to_owned());
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
             approval.clone(),

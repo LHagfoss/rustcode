@@ -506,14 +506,17 @@ mod tests {
             "snapshots must preserve the token while the same batch is in flight"
         );
 
-        state
-            .lock()
-            .await
-            .tool_confirmation_response
-            .take()
-            .expect("the batch has one response channel")
-            .send(crate::app::ToolConfirmationResponse::Deny)
-            .expect("policy task should be waiting for this decision");
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+        assert!(
+            crate::app::runtime::apply_approval_decision_for_batch(
+                &state,
+                &mut cancel_token,
+                &stable_batch_id,
+                crate::app::ApprovalDecision::Deny,
+            )
+            .await,
+            "the exact current policy batch ID should resolve"
+        );
         assert!(!task.await.expect("policy task should finish"));
     }
 

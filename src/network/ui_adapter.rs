@@ -234,21 +234,13 @@ async fn publish_snapshot_with_mode(
         history_len,
         subagents,
     ) = {
-        let mut state = state.lock().await;
-        if state
-            .pending_tool_confirmation
-            .as_ref()
-            .is_some_and(|confirmations| !confirmations.is_empty())
-            && state.pending_approval_batch_id.is_none()
-        {
-            state.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
-        }
+        let state = state.lock().await;
         (
             state.current_response.clone(),
             state.current_response_revision,
             state.current_response_last_rewrite_revision,
             Arc::clone(&state.live_tool_calls),
-            state.pending_approval_batch_id.clone().unwrap_or_default(),
+            state.pending_approval_batch_id.clone(),
             state
                 .pending_tool_confirmation
                 .as_ref()
@@ -364,11 +356,13 @@ async fn publish_snapshot_with_mode(
     }
 
     if !pending_approval_actions.is_empty() && !*approval_sent {
-        sender.send(AgentUiEvent::ApprovalRequested {
-            batch_id: pending_approval_batch_id,
-            actions: pending_approval_actions,
-        });
-        *approval_sent = true;
+        if let Some(batch_id) = pending_approval_batch_id {
+            sender.send(AgentUiEvent::ApprovalRequested {
+                batch_id,
+                actions: pending_approval_actions,
+            });
+            *approval_sent = true;
+        }
     } else if pending_approval_actions.is_empty() {
         *approval_sent = false;
     }

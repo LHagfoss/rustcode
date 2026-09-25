@@ -157,7 +157,7 @@ impl ApprovalPrompt {
             ));
         }
         Self {
-            batch_id: request_id.clone(),
+            batch_id: String::new(),
             request_id,
             actions,
         }
@@ -203,7 +203,8 @@ impl ControllerSnapshot {
         let pending_approval = state
             .pending_tool_confirmation
             .as_ref()
-            .map(|confirmations| {
+            .filter(|confirmations| !confirmations.is_empty())
+            .and_then(|confirmations| {
                 let actions = confirmations
                     .iter()
                     .enumerate()
@@ -223,9 +224,7 @@ impl ControllerSnapshot {
                 state
                     .pending_approval_batch_id
                     .as_ref()
-                    .map_or(prompt.clone(), |batch_id| {
-                        prompt.with_batch_id(batch_id.clone())
-                    })
+                    .map(|batch_id| prompt.with_batch_id(batch_id.clone()))
             });
         let mut details = std::collections::HashMap::new();
         let transcript = state
