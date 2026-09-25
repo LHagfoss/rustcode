@@ -287,7 +287,7 @@ impl ChatViewState {
             }
             TurnUpdate::ApprovalRequested(approvals) => {
                 self.turn_active = true;
-                self.pending_approval = approvals.into_iter().next();
+                self.pending_approval = Some(approvals);
             }
             TurnUpdate::QuestionRequested(question) => {
                 self.turn_active = true;
@@ -412,7 +412,8 @@ impl ChatViewState {
 #[cfg(test)]
 mod tests {
     use rustcode::controller::{
-        ApprovalPrompt, ControllerError, ControllerSnapshot, ControllerUpdate, TurnUpdate,
+        ApprovalAction, ApprovalPrompt, ControllerError, ControllerSnapshot, ControllerUpdate,
+        TurnUpdate,
     };
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
 
@@ -922,40 +923,74 @@ mod tests {
             descriptions: vec![],
             multiple: false,
         };
-        let approval = ApprovalPrompt {
-            request_id: "write-file-1".to_owned(),
-            tool_name: "write_file".to_owned(),
-            action_summary: "write_file · src/main.rs".to_owned(),
-            risk_context: "This action requires your approval before it can continue.".to_owned(),
-            description: "src/main.rs".to_owned(),
-        };
+        let approval = ApprovalPrompt::new(vec![ApprovalAction::new(
+            "write-file-1".to_owned(),
+            "write_file".to_owned(),
+            "write_file · src/main.rs".to_owned(),
+            "This action requires your approval before it can continue.".to_owned(),
+            "src/main.rs".to_owned(),
+        )]);
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
             question.clone(),
         )));
         assert_eq!(view.pending_question(), Some(&question));
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
             approval.clone(),
-        ])));
+        )));
         assert_eq!(view.pending_approval(), Some(&approval));
         assert!(view.turn_active());
     }
 
     #[test]
+    fn streamed_approval_discloses_every_action_and_uses_batch_identity() {
+        let mut view = ChatViewState::default();
+        let batch = ApprovalPrompt::new(vec![
+            ApprovalAction::new(
+                "7:call-a".to_owned(),
+                "write_file".to_owned(),
+                "write_file · src/a.txt".to_owned(),
+                "This action requires your approval before it can continue.".to_owned(),
+                r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+            ),
+            ApprovalAction::new(
+                "7:call-b".to_owned(),
+                "run_command".to_owned(),
+                "run_command · cargo test".to_owned(),
+                "This action requires your approval before it can continue.".to_owned(),
+                r#"{"command":"cargo test"}"#.to_owned(),
+            ),
+        ]);
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(batch)));
+
+        let batch = view.pending_approval().expect("pending approval batch");
+        assert_eq!(batch.actions.len(), 2);
+        assert_eq!(batch.actions[0].action_summary, "write_file · src/a.txt");
+        assert_eq!(batch.actions[1].action_summary, "run_command · cargo test");
+        assert_eq!(
+            batch.request_id, "batch:2:8:7:call-a:8:7:call-b",
+            "the decision identity must represent the exact disclosed batch"
+        );
+        assert!(batch.actions[0].description.contains("src/a.txt"));
+        assert!(batch.actions[1].description.contains("cargo test"));
+    }
+
+    #[test]
     fn approval_lifecycle_keeps_the_exact_request_until_resolution_snapshot() {
         let mut view = ChatViewState::default();
-        let approval = ApprovalPrompt {
-            request_id: "9:call-approval".to_owned(),
-            tool_name: "write_file".to_owned(),
-            action_summary: "write_file · src/main.rs".to_owned(),
-            risk_context: "This action requires your approval before it can continue.".to_owned(),
-            description: "src/main.rs".to_owned(),
-        };
+        let approval = ApprovalPrompt::new(vec![ApprovalAction::new(
+            "9:call-approval".to_owned(),
+            "write_file".to_owned(),
+            "write_file · src/main.rs".to_owned(),
+            "This action requires your approval before it can continue.".to_owned(),
+            "src/main.rs".to_owned(),
+        )]);
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
             approval.clone(),
-        ])));
+        )));
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
             "progress while waiting".to_owned(),
         )));

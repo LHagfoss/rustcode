@@ -76,12 +76,93 @@ pub struct QuestionPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalPrompt {
+pub struct ApprovalAction {
     pub request_id: String,
     pub tool_name: String,
     pub action_summary: String,
     pub risk_context: String,
     pub description: String,
+}
+
+impl ApprovalAction {
+    pub fn new(
+        request_id: String,
+        tool_name: String,
+        action_summary: String,
+        risk_context: String,
+        description: String,
+    ) -> Self {
+        Self {
+            request_id,
+            tool_name,
+            action_summary: bounded_preview(&action_summary, 160),
+            risk_context,
+            description: bounded_preview(&description, 320),
+        }
+    }
+
+    pub(crate) fn from_confirmation(
+        confirmation: &crate::app::ToolConfirmation,
+        index: usize,
+    ) -> Self {
+        let request_id = confirmation.request_id.clone().unwrap_or_else(|| {
+            format!(
+                "local:{index}:{}:{}:{}",
+                confirmation.tool_name, confirmation.path, confirmation.content_bytes
+            )
+        });
+        let description = if confirmation.content_preview.is_empty() {
+            confirmation.path.clone()
+        } else {
+            format!("{}\n{}", confirmation.path, confirmation.content_preview)
+        };
+        Self::new(
+            request_id,
+            confirmation.tool_name.clone(),
+            format!("{} · {}", confirmation.tool_name, confirmation.path),
+            "This action requires your approval before it can continue.".to_owned(),
+            description,
+        )
+    }
+
+    pub(crate) fn with_generation(mut self, generation: u64) -> Self {
+        self.request_id = format!("{generation}:{}", self.request_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalPrompt {
+    /// Exact, stable identity for the complete disclosed batch.
+    pub request_id: String,
+    pub actions: Vec<ApprovalAction>,
+}
+
+impl ApprovalPrompt {
+    pub fn new(actions: Vec<ApprovalAction>) -> Self {
+        let mut request_id = format!("batch:{}", actions.len());
+        for action in &actions {
+            request_id.push_str(&format!(
+                ":{}:{}",
+                action.request_id.len(),
+                action.request_id
+            ));
+        }
+        Self {
+            request_id,
+            actions,
+        }
+    }
+}
+
+fn bounded_preview(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let preview = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}… [truncated]")
+    } else {
+        preview
+    }
 }
 
 /// An owned, presentation-independent view of the current interactive session.
@@ -108,26 +189,17 @@ impl ControllerSnapshot {
         let pending_approval = state
             .pending_tool_confirmation
             .as_ref()
-            .and_then(|confirmations| confirmations.first())
-            .map(|confirmation| ApprovalPrompt {
-                request_id: format!(
-                    "{generation}:{}",
-                    confirmation.request_id.clone().unwrap_or_else(|| {
-                        format!(
-                            "local:{}:{}:{}",
-                            confirmation.tool_name, confirmation.path, confirmation.content_bytes
-                        )
-                    })
-                ),
-                tool_name: confirmation.tool_name.clone(),
-                action_summary: format!("{} · {}", confirmation.tool_name, confirmation.path),
-                risk_context: "This action requires your approval before it can continue."
-                    .to_owned(),
-                description: if confirmation.content_preview.is_empty() {
-                    confirmation.path.clone()
-                } else {
-                    format!("{}\n{}", confirmation.path, confirmation.content_preview)
-                },
+            .map(|confirmations| {
+                ApprovalPrompt::new(
+                    confirmations
+                        .iter()
+                        .enumerate()
+                        .map(|(index, confirmation)| {
+                            ApprovalAction::from_confirmation(confirmation, index)
+                                .with_generation(generation)
+                        })
+                        .collect(),
+                )
             });
         let mut details = std::collections::HashMap::new();
         let transcript = state

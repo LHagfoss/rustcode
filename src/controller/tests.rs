@@ -678,7 +678,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
             .pending_approval
             .as_ref()
             .map(|approval| approval.request_id.as_str()),
-        Some("7:tool-call-13")
+        Some("batch:1:14:7:tool-call-13")
     );
     assert_eq!(snapshot.session_id.as_deref(), Some("session-7"));
     assert_eq!(
@@ -727,8 +727,49 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(question.descriptions, ["Local files", "Remote API"]);
     assert!(!question.multiple);
     let approval = snapshot.pending_approval.expect("approval projection");
-    assert_eq!(approval.tool_name, "write_file");
-    assert_eq!(approval.description, "src/main.rs\nfn main() {}");
+    assert_eq!(approval.actions.len(), 1);
+    assert_eq!(approval.actions[0].tool_name, "write_file");
+    assert_eq!(approval.actions[0].description, "src/main.rs\nfn main() {}");
+}
+
+#[test]
+fn snapshot_approval_discloses_full_confirmation_batch_with_bounded_details() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-batch"));
+    state.pending_tool_confirmation = Some(vec![
+        ToolConfirmation {
+            request_id: Some("call-a".to_owned()),
+            tool_name: "write_file".to_owned(),
+            path: "src/a.txt".to_owned(),
+            content_preview: "first action".to_owned(),
+            content_bytes: 12,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        },
+        ToolConfirmation {
+            request_id: Some("call-b".to_owned()),
+            tool_name: "run_command".to_owned(),
+            path: "cargo test".to_owned(),
+            content_preview: "x".repeat(2_000),
+            content_bytes: 2_000,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        },
+    ]);
+
+    let snapshot = ControllerSnapshot::from_state(7, &state);
+    let batch = snapshot
+        .pending_approval
+        .expect("approval batch projection");
+
+    assert_eq!(batch.actions.len(), 2);
+    assert_eq!(batch.request_id, "batch:2:8:7:call-a:8:7:call-b");
+    assert_eq!(batch.actions[0].action_summary, "write_file · src/a.txt");
+    assert_eq!(batch.actions[1].action_summary, "run_command · cargo test");
+    assert!(batch.actions[0].description.contains("first action"));
+    assert!(batch.actions[1].description.contains("cargo test"));
+    assert!(batch.actions[1].description.chars().count() <= 340);
+    assert!(batch.actions[1].description.contains("[truncated]"));
 }
 
 #[test]

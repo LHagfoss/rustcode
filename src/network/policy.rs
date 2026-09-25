@@ -435,6 +435,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn policy_batch_projects_every_action_before_one_deny_decision() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let policy_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let calls = [
+                ToolCall {
+                    name: "run_command".to_owned(),
+                    arguments: serde_json::json!({ "command": "cargo test --lib" }),
+                    call_id: Some("call-a".to_owned()),
+                },
+                ToolCall {
+                    name: "run_command".to_owned(),
+                    arguments: serde_json::json!({ "command": "cargo fmt --check" }),
+                    call_id: Some("call-b".to_owned()),
+                },
+            ];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the complete call batch should await one decision");
+
+        let snapshot = {
+            let state = state.lock().await;
+            assert!(state.tool_confirmation_response.is_some());
+            crate::controller::ControllerSnapshot::from_state(7, &state)
+        };
+        let approval = snapshot
+            .pending_approval
+            .expect("controller approval batch");
+        assert_eq!(approval.actions.len(), 2);
+        assert_eq!(
+            approval.actions[0].action_summary,
+            "run_command · cargo test --lib"
+        );
+        assert_eq!(
+            approval.actions[1].action_summary,
+            "run_command · cargo fmt --check"
+        );
+        assert_eq!(approval.request_id, "batch:2:8:7:call-a:8:7:call-b");
+
+        state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .expect("the batch has one response channel")
+            .send(crate::app::ToolConfirmationResponse::Deny)
+            .expect("policy task should be waiting for this decision");
+        assert!(!task.await.expect("policy task should finish"));
+    }
+
+    #[tokio::test]
     async fn one_shot_network_request_prompts_even_with_yolo_and_saved_allow() {
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));
         {

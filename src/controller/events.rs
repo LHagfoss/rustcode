@@ -32,7 +32,7 @@ pub enum TurnUpdate {
         pending: bool,
     },
     /// The approval prompt batch is available in owned form to the frontend.
-    ApprovalRequested(Vec<ApprovalPrompt>),
+    ApprovalRequested(ApprovalPrompt),
     QuestionRequested(crate::controller::QuestionPrompt),
     TurnFinished,
     Cancelled,
@@ -89,41 +89,12 @@ pub(crate) fn from_agent_ui_event(
         AgentUiEvent::TurnRecovered { message } => {
             ControllerUpdate::Error(ControllerError::Provider(message))
         }
-        AgentUiEvent::ApprovalRequested { calls } => {
-            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
-                calls
-                    .into_iter()
-                    .map(|call| {
-                        let action_summary = call
-                            .arguments
-                            .get("path")
-                            .or_else(|| call.arguments.get("command"))
-                            .or_else(|| call.arguments.get("url"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(|target| format!("{} · {target}", call.name))
-                            .unwrap_or_else(|| call.name.clone());
-                        ApprovalPrompt {
-                            request_id: format!(
-                                "{generation}:{}",
-                                call.call_id.unwrap_or_else(|| {
-                                    format!(
-                                        "local:{}",
-                                        crate::network::tool_exec::stable_arguments_hash(
-                                            &call.arguments
-                                        )
-                                    )
-                                })
-                            ),
-                            tool_name: call.name,
-                            action_summary,
-                            risk_context:
-                                "This action requires your approval before it can continue."
-                                    .to_owned(),
-                            description: call.arguments.to_string(),
-                        }
-                    })
-                    .collect(),
-            ))
+        AgentUiEvent::ApprovalRequested { actions } => {
+            let actions = actions
+                .into_iter()
+                .map(|action| action.with_generation(generation))
+                .collect();
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(ApprovalPrompt::new(actions)))
         }
         AgentUiEvent::QuestionRequested { prompt } => {
             ControllerUpdate::Turn(TurnUpdate::QuestionRequested(prompt))
@@ -140,36 +111,78 @@ mod tests {
     #[test]
     fn approval_requests_are_observable_and_tagged_with_the_generation() {
         let event = crate::network::ui_adapter::AgentUiEvent::ApprovalRequested {
-            calls: vec![crate::tools::ToolCall {
-                name: "write_file".to_owned(),
-                arguments: serde_json::json!({ "path": "src/main.rs" }),
-                call_id: Some("call-13".to_owned()),
-            }],
+            actions: vec![super::super::ApprovalAction::new(
+                "call-13".to_owned(),
+                "write_file".to_owned(),
+                "write_file · src/main.rs".to_owned(),
+                "This action requires your approval before it can continue.".to_owned(),
+                r#"{"path":"src/main.rs"}"#.to_owned(),
+            )],
         };
         let public = from_agent_ui_event(13, event).expect("approval request should be projected");
 
         assert_eq!(public.generation, 13);
         assert_eq!(
             public.update,
-            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
-                super::super::ApprovalPrompt {
-                    request_id: "13:call-13".to_owned(),
-                    tool_name: "write_file".to_owned(),
-                    action_summary: "write_file · src/main.rs".to_owned(),
-                    risk_context: "This action requires your approval before it can continue."
-                        .to_owned(),
-                    description: r#"{"path":"src/main.rs"}"#.to_owned(),
-                },
-            ]))
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
+                super::super::ApprovalPrompt::new(vec![super::super::ApprovalAction::new(
+                    "13:call-13".to_owned(),
+                    "write_file".to_owned(),
+                    "write_file · src/main.rs".to_owned(),
+                    "This action requires your approval before it can continue.".to_owned(),
+                    r#"{"path":"src/main.rs"}"#.to_owned(),
+                )]),
+            ))
         );
-        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approvals)) = public.update else {
+        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approval)) = public.update else {
             unreachable!();
         };
-        let approval = &approvals[0];
-        assert_eq!(approval.request_id, "13:call-13");
-        assert_eq!(approval.action_summary, "write_file · src/main.rs");
-        assert!(approval.risk_context.contains("requires your approval"));
-        assert_eq!(approval.description, r#"{"path":"src/main.rs"}"#);
+        assert_eq!(approval.request_id, "batch:1:10:13:call-13");
+        let action = &approval.actions[0];
+        assert_eq!(action.request_id, "13:call-13");
+        assert_eq!(action.action_summary, "write_file · src/main.rs");
+        assert!(action.risk_context.contains("requires your approval"));
+        assert_eq!(action.description, r#"{"path":"src/main.rs"}"#);
+    }
+
+    #[test]
+    fn streamed_approval_batch_keeps_every_action_and_bounds_argument_preview() {
+        let large_value = "x".repeat(2_000);
+        let public = from_agent_ui_event(
+            7,
+            crate::network::ui_adapter::AgentUiEvent::ApprovalRequested {
+                actions: vec![
+                    super::super::ApprovalAction::new(
+                        "call-a".to_owned(),
+                        "write_file".to_owned(),
+                        "write_file · src/a.txt".to_owned(),
+                        "This action requires your approval before it can continue.".to_owned(),
+                        r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+                    ),
+                    super::super::ApprovalAction::new(
+                        "call-b".to_owned(),
+                        "run_command".to_owned(),
+                        "run_command · cargo test".to_owned(),
+                        "This action requires your approval before it can continue.".to_owned(),
+                        serde_json::json!({ "command": "cargo test", "payload": large_value })
+                            .to_string(),
+                    ),
+                ],
+            },
+        )
+        .expect("approval request should be projected");
+
+        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approval)) = public.update else {
+            unreachable!();
+        };
+        assert_eq!(approval.actions.len(), 2);
+        assert_eq!(approval.actions[0].action_summary, "write_file · src/a.txt");
+        assert_eq!(
+            approval.actions[1].action_summary,
+            "run_command · cargo test"
+        );
+        assert!(approval.actions[1].description.chars().count() <= 340);
+        assert!(approval.actions[1].description.ends_with("… [truncated]"));
     }
 
     #[test]
