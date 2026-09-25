@@ -1593,6 +1593,12 @@ mod tests {
         assert!(active_logs.join("debug.log.1").exists());
         assert!(!inactive_logs.join("debug.log").exists());
 
+        // A parallel test can fork while these descriptors are open. On
+        // platforms with inherited `flock` descriptors, dropping the parent
+        // handles alone may leave the lock live until the child closes its
+        // copy, so explicitly release both simulated owners before pruning.
+        owner_a.unlock().expect("release first active marker");
+        owner_b.unlock().expect("release second active marker");
         drop((owner_a, owner_b));
         prune_session_logs(dir.path(), None, 4);
 
