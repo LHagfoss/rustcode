@@ -89,6 +89,13 @@ fn copy_control_stays_in_hover_region(bottom_offset: f32, reserved_height: f32) 
     bottom_offset >= 0. && reserved_height >= MESSAGE_COPY_CONTROL_HEIGHT
 }
 
+fn approval_in_flight_after_snapshot(
+    current_request_id: Option<String>,
+    pending_request_id: Option<&str>,
+) -> Option<String> {
+    current_request_id.filter(|request_id| Some(request_id.as_str()) == pending_request_id)
+}
+
 use crate::search::ConversationSearch;
 use crate::theme::NativePalette as Palette;
 use crate::{
@@ -307,9 +314,13 @@ impl AppView {
         self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
-                if snapshot.pending_approval.is_none() {
-                    self.approval_in_flight = None;
-                }
+                self.approval_in_flight = approval_in_flight_after_snapshot(
+                    self.approval_in_flight.take(),
+                    snapshot
+                        .pending_approval
+                        .as_ref()
+                        .map(|approval| approval.request_id.as_str()),
+                );
                 if !snapshot.sessions.is_empty() {
                     self.recent_sessions = snapshot.sessions.clone();
                 }
@@ -2784,6 +2795,25 @@ mod tests {
             super::MESSAGE_COPY_CONTROL_HEIGHT,
         ));
         assert!(!super::copy_control_stays_in_hover_region(-27., 0.));
+    }
+
+    #[test]
+    fn replacing_pending_approval_releases_only_the_old_in_flight_request() {
+        assert_eq!(
+            super::approval_in_flight_after_snapshot(Some("request-a".into()), Some("request-a")),
+            Some("request-a".into()),
+            "the same request remains disabled while its decision resolves"
+        );
+        assert_eq!(
+            super::approval_in_flight_after_snapshot(Some("request-a".into()), Some("request-b")),
+            None,
+            "a replacement request must not inherit the old in-flight state"
+        );
+        assert_eq!(
+            super::approval_in_flight_after_snapshot(Some("request-a".into()), None),
+            None,
+            "a resolved approval clears the in-flight state"
+        );
     }
 
     #[test]
