@@ -68,8 +68,10 @@ pub struct TranscriptItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionPrompt {
+    pub header: String,
     pub text: String,
     pub options: Vec<String>,
+    pub descriptions: Vec<String>,
     pub multiple: bool,
 }
 
@@ -177,6 +179,33 @@ impl ControllerSnapshot {
                 }
             })
             .collect();
+        let mut sessions = state
+            .history_picker_sessions
+            .iter()
+            .map(|session| SessionChoice {
+                id: crate::config::session_id_from_path(&session.path).unwrap_or_default(),
+                title: session.title.clone(),
+                when: session.when.clone(),
+                message_count: session.message_count,
+            })
+            .collect::<Vec<_>>();
+        if crate::config::session_has_content(&state.history) {
+            sessions.retain(|choice| choice.id != state.active_session_id);
+            sessions.insert(
+                0,
+                SessionChoice {
+                    id: state.active_session_id.clone(),
+                    title: crate::config::load_session_title(&state.active_session_id)
+                        .unwrap_or_else(|| crate::config::session_title(&state.history)),
+                    when: state
+                        .history
+                        .first()
+                        .map(|message| message.timestamp.clone())
+                        .unwrap_or_default(),
+                    message_count: state.history.len(),
+                },
+            );
+        }
         Self {
             generation,
             workspace: state
@@ -184,26 +213,27 @@ impl ControllerSnapshot {
                 .clone()
                 .or_else(|| state.workspace_root.clone()),
             session_id: Some(state.active_session_id.clone()),
-            sessions: state
-                .history_picker_sessions
-                .iter()
-                .map(|session| SessionChoice {
-                    id: crate::config::session_id_from_path(&session.path).unwrap_or_default(),
-                    title: session.title.clone(),
-                    when: session.when.clone(),
-                    message_count: session.message_count,
-                })
-                .collect(),
+            sessions,
             models: state
                 .config
                 .models
                 .iter()
                 .map(|model| ModelChoice {
-                    id: model.model.clone(),
+                    id: model.name.clone(),
                     label: model.name.clone(),
                 })
                 .collect(),
-            selected_model: Some(state.model_name.clone()),
+            selected_model: Some(
+                state
+                    .config
+                    .models
+                    .iter()
+                    .find(|profile| {
+                        profile.model == state.model_name && profile.url == state.api_base_url
+                    })
+                    .map(|profile| profile.name.clone())
+                    .unwrap_or_else(|| state.model_name.clone()),
+            ),
             transcript,
             live_response: state.current_response.as_ref().clone(),
             queued_count: state.pending_queue.len(),
@@ -219,8 +249,10 @@ impl ControllerSnapshot {
                 .pending_question
                 .as_ref()
                 .map(|question| QuestionPrompt {
+                    header: question.header.clone(),
                     text: question.question.clone(),
                     options: question.options.clone(),
+                    descriptions: question.descriptions.clone(),
                     multiple: question.is_multi_select,
                 }),
             pending_approval,
