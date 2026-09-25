@@ -431,6 +431,9 @@ fn is_plausible_source_path(path: &str) -> bool {
     if path.starts_with('/') || is_windows_absolute {
         return true;
     }
+    if !path.contains(['/', '\\']) {
+        return true;
+    }
     let first_component = path.split(['/', '\\']).next().unwrap_or_default();
     !first_component.is_empty()
         && !first_component.chars().any(char::is_whitespace)
@@ -825,6 +828,12 @@ mod compiler_execution_tests {
         assert!(has_recognized_source_diagnostic(
             r"C:\repo\src\my file.ts:3:1 lint/suspicious/noConsole"
         ));
+        assert!(has_recognized_source_diagnostic(
+            "my file.ts(3,1): error TS2322: wrong type"
+        ));
+        assert!(has_recognized_source_diagnostic(
+            "my file.ts:3:1 lint/suspicious/noConsole"
+        ));
         assert!(!has_recognized_source_diagnostic(
             "error: failed to create temporary directory at /tmp/my build: PermissionDenied"
         ));
@@ -839,6 +848,9 @@ mod compiler_execution_tests {
         ));
         assert!(!has_recognized_source_diagnostic(
             "runner failed tests/my file.ts:3:1 lint/suspicious/noConsole"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "build failed because temporary files could not be written"
         ));
         assert!(!has_recognized_source_diagnostic(
             "foo(3,1): error TS2322: wrong type"
