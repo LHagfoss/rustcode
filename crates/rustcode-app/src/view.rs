@@ -42,6 +42,7 @@ actions!(
 );
 
 const SIDEBAR_WIDTH: f32 = 270.;
+const SIDEBAR_CONTENT_INSET: f32 = 12.;
 const MAIN_PANE_INSET: f32 = 24.;
 #[cfg(target_os = "macos")]
 const TITLE_BAR_LEFT_PADDING: f32 = 80.;
@@ -49,10 +50,11 @@ const TITLE_BAR_LEFT_PADDING: f32 = 80.;
 const TITLE_BAR_LEFT_PADDING: f32 = 12.;
 const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
 const TITLE_BAR_CHILD_GAP: f32 = 8.;
-const SETTINGS_RAIL_WIDTH: f32 = 180.;
 const SETTINGS_CONTENT_WIDTH: f32 = 680.;
-const MESSAGE_COPY_CONTROL_HEIGHT: f32 = 24.;
+const MESSAGE_COPY_CONTROL_HEIGHT: f32 = 36.;
 const MESSAGE_COPY_CONTROL_BOTTOM_OFFSET: f32 = 0.;
+const MESSAGE_COPY_TARGET_SIZE: f32 = 36.;
+const MESSAGE_COPY_ICON_SIZE: f32 = 18.;
 const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
     - TITLE_BAR_LEFT_PADDING
     - SIDEBAR_TOGGLE_SIZE
@@ -89,6 +91,50 @@ fn current_branch(project: &Path) -> Option<String> {
 
 fn copy_control_stays_in_hover_region(bottom_offset: f32, reserved_height: f32) -> bool {
     bottom_offset >= 0. && reserved_height >= MESSAGE_COPY_CONTROL_HEIGHT
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarShell {
+    Sessions,
+    Settings,
+}
+
+fn sidebar_shell_for(destination: AppDestination) -> SidebarShell {
+    match destination {
+        AppDestination::Chat => SidebarShell::Sessions,
+        AppDestination::Settings(_) => SidebarShell::Settings,
+    }
+}
+
+fn sidebar_footer_divider_inset() -> f32 {
+    0.
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopyActionAlignment {
+    Start,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MessageCopyLayout {
+    horizontal_alignment: CopyActionAlignment,
+    hit_width: f32,
+    hit_height: f32,
+    icon_size: f32,
+    hit_area_is_transparent: bool,
+}
+
+#[cfg(test)]
+fn message_copy_layout() -> MessageCopyLayout {
+    MessageCopyLayout {
+        horizontal_alignment: CopyActionAlignment::Start,
+        hit_width: MESSAGE_COPY_TARGET_SIZE,
+        hit_height: MESSAGE_COPY_TARGET_SIZE,
+        icon_size: MESSAGE_COPY_ICON_SIZE,
+        hit_area_is_transparent: true,
+    }
 }
 
 fn approval_in_flight_after_snapshot(
@@ -1008,10 +1054,9 @@ impl AppView {
 
     fn render_settings_page(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let narrow = window.bounds().size.width <= px(1000.);
         let state =
             crate::settings::SettingsState::from_snapshot(self.navigation.chat_snapshot.as_ref());
         let models = state.models.clone();
@@ -1118,41 +1163,6 @@ impl AppView {
             "RustCode asks before running tool calls for this session."
         };
 
-        let rail = div()
-            .when(narrow, |this| {
-                this.w_full()
-                    .pb_4()
-                    .border_b_1()
-                    .border_color(rgb(Palette::BORDER_SUBTLE))
-            })
-            .when(!narrow, |this| {
-                this.w(px(SETTINGS_RAIL_WIDTH))
-                    .flex_shrink_0()
-                    .pr_5()
-                    .border_r_1()
-                    .border_color(rgb(Palette::BORDER_SUBTLE))
-            })
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .text_color(rgb(Palette::TEXT_SECONDARY))
-                    .child("Settings"),
-            )
-            .child(
-                SidebarMenu::new()
-                    .child(
-                        SidebarMenuItem::new("General")
-                            .icon(Icon::new(IconName::Settings))
-                            .active(true),
-                    )
-                    .render("settings-general-navigation", window, cx)
-                    .into_any_element(),
-            );
-
         let model_row = div()
             .w_full()
             .flex()
@@ -1167,7 +1177,11 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().font_medium().child("Model"))
+                    .child(
+                        div()
+                            .font_medium()
+                            .child("Choose the model for this session"),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -1190,7 +1204,7 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().font_medium().child("Permissions"))
+                    .child(div().font_medium().child("Choose when tools need approval"))
                     .child(
                         div()
                             .text_sm()
@@ -1200,29 +1214,33 @@ impl AppView {
             )
             .child(approval_picker);
 
-        let content = div()
-            .flex_1()
-            .min_w_0()
-            .max_w(px(SETTINGS_CONTENT_WIDTH))
+        let model_section = div()
+            .w_full()
             .flex()
             .flex_col()
-            .gap_5()
-            .child(div().text_2xl().font_semibold().child("General"))
+            .gap_2()
+            .child(div().text_base().font_semibold().child("Model"))
             .child(
                 div()
                     .w_full()
-                    .px_5()
+                    .px_4()
                     .py_1()
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(Palette::BORDER_SUBTLE))
                     .bg(rgb(Palette::SURFACE_ELEVATED))
                     .child(model_row),
-            )
+            );
+        let permissions_section = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_base().font_semibold().child("Permissions"))
             .child(
                 div()
                     .w_full()
-                    .px_5()
+                    .px_4()
                     .py_1()
                     .rounded_lg()
                     .border_1()
@@ -1231,27 +1249,37 @@ impl AppView {
                     .child(approval_row),
             );
 
+        let content = div()
+            .flex_1()
+            .min_w_0()
+            .max_w(px(SETTINGS_CONTENT_WIDTH))
+            .flex()
+            .flex_col()
+            .gap_6()
+            .child(div().text_2xl().font_semibold().child("General"))
+            .child(model_section)
+            .child(permissions_section);
+
         div()
             .w_full()
             .h_full()
             .min_h_0()
             .flex()
             .justify_center()
-            .px_6()
-            .pt(TITLE_BAR_HEIGHT + px(24.))
-            .pb_6()
+            .px_8()
+            .pt(TITLE_BAR_HEIGHT + px(48.))
+            .pb_8()
             .child(
                 div()
                     .w_full()
-                    .max_w(px(SETTINGS_RAIL_WIDTH + SETTINGS_CONTENT_WIDTH + 48.))
+                    .max_w(px(SETTINGS_CONTENT_WIDTH))
                     .h_full()
                     .min_w_0()
                     .flex()
-                    .when(narrow, |this| this.flex_col().gap_5())
-                    .when(!narrow, |this| this.flex_row().gap_6())
-                    .child(rail)
+                    .flex_col()
                     .child(
                         div()
+                            .w_full()
                             .flex_1()
                             .min_h_0()
                             .min_w_0()
@@ -1259,6 +1287,39 @@ impl AppView {
                             .child(content),
                     ),
             )
+            .into_any_element()
+    }
+
+    fn render_settings_sidebar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let back = SidebarMenu::new().child(
+            SidebarMenuItem::new("Back to app")
+                .icon(Icon::new(IconName::PanelLeft))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.navigation.open_chat();
+                    cx.notify();
+                })),
+        );
+        let general = SidebarMenu::new().child(
+            SidebarMenuItem::new("General")
+                .icon(Icon::new(IconName::Settings))
+                .active(true),
+        );
+
+        Sidebar::new("settings-sidebar")
+            .w(px(SIDEBAR_WIDTH))
+            .bg(rgb(Palette::SIDEBAR))
+            .border_color(rgb(Palette::BORDER_SUBTLE))
+            .border_r_1()
+            .header(div().w_full().pt(px(30.)).child(back.render(
+                "settings-back-navigation",
+                window,
+                cx,
+            )))
+            .child(general)
             .into_any_element()
     }
 
@@ -1361,9 +1422,9 @@ impl AppView {
             .into_any_element();
 
         let footer = div()
-            .w_full()
-            .flex()
-            .flex_col()
+            .w(px(SIDEBAR_WIDTH))
+            .mx(px(-SIDEBAR_CONTENT_INSET + sidebar_footer_divider_inset()))
+            .px_3()
             .pt_1()
             .border_t_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -1870,13 +1931,16 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                         ))
                         .w_full()
                         .flex()
-                        .justify_end()
+                        .pl_6()
+                        .justify_start()
                         .invisible()
                         .group_hover("user-message", |this| this.visible())
                         .child(
                             Button::new(format!("copy-user-message-{index}"))
                                 .ghost()
-                                .xsmall()
+                                .with_size(px(MESSAGE_COPY_ICON_SIZE * 4. / 3.))
+                                .size(px(MESSAGE_COPY_TARGET_SIZE))
+                                .p_2()
                                 .icon(IconName::Copy)
                                 .accessibility_label("Copy message")
                                 .tooltip("Copy message")
@@ -2256,7 +2320,7 @@ fn render_turn_segment(
                                 ))
                                 .w_full()
                                 .flex()
-                                .justify_end()
+                                .justify_start()
                                 .invisible()
                                 .group_hover("assistant-message", |this| this.visible())
                                 .child(
@@ -2264,7 +2328,9 @@ fn render_turn_segment(
                                         "copy-assistant-{index}-{segment_index}-{answer_index}"
                                     ))
                                     .ghost()
-                                    .xsmall()
+                                    .with_size(px(MESSAGE_COPY_ICON_SIZE * 4. / 3.))
+                                    .size(px(MESSAGE_COPY_TARGET_SIZE))
+                                    .p_2()
                                     .icon(IconName::Copy)
                                     .accessibility_label("Copy reply")
                                     .tooltip("Copy reply")
@@ -2498,7 +2564,10 @@ impl Render for AppView {
                         .map(|item| item.content.lines().next().unwrap_or("").to_owned())
                 })
         });
-        let sidebar = self.render_sidebar(window, cx);
+        let sidebar = match sidebar_shell_for(self.navigation.destination) {
+            SidebarShell::Sessions => self.render_sidebar(window, cx),
+            SidebarShell::Settings => self.render_settings_sidebar(window, cx),
+        };
 
         let welcome = div()
             .flex_1()
@@ -2953,39 +3022,52 @@ impl Render for AppView {
                     .flex()
                     .items_center()
                     .gap(px(TITLE_BAR_CHILD_GAP))
-                    .child(
-                        Button::new("sidebar-toggle")
-                            .ghost()
-                            .with_size(px(SIDEBAR_TOGGLE_SIZE))
-                            .icon(toggle_icon)
-                            .text_color(rgb(Palette::TEXT_MUTED))
-                            .tooltip("Toggle sidebar")
-                            .accessibility_label("Toggle sidebar")
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                    .when(
+                        matches!(self.navigation.destination, AppDestination::Chat),
+                        |this| {
+                            this.child(
+                                Button::new("sidebar-toggle")
+                                    .ghost()
+                                    .with_size(px(SIDEBAR_TOGGLE_SIZE))
+                                    .icon(toggle_icon)
+                                    .text_color(rgb(Palette::TEXT_MUTED))
+                                    .tooltip("Toggle sidebar")
+                                    .accessibility_label("Toggle sidebar")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
+                                    ),
+                            )
+                        },
                     )
-                    .when_some(conversation_title.filter(|_| has_session), |this, title| {
-                        this.child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .min_w_0()
-                                .items_center()
-                                .gap_2()
-                                .ml(if self.sidebar_collapsed {
-                                    px(0.)
-                                } else {
-                                    px(SIDEBAR_TITLE_MARGIN)
-                                })
-                                .text_sm()
-                                .font_medium()
-                                .child(
-                                    Icon::new(IconName::FolderOpen)
-                                        .size_4()
-                                        .text_color(rgb(Palette::TEXT_SECONDARY)),
-                                )
-                                .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
-                        )
-                    }),
+                    .when_some(
+                        conversation_title.filter(|_| {
+                            has_session
+                                && matches!(self.navigation.destination, AppDestination::Chat)
+                        }),
+                        |this, title| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap_2()
+                                    .ml(if self.sidebar_collapsed {
+                                        px(0.)
+                                    } else {
+                                        px(SIDEBAR_TITLE_MARGIN)
+                                    })
+                                    .text_sm()
+                                    .font_medium()
+                                    .child(
+                                        Icon::new(IconName::FolderOpen)
+                                            .size_4()
+                                            .text_color(rgb(Palette::TEXT_SECONDARY)),
+                                    )
+                                    .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
+                            )
+                        },
+                    ),
             );
 
         div()
@@ -3014,7 +3096,7 @@ mod tests {
 
     use super::{
         AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
-        SettingsSection, ToolOutputState, ToolStatus, group_turn_rows,
+        SettingsSection, SidebarShell, ToolOutputState, ToolStatus, group_turn_rows,
         literal_tool_output_markdown, should_show_start_screen, slash_menu_key_decision,
         tool_output_state, turn_segments,
     };
@@ -3026,6 +3108,36 @@ mod tests {
             super::MESSAGE_COPY_CONTROL_HEIGHT,
         ));
         assert!(!super::copy_control_stays_in_hover_region(-27., 0.));
+    }
+
+    #[test]
+    fn settings_replaces_session_sidebar_with_a_dedicated_rail() {
+        assert_eq!(
+            super::sidebar_shell_for(AppDestination::Chat),
+            SidebarShell::Sessions
+        );
+        assert_eq!(
+            super::sidebar_shell_for(AppDestination::Settings(SettingsSection::General)),
+            SidebarShell::Settings
+        );
+    }
+
+    #[test]
+    fn session_sidebar_footer_divider_is_edge_to_edge() {
+        assert_eq!(super::sidebar_footer_divider_inset(), 0.);
+    }
+
+    #[test]
+    fn copy_action_is_left_aligned_with_a_large_transparent_hit_target() {
+        let layout = super::message_copy_layout();
+        assert_eq!(
+            layout.horizontal_alignment,
+            super::CopyActionAlignment::Start
+        );
+        assert!(layout.hit_width >= 32.);
+        assert!(layout.hit_height >= 32.);
+        assert!(layout.icon_size > 16.);
+        assert!(layout.hit_area_is_transparent);
     }
 
     #[test]
