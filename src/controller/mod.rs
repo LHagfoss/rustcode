@@ -6,6 +6,19 @@ mod native_commands;
 mod snapshot;
 mod worker;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_APPROVAL_BATCH_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Creates a unique identity for a controller-owned pending approval batch.
+pub(crate) fn next_approval_batch_id() -> String {
+    format!(
+        "controller:{}:{}",
+        std::process::id(),
+        NEXT_APPROVAL_BATCH_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -15,8 +28,8 @@ pub use events::{
     accepts_generation,
 };
 pub use snapshot::{
-    ApprovalPrompt, Command, ControllerHandle, ControllerSnapshot, ModelChoice, QuestionPrompt,
-    SessionChoice, TranscriptItem,
+    ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
+    ControllerSnapshot, ModelChoice, QuestionPrompt, SessionChoice, TranscriptItem,
 };
 
 pub use worker::InteractiveController;

@@ -31,6 +31,10 @@ pub const COMMANDS: &[SlashSuggestion] = &[
         name: "/change_title",
         description: "Rename this chat",
     },
+    SlashSuggestion {
+        name: "/info",
+        description: "Show session and turn status",
+    },
 ];
 
 /// Suggestions appear while the first token is being typed. Once the user
@@ -72,9 +76,63 @@ pub fn complete_selection(input: &str, selected: usize) -> Option<String> {
         .map(|suggestion| complete(suggestion.name))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashInteraction {
+    Move(usize),
+    Complete { value: String, cursor_offset: usize },
+    Dismiss,
+    Ignore,
+}
+
+/// Decide how the slash menu responds to a key while its draft is active.
+pub fn slash_interaction(
+    draft: &str,
+    selected: usize,
+    dismissed: bool,
+    key: &str,
+) -> SlashInteraction {
+    let suggestions = suggestions(draft);
+    if dismissed || suggestions.is_empty() {
+        return SlashInteraction::Ignore;
+    }
+
+    match key {
+        "up" | "ArrowUp" | "arrowup" => {
+            SlashInteraction::Move(move_selection(selected, suggestions.len(), false))
+        }
+        "down" | "ArrowDown" | "arrowdown" => {
+            SlashInteraction::Move(move_selection(selected, suggestions.len(), true))
+        }
+        "enter" | "Enter" => suggestions
+            .get(selected)
+            .map(|suggestion| {
+                let value = complete(suggestion.name);
+                SlashInteraction::Complete {
+                    cursor_offset: value.chars().count(),
+                    value,
+                }
+            })
+            .unwrap_or(SlashInteraction::Ignore),
+        "escape" | "Escape" => SlashInteraction::Dismiss,
+        _ => SlashInteraction::Ignore,
+    }
+}
+
+/// The textarea currently applies styles to the whole value, so only style a
+/// recognized command when no non-whitespace argument text has been entered.
+pub fn is_recognized_command(draft: &str) -> bool {
+    let token = draft.trim();
+    COMMANDS
+        .iter()
+        .any(|command| command.name.eq_ignore_ascii_case(token))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{complete, complete_selection, move_selection, suggestions};
+    use super::{
+        SlashInteraction, complete, complete_selection, is_recognized_command, move_selection,
+        slash_interaction, suggestions,
+    };
 
     #[test]
     fn suggestions_follow_only_the_command_token() {
@@ -95,6 +153,14 @@ mod tests {
         assert!(suggestions("/model deepseek").is_empty());
         assert!(suggestions("plain prompt").is_empty());
         assert_eq!(complete("/change_title"), "/change_title ");
+        assert_eq!(
+            suggestions("/i")
+                .iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>(),
+            vec!["/info"]
+        );
+        assert_eq!(complete_selection("/i", 0), Some("/info".to_owned()));
     }
 
     #[test]
@@ -106,5 +172,66 @@ mod tests {
         assert_eq!(complete_selection("/c", 1), Some("/cancel".to_owned()));
         assert_eq!(complete_selection("/m", 0), Some("/model ".to_owned()));
         assert_eq!(complete_selection("/m", 1), None);
+    }
+
+    #[test]
+    fn arrow_key_names_move_selection_and_wrap() {
+        assert_eq!(
+            slash_interaction("/", 0, false, "ArrowUp"),
+            SlashInteraction::Move(6)
+        );
+        assert_eq!(
+            slash_interaction("/", 5, false, "up"),
+            SlashInteraction::Move(4)
+        );
+        assert_eq!(
+            slash_interaction("/", 5, false, "ArrowDown"),
+            SlashInteraction::Move(6)
+        );
+        assert_eq!(
+            slash_interaction("/", 0, false, "down"),
+            SlashInteraction::Move(1)
+        );
+    }
+
+    #[test]
+    fn enter_completes_the_selected_command_and_returns_its_cursor_offset() {
+        assert_eq!(
+            slash_interaction("/m", 0, false, "Enter"),
+            SlashInteraction::Complete {
+                value: "/model ".to_owned(),
+                cursor_offset: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn escape_dismisses_and_dismissed_or_irrelevant_keys_are_ignored() {
+        assert_eq!(
+            slash_interaction("/m", 0, false, "Escape"),
+            SlashInteraction::Dismiss
+        );
+        assert_eq!(
+            slash_interaction("/m", 0, true, "ArrowDown"),
+            SlashInteraction::Ignore
+        );
+        assert_eq!(
+            slash_interaction("ordinary prompt", 0, false, "Enter"),
+            SlashInteraction::Ignore
+        );
+        assert_eq!(
+            slash_interaction("/model args", 0, false, "ArrowDown"),
+            SlashInteraction::Ignore
+        );
+    }
+
+    #[test]
+    fn recognized_command_styling_excludes_arguments_and_unknown_commands() {
+        assert!(is_recognized_command("/model"));
+        assert!(is_recognized_command("/MODEL"));
+        assert!(is_recognized_command("/model "));
+        assert!(!is_recognized_command("/model deepseek"));
+        assert!(!is_recognized_command("/not-a-command"));
+        assert!(!is_recognized_command("plain text"));
     }
 }

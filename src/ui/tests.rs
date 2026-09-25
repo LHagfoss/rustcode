@@ -139,6 +139,7 @@ fn render_snapshot_preserves_existing_ui_output() {
     let mut approval = AppState::new();
     approval.status = AppStatus::AwaitingToolConfirmation;
     approval.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: "cargo test".to_owned(),
         content_preview: String::new(),
@@ -292,6 +293,7 @@ fn acceptance_tool_confirmation_replaces_composer_with_actions() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: "cargo test".to_owned(),
         content_preview: String::new(),

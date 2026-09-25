@@ -602,6 +602,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
         let mut app = state.lock().await;
         app.status = AppStatus::Streaming;
         app.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            request_id: None,
             tool_name: "write_file".to_owned(),
             path: "file.txt".to_owned(),
             content_preview: String::new(),
