@@ -8,3 +8,6 @@ rustcode = { path = "../.." }
 gpui-kit = "=0.6.6"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync"] }
 syntect = "5.2"
+
+[dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["test-support"] }

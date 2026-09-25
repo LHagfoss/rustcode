@@ -14,7 +14,6 @@ use gpui_kit::{
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Position, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
-        message_scroller::{MessageScroller, MessageScrollerState},
         scroll::ScrollableElement,
         sidebar::{
             Sidebar, SidebarCollapsible, SidebarGroup, SidebarItem, SidebarMenu, SidebarMenuItem,
@@ -31,6 +30,7 @@ use rustcode::controller::{
 };
 
 use super::{CloseWindow, MinimizeWindow};
+use crate::transcript_scroller::{TranscriptScroller, TranscriptScrollerState};
 actions!(
     rustcode_app,
     [
@@ -245,7 +245,7 @@ pub struct AppView {
     question_answer: gpui_kit::Entity<TextareaState>,
     search_input: gpui_kit::Entity<InputState>,
     _search_subscription: gpui_kit::Subscription,
-    messages: gpui_kit::Entity<MessageScrollerState>,
+    messages: gpui_kit::Entity<TranscriptScrollerState>,
     navigation: AppNavigation,
     recent_sessions: Vec<SessionChoice>,
     chat_state: ChatViewState,
@@ -361,7 +361,7 @@ impl AppView {
                     });
                 }
             });
-        let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let messages = cx.new(|cx| TranscriptScrollerState::new(0, cx));
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         Self {
@@ -1006,7 +1006,7 @@ impl AppView {
         });
         let view = cx.entity().downgrade();
         let turn_active = self.chat_state.turn_active();
-        MessageScroller::new("conversation", self.messages.clone(), move |index, _, _| {
+        TranscriptScroller::new("conversation", self.messages.clone(), move |index, _, _| {
             let element = match rendered_rows.get(index).cloned() {
                 Some(DisplayRow::Turn(parts)) => render_turn(
                     parts,
@@ -1053,6 +1053,7 @@ impl AppView {
         // The row wrapper already insets px_3, so keep the viewport flush:
         // a second viewport inset misaligns message text against tool cards.
         // Row gaps come from the row style (the default pb_8 is far too airy).
+        .with_position_rail(rows.len())
         .with_content_style(gpui_kit::StyleRefinement::default().px_0().pb_1())
         .with_list_style(gpui_kit::StyleRefinement::default().py_2())
         .with_row_style(gpui_kit::StyleRefinement::default().pb_5())
