@@ -34,7 +34,9 @@ impl SettingsState {
     }
 
     pub fn approval_mode_label(&self) -> &'static str {
-        if self.auto_approve {
+        if !self.has_session {
+            "Unavailable"
+        } else if self.auto_approve {
             "Auto approve"
         } else {
             "Ask first"
@@ -94,15 +96,28 @@ mod tests {
 
         assert_eq!(ask_first.approval_mode_label(), "Ask first");
         assert_eq!(auto_approve.approval_mode_label(), "Auto approve");
+        assert!(ask_first.has_session);
+        assert!(auto_approve.has_session);
     }
 
     #[test]
-    fn settings_without_a_session_does_not_invent_model_choices() {
+    fn settings_without_a_session_marks_permissions_unavailable() {
         let state = SettingsState::from_snapshot(None);
 
         assert!(state.models.is_empty());
         assert_eq!(state.selected_model_label(), None);
         assert!(!state.has_session);
-        assert!(state.auto_approve);
+        assert_eq!(state.approval_mode_label(), "Unavailable");
+    }
+
+    #[test]
+    fn settings_snapshot_without_an_active_session_marks_permissions_unavailable() {
+        let state = SettingsState::from_snapshot(Some(&ControllerSnapshot {
+            session_id: None,
+            ..snapshot()
+        }));
+
+        assert!(!state.has_session);
+        assert_eq!(state.approval_mode_label(), "Unavailable");
     }
 }
