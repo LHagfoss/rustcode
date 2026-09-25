@@ -605,8 +605,14 @@ fn flush_final_response_delta(
         });
     let missing_content = if emitted_prefix_matches {
         &final_content[previous_response.emitted_content_len..]
-    } else {
+    } else if previous_response.emitted_content_len == 0 {
         final_content
+    } else {
+        // A text delta has no replacement semantics. If the final response
+        // rewrote text already sent during the turn, the completed snapshot
+        // carries the authoritative transcript; appending the rewrite here
+        // would display both versions.
+        ""
     };
     if !missing_content.is_empty() {
         sender.send(AgentUiEvent::TextDelta {
@@ -680,6 +686,37 @@ mod tests {
         assert!(
             receiver.try_recv().is_err(),
             "terminal flush must not duplicate text"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_text_flush_does_not_append_a_rewritten_final_response() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let mut context = crate::network::TurnContext::new();
+        context.response.final_content = "Turn completed with a summary.".to_owned();
+        let turn_state = Arc::clone(&state);
+        let turn = async move {
+            turn_state
+                .lock()
+                .await
+                .replace_current_response("<think>long internal reasoning</think>");
+            tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+            turn_state.lock().await.clear_current_response();
+            context
+        };
+        let mut turn = Box::pin(turn);
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+
+        super::drive_turn_with_snapshots(turn.as_mut(), &state, &sender, false, 0).await;
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::TextDelta { text })
+                if text == "<think>long internal reasoning</think>"
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "a rewritten final answer cannot be appended as a text delta"
         );
     }
 
