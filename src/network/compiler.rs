@@ -248,12 +248,18 @@ fn classify_compiler_output(
 fn has_recognized_source_diagnostic(output: &str) -> bool {
     static BIOME_LOCATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\S+:\d+:\d+\s+(?:lint|assist|format)/").unwrap());
+    static RUST_SOURCE_LOCATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*-->\s+\S+\.rs:\d+:\d+").unwrap());
     let lower = output.to_lowercase();
     let has_location = !compiler_diagnostic_locations(output).is_empty();
-    let rust_diagnostic = lower.contains("error[")
-        && lower
-            .lines()
-            .any(|line| line.trim_start().starts_with("-->"));
+    let has_rust_source_location = output
+        .lines()
+        .any(|line| RUST_SOURCE_LOCATION.is_match(line));
+    let rust_diagnostic = has_rust_source_location
+        && (lower.contains("error[")
+            || lower
+                .lines()
+                .any(|line| line.trim_start().starts_with("error:")));
     let typescript_diagnostic = lower.contains("error ts") && has_location;
     let biome_diagnostic = output.lines().any(|line| BIOME_LOCATION.is_match(line));
     rust_diagnostic || typescript_diagnostic || biome_diagnostic
@@ -456,6 +462,14 @@ mod compiler_execution_tests {
                 "rustc",
                 false,
                 "error[E0425]: cannot find value `missing` in this scope\n --> src/lib.rs:3:5",
+                "",
+                true,
+            ),
+            (
+                "rustc uncoded syntax diagnostic",
+                "rustc",
+                false,
+                "error: unexpected closing delimiter: `}`\n --> src/lib.rs:3:1",
                 "",
                 true,
             ),
