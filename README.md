@@ -92,6 +92,19 @@ cargo build -p rustcode-app
 cargo run -p rustcode-app -- /path/to/project
 ```
 
+On macOS, package the app with the Icon Composer icon from
+`images/AppIcon.icon` (requires Xcode 26 or later):
+
+```bash
+scripts/build-native-app.sh            # target/debug/RustCode.app
+scripts/build-native-app.sh --release  # target/release/RustCode.app
+open target/debug/RustCode.app
+```
+
+The bundle includes both the layered icon for newer macOS versions and a
+fallback `.icns`. Running `cargo run` launches the executable directly, so use
+the bundled app to see its Dock and Finder icon.
+
 Build the terminal executable separately with `cargo build --bin rustcode`.
 
 ## Keeping it upgraded
