@@ -20,6 +20,10 @@
 - Arrow navigation and Enter completion must work while the composer retains focus, and completion must leave the caret after the inserted text.
 - Pending permission requests must present persistent Approve and Deny controls above the composer until resolved.
 - Copy controls must remain reachable while the pointer travels from message content to the control.
+- Queued prompts survive cancellation of the active turn and native UI makes queued state visible.
+- While running, the footer shows one Stop control; a valid Enter submission may still queue a follow-up.
+- Tool activity motion must use GPUI's reduced-motion-aware animation path and output must remain bounded/selectable.
+- Only native commands backed by real controller behavior may be advertised; `/info` must include the session ID.
 - Use existing icon assets/components, rounded rectangles only where they communicate grouping, and visible keyboard focus/disabled states.
 - Follow test-driven development: add a failing focused test before each behavior change.
 - Run `cargo check --tests` and `cargo test` before the branch is declared complete.
@@ -102,14 +106,58 @@
 - [ ] Run focused adapter/view tests and `cargo check -p rustcode-app --tests`.
 - [ ] Self-review stale approval callbacks, double submission, hover gaps, and overlap with message text; commit the task.
 
-## Task 5: Integrate, visually audit, and verify the native surface
+## Task 5: Preserve queued prompts and simplify the composer action
+
+**Files:**
+- Modify: `src/controller/tests.rs`
+- Modify: `crates/rustcode-app/src/projection.rs`
+- Modify: `crates/rustcode-app/src/view.rs`
+- Test: `src/controller/tests.rs`
+- Test: `crates/rustcode-app/src/projection.rs`
+- Test: `crates/rustcode-app/src/view.rs`
+
+- [ ] Add a failing controller regression that holds the first response open, submits a second prompt while streaming, then sends Cancel and proves the second prompt starts and completes without being removed from `pending_queue`.
+- [ ] Fix the narrow controller/queue boundary only if the regression fails; do not make Cancel clear or restart unrelated session state.
+- [ ] Add a failing projection test for `ControllerSnapshot.queued_count`, then retain it in `ChatViewState` and render a compact queued-message indicator near the composer.
+- [ ] Render a single contextual circular footer button: Send while idle, Stop while active. Preserve Enter-to-queue for a non-empty draft while active and disable only invalid submissions.
+- [ ] Reduce the textarea from two initial rows to one, lower the maximum growth where practical, and tighten vertical composer padding while preserving multiline editing and model/permission controls.
+- [ ] Add a focused view-state test for the idle/running action choice and queue label text.
+- [ ] Run focused controller/projection/view tests and `cargo check --tests`.
+- [ ] Self-review cancellation races, queue count refresh, empty drafts, keyboard submission, and accessible control labels; commit the task.
+
+## Task 6: Improve tool activity and add native diagnostic commands
+
+**Files:**
+- Modify: `src/controller/native_commands.rs`
+- Modify: `src/controller/worker.rs`
+- Modify if a bounded existing progress callback supports it: `src/controller/events.rs`
+- Modify if a bounded existing progress callback supports it: `src/network/ui_adapter.rs`
+- Modify: `crates/rustcode-app/src/slash.rs`
+- Modify: `crates/rustcode-app/src/projection.rs`
+- Modify: `crates/rustcode-app/src/view.rs`
+- Test: `src/controller/native_commands.rs`
+- Test: `src/controller/tests.rs`
+- Test: `crates/rustcode-app/src/slash.rs`
+- Test: `crates/rustcode-app/src/projection.rs`
+
+- [ ] Add failing parser/controller tests for `/info` and optional `/session` alias, asserting output contains the exact active session ID plus model, turn state, and queue count.
+- [ ] Add only those commands to the native slash registry and help text; do not copy unsupported TUI-only suggestions.
+- [ ] Add a failing pure render-data/state test distinguishing running, completed, and failed tool rows and whether bounded output is expandable.
+- [ ] Replace the static running icon with a repeating GPUI rotation animation that follows the framework's reduced-motion behavior; completed/failed states remain still.
+- [ ] Polish the existing 180px-bounded output area into a distinct selectable scroll viewport with visible overflow affordance for long output.
+- [ ] Inspect the existing executor progress callback. Project live chunks only if an existing bounded callback can feed a typed controller event without a second execution/output channel; otherwise record a non-blocking follow-up in the report and keep correct final output.
+- [ ] Add short, functional state transitions to tool/chat activity where GPUI supports them without delaying content or changing hit testing.
+- [ ] Run focused native-command/controller/slash/projection/view tests and `cargo check --tests`.
+- [ ] Self-review output bounds, secret exposure relative to existing final output, reduced motion, unknown commands, and help/suggestion parity; commit the task.
+
+## Task 7: Integrate, visually audit, and verify the native surface
 
 **Files:**
 - Modify as required by verified defects only: `crates/rustcode-app/src/theme.rs`
 - Modify as required by verified defects only: `crates/rustcode-app/src/view.rs`
 - Modify as required by verified defects only: `crates/rustcode-app/src/settings.rs`
 
-- [ ] Build and launch the native app against a disposable/fresh session and verify: selected session contrast, Settings sidebar/Cmd+comma navigation, General picker persistence, slash arrow/Enter/mouse completion and caret, slash styling, pending approval actions, and both copy buttons.
+- [ ] Build and launch the native app against a disposable/fresh session and verify: selected session contrast, Settings sidebar/Cmd+comma navigation, General picker persistence, slash arrow/Enter/mouse completion and caret, slash styling, pending approval actions, both copy buttons, queue-then-Stop behavior, contextual Send/Stop, compact composer, `/info`, animated tool state, and long-output scrolling.
 - [ ] Capture one batched inspection at representative narrow and wide sizes and check contrast, spacing, type hierarchy, focus, disabled, hover, loading, error, and empty states against the craft floor.
 - [ ] Run the Impeccable detector exactly once over all changed UI targets: `/Users/lagos/.agents/skills/impeccable/scripts/impeccable detect --json crates/rustcode-app/src/theme.rs crates/rustcode-app/src/view.rs crates/rustcode-app/src/settings.rs crates/rustcode-app/src/ui_adapter.rs`.
 - [ ] Fix confirmed detector/manual findings in one bounded batch and rerun only the focused tests covering those fixes.

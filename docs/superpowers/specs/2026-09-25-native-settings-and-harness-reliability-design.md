@@ -1,7 +1,7 @@
 # Native Settings, Interaction Polish, and Harness Reliability Design
 
 Date: 2026-09-25
-Issues: [#1411](https://github.com/LHagfoss/rustcode/issues/1411), [#1412](https://github.com/LHagfoss/rustcode/issues/1412)
+Issues: [#1411](https://github.com/LHagfoss/rustcode/issues/1411), [#1412](https://github.com/LHagfoss/rustcode/issues/1412), [#1413](https://github.com/LHagfoss/rustcode/issues/1413), [#1414](https://github.com/LHagfoss/rustcode/issues/1414)
 
 ## Purpose
 
@@ -23,6 +23,11 @@ The work is delivered as two focused pull requests. The native GPUI pull request
 - Complete a slash command without submitting it and leave the caret after the inserted command.
 - Render recognized slash-command drafts in bold purple text.
 - Keep user and assistant copy buttons visible while the pointer moves onto them.
+- Preserve queued follow-up prompts when Stop cancels the active turn and show that a message is queued.
+- Use one contextual Send or Stop control and reduce the composer's default height.
+- Improve tool-call observability with an animated running state and an obvious bounded output viewport.
+- Add `/info` with the active session ID and a small first batch of genuinely supported native diagnostic commands.
+- Add restrained state transitions that respect reduced-motion preferences.
 
 ### Harness reliability
 
@@ -40,6 +45,8 @@ The work is delivered as two focused pull requests. The native GPUI pull request
 - Adding new user-configurable preferences beyond the currently supported model and approval mode.
 - Prompting for every safe or read-only tool call. Ask-first continues to prompt only when policy requires confirmation.
 - Replacing the GPUI text engine solely to gain per-token rich-text styling.
+- Advertising the full TUI slash-command registry before native controller behavior exists for those commands.
+- Requiring live subprocess output streaming in this pull request if the executor has no existing bounded chunk callback.
 - Changing tool authorization policy or weakening sandbox restrictions.
 
 ## Delivery Structure
@@ -119,6 +126,24 @@ The copy action and the visual message area share one hover hit region. The butt
 
 Clipboard behavior and labels remain unchanged.
 
+### Queue, composer, and contextual action
+
+Submitting a valid draft with Enter while a turn is active queues the follow-up through the existing controller path. Native projection retains `queued_count` and displays a compact queued indicator near the composer. Stopping the active turn cancels only that turn; the queued follow-up remains and begins when the controller returns to the queue boundary. A controller regression test covers the exact submit-while-streaming, then Stop ordering.
+
+The footer has one primary circular action: Send while idle and Stop while a turn is active. This avoids adjacent contradictory controls while preserving Enter-to-queue. The textarea begins at one row and grows to a smaller bounded multiline height, with tighter vertical padding than the current composer.
+
+### Tool activity, output, and motion
+
+Running tool rows use a GPUI repeating rotation animation on the loader icon. The animation uses the framework's reduced-motion-aware path; completed and failed transitions settle into their existing status icons. Expanded arguments and output sit in a visually distinct, bounded viewport with an obvious scrollbar and selectable content.
+
+The implementation inspects the existing executor progress path for bounded output chunks. If a safe callback already exists, chunks are projected through a typed controller event; otherwise this pull request keeps final output projection and records live streaming as follow-up scope rather than inventing an unbounded parallel execution channel.
+
+Chat/tool state changes may use short opacity/position transitions where GPUI supports them without changing hit testing or delaying content. Motion is functional, subtle, and disabled by the framework under reduced-motion preferences.
+
+### Native diagnostic commands
+
+The native command parser and slash registry add `/info` as the canonical diagnostic command. It renders the active session ID plus selected model, active/idle state, and queued-message count from the controller snapshot. `/session` may be provided as a discoverable alias if it uses the same tested handler. Only commands backed by native controller behavior appear in suggestions; the larger TUI registry remains an incremental roadmap.
+
 ## Harness Reliability Design
 
 ### Captured failure
@@ -169,6 +194,10 @@ No sandbox permission is broadened beyond the active workspace and harness-owned
 - GPUI interaction tests for Up/Down, Escape, Enter completion, and no accidental submission.
 - Projection/render tests for pending approval controls.
 - Tests for settings state and General-section model/approval selection.
+- Controller regression for queuing during streaming followed by Stop, plus native queue projection.
+- Contextual Send/Stop and compact composer-state tests.
+- Tool running/finished presentation and bounded scroll-viewport tests.
+- Parser/controller tests for `/info` (and `/session` if included), asserting the session ID is present.
 - Targeted visual/manual verification of selected-session contrast, Settings layout, approval card, and both copy buttons.
 - Full `cargo check --tests` and `cargo test`.
 
