@@ -6,10 +6,37 @@ use regex::Regex;
 use std::sync::{Arc, LazyLock};
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompilerCheckOutcome {
+    Passed,
+    SourceDiagnostics { output: String, fingerprint: String },
+    UnverifiedInfrastructure { reason: String },
+}
+
+impl CompilerCheckOutcome {
+    fn legacy_output(&self, command: &str) -> Option<String> {
+        match self {
+            Self::Passed => None,
+            Self::SourceDiagnostics { output, .. } => Some(output.clone()),
+            Self::UnverifiedInfrastructure { reason } => Some(format!(
+                "__BUILD_UNVERIFIED__: `{command}` {reason}. The build could not be verified. Check the checker environment or sandbox, then rerun verification."
+            )),
+        }
+    }
+}
+
 pub(crate) async fn run_compiler_check(
     cwd: &std::path::Path,
     cancel_token: &CancellationToken,
 ) -> Option<String> {
+    let (outcome, command) = run_compiler_check_with_command(cwd, cancel_token).await;
+    outcome.legacy_output(command)
+}
+
+async fn run_compiler_check_with_command(
+    cwd: &std::path::Path,
+    cancel_token: &CancellationToken,
+) -> (CompilerCheckOutcome, &'static str) {
     let (command, cargo, timeout) = if cwd.join("Cargo.toml").exists() {
         ("cargo check --message-format=json", true, 120)
     } else if cwd.join("biome.json").exists() || cwd.join("biome.jsonc").exists() {
@@ -27,18 +54,22 @@ pub(crate) async fn run_compiler_check(
         };
         (command, false, 60)
     } else {
-        return None;
+        return (CompilerCheckOutcome::Passed, "compiler check");
     };
-    run_compiler_command(
-        cwd,
+    (
+        run_compiler_command_outcome(
+            cwd,
+            command,
+            cargo,
+            std::time::Duration::from_secs(timeout),
+            cancel_token,
+        )
+        .await,
         command,
-        cargo,
-        std::time::Duration::from_secs(timeout),
-        cancel_token,
     )
-    .await
 }
 
+#[cfg(test)]
 async fn run_compiler_command(
     cwd: &std::path::Path,
     command: &str,
@@ -46,13 +77,21 @@ async fn run_compiler_command(
     timeout: std::time::Duration,
     cancel_token: &CancellationToken,
 ) -> Option<String> {
-    let unverified = |reason: &str| {
-        Some(format!(
-            "__BUILD_UNVERIFIED__: `{command}` {reason}. The build was NOT verified — do not claim the task compiles."
-        ))
-    };
+    run_compiler_command_outcome(cwd, command, cargo, timeout, cancel_token)
+        .await
+        .legacy_output(command)
+}
+
+async fn run_compiler_command_outcome(
+    cwd: &std::path::Path,
+    command: &str,
+    cargo: bool,
+    timeout: std::time::Duration,
+    cancel_token: &CancellationToken,
+) -> CompilerCheckOutcome {
+    let unverified = |reason: String| CompilerCheckOutcome::UnverifiedInfrastructure { reason };
     if cancel_token.is_cancelled() {
-        return unverified("was cancelled");
+        return record_unverified_event(unverified("was cancelled".to_string()), command);
     }
     let writable_roots = [cwd.to_path_buf()];
     let command_for_exec = match crate::tools::exec::sandbox::command(
@@ -68,7 +107,7 @@ async fn run_compiler_command(
         },
     ) {
         Ok(command) => command,
-        Err(error) => return unverified(&error),
+        Err(error) => return record_unverified_event(unverified(error.to_string()), command),
     };
     // A child token also stops the blocking worker if this async future is dropped.
     let worker_token = cancel_token.child_token();
@@ -91,19 +130,57 @@ async fn run_compiler_command(
         )
     })
     .await;
-    match output {
-        Ok(Ok(output)) => compiler_output_diagnostics(command, cargo, &output),
-        Ok(Err(error)) => unverified(&error),
-        Err(error) => unverified(&format!("could not complete ({error})")),
-    }
+    let outcome = match output {
+        Ok(Ok(output)) => classify_compiler_output(
+            command,
+            cargo,
+            output.success,
+            output.exit_code,
+            &String::from_utf8_lossy(output.stdout.bytes()),
+            &String::from_utf8_lossy(output.stderr.bytes()),
+        ),
+        Ok(Err(error)) => unverified(error.to_string()),
+        Err(error) => unverified(format!("could not complete ({error})")),
+    };
+    record_unverified_event(outcome, command)
 }
 
-fn compiler_output_diagnostics(
+fn record_unverified_event(outcome: CompilerCheckOutcome, command: &str) -> CompilerCheckOutcome {
+    if let CompilerCheckOutcome::UnverifiedInfrastructure { reason } = &outcome {
+        crate::logger::operational_event(
+            "compiler.check_unverified",
+            serde_json::json!({
+                "command": command,
+                "reason": reason,
+                "recovery": "resolve checker startup, sandbox, workspace, or temporary-directory access and rerun verification",
+            }),
+        );
+    }
+    outcome
+}
+
+fn classify_compiler_output(
     command: &str,
     cargo: bool,
-    output: &rustcode_command::CommandOutput,
-) -> Option<String> {
-    let stdout = String::from_utf8_lossy(output.stdout.bytes());
+    success: bool,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> CompilerCheckOutcome {
+    let normalized = strip_ansi_escapes(&format!("{stdout}\n{stderr}"));
+    let lower = normalized.to_lowercase();
+    if lower.contains("permissiondenied")
+        || lower.contains("permission denied")
+        || lower.contains("unable to write files to tempdir")
+        || lower.contains("command not found")
+        || lower.contains("no such file or directory")
+        || lower.contains("failed to start")
+        || lower.contains("could not find executable")
+    {
+        return CompilerCheckOutcome::UnverifiedInfrastructure {
+            reason: normalized.trim().to_owned(),
+        };
+    }
     if cargo {
         let errors = stdout
             .lines()
@@ -119,17 +196,24 @@ fn compiler_output_diagnostics(
             })
             .collect::<Vec<_>>();
         if !errors.is_empty() {
-            return Some(errors.join("\n"));
+            let diagnostics = errors.join("\n");
+            return CompilerCheckOutcome::SourceDiagnostics {
+                fingerprint: fingerprint_compiler_diagnostics(&diagnostics),
+                output: diagnostics,
+            };
         }
     }
-    if output.success {
-        return None;
+    if success {
+        return CompilerCheckOutcome::Passed;
     }
     // Cargo's manifest, dependency, and toolchain failures often have no JSON
     // diagnostic. A nonzero exit must never be cached or reported as a pass.
-    let stderr = String::from_utf8_lossy(output.stderr.bytes());
-    let diagnostics = strip_ansi_escapes(&format!("{stdout}\n{stderr}"));
-    let mut diagnostics = diagnostics.trim().to_owned();
+    let mut diagnostics = normalized.trim().to_owned();
+    if diagnostics.is_empty() {
+        return CompilerCheckOutcome::UnverifiedInfrastructure {
+            reason: format!("`{command}` exited unsuccessfully without output"),
+        };
+    }
     const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
     if diagnostics.len() > MAX_DIAGNOSTIC_BYTES {
         let mut end = MAX_DIAGNOSTIC_BYTES;
@@ -139,15 +223,25 @@ fn compiler_output_diagnostics(
         diagnostics.truncate(end);
         diagnostics.push_str("\n[compiler diagnostics truncated]");
     }
-    let status = output.exit_code.map_or_else(
+    let status = exit_code.map_or_else(
         || "terminated without an exit code".to_owned(),
         |code| format!("exited with status {code}"),
     );
-    Some(
-        format!("`{command}` {status}.\n{diagnostics}")
-            .trim_end()
-            .to_owned(),
-    )
+    let rendered = format!("`{command}` {status}.\n{diagnostics}")
+        .trim_end()
+        .to_owned();
+    CompilerCheckOutcome::SourceDiagnostics {
+        fingerprint: fingerprint_compiler_diagnostics(&rendered),
+        output: rendered,
+    }
+}
+
+fn fingerprint_compiler_diagnostics(diagnostics: &str) -> String {
+    normalize_diagnostic_fingerprint(&compiler_diagnostics_with_snippets(diagnostics))
+}
+
+fn normalize_diagnostic_fingerprint(diagnostics: &str) -> String {
+    diagnostics.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) async fn cached_compiler_check(
@@ -184,14 +278,35 @@ pub(crate) fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: 
         result.content.push_str(diagnostics);
         return;
     }
-    result
-        .content
-        .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-    result
-        .content
-        .push_str(&compiler_diagnostics_with_snippets(diagnostics));
-    result.metadata.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-    result.metadata.retryable = true;
+    append_compiler_outcome(
+        result,
+        &CompilerCheckOutcome::SourceDiagnostics {
+            output: diagnostics.to_string(),
+            fingerprint: normalize_diagnostic_fingerprint(diagnostics),
+        },
+    );
+}
+
+pub(crate) fn append_compiler_outcome(result: &mut ToolResult, outcome: &CompilerCheckOutcome) {
+    match outcome {
+        CompilerCheckOutcome::Passed => {}
+        CompilerCheckOutcome::SourceDiagnostics { output, .. } => {
+            result
+                .content
+                .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+            result
+                .content
+                .push_str(&compiler_diagnostics_with_snippets(output));
+            result.metadata.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+            result.metadata.retryable = true;
+        }
+        CompilerCheckOutcome::UnverifiedInfrastructure { reason } => {
+            result.content.push_str("\n\n");
+            result.content.push_str("__BUILD_UNVERIFIED__: ");
+            result.content.push_str(reason);
+            result.content.push_str(". The build could not be verified. Check the checker environment or sandbox, then rerun verification.");
+        }
+    }
 }
 
 fn compiler_diagnostic_locations(diagnostics: &str) -> Vec<(String, usize, usize)> {
@@ -249,6 +364,57 @@ const COMPILER_DIAGNOSTIC_MARKER: &str = "LSP/Compiler errors detected in worksp
 mod compiler_execution_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn compiler_output_classification_separates_pass_source_and_infrastructure() {
+        let passed = classify_compiler_output("biome check .", false, true, Some(0), "", "");
+        assert_eq!(passed, CompilerCheckOutcome::Passed);
+
+        let source = classify_compiler_output(
+            "biome check .",
+            false,
+            false,
+            Some(1),
+            "src/main.ts(3,1): error TS2322: wrong type",
+            "",
+        );
+        assert!(matches!(
+            source,
+            CompilerCheckOutcome::SourceDiagnostics { .. }
+        ));
+
+        let infrastructure = classify_compiler_output(
+            "bunx biome check .",
+            false,
+            false,
+            Some(1),
+            "",
+            "error: unable to write files to tempdir: PermissionDenied",
+        );
+        assert!(matches!(
+            infrastructure,
+            CompilerCheckOutcome::UnverifiedInfrastructure { .. }
+        ));
+
+        let empty_failure = classify_compiler_output("tsc --noEmit", false, false, Some(1), "", "");
+        assert!(matches!(
+            empty_failure,
+            CompilerCheckOutcome::UnverifiedInfrastructure { .. }
+        ));
+
+        let missing_executable = classify_compiler_output(
+            "biome check .",
+            false,
+            false,
+            Some(127),
+            "sh: biome: command not found",
+            "",
+        );
+        assert!(matches!(
+            missing_executable,
+            CompilerCheckOutcome::UnverifiedInfrastructure { .. }
+        ));
+    }
 
     #[tokio::test]
     async fn stderr_only_cargo_failure_is_not_cached_as_passed() {
@@ -331,7 +497,8 @@ mod compiler_execution_tests {
         )
         .await
         .unwrap();
-        assert!(failure.contains("status 9"));
+        assert!(failure.starts_with("__BUILD_UNVERIFIED__"), "{failure}");
+        assert!(failure.contains("without output"));
         assert!(
             run_compiler_command(
                 project.path(),
@@ -435,5 +602,18 @@ pub(crate) fn update_compiler_diagnostic_streak(
             ctx.compiler.last_diagnostic_fingerprint = None;
             ctx.compiler.consecutive_diagnostics = 0;
         }
+    }
+}
+
+pub(crate) fn update_compiler_outcome_streak(
+    ctx: &mut TurnContext,
+    outcome: &CompilerCheckOutcome,
+) {
+    match outcome {
+        CompilerCheckOutcome::Passed => update_compiler_diagnostic_streak(ctx, None),
+        CompilerCheckOutcome::SourceDiagnostics { fingerprint, .. } => {
+            update_compiler_diagnostic_streak(ctx, Some(fingerprint.clone()));
+        }
+        CompilerCheckOutcome::UnverifiedInfrastructure { .. } => {}
     }
 }

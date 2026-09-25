@@ -2987,6 +2987,72 @@ fn repeated_compiler_diagnostics_increment_and_reset_their_streak() {
 }
 
 #[test]
+fn compiler_outcomes_only_count_verified_source_diagnostics() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, update_compiler_outcome_streak,
+    };
+
+    let mut ctx = TurnContext::new();
+    let diagnostic = CompilerCheckOutcome::SourceDiagnostics {
+        output: "error[E0425]: missing_symbol".to_string(),
+        fingerprint: "error[E0425]: missing_symbol".to_string(),
+    };
+    let mut source_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    append_compiler_outcome(&mut source_result, &diagnostic);
+    update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    let marker = "LSP/Compiler errors detected in workspace, please fix:";
+    assert!(source_result.content.contains(marker));
+    assert_eq!(
+        compiler_diagnostic_fingerprint(&source_result.content),
+        Some("error[E0425]: missing_symbol".to_string())
+    );
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
+    update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
+
+    let mut infrastructure_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    let infrastructure = CompilerCheckOutcome::UnverifiedInfrastructure {
+        reason: "PermissionDenied while creating checker tempdir".to_string(),
+    };
+    append_compiler_outcome(&mut infrastructure_result, &infrastructure);
+    update_compiler_outcome_streak(&mut ctx, &infrastructure);
+    assert!(!infrastructure_result.content.contains(marker));
+    assert!(compiler_diagnostic_fingerprint(&infrastructure_result.content).is_none());
+    assert!(
+        infrastructure_result
+            .content
+            .contains("could not be verified")
+    );
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
+
+    let passed = CompilerCheckOutcome::Passed;
+    let mut passed_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    append_compiler_outcome(&mut passed_result, &passed);
+    assert_eq!(passed_result.content, "edit applied");
+    update_compiler_outcome_streak(&mut ctx, &passed);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+    assert!(ctx.compiler.last_diagnostic_fingerprint.is_none());
+}
+
+#[test]
 fn repeated_compiler_diagnostics_trigger_the_budget() {
     let mut ctx = TurnContext::new();
     ctx.compiler.consecutive_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
