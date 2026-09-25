@@ -2,6 +2,14 @@ use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prom
 use super::*;
 
 #[test]
+fn app_state_preserves_the_session_workspace_root() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let state = AppState::new_with_workspace_session(workspace.path(), Some("workspace-root-test"));
+
+    assert_eq!(state.workspace_root.as_deref(), Some(workspace.path()));
+}
+
+#[test]
 fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
     let history = vec![
         ChatMessage::new("user", "first task"),
@@ -5081,23 +5089,28 @@ async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
 #[tokio::test]
 async fn view_file_reports_structured_truncation_only_when_content_is_omitted() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=1000).map(|line| format!("line {line}\n")).collect();
     std::fs::write(&file, content).expect("write");
     let path = file.to_string_lossy().to_string();
 
-    let truncated = run_one_tool(test_tool_call(
-        "view_file",
-        serde_json::json!({"path": path}),
-    ))
+    let truncated = run_one_tool_with_state(
+        &state,
+        test_tool_call("view_file", serde_json::json!({"path": path})),
+    )
     .await;
     assert!(truncated.metadata.success);
     assert!(truncated.metadata.truncated);
 
-    let targeted = run_one_tool(test_tool_call(
-        "view_file",
-        serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
-    ))
+    let targeted = run_one_tool_with_state(
+        &state,
+        test_tool_call(
+            "view_file",
+            serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+        ),
+    )
     .await;
     assert!(targeted.metadata.success);
     assert!(!targeted.metadata.truncated);
@@ -5137,8 +5150,9 @@ async fn repeated_failed_read_reexecutes_and_preserves_structured_failure() {
 
 #[tokio::test]
 async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=850).map(|line| format!("{line}\n")).collect();
     std::fs::write(&file, content).expect("write");
@@ -5162,8 +5176,9 @@ async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
 
 #[tokio::test]
 async fn repeated_unchanged_small_view_file_replays_cached_body() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("small.txt");
     std::fs::write(&file, "first line\nrecoverable body\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5184,8 +5199,9 @@ async fn repeated_unchanged_small_view_file_replays_cached_body() {
 
 #[tokio::test]
 async fn view_file_subrange_reuses_complete_cached_read() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5234,8 +5250,9 @@ async fn view_file_subrange_reuses_complete_cached_read() {
 
 #[tokio::test]
 async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5260,8 +5277,9 @@ async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
 
 #[tokio::test]
 async fn view_file_subrange_with_different_content_offset_reexecutes() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5291,8 +5309,9 @@ async fn view_file_subrange_with_different_content_offset_reexecutes() {
 
 #[tokio::test]
 async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.rs");
     let content: String = (1..=800)
         .map(|line| format!("line {line}: {}\n", "x".repeat(13)))
@@ -5383,8 +5402,9 @@ async fn repeated_over_limit_failed_read_reexecutes() {
 
 #[tokio::test]
 async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=850)
         .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
@@ -5420,6 +5440,8 @@ async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() 
 #[tokio::test]
 async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     // The edit lands at line 50, not line 1 — the old argument-only
     // preview always reported line 1 because it had no idea where in
@@ -5437,7 +5459,7 @@ async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
             "new_string": "let target = 100;",
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     assert!(result.metadata.success, "got: {}", result.content);
     let diff = result.diff.expect("a real edit must produce a diff");
@@ -5458,6 +5480,8 @@ async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
     // inserted line as `+`, the anchor line as unchanged context) —
     // not a side-by-side line-for-line replacement of the whole block.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5470,7 +5494,7 @@ async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
             "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     let diff = result.diff.expect("an insertion must still produce a diff");
     assert!(diff.contains("+    let model_name = ...;"), "got: {diff}");
@@ -5489,6 +5513,8 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
     // PR #306 made the edit itself idempotent. A stale diff on a no-op
     // result would tell the user something changed when nothing did.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let status = Idle;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5498,13 +5524,15 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
         "new_string": "let status = Active;",
     });
 
-    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    let first =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args.clone())).await;
     assert!(
         first.diff.is_some(),
         "the first, real change must have a diff"
     );
 
-    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    let second =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args)).await;
     assert!(
         second
             .content
@@ -5523,6 +5551,8 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
 #[tokio::test]
 async fn multi_replacement_final_diff_is_real() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5537,7 +5567,7 @@ async fn multi_replacement_final_diff_is_real() {
             ],
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     assert!(result.metadata.success, "got: {}", result.content);
     let diff = result
@@ -5709,6 +5739,8 @@ async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
     // final_tool_diff as a non-empty fallback, showing a diff for a
     // no-op that changed nothing.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let status = Idle;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5718,13 +5750,15 @@ async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
         "new_string": "let status = Active;",
     });
 
-    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    let first =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args.clone())).await;
     assert!(
         first.diff.is_some(),
         "the first, real change must have a diff"
     );
 
-    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    let second =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args)).await;
     assert!(
         second
             .content

@@ -134,7 +134,7 @@ pub struct AppState {
     pub cwd_and_branch: String,
     /// Cached workspace path and Git branch used by the composer footer.
     pub(crate) workspace_location: crate::app::workspace::WorkspaceLocationCache,
-    /// Workspace root supplied by an external frontend such as ACP.
+    /// Session workspace boundary; sandbox backends canonicalize it before use.
     pub workspace_root: Option<std::path::PathBuf>,
     /// Task/project directory supplied by an external frontend. This is the
     /// default navigation scope; `workspace_root` remains the hard boundary.
@@ -1054,7 +1054,7 @@ impl AppState {
             config,
             cwd_and_branch,
             workspace_location,
-            workspace_root: None,
+            workspace_root: Some(workspace.to_path_buf()),
             task_working_directory: None,
             update_check: crate::update::UpdateState::Unknown,
             show_update_prompt: false,

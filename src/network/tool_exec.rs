@@ -553,30 +553,34 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             tokio::task::spawn_blocking(move || {
                 crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
                     crate::tools::set_active_session_id(Some(session_id));
+                    let workspace_root_for_command = workspace_root_for_task.clone();
                     crate::tools::set_active_workspace_context(
                         workspace_root_for_task,
                         task_working_directory_for_task,
                         false,
                         Some(sandbox_mode_for_task),
                     );
-                    let result = if name_owned == "run_command" && live_key_owned.is_some() {
-                        let callback: crate::tools::CommandProgressCallback =
-                            Arc::new(move |bytes, stderr| {
-                                let _ = progress_tx.send((bytes.to_vec(), stderr));
-                            });
-                        crate::tools::run_command_output_with_progress_cancellable_for_call(
-                            &args_owned,
-                            callback,
-                            Some(cancel_token_for_task),
-                            call_id_owned.as_deref(),
-                        )
-                        .unwrap_or_else(|error| {
-                            crate::tools::ToolExecutionOutput::failure_with_kind(
-                                format!("error: {error}"),
-                                crate::tools::ToolErrorKind::CommandFailed,
-                                true,
+                    let result = if name_owned == "run_command" {
+                        if live_key_owned.is_some() {
+                            let callback: crate::tools::CommandProgressCallback =
+                                Arc::new(move |bytes, stderr| {
+                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                });
+                            crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
+                                &args_owned,
+                                callback,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                                workspace_root_for_command,
                             )
-                        })
+                        } else {
+                            crate::tools::run_command_output_with_workspace_for_call(
+                                &args_owned,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                                workspace_root_for_command,
+                            )
+                        }
                     } else if name_owned == "render_video" && live_key_owned.is_some() {
                         let callback: crate::tools::CommandProgressCallback =
                             Arc::new(move |bytes, stderr| {
@@ -806,6 +810,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
                         crate::tools::set_active_session_id(Some(session_id));
+                        let workspace_root_for_command = workspace_root_for_task.clone();
                         crate::tools::set_active_workspace_context(
                             workspace_root_for_task,
                             task_working_directory_for_task,
@@ -823,6 +828,13 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                                 &args_owned,
                                 Some(cancel_token_for_task),
                                 Some(callback),
+                            )
+                        } else if name_owned == "run_command" {
+                            crate::tools::run_command_output_with_workspace_for_call(
+                                &args_owned,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                                workspace_root_for_command,
                             )
                         } else {
                             crate::tools::execute_with_metadata_cancellable_for_call(
@@ -1576,6 +1588,99 @@ mod cancellation_tests {
         .await;
         assert!(approved, "the current repeated-call ID should resolve");
         second_run.await.expect("confirmation task should finish");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod workspace_propagation_tests {
+    use super::confirm_and_execute_for_call_with_assessment;
+    use crate::app::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn run_command_without_cwd_uses_the_session_workspace() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+            workspace.path(),
+            Some("workspace-propagation-test"),
+        )));
+        let active_workspace = state.lock().await.workspace_root.clone();
+        let (output, _, _) = confirm_and_execute_for_call_with_assessment(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "run_command",
+            &serde_json::json!({"command": "pwd"}),
+            "run_command",
+            true,
+            active_workspace,
+            None,
+            Some("workspace-propagation-call"),
+            None,
+        )
+        .await;
+
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output
+                .content
+                .contains(&workspace.path().display().to_string()),
+            "command did not run in the session workspace: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_run_command_keeps_the_session_workspace() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let output_path = workspace.path().join("approved-command.txt");
+        let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+            workspace.path(),
+            Some("approved-workspace-propagation-test"),
+        )));
+        let active_workspace = state.lock().await.workspace_root.clone();
+        let state_for_task = Arc::clone(&state);
+        let command_for_task = format!("pwd && touch '{}'", output_path.display());
+        let task = tokio::spawn(async move {
+            confirm_and_execute_for_call_with_assessment(
+                &reqwest::Client::new(),
+                &state_for_task,
+                &tokio_util::sync::CancellationToken::new(),
+                "run_command",
+                &serde_json::json!({"command": command_for_task}),
+                "run_command",
+                false,
+                active_workspace,
+                None,
+                Some("approved-workspace-propagation-call"),
+                None,
+            )
+            .await
+        });
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(response) = state.lock().await.tool_confirmation_response.take() {
+                    break response;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("command should request confirmation");
+        response
+            .send(crate::app::ToolConfirmationResponse::Approve)
+            .expect("confirmation task should still be waiting");
+
+        let (output, _, _) = task.await.expect("command task should finish");
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output
+                .content
+                .contains(&workspace.path().display().to_string())
+        );
+        assert!(output_path.is_file());
     }
 }
 

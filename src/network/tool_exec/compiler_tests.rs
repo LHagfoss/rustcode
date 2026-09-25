@@ -38,6 +38,7 @@ async fn batch_compiler_diagnostics_are_once_per_edit_and_refresh_after_fix() {
     let project = compiler_project();
     let unrelated_project = tempfile::tempdir().unwrap();
     let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(project.path().to_path_buf());
     state.lock().await.agent_mode = crate::config::AgentMode::Build;
     let calls =
         ["pub fn broken( {", "pub fn repaired() {}"].map(|content| crate::tools::ToolCall {
@@ -103,6 +104,7 @@ async fn batch_compiler_diagnostics_are_once_per_edit_and_refresh_after_fix() {
 async fn standalone_edit_preserves_compiler_check() {
     let project = compiler_project();
     let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(project.path().to_path_buf());
     state.lock().await.agent_mode = crate::config::AgentMode::Build;
     let (result, _, _) = confirm_and_execute(
         &reqwest::Client::new(),
