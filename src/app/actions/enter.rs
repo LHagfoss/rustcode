@@ -68,10 +68,7 @@ async fn handle_enter_inner(
 
         match cmd {
             "/memory" => {
-                let root = s
-                    .workspace_root
-                    .clone()
-                    .or_else(|| std::env::current_dir().ok());
+                let root = s.effective_workspace_root();
                 match tokens.get(1).copied() {
                     None => check_memory_usage(&mut s),
                     Some(_) => {
@@ -1157,10 +1154,7 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
                 ));
                 return;
             };
-            let source = s
-                .workspace_root
-                .clone()
-                .or_else(|| std::env::current_dir().ok());
+            let source = s.effective_workspace_root();
             let Some(source) = source else {
                 s.history.push(ChatMessage::new(
                     "system",
@@ -1251,46 +1245,145 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
             }
         }
         "cleanup" => {
-            let Some(path) = s.workspace_root.as_deref() else {
-                s.history.push(ChatMessage::new(
-                    "system",
-                    "No isolated workspace is active.",
-                ));
-                return;
-            };
-            let confirmed = tokens.get(2) == Some(&"confirm");
-            let delete_branch = tokens.get(3) == Some(&"delete-branch");
-            match manager.find_by_workspace_path(path) {
-                Ok(Some(descriptor)) => match manager.cleanup(
-                    &descriptor.id,
-                    rustcode_session::CleanupAction::Remove { delete_branch },
-                    confirmed,
-                ) {
-                    Ok(_) => {
-                        s.workspace_root = None;
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            "Isolated workspace removed. Source checkout was not changed.",
-                        ));
-                    }
-                    Err(error) => s.history.push(ChatMessage::new(
-                        "system",
-                        format!("Workspace cleanup was not performed: {error}"),
-                    )),
-                },
-                Ok(None) => s.history.push(ChatMessage::new(
-                    "system",
-                    "No RustCode workspace descriptor owns the active path.",
-                )),
-                Err(error) => s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Unable to find workspace: {error}"),
-                )),
-            }
+            handle_workspace_cleanup(s, &manager, tokens);
         }
         _ => s.history.push(ChatMessage::new(
             "system",
             "Unknown workspace action. Use create, status, archive, or cleanup.",
         )),
+    }
+}
+
+fn handle_workspace_cleanup(
+    s: &mut AppState,
+    manager: &rustcode_session::WorkspaceManager,
+    tokens: &[&str],
+) {
+    let Some(path) = s.workspace_root.as_deref() else {
+        s.history.push(ChatMessage::new(
+            "system",
+            "No isolated workspace is active.",
+        ));
+        return;
+    };
+    let confirmed = tokens.get(2) == Some(&"confirm");
+    let delete_branch = tokens.get(3) == Some(&"delete-branch");
+    match manager.find_by_workspace_path(path) {
+        Ok(Some(descriptor)) => match manager.cleanup(
+            &descriptor.id,
+            rustcode_session::CleanupAction::Remove { delete_branch },
+            confirmed,
+        ) {
+            Ok(_) => {
+                s.workspace_root = None;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "Isolated workspace removed. Source checkout was not changed.",
+                ));
+            }
+            Err(error) => s.history.push(ChatMessage::new(
+                "system",
+                format!("Workspace cleanup was not performed: {error}"),
+            )),
+        },
+        Ok(None) => s.history.push(ChatMessage::new(
+            "system",
+            "No RustCode workspace descriptor owns the active path.",
+        )),
+        Err(error) => s.history.push(ChatMessage::new(
+            "system",
+            format!("Unable to find workspace: {error}"),
+        )),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod workspace_cleanup_tests {
+    use super::handle_workspace_cleanup;
+    use crate::app::AppState;
+    use rustcode_session::{WorkspaceManager, WorkspaceRequest};
+    use std::path::Path;
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git command should start");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[tokio::test]
+    async fn confirmed_workspace_cleanup_restores_source_for_run_command() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
+
+        let source = tempfile::tempdir().unwrap();
+        git(source.path(), &["init", "-b", "main"]);
+        git(
+            source.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        git(source.path(), &["config", "user.name", "Test"]);
+        std::fs::write(source.path().join("README.md"), "base\n").unwrap();
+        git(source.path(), &["add", "."]);
+        git(source.path(), &["commit", "-m", "base"]);
+        let base_sha = git(source.path(), &["rev-parse", "HEAD"]);
+        let persistence = tempfile::tempdir().unwrap();
+        let manager = WorkspaceManager::new(persistence.path());
+        let mut request = WorkspaceRequest::for_task(
+            source.path(),
+            "cleanup-regression",
+            base_sha,
+            "rustcode",
+            "cleanup-session",
+            "cleanup-task",
+        );
+        request.branch = Some("rustcode/cleanup-regression".to_owned());
+        let descriptor = manager.create(&request).unwrap();
+
+        let mut state =
+            AppState::new_with_workspace_session(source.path(), Some("cleanup-session"));
+        state.workspace_root = Some(descriptor.workspace_path.clone());
+        handle_workspace_cleanup(&mut state, &manager, &["/workspace", "cleanup", "confirm"]);
+
+        assert_eq!(state.workspace_root, None);
+        assert_eq!(
+            state.effective_workspace_root().as_deref(),
+            Some(source.path())
+        );
+        assert!(!descriptor.workspace_path.exists());
+
+        let shared_state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+        let (output, _, _) =
+            crate::network::tool_exec::confirm_and_execute_for_call_with_assessment(
+                &reqwest::Client::new(),
+                &shared_state,
+                &tokio_util::sync::CancellationToken::new(),
+                "run_command",
+                &serde_json::json!({"command": "pwd"}),
+                "run_command",
+                true,
+                None,
+                None,
+                Some("cleanup-regression-call"),
+                None,
+            )
+            .await;
+
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output
+                .content
+                .contains(&source.path().display().to_string()),
+            "command did not use the source after cleanup: {}",
+            output.content
+        );
     }
 }

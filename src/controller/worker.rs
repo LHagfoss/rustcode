@@ -255,6 +255,16 @@ async fn controller_worker(
             Command::ListSessions => {
                 if let Some(session) = active.as_ref() {
                     let state = session.state.lock().await;
+                    // The active transcript is added to this snapshot even
+                    // before its queued history write has reached disk. Make
+                    // it resumable before advertising it as a saved session.
+                    if crate::config::session_has_content(&state.history) {
+                        crate::config::save_session_history(
+                            &state.active_session_id,
+                            &state.history,
+                        );
+                        crate::config::flush_history();
+                    }
                     let sessions = crate::app::actions::build_session_list(&state);
                     let mut snapshot = ControllerSnapshot::from_state(session.generation, &state);
                     snapshot.sessions = sessions

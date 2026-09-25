@@ -65,8 +65,8 @@ impl InteractivePolicy {
                 state
                     .task_working_directory
                     .clone()
-                    .or_else(|| state.workspace_root.clone()),
-                state.workspace_root.clone(),
+                    .or_else(|| state.effective_workspace_root()),
+                state.effective_workspace_root(),
                 state.config.sandbox_mode,
             )
         };
@@ -637,6 +637,71 @@ mod tests {
             assert!(confirmation.content_preview.contains("(one time)"));
             assert!(confirmation.rememberable_prefix.is_none());
         }
+        state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .unwrap()
+            .send(crate::app::ToolConfirmationResponse::Approve)
+            .unwrap();
+        assert!(task.await.unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn one_shot_filesystem_request_uses_session_source_when_no_workspace_is_active() {
+        let source = tempfile::tempdir().unwrap();
+        let requested = tempfile::tempdir().unwrap();
+        let canonical = requested.path().canonicalize().unwrap();
+        let state = Arc::new(Mutex::new(
+            crate::app::AppState::new_with_workspace_session(
+                source.path(),
+                Some("source-filesystem-policy"),
+            ),
+        ));
+        {
+            let mut state = state.lock().await;
+            state.auto_confirm = true;
+            assert_eq!(state.workspace_root, None);
+        }
+        let policy_state = Arc::clone(&state);
+        let requested = requested.path().display().to_string();
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "touch output/example",
+                    "filesystem_write_path": requested
+                }),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session-source filesystem access must await a user decision");
+        let confirmation = state
+            .lock()
+            .await
+            .pending_tool_confirmation
+            .clone()
+            .unwrap();
+        assert!(
+            confirmation[0]
+                .content_preview
+                .contains(&canonical.display().to_string())
+        );
         state
             .lock()
             .await

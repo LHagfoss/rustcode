@@ -226,10 +226,7 @@ pub(crate) async fn run_subagent(
                 model_name,
                 budget,
                 max_mutating_calls,
-                subagent
-                    .workspace_root
-                    .clone()
-                    .or_else(|| s.workspace_root.clone()),
+                subagent_context_workspace_root(&s, subagent.workspace_root.clone()),
             )
         };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
@@ -831,9 +828,7 @@ pub(crate) async fn handle_agent_tool(
                         );
                     };
                     let source_cwd = s
-                        .workspace_root
-                        .clone()
-                        .or_else(|| std::env::current_dir().ok())
+                        .effective_workspace_root()
                         .ok_or_else(|| "cannot determine source workspace".to_string());
                     let Ok(source_cwd) = source_cwd else {
                         return crate::tools::ToolExecutionOutput::failure(
@@ -1148,9 +1143,36 @@ pub(crate) async fn handle_agent_tool(
     }
 }
 
+fn subagent_context_workspace_root(
+    state: &crate::app::AppState,
+    agent_workspace: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    agent_workspace.or_else(|| state.effective_workspace_root())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subagent_context_defaults_to_session_source_and_prefers_agent_workspace() {
+        let source = tempfile::tempdir().unwrap();
+        let agent_workspace = tempfile::tempdir().unwrap();
+        let state = crate::app::AppState::new_with_workspace_session(
+            source.path(),
+            Some("subagent-source-context"),
+        );
+
+        assert_eq!(
+            subagent_context_workspace_root(&state, None).as_deref(),
+            Some(source.path())
+        );
+        assert_eq!(
+            subagent_context_workspace_root(&state, Some(agent_workspace.path().to_path_buf()))
+                .as_deref(),
+            Some(agent_workspace.path())
+        );
+    }
 
     async fn gated_subagent_server() -> (
         String,
