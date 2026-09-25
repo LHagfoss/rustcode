@@ -427,7 +427,7 @@ impl AppView {
         {
             self.selected_question_options.clear();
         }
-        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(
+        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalBatchRequested(
             approval,
         )) = &event.update
         {
@@ -446,7 +446,7 @@ impl AppView {
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
                 let pending_batch_id = snapshot
-                    .pending_approval
+                    .pending_approval_batch
                     .as_ref()
                     .map(|approval| approval.batch_id.as_str());
                 self.expanded_approval_actions
@@ -1632,7 +1632,7 @@ impl AppView {
             self.navigation
                 .chat_snapshot
                 .as_ref()
-                .and_then(|snapshot| snapshot.pending_approval.clone())
+                .and_then(|snapshot| snapshot.pending_approval_batch.clone())
         })?;
         let batch_id = prompt.batch_id.clone();
         let approve_view = cx.entity().downgrade();
@@ -1764,7 +1764,7 @@ impl AppView {
                                             this.chat_state.begin_user_action();
                                             this.chat_state.set_approval_denied();
                                             if let Err(error) =
-                                                deny_controller.send(Command::Approval {
+                                                deny_controller.send(Command::ApprovalBatch {
                                                     batch_id: deny_id.clone(),
                                                     choice: ApprovalChoice::Deny,
                                                 })
@@ -1793,12 +1793,12 @@ impl AppView {
                                             {
                                                 this.approval_in_flight = Some(approve_id.clone());
                                                 this.chat_state.begin_user_action();
-                                                if let Err(error) =
-                                                    approve_controller.send(Command::Approval {
+                                                if let Err(error) = approve_controller.send(
+                                                    Command::ApprovalBatch {
                                                         batch_id: approve_id.clone(),
                                                         choice: ApprovalChoice::Approve,
-                                                    })
-                                                {
+                                                    },
+                                                ) {
                                                     this.approval_in_flight = None;
                                                     this.status = Some(format!(
                                                         "Could not approve action: {error:?}"
@@ -3335,6 +3335,7 @@ mod tests {
             auto_approve: false,
             pending_question: None,
             pending_approval: None,
+            pending_approval_batch: None,
         }));
 
         navigation.open_settings();
@@ -3420,6 +3421,7 @@ mod tests {
             auto_approve: true,
             pending_question: None,
             pending_approval: None,
+            pending_approval_batch: None,
         };
         let listed = ControllerSnapshot {
             sessions: vec![SessionChoice {

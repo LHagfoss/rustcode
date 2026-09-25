@@ -1,4 +1,4 @@
-use super::{ApprovalPrompt, ControllerSnapshot};
+use super::{ApprovalBatchPrompt, ApprovalPrompt, ControllerSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalChoice {
@@ -31,8 +31,11 @@ pub enum TurnUpdate {
         success: bool,
         pending: bool,
     },
-    /// The approval prompt batch is available in owned form to the frontend.
-    ApprovalRequested(ApprovalPrompt),
+    /// Legacy presentation-only approval prompts. Decisions made from these
+    /// prompts cannot be authorized without a batch identity.
+    ApprovalRequested(Vec<ApprovalPrompt>),
+    /// Exact controller-owned approval batch for batch-aware frontends.
+    ApprovalBatchRequested(ApprovalBatchPrompt),
     QuestionRequested(crate::controller::QuestionPrompt),
     TurnFinished,
     Cancelled,
@@ -60,50 +63,71 @@ pub fn accepts_generation(current: u64, event: &ControllerEvent) -> bool {
 pub(crate) fn from_agent_ui_event(
     generation: u64,
     event: crate::network::ui_adapter::AgentUiEvent,
-) -> Option<ControllerEvent> {
+) -> Vec<ControllerEvent> {
     use crate::network::ui_adapter::AgentUiEvent;
 
-    let update = match event {
+    let updates = match event {
         AgentUiEvent::PromptStarted { prompt } => {
-            ControllerUpdate::Turn(TurnUpdate::PromptStarted(prompt))
+            vec![ControllerUpdate::Turn(TurnUpdate::PromptStarted(prompt))]
         }
-        AgentUiEvent::TextDelta { text } => ControllerUpdate::Turn(TurnUpdate::TextDelta(text)),
+        AgentUiEvent::TextDelta { text } => {
+            vec![ControllerUpdate::Turn(TurnUpdate::TextDelta(text))]
+        }
         AgentUiEvent::ToolStarted { id, name, detail } => {
-            ControllerUpdate::Turn(TurnUpdate::ToolStarted { id, name, detail })
+            vec![ControllerUpdate::Turn(TurnUpdate::ToolStarted {
+                id,
+                name,
+                detail,
+            })]
         }
         AgentUiEvent::ToolFinished { id, result } => {
-            ControllerUpdate::Turn(TurnUpdate::ToolFinished {
+            vec![ControllerUpdate::Turn(TurnUpdate::ToolFinished {
                 id,
                 content: result.content,
                 success: result.metadata.success,
                 pending: result.metadata.pending,
-            })
+            })]
         }
-        AgentUiEvent::TurnFinished { .. } => ControllerUpdate::Turn(TurnUpdate::TurnFinished),
-        AgentUiEvent::Cancelled { .. } => ControllerUpdate::Turn(TurnUpdate::Cancelled),
+        AgentUiEvent::TurnFinished { .. } => vec![ControllerUpdate::Turn(TurnUpdate::TurnFinished)],
+        AgentUiEvent::Cancelled { .. } => vec![ControllerUpdate::Turn(TurnUpdate::Cancelled)],
         #[cfg(test)]
         AgentUiEvent::Error { message, .. } => {
-            ControllerUpdate::Error(ControllerError::Provider(message))
+            vec![ControllerUpdate::Error(ControllerError::Provider(message))]
         }
         #[cfg(test)]
         AgentUiEvent::TurnRecovered { message } => {
-            ControllerUpdate::Error(ControllerError::Provider(message))
+            vec![ControllerUpdate::Error(ControllerError::Provider(message))]
         }
         AgentUiEvent::ApprovalRequested { batch_id, actions } => {
             let actions = actions
                 .into_iter()
                 .map(|action| action.with_generation(generation))
                 .collect();
-            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
-                ApprovalPrompt::new(actions).with_batch_id(batch_id),
-            ))
+            let batch = ApprovalBatchPrompt::new(actions).with_batch_id(batch_id);
+            let legacy = batch
+                .actions
+                .iter()
+                .map(|action| ApprovalPrompt {
+                    tool_name: action.tool_name.clone(),
+                    description: action.description.clone(),
+                })
+                .collect();
+            vec![
+                ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(legacy)),
+                ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(batch)),
+            ]
         }
         AgentUiEvent::QuestionRequested { prompt } => {
-            ControllerUpdate::Turn(TurnUpdate::QuestionRequested(prompt))
+            vec![ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
+                prompt,
+            ))]
         }
-        AgentUiEvent::SubagentUpdated { .. } => return None,
+        AgentUiEvent::SubagentUpdated { .. } => return Vec::new(),
     };
-    Some(ControllerEvent { generation, update })
+    updates
+        .into_iter()
+        .map(|update| ControllerEvent { generation, update })
+        .collect()
 }
 
 #[cfg(test)]
@@ -122,23 +146,20 @@ mod tests {
                 r#"{"path":"src/main.rs"}"#.to_owned(),
             )],
         };
-        let public = from_agent_ui_event(13, event).expect("approval request should be projected");
-
-        assert_eq!(public.generation, 13);
-        assert_eq!(
-            public.update,
-            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
-                super::super::ApprovalPrompt::new(vec![super::super::ApprovalAction::new(
-                    "13:call-13".to_owned(),
-                    "write_file".to_owned(),
-                    "write_file · src/main.rs".to_owned(),
-                    "This action requires your approval before it can continue.".to_owned(),
-                    r#"{"path":"src/main.rs"}"#.to_owned(),
-                )])
-                .with_batch_id("controller:13:1".to_owned()),
-            ))
-        );
-        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approval)) = public.update else {
+        let public = from_agent_ui_event(13, event);
+        assert_eq!(public.len(), 2);
+        assert!(public.iter().all(|event| event.generation == 13));
+        assert!(matches!(
+            &public[0].update,
+            ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(prompts))
+                if prompts == &[super::super::ApprovalPrompt {
+                    tool_name: "write_file".to_owned(),
+                    description: r#"{"path":"src/main.rs"}"#.to_owned(),
+                }]
+        ));
+        let ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(approval)) =
+            public[1].update.clone()
+        else {
             unreachable!();
         };
         assert_eq!(approval.request_id, "batch:1:10:13:call-13");
@@ -148,6 +169,20 @@ mod tests {
         assert_eq!(action.action_summary, "write_file · src/main.rs");
         assert!(action.risk_context.contains("requires your approval"));
         assert_eq!(action.description, r#"{"path":"src/main.rs"}"#);
+    }
+
+    #[test]
+    fn legacy_approval_prompt_construction_and_match_remain_available() {
+        let prompt = super::super::ApprovalPrompt {
+            tool_name: "write_file".to_owned(),
+            description: "src/main.rs".to_owned(),
+        };
+        let update = TurnUpdate::ApprovalRequested(vec![prompt]);
+        let TurnUpdate::ApprovalRequested(prompts) = update else {
+            unreachable!();
+        };
+        assert_eq!(prompts[0].tool_name, "write_file");
+        assert_eq!(prompts[0].description, "src/main.rs");
     }
 
     #[test]
@@ -175,10 +210,11 @@ mod tests {
                     ),
                 ],
             },
-        )
-        .expect("approval request should be projected");
+        );
 
-        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approval)) = public.update else {
+        let ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(approval)) =
+            public[1].update.clone()
+        else {
             unreachable!();
         };
         assert_eq!(approval.actions.len(), 2);
@@ -204,8 +240,11 @@ mod tests {
                     multiple: true,
                 },
             },
-        )
-        .expect("question prompt should be projected");
+        );
+        let public = public
+            .into_iter()
+            .next()
+            .expect("question prompt should be projected");
 
         assert_eq!(public.generation, 23);
         assert_eq!(
@@ -229,7 +268,10 @@ mod tests {
             name: "read_file".to_owned(),
             detail: Some("src/main.rs".to_owned()),
         };
-        let public = from_agent_ui_event(12, event).expect("event should be projected");
+        let public = from_agent_ui_event(12, event)
+            .into_iter()
+            .next()
+            .expect("event should be projected");
         assert_eq!(public.generation, 12);
         assert_eq!(
             public.update,

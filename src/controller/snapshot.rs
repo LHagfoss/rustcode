@@ -18,7 +18,11 @@ pub enum Command {
     SetAutoApprove(bool),
     SelectModel(String),
     AnswerQuestion(String),
-    Approval {
+    /// Legacy unbound decision. The controller rejects it because it cannot
+    /// identify which pending batch the caller reviewed.
+    Approval(ApprovalChoice),
+    /// Resolve only the controller-owned batch the caller reviewed.
+    ApprovalBatch {
         batch_id: String,
         choice: ApprovalChoice,
     },
@@ -139,6 +143,13 @@ impl ApprovalAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPrompt {
+    pub tool_name: String,
+    pub description: String,
+}
+
+/// Exact, controller-owned approval batch for batch-aware frontends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalBatchPrompt {
     /// Presentation signature for the action request IDs in this batch.
     pub request_id: String,
     /// Controller-owned authorization token for this exact pending batch.
@@ -146,7 +157,7 @@ pub struct ApprovalPrompt {
     pub actions: Vec<ApprovalAction>,
 }
 
-impl ApprovalPrompt {
+impl ApprovalBatchPrompt {
     pub fn new(actions: Vec<ApprovalAction>) -> Self {
         let mut request_id = format!("batch:{}", actions.len());
         for action in &actions {
@@ -194,13 +205,16 @@ pub struct ControllerSnapshot {
     pub turn_active: bool,
     pub auto_approve: bool,
     pub pending_question: Option<QuestionPrompt>,
+    /// Legacy presentation-only projection. It carries no authorization token.
     pub pending_approval: Option<ApprovalPrompt>,
+    /// Exact batch-aware approval data for native frontends.
+    pub pending_approval_batch: Option<ApprovalBatchPrompt>,
 }
 
 impl ControllerSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_state(generation: u64, state: &AppState) -> Self {
-        let pending_approval = state
+        let pending_approval_batch = state
             .pending_tool_confirmation
             .as_ref()
             .filter(|confirmations| !confirmations.is_empty())
@@ -220,11 +234,18 @@ impl ControllerSnapshot {
                         action.with_generation(generation)
                     })
                     .collect();
-                let prompt = ApprovalPrompt::new(actions);
+                let prompt = ApprovalBatchPrompt::new(actions);
                 state
                     .pending_approval_batch_id
                     .as_ref()
                     .map(|batch_id| prompt.with_batch_id(batch_id.clone()))
+            });
+        let pending_approval = pending_approval_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.first())
+            .map(|action| ApprovalPrompt {
+                tool_name: action.tool_name.clone(),
+                description: action.description.clone(),
             });
         let mut details = std::collections::HashMap::new();
         let transcript = state
@@ -368,6 +389,7 @@ impl ControllerSnapshot {
                     multiple: question.is_multi_select,
                 }),
             pending_approval,
+            pending_approval_batch,
         }
     }
 }

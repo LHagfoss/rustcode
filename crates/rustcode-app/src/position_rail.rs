@@ -1,6 +1,7 @@
 pub const MAX_MARKERS: usize = 14;
 pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
 pub const MARKER_HIT_TARGET_HEIGHT: f32 = 20.;
+pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 16.;
 pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
 pub const RAIL_VERTICAL_INSET: f32 = 8.;
 pub const RAIL_CONTENT_GAP: f32 = 3.;
@@ -21,6 +22,20 @@ pub fn marker_count(row_count: usize) -> usize {
     } else {
         row_count.min(MAX_MARKERS)
     }
+}
+
+pub fn marker_count_for_height(row_count: usize, viewport_height: f32) -> usize {
+    let available_height = (viewport_height - 2. * RAIL_VERTICAL_INSET).max(0.);
+    let height_capacity = (available_height / MIN_MARKER_HIT_TARGET_HEIGHT).floor() as usize;
+    row_count.min(MAX_MARKERS).min(height_capacity)
+}
+
+pub fn marker_slot_height_for_count(viewport_height: f32, markers: usize) -> f32 {
+    if markers == 0 {
+        return 0.;
+    }
+    ((viewport_height - 2. * RAIL_VERTICAL_INSET).max(0.) / markers as f32)
+        .min(MARKER_HIT_TARGET_HEIGHT)
 }
 
 pub fn row_to_marker(row: usize, row_count: usize) -> Option<usize> {
@@ -47,6 +62,38 @@ pub fn marker_to_row(marker: usize, row_count: usize) -> Option<usize> {
 
 pub fn active_marker(logical_top_row: usize, row_count: usize) -> Option<usize> {
     row_to_marker(logical_top_row.min(row_count.saturating_sub(1)), row_count)
+}
+
+pub fn row_to_marker_with_count(row: usize, row_count: usize, markers: usize) -> Option<usize> {
+    if markers == 0 || row_count == 0 || row >= row_count {
+        return None;
+    }
+    if markers >= row_count {
+        return Some(row);
+    }
+    Some(scale_index(row, row_count, markers))
+}
+
+pub fn marker_to_row_with_count(marker: usize, row_count: usize, markers: usize) -> Option<usize> {
+    if markers == 0 || marker >= markers || row_count == 0 {
+        return None;
+    }
+    if markers >= row_count {
+        return Some(marker);
+    }
+    Some(scale_index(marker, markers, row_count))
+}
+
+pub fn active_marker_with_count(
+    logical_top_row: usize,
+    row_count: usize,
+    markers: usize,
+) -> Option<usize> {
+    row_to_marker_with_count(
+        logical_top_row.min(row_count.saturating_sub(1)),
+        row_count,
+        markers,
+    )
 }
 
 fn scale_index(index: usize, source_count: usize, target_count: usize) -> usize {
@@ -154,6 +201,38 @@ mod tests {
             MARKER_HIT_TARGET_HEIGHT
         );
         assert_eq!(marker_slot_height(120., 0), 0.);
+    }
+
+    #[test]
+    fn marker_count_adapts_to_measured_height_and_keeps_minimum_target() {
+        for (height, expected_markers) in [(120., 6), (180., 10), (300., 14)] {
+            let count = marker_count_for_height(100, height);
+            assert_eq!(count, expected_markers);
+            let slot = marker_slot_height_for_count(height, count);
+            assert!(slot >= MIN_MARKER_HIT_TARGET_HEIGHT);
+            assert!(slot <= MARKER_HIT_TARGET_HEIGHT);
+            assert!(2. * RAIL_VERTICAL_INSET + count as f32 * slot <= height + 0.01);
+        }
+        assert_eq!(marker_count_for_height(100, 31.), 0);
+        assert_eq!(marker_count_for_height(4, 120.), 4);
+    }
+
+    #[test]
+    fn height_adaptive_mapping_preserves_endpoints_and_click_targets() {
+        let rows = 100;
+        let markers = marker_count_for_height(rows, 120.);
+        assert_eq!(markers, 6);
+        assert_eq!(row_to_marker_with_count(0, rows, markers), Some(0));
+        assert_eq!(
+            row_to_marker_with_count(rows - 1, rows, markers),
+            Some(markers - 1)
+        );
+        assert_eq!(marker_to_row_with_count(0, rows, markers), Some(0));
+        assert_eq!(
+            marker_to_row_with_count(markers - 1, rows, markers),
+            Some(rows - 1)
+        );
+        assert_eq!(active_marker_with_count(50, rows, markers), Some(3));
     }
 
     #[test]

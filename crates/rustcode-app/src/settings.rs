@@ -94,6 +94,7 @@ mod tests {
             auto_approve: false,
             pending_question: None,
             pending_approval: None,
+            pending_approval_batch: None,
         }
     }
 

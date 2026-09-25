@@ -1523,7 +1523,7 @@ mod cancellation_tests {
                             7,
                             &*state.lock().await,
                         );
-                        let prompt = snapshot.pending_approval.expect(
+                        let prompt = snapshot.pending_approval_batch.expect(
                             "direct confirmation must already have a controller batch identity",
                         );
                         return prompt.batch_id;
@@ -1561,7 +1561,7 @@ mod cancellation_tests {
             crate::controller::ControllerSnapshot::from_state(7, &*state.lock().await);
         assert_eq!(
             second_snapshot
-                .pending_approval
+                .pending_approval_batch
                 .expect("current batch")
                 .batch_id,
             second_id,

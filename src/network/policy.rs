@@ -480,7 +480,7 @@ mod tests {
             crate::controller::ControllerSnapshot::from_state(7, &state)
         };
         let approval = snapshot
-            .pending_approval
+            .pending_approval_batch
             .expect("controller approval batch");
         assert_eq!(approval.actions.len(), 2);
         assert_eq!(
@@ -499,7 +499,7 @@ mod tests {
         let stable_batch_id = approval.batch_id.clone();
         assert_eq!(
             crate::controller::ControllerSnapshot::from_state(7, &*state.lock().await)
-                .pending_approval
+                .pending_approval_batch
                 .expect("approval should remain pending")
                 .batch_id,
             stable_batch_id,

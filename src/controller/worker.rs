@@ -314,7 +314,20 @@ async fn controller_worker(
                     Err(error) => send_error(&updates, session.generation, error),
                 }
             }
-            Command::Approval { batch_id, choice } => {
+            Command::Approval(_choice) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                send_error(
+                    &updates,
+                    session.generation,
+                    ControllerError::Provider(
+                        "approval decision requires the reviewed batch identity".to_owned(),
+                    ),
+                );
+            }
+            Command::ApprovalBatch { batch_id, choice } => {
                 let Some(session) = active.as_mut() else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
@@ -625,6 +638,7 @@ fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
         auto_approve,
         pending_question: None,
         pending_approval: None,
+        pending_approval_batch: None,
     }
 }
 
@@ -817,7 +831,7 @@ fn spawn_turn(
                 event = event_receiver.recv(), if event_stream_open => {
                     match event {
                         Some(event) => {
-                            if let Some(public) = events::from_agent_ui_event(generation, event) {
+                            for public in events::from_agent_ui_event(generation, event) {
                                 let _ = updates.send(public);
                             }
                         }

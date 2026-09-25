@@ -28,8 +28,8 @@ pub use events::{
     accepts_generation,
 };
 pub use snapshot::{
-    ApprovalAction, ApprovalPrompt, Command, ControllerHandle, ControllerSnapshot, ModelChoice,
-    QuestionPrompt, SessionChoice, TranscriptItem,
+    ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
+    ControllerSnapshot, ModelChoice, QuestionPrompt, SessionChoice, TranscriptItem,
 };
 
 pub use worker::InteractiveController;

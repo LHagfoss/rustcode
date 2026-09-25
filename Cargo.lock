@@ -7091,7 +7091,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode"
-version = "0.55.11"
+version = "0.56.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -7151,7 +7151,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-app"
-version = "0.55.11"
+version = "0.56.0"
 dependencies = [
  "gpui-kit",
  "rustcode",
