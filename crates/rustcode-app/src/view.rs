@@ -7,7 +7,8 @@ use std::{
 use gpui_kit::{
     Anchor, Context, Focusable, PathPromptOptions, Render, Window, actions,
     component::{
-        Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
+        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, Theme, TitleBar,
+        WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
@@ -28,7 +29,12 @@ use rustcode::controller::{
 
 actions!(
     rustcode_app,
-    [ToggleSidebar, ToggleChatSearch, CloseChatSearch]
+    [
+        ToggleSidebar,
+        OpenSettings,
+        ToggleChatSearch,
+        CloseChatSearch
+    ]
 );
 
 fn current_branch(project: &Path) -> Option<String> {
@@ -90,6 +96,177 @@ pub struct AppView {
 }
 
 impl AppView {
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = crate::settings::SettingsState::from_snapshot(self.snapshot.as_ref());
+        let models = state.models.clone();
+        let selected_model = state.selected_model.clone();
+        let selected_model_label = state
+            .selected_model_label()
+            .unwrap_or("No model selected")
+            .to_owned();
+        let auto_approve = state.auto_approve;
+        let has_session = state.has_session;
+        let controller = self.backend.controller().clone();
+        let view = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let model_rows = models.iter().map(|model| {
+                let model_id = model.id.clone();
+                let model_label = model.label.clone();
+                let selected = selected_model.as_deref() == Some(model.id.as_str());
+                let view = view.clone();
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(if selected {
+                        rgb(0x343a43)
+                    } else {
+                        rgb(0x25272a)
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().font_medium().child(model_label.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xa5a8af))
+                                    .child(model_id.clone()),
+                            ),
+                    )
+                    .child(
+                        Button::new(format!("settings-model-{}", model.id))
+                            .label(if selected { "Selected" } else { "Use model" })
+                            .selected(selected)
+                            .accessibility_label(format!("Use model {}", model.label))
+                            .on_click(move |_, window, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    if has_session
+                                        && this
+                                            .snapshot
+                                            .as_ref()
+                                            .is_some_and(|snapshot| snapshot.session_id.is_some())
+                                        && !this.starting_new_session
+                                    {
+                                        this.send_command(
+                                            Command::SelectModel(model_id.clone()),
+                                            cx,
+                                        );
+                                    } else {
+                                        this.pending_model_selection = Some(model_id.clone());
+                                        cx.notify();
+                                    }
+                                });
+                                window.close_dialog(cx);
+                            }),
+                    )
+            });
+
+            let approval_controller = controller.clone();
+            let approval_label = if auto_approve {
+                "Automatically approve tool calls"
+            } else {
+                "Ask before tool calls"
+            };
+            let approval_detail = if auto_approve {
+                "Tool calls run without a confirmation prompt for this session."
+            } else {
+                "RustCode asks before running tool calls for this session."
+            };
+            let approval_button_label = if auto_approve { "Turn off" } else { "Turn on" };
+            let approval_button_accessibility = if auto_approve {
+                "Ask before tool calls"
+            } else {
+                "Automatically approve tool calls"
+            };
+
+            dialog.title("Settings").w(px(560.)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xa5a8af))
+                            .child("Preferences for the current RustCode session."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_xs().font_semibold().child("MODEL"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xa5a8af))
+                                    .child(format!("Active model: {selected_model_label}")),
+                            )
+                            .when(models.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0xa5a8af))
+                                        .child("Start or open a session to choose a model."),
+                                )
+                            })
+                            .children(model_rows),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_xs().font_semibold().child("APPROVALS"))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_4()
+                                    .px_3()
+                                    .py_3()
+                                    .rounded_md()
+                                    .bg(rgb(0x25272a))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(div().font_medium().child(approval_label))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0xa5a8af))
+                                                    .child(approval_detail),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("settings-toggle-approval")
+                                            .label(approval_button_label)
+                                            .accessibility_label(approval_button_accessibility)
+                                            .on_click(move |_, window, cx| {
+                                                let _ = approval_controller
+                                                    .send(Command::SetAutoApprove(!auto_approve));
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+        });
+    }
+
     pub fn new(
         backend: NativeBackend,
         launch_dir: PathBuf,
@@ -1674,6 +1851,7 @@ fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialogs = Root::render_dialog_layer(window, cx);
         if self.reset_search_input_on_render {
             self.search_input
                 .update(cx, |state, cx| state.set_value("", window, cx));
@@ -2148,6 +2326,7 @@ impl Render for AppView {
             .text_color(rgb(0xe8e9ed))
             .child(div().size_full().flex().child(sidebar).child(main))
             .child(div().absolute().top_0().left_0().right_0().child(title_bar))
+            .children(dialogs)
     }
 }
 
