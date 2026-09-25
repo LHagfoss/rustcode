@@ -314,12 +314,19 @@ async fn controller_worker(
                     Err(error) => send_error(&updates, session.generation, error),
                 }
             }
-            Command::Approval(choice) => {
+            Command::Approval { batch_id, choice } => {
                 let Some(session) = active.as_mut() else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
-                match apply_approval(&session.state, &mut session.cancel_token, choice).await {
+                match apply_approval(
+                    &session.state,
+                    &mut session.cancel_token,
+                    &batch_id,
+                    choice,
+                )
+                .await
+                {
                     Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
                     Err(error) => send_error(&updates, session.generation, error),
                 }
@@ -699,6 +706,8 @@ async fn cancel_active_turn_inner(
             let _ = response.send("User cancelled prompt.".to_owned());
         }
         state.pending_tool_confirmation = None;
+        state.pending_approval_details = None;
+        state.pending_approval_batch_id = None;
         state.pending_question = None;
         state.clear_question_chain();
     }
@@ -755,22 +764,27 @@ pub(super) async fn answer_question(
 pub(super) async fn apply_approval(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut CancellationToken,
+    batch_id: &str,
     choice: ApprovalChoice,
 ) -> Result<(), ControllerError> {
-    {
-        let state = state.lock().await;
-        if state.pending_tool_confirmation.is_none() || state.tool_confirmation_response.is_none() {
-            return Err(ControllerError::Session(
-                "there is no pending tool approval".to_owned(),
-            ));
-        }
-    }
     let decision = match choice {
         ApprovalChoice::Approve => crate::app::ApprovalDecision::Approve,
         ApprovalChoice::Deny => crate::app::ApprovalDecision::Deny,
     };
-    crate::app::runtime::apply_approval_decision(state, cancel_token, decision).await;
-    Ok(())
+    if crate::app::runtime::apply_approval_decision_for_batch(
+        state,
+        cancel_token,
+        batch_id,
+        decision,
+    )
+    .await
+    {
+        Ok(())
+    } else {
+        Err(ControllerError::Session(
+            "the pending tool approval changed before the decision arrived".to_owned(),
+        ))
+    }
 }
 
 fn spawn_turn(

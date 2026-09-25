@@ -30,6 +30,7 @@ pub(crate) enum AgentUiEvent {
         detail: Option<String>,
     },
     ApprovalRequested {
+        batch_id: String,
         actions: Vec<crate::controller::ApprovalAction>,
     },
     QuestionRequested {
@@ -225,6 +226,7 @@ async fn publish_snapshot_with_mode(
         response_revision,
         response_last_rewrite_revision,
         live_tools,
+        pending_approval_batch_id,
         pending_approval_actions,
         pending_question,
         protocol,
@@ -232,12 +234,21 @@ async fn publish_snapshot_with_mode(
         history_len,
         subagents,
     ) = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
+        if state
+            .pending_tool_confirmation
+            .as_ref()
+            .is_some_and(|confirmations| !confirmations.is_empty())
+            && state.pending_approval_batch_id.is_none()
+        {
+            state.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
+        }
         (
             state.current_response.clone(),
             state.current_response_revision,
             state.current_response_last_rewrite_revision,
             Arc::clone(&state.live_tool_calls),
+            state.pending_approval_batch_id.clone().unwrap_or_default(),
             state
                 .pending_tool_confirmation
                 .as_ref()
@@ -246,10 +257,18 @@ async fn publish_snapshot_with_mode(
                         .iter()
                         .enumerate()
                         .map(|(index, confirmation)| {
-                            crate::controller::ApprovalAction::from_confirmation(
+                            let mut action = crate::controller::ApprovalAction::from_confirmation(
                                 confirmation,
                                 index,
-                            )
+                            );
+                            if let Some(full_details) = state
+                                .pending_approval_details
+                                .as_ref()
+                                .and_then(|details| details.get(index))
+                            {
+                                action.full_details = full_details.clone();
+                            }
+                            action
                         })
                         .collect::<Vec<_>>()
                 })
@@ -346,6 +365,7 @@ async fn publish_snapshot_with_mode(
 
     if !pending_approval_actions.is_empty() && !*approval_sent {
         sender.send(AgentUiEvent::ApprovalRequested {
+            batch_id: pending_approval_batch_id,
             actions: pending_approval_actions,
         });
         *approval_sent = true;
@@ -960,6 +980,7 @@ mod tests {
             active_turn: true,
         });
         sender.send(AgentUiEvent::ApprovalRequested {
+            batch_id: "controller:test:1".to_owned(),
             actions: Vec::new(),
         });
         sender.send(AgentUiEvent::TurnRecovered {
@@ -976,7 +997,7 @@ mod tests {
         ));
         assert!(matches!(
             receiver.recv().await,
-            Some(AgentUiEvent::ApprovalRequested { actions }) if actions.is_empty()
+            Some(AgentUiEvent::ApprovalRequested { actions, .. }) if actions.is_empty()
         ));
         assert!(matches!(
             receiver.recv().await,
@@ -1028,6 +1049,11 @@ mod tests {
                     forbidden_prefix: None,
                 },
             ]);
+            state.pending_approval_details = Some(vec![
+                r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+                r#"{"command":"cargo test"}"#.to_owned(),
+            ]);
+            state.pending_approval_batch_id = Some("controller:test:1".to_owned());
         }
         let (sender, mut receiver) = AgentUiEventSender::channel();
         let mut previous_response = super::ResponseDeltaTracker::default();
@@ -1051,9 +1077,11 @@ mod tests {
         )
         .await;
 
-        let Some(AgentUiEvent::ApprovalRequested { actions }) = receiver.recv().await else {
+        let Some(AgentUiEvent::ApprovalRequested { batch_id, actions }) = receiver.recv().await
+        else {
             panic!("pending policy batch should produce one approval event");
         };
+        assert_eq!(batch_id, "controller:test:1");
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].request_id, "call-a");
         assert_eq!(actions[0].action_summary, "write_file · src/a.txt");
@@ -1061,6 +1089,7 @@ mod tests {
         assert_eq!(actions[1].request_id, "call-b");
         assert_eq!(actions[1].action_summary, "run_command · cargo test");
         assert_eq!(actions[1].description, "cargo test\ncommand scope");
+        assert_eq!(actions[1].full_details, r#"{"command":"cargo test"}"#);
     }
 
     #[tokio::test]
