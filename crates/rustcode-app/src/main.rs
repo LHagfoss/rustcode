@@ -1,4 +1,5 @@
 mod projection;
+mod settings;
 
 mod backend;
 mod highlight;
@@ -15,7 +16,7 @@ use gpui_kit::{
 };
 
 use backend::NativeBackend;
-use view::{AppView, ToggleSidebar};
+use view::{AppView, OpenSettings, ToggleSidebar};
 
 fn main() {
     let launch_dir = std::env::args_os()
@@ -33,7 +34,10 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            cx.bind_keys([KeyBinding::new("cmd-b", ToggleSidebar, None)]);
+            cx.bind_keys([
+                KeyBinding::new("cmd-b", ToggleSidebar, None),
+                KeyBinding::new("cmd-,", OpenSettings, None),
+            ]);
             Theme::change(ThemeMode::Dark, None, cx);
             highlight::install(cx);
             let window_bounds = WindowBounds::centered(size(px(1200.), px(800.)), cx);
@@ -50,6 +54,15 @@ fn main() {
                         let toggle_view = view.downgrade();
                         cx.on_action(move |_: &ToggleSidebar, cx| {
                             let _ = toggle_view.update(cx, |view, cx| view.toggle_sidebar(cx));
+                        });
+                        let settings_window = window.window_handle();
+                        let settings_view = view.downgrade();
+                        cx.on_action(move |_: &OpenSettings, cx| {
+                            let _ = cx.update_window(settings_window, |_, window, cx| {
+                                let _ = settings_view.update(cx, |view, cx| {
+                                    view.open_settings(window, cx);
+                                });
+                            });
                         });
                         let updates = view.update(cx, |view, _| view.take_updates());
                         let update_view = view.clone();
