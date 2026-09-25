@@ -1,4 +1,5 @@
 mod projection;
+mod search;
 
 mod backend;
 mod highlight;
@@ -15,7 +16,7 @@ use gpui_kit::{
 };
 
 use backend::NativeBackend;
-use view::{AppView, ToggleSidebar};
+use view::{AppView, CloseChatSearch, ToggleChatSearch, ToggleSidebar};
 
 gpui_kit::actions!([Quit, CloseWindow, MinimizeWindow]);
 
@@ -37,6 +38,8 @@ fn main() {
             gpui_kit::init(cx);
             cx.bind_keys([
                 KeyBinding::new("cmd-b", ToggleSidebar, None),
+                KeyBinding::new("cmd-f", ToggleChatSearch, None),
+                KeyBinding::new("escape", CloseChatSearch, None),
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-w", CloseWindow, None),
                 KeyBinding::new("cmd-m", MinimizeWindow, None),
@@ -64,6 +67,14 @@ fn main() {
                         let toggle_view = view.downgrade();
                         cx.on_action(move |_: &ToggleSidebar, cx| {
                             let _ = toggle_view.update(cx, |view, cx| view.toggle_sidebar(cx));
+                        });
+                        let search_view = view.downgrade();
+                        cx.on_action(move |_: &ToggleChatSearch, cx| {
+                            let _ = search_view.update(cx, |view, cx| view.toggle_chat_search(cx));
+                        });
+                        let close_view = view.downgrade();
+                        cx.on_action(move |_: &CloseChatSearch, cx| {
+                            let _ = close_view.update(cx, |view, cx| view.close_chat_search(cx));
                         });
                         let updates = view.update(cx, |view, _| view.take_updates());
                         let update_view = view.downgrade();
