@@ -27,6 +27,9 @@ pub fn marker_count(row_count: usize) -> usize {
 pub fn marker_count_for_height(row_count: usize, viewport_height: f32) -> usize {
     let available_height = (viewport_height - 2. * RAIL_VERTICAL_INSET).max(0.);
     let height_capacity = (available_height / MIN_MARKER_HIT_TARGET_HEIGHT).floor() as usize;
+    if height_capacity < 2 {
+        return 0;
+    }
     row_count.min(MAX_MARKERS).min(height_capacity)
 }
 
@@ -215,6 +218,21 @@ mod tests {
         }
         assert_eq!(marker_count_for_height(100, 31.), 0);
         assert_eq!(marker_count_for_height(4, 120.), 4);
+    }
+
+    #[test]
+    fn hides_rail_until_measured_height_fits_two_minimum_targets() {
+        for height in [31., 32., 47.] {
+            assert_eq!(marker_count_for_height(100, height), 0, "height={height}");
+            assert_eq!(active_marker_with_count(50, 100, 0), None);
+            assert_eq!(marker_to_row_with_count(0, 100, 0), None);
+        }
+
+        assert_eq!(marker_count_for_height(100, 48.), 2);
+        assert_eq!(
+            marker_slot_height_for_count(48., marker_count_for_height(100, 48.)),
+            MIN_MARKER_HIT_TARGET_HEIGHT
+        );
     }
 
     #[test]

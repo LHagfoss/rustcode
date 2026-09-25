@@ -460,7 +460,7 @@ mod tests {
             state: cx.new(|cx| TranscriptScrollerState::new(100, cx)),
         });
 
-        for height in [120., 180., 300.] {
+        for height in [31., 32., 47., 48., 120., 180., 300.] {
             window.simulate_resize(gpui_kit::size(px(600.), px(height)));
             let (marker_count, marker_bounds) = window.update(|window, cx| {
                 window.render_frame(cx);
