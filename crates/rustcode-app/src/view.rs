@@ -8,8 +8,8 @@ use gpui_kit::{
     Anchor, Context, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, Render, Window,
     actions,
     component::{
-        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT,
-        Theme, TitleBar, WindowExt as _,
+        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
+        TitleBar, WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Textarea, TextareaState},
