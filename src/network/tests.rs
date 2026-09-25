@@ -3060,20 +3060,61 @@ fn compiler_outcomes_only_count_verified_source_diagnostics() {
     assert!(ctx.compiler.last_diagnostic_fingerprint.is_none());
 }
 
-#[test]
-fn repeated_compiler_diagnostics_trigger_the_budget() {
-    let diagnostic = crate::network::compiler::CompilerCheckOutcome::SourceDiagnostics {
-        output: "error[E0425]: cannot find value `missing` in this scope".to_owned(),
-        fingerprint: "error[E0425]: cannot find value `missing` in this scope".to_owned(),
+#[cfg(unix)]
+#[tokio::test]
+async fn repeated_compiler_diagnostics_trigger_the_budget() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, run_compiler_command_outcome,
+        update_compiler_outcome_streak,
     };
-    let mut ctx = TurnContext::new();
-    for _ in 0..MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
-        crate::network::compiler::update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    use std::time::Duration;
+
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
     }
-    assert_eq!(
-        ctx.compiler.consecutive_diagnostics,
-        MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS
-    );
+
+    let workspace = tempfile::tempdir().expect("compiler diagnostic workspace");
+    let command = "printf '%s\\n' 'src/main.ts(3,1): error TS2322: wrong type' >&2; exit 1";
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    for expected_streak in 1..=MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            command,
+            false,
+            Duration::from_secs(5),
+            &cancel_token,
+        )
+        .await;
+        assert!(
+            matches!(
+                &outcome,
+                CompilerCheckOutcome::SourceDiagnostics { output, .. }
+                    if output.contains("error TS2322")
+            ),
+            "checker output should classify as a source diagnostic: {outcome:?}"
+        );
+        let mut result = ToolResult {
+            tool_name: "delete_file".to_owned(),
+            content: format!("Applied mutation {}", expected_streak - 1),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        };
+        append_compiler_outcome(&mut result, &outcome);
+        update_compiler_outcome_streak(&mut ctx, &outcome);
+
+        assert!(
+            compiler_diagnostic_fingerprint(&result.content).is_some(),
+            "source diagnostic should be annotated for the compiler budget"
+        );
+        assert_eq!(ctx.compiler.consecutive_diagnostics, expected_streak);
+        if expected_streak < MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+            assert!(turn_budget_exceeded(&ctx).is_none());
+        }
+    }
+
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
