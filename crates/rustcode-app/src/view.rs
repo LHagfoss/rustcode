@@ -7,7 +7,7 @@ use std::{
 use gpui_kit::{
     Anchor, Context, PathPromptOptions, Render, Window, actions,
     component::{
-        Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
+        Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, Theme, TitleBar,
         WindowExt as _,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
@@ -1630,6 +1630,7 @@ fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialogs = Root::render_dialog_layer(window, cx);
         if self.clear_composer_on_render {
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
@@ -2075,6 +2076,7 @@ impl Render for AppView {
             .text_color(rgb(0xe8e9ed))
             .child(div().size_full().flex().child(sidebar).child(main))
             .child(div().absolute().top_0().left_0().right_0().child(title_bar))
+            .children(dialogs)
     }
 }
 
