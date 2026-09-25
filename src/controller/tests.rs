@@ -32,6 +32,10 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
             .iter()
             .any(|item| item.content.contains("Native commands:"))
     );
+    assert!(help.transcript.iter().any(|item| {
+        item.content
+            .contains("`/info` — Show session and turn status")
+    }));
     assert!(
         !help
             .transcript
@@ -64,6 +68,74 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
     );
     assert!(fresh.generation > help.generation);
     assert!(!fresh.turn_active);
+}
+
+#[tokio::test]
+async fn native_info_command_reports_current_session_model_turn_and_queue() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let session_id = started.session_id.expect("session id");
+    let model = started.selected_model.expect("selected model");
+
+    handle.send(Command::Submit("/info".into())).expect("info");
+    let info = updates.recv().await.expect("info snapshot");
+    let ControllerUpdate::Snapshot(info) = info.update else {
+        panic!("expected info snapshot");
+    };
+    let notice = info
+        .transcript
+        .iter()
+        .find(|item| item.content.contains("Session:"))
+        .expect("diagnostic notice");
+    assert!(notice.content.contains(&format!("Session: {session_id}")));
+    assert!(notice.content.contains(&format!("Model: {model}")));
+    assert!(notice.content.contains("Turn: inactive"));
+    assert!(notice.content.contains("Queue: 0"));
+}
+
+#[tokio::test]
+async fn legacy_approval_command_is_rejected_without_a_batch_identity() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let _ = updates.recv().await.expect("session snapshot");
+
+    // Existing callers still compile, but an unbound approval cannot authorize
+    // whichever batch happens to be pending when the command is handled.
+    let legacy = Command::Approval(super::ApprovalChoice::Approve);
+    assert!(matches!(
+        legacy,
+        Command::Approval(super::ApprovalChoice::Approve)
+    ));
+    handle
+        .send(legacy)
+        .expect("legacy command should be accepted by channel");
+    let event = tokio::time::timeout(Duration::from_secs(1), updates.recv())
+        .await
+        .expect("legacy command should fail closed promptly")
+        .expect("controller remains active");
+    assert!(matches!(
+        event.update,
+        ControllerUpdate::Error(super::ControllerError::Provider(message))
+            if message.contains("requires the reviewed batch identity")
+    ));
 }
 
 #[tokio::test]
@@ -623,6 +695,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         .with_descriptions(vec!["Local files".to_owned(), "Remote API".to_owned()]),
     );
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("tool-call-13".to_owned()),
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),
@@ -630,10 +703,18 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         rememberable_prefix: None,
         forbidden_prefix: None,
     }]);
+    state.pending_approval_batch_id = Some("controller:snapshot:1".to_owned());
 
     let snapshot = ControllerSnapshot::from_state(7, &state);
 
     assert_eq!(snapshot.generation, 7);
+    assert_eq!(
+        snapshot
+            .pending_approval_batch
+            .as_ref()
+            .map(|approval| approval.request_id.as_str()),
+        Some("batch:1:14:7:tool-call-13")
+    );
     assert_eq!(snapshot.session_id.as_deref(), Some("session-7"));
     assert_eq!(
         snapshot.workspace.as_deref(),
@@ -680,9 +761,75 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(question.options, ["A", "B"]);
     assert_eq!(question.descriptions, ["Local files", "Remote API"]);
     assert!(!question.multiple);
-    let approval = snapshot.pending_approval.expect("approval projection");
-    assert_eq!(approval.tool_name, "write_file");
-    assert_eq!(approval.description, "src/main.rs\nfn main() {}");
+    let approval = snapshot
+        .pending_approval_batch
+        .expect("approval projection");
+    assert_eq!(approval.actions.len(), 1);
+    assert_eq!(approval.actions[0].tool_name, "write_file");
+    assert_eq!(approval.actions[0].description, "src/main.rs\nfn main() {}");
+}
+
+#[test]
+fn snapshot_approval_discloses_full_confirmation_batch_with_bounded_details() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-batch"));
+    state.pending_tool_confirmation = Some(vec![
+        ToolConfirmation {
+            request_id: Some("call-a".to_owned()),
+            tool_name: "write_file".to_owned(),
+            path: "src/a.txt".to_owned(),
+            content_preview: "first action".to_owned(),
+            content_bytes: 12,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        },
+        ToolConfirmation {
+            request_id: Some("call-b".to_owned()),
+            tool_name: "run_command".to_owned(),
+            path: "cargo test".to_owned(),
+            content_preview: "x".repeat(2_000),
+            content_bytes: 2_000,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        },
+    ]);
+    state.pending_approval_batch_id = Some("controller:snapshot:2".to_owned());
+
+    let snapshot = ControllerSnapshot::from_state(7, &state);
+    let batch = snapshot
+        .pending_approval_batch
+        .expect("approval batch projection");
+
+    assert_eq!(batch.actions.len(), 2);
+    assert_eq!(batch.request_id, "batch:2:8:7:call-a:8:7:call-b");
+    assert_eq!(batch.actions[0].action_summary, "write_file · src/a.txt");
+    assert_eq!(batch.actions[1].action_summary, "run_command · cargo test");
+    assert!(batch.actions[0].description.contains("first action"));
+    assert!(batch.actions[1].description.contains("cargo test"));
+    assert!(batch.actions[1].description.chars().count() <= 340);
+    assert!(batch.actions[1].description.contains("[truncated]"));
+}
+
+#[test]
+fn snapshot_fails_closed_without_a_controller_owned_approval_batch_id() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("unidentified"));
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("repeated-provider-call".to_owned()),
+        tool_name: "run_command".to_owned(),
+        path: "true".to_owned(),
+        content_preview: "true".to_owned(),
+        content_bytes: 4,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+
+    let snapshot = ControllerSnapshot::from_state(7, &state);
+
+    assert!(
+        snapshot.pending_approval_batch.is_none(),
+        "an action-derived presentation ID must never be offered as an authorization token"
+    );
 }
 
 #[test]
@@ -743,6 +890,7 @@ async fn controller_approval_resolves_the_existing_response_channel() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),
@@ -750,19 +898,99 @@ async fn controller_approval_resolves_the_existing_response_channel() {
         rememberable_prefix: None,
         forbidden_prefix: None,
     }]);
+    state.pending_approval_batch_id = Some("controller-batch-current".to_owned());
     state.tool_confirmation_response = Some(tx);
     let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
     let mut cancel_token = tokio_util::sync::CancellationToken::new();
 
-    super::worker::apply_approval(&state, &mut cancel_token, super::ApprovalChoice::Approve)
-        .await
-        .expect("pending approval should accept a choice");
+    super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-current",
+        super::ApprovalChoice::Approve,
+    )
+    .await
+    .expect("pending approval should accept a choice");
 
     assert_eq!(
         rx.await.expect("approval response"),
         crate::app::ToolConfirmationResponse::Approve
     );
     assert!(state.lock().await.pending_tool_confirmation.is_none());
+}
+
+#[test]
+fn controller_approval_batch_ids_do_not_reuse_provider_call_ids() {
+    let action = || {
+        super::ApprovalAction::new(
+            "repeated-provider-call".to_owned(),
+            "run_command".to_owned(),
+            "run_command · cargo test".to_owned(),
+            "confirmation required".to_owned(),
+            "cargo test".to_owned(),
+        )
+    };
+    let first = super::ApprovalBatchPrompt::new(vec![action()])
+        .with_batch_id(super::next_approval_batch_id());
+    let replacement = super::ApprovalBatchPrompt::new(vec![action()])
+        .with_batch_id(super::next_approval_batch_id());
+
+    assert_eq!(
+        first.actions[0].request_id,
+        replacement.actions[0].request_id
+    );
+    assert_ne!(first.batch_id, replacement.batch_id);
+}
+
+#[tokio::test]
+async fn stale_approval_batch_id_cannot_resolve_a_replacement_batch() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut app = AppState::new_with_workspace_session(workspace.path(), Some("approval-batches"));
+    app.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("same-provider-call".to_owned()),
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: "preview".to_owned(),
+        content_bytes: 7,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+    app.pending_approval_batch_id = Some("controller-batch-a".to_owned());
+    let (tx_a, rx_a) = tokio::sync::oneshot::channel();
+    app.tool_confirmation_response = Some(tx_a);
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(app));
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    let (tx_b, rx_b) = tokio::sync::oneshot::channel();
+    {
+        let mut state = state.lock().await;
+        state.pending_approval_batch_id = Some("controller-batch-b".to_owned());
+        state.tool_confirmation_response = Some(tx_b);
+    }
+    assert!(rx_a.await.is_err(), "replacing batch A drops its responder");
+
+    let stale = super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-a",
+        super::ApprovalChoice::Approve,
+    )
+    .await;
+    assert!(stale.is_err(), "a delayed decision for A must be rejected");
+    assert!(state.lock().await.pending_tool_confirmation.is_some());
+
+    super::worker::apply_approval(
+        &state,
+        &mut cancel_token,
+        "controller-batch-b",
+        super::ApprovalChoice::Approve,
+    )
+    .await
+    .expect("the current batch identity should resolve");
+    assert_eq!(
+        rx_b.await.expect("approval response"),
+        crate::app::ToolConfirmationResponse::Approve
+    );
 }
 
 #[tokio::test]
@@ -854,11 +1082,26 @@ async fn cancelled_turn_can_be_followed_by_a_new_submit() {
     .await
     .expect("first text delta timeout");
     assert!(saw_first_text);
-    handle.send(Command::Cancel).expect("cancel active turn");
-    let _ = release_first_tx.send(());
     handle
         .send(Command::Submit("second prompt".to_owned()))
-        .expect("submit while cancellation unwinds");
+        .expect("queue second prompt while first turn is streaming");
+
+    let mut saw_queued_prompt = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = updates.recv().await {
+            if matches!(event.update, ControllerUpdate::Snapshot(snapshot) if snapshot.turn_active && snapshot.queued_count == 1)
+            {
+                saw_queued_prompt = true;
+                break;
+            }
+        }
+    })
+    .await
+    .expect("queued prompt snapshot timeout");
+    assert!(saw_queued_prompt);
+
+    handle.send(Command::Cancel).expect("cancel active turn");
+    let _ = release_first_tx.send(());
 
     let mut saw_cancelled = false;
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -913,6 +1156,7 @@ async fn cancel_resolves_pending_approval_and_question_before_followup_submit() 
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),

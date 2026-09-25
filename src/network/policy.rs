@@ -57,6 +57,7 @@ impl InteractivePolicy {
         assessments: &crate::tools::ShellAssessmentCache,
     ) -> bool {
         let mut confirmations = Vec::new();
+        let mut confirmation_details = Vec::new();
         let (auto_confirm, task_working_directory, workspace_root, sandbox_mode) = {
             let state = state.lock().await;
             (
@@ -171,6 +172,12 @@ impl InteractivePolicy {
                     };
 
                     confirmations.push(ToolConfirmation {
+                        request_id: Some(call.call_id.clone().unwrap_or_else(|| {
+                            format!(
+                                "local:{}",
+                                super::tool_exec::stable_arguments_hash(&call.arguments)
+                            )
+                        })),
                         tool_name: call.name.clone(),
                         path,
                         content_preview: preview,
@@ -184,6 +191,7 @@ impl InteractivePolicy {
                             })
                             .flatten(),
                     });
+                    confirmation_details.push(call.arguments.to_string());
                 }
             }
         }
@@ -196,6 +204,8 @@ impl InteractivePolicy {
                 s.modal_scroll_row = 0;
                 s.tool_confirmation_selected = 0;
                 s.pending_tool_confirmation = Some(confirmations);
+                s.pending_approval_details = Some(confirmation_details);
+                s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
                 s.tool_confirmation_response = Some(tx);
                 s.status = AppStatus::AwaitingToolConfirmation;
                 s.request_redraw();
@@ -426,6 +436,88 @@ mod tests {
             state.lock().await.config.approved_command_prefixes,
             ["prefix-v1:cargo test --lib"]
         );
+    }
+
+    #[tokio::test]
+    async fn policy_batch_projects_every_action_before_one_deny_decision() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let policy_state = Arc::clone(&state);
+        let decisive_tail = "--approval-review-tail";
+        let long_command = format!("{} {decisive_tail}", "cargo test ".repeat(80));
+        let second_call = long_command.clone();
+        let task = tokio::spawn(async move {
+            let calls = [
+                ToolCall {
+                    name: "run_command".to_owned(),
+                    arguments: serde_json::json!({ "command": "cargo test --lib" }),
+                    call_id: Some("call-a".to_owned()),
+                },
+                ToolCall {
+                    name: "run_command".to_owned(),
+                    arguments: serde_json::json!({ "command": second_call }),
+                    call_id: Some("call-b".to_owned()),
+                },
+            ];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the complete call batch should await one decision");
+
+        let snapshot = {
+            let state = state.lock().await;
+            assert!(state.tool_confirmation_response.is_some());
+            crate::controller::ControllerSnapshot::from_state(7, &state)
+        };
+        let approval = snapshot
+            .pending_approval_batch
+            .expect("controller approval batch");
+        assert_eq!(approval.actions.len(), 2);
+        assert_eq!(
+            approval.actions[0].action_summary,
+            "run_command · cargo test --lib"
+        );
+        assert!(
+            approval.actions[1]
+                .action_summary
+                .starts_with("run_command · cargo test")
+        );
+        assert!(approval.actions[1].description.contains("[truncated]"));
+        assert!(approval.actions[1].full_details.contains(decisive_tail));
+        assert_eq!(approval.request_id, "batch:2:8:7:call-a:8:7:call-b");
+        assert!(approval.batch_id.starts_with("controller:"));
+        let stable_batch_id = approval.batch_id.clone();
+        assert_eq!(
+            crate::controller::ControllerSnapshot::from_state(7, &*state.lock().await)
+                .pending_approval_batch
+                .expect("approval should remain pending")
+                .batch_id,
+            stable_batch_id,
+            "snapshots must preserve the token while the same batch is in flight"
+        );
+
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+        assert!(
+            crate::app::runtime::apply_approval_decision_for_batch(
+                &state,
+                &mut cancel_token,
+                &stable_batch_id,
+                crate::app::ApprovalDecision::Deny,
+            )
+            .await,
+            "the exact current policy batch ID should resolve"
+        );
+        assert!(!task.await.expect("policy task should finish"));
     }
 
     #[tokio::test]

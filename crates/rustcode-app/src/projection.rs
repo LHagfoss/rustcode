@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
 use rustcode::controller::{
-    ApprovalPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
+    ApprovalBatchPrompt, ControllerSnapshot, ControllerUpdate, QuestionPrompt, TranscriptItem,
     TurnUpdate,
 };
 
@@ -29,6 +29,26 @@ pub enum ToolStatus {
     Pending,
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolRowPresentation {
+    pub status: ToolStatus,
+    pub status_label: &'static str,
+    pub output_expandable: bool,
+}
+
+pub fn tool_row_presentation(status: ToolStatus, _output: &str) -> ToolRowPresentation {
+    ToolRowPresentation {
+        status,
+        status_label: match status {
+            ToolStatus::Running => "Running",
+            ToolStatus::Pending => "Pending",
+            ToolStatus::Completed => "Done",
+            ToolStatus::Failed => "Failed",
+        },
+        output_expandable: !matches!(status, ToolStatus::Running | ToolStatus::Pending),
+    }
 }
 
 pub fn project_rows(transcript: &[TranscriptItem], live_response: &str) -> Vec<ProjectionRow> {
@@ -106,6 +126,12 @@ pub fn stop_available(turn_active: bool) -> bool {
     turn_active
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerAction {
+    Send,
+    Stop,
+}
+
 pub fn answer_for_question(
     _question: &QuestionPrompt,
     selected_option: Option<&str>,
@@ -130,13 +156,14 @@ pub struct ChatViewState {
     error: Option<String>,
     approval_denied: bool,
     turn_active: bool,
+    queued_count: usize,
     stream_rows: Vec<ProjectionRow>,
     active_tools: HashMap<String, (usize, Instant)>,
     turn_started_at: Option<Instant>,
     last_turn_elapsed_ms: Option<u64>,
     thinking_started_at: Option<Instant>,
     pending_question: Option<QuestionPrompt>,
-    pending_approval: Option<ApprovalPrompt>,
+    pending_approval: Option<ApprovalBatchPrompt>,
 }
 
 impl ChatViewState {
@@ -152,8 +179,9 @@ impl ChatViewState {
 
     fn apply_snapshot(&mut self, snapshot: ControllerSnapshot) {
         self.turn_active = snapshot.turn_active;
+        self.queued_count = snapshot.queued_count;
         self.pending_question = snapshot.pending_question.clone();
-        self.pending_approval = snapshot.pending_approval.clone();
+        self.pending_approval = snapshot.pending_approval_batch.clone();
         if snapshot.transcript.iter().any(|item| {
             item.role == "user"
                 && self
@@ -257,9 +285,10 @@ impl ChatViewState {
                     *elapsed_ms = Some(started_at.elapsed().as_millis() as u64);
                 }
             }
-            TurnUpdate::ApprovalRequested(approvals) => {
+            TurnUpdate::ApprovalRequested(_) => {}
+            TurnUpdate::ApprovalBatchRequested(approvals) => {
                 self.turn_active = true;
-                self.pending_approval = approvals.into_iter().next();
+                self.pending_approval = Some(approvals);
             }
             TurnUpdate::QuestionRequested(question) => {
                 self.turn_active = true;
@@ -290,6 +319,18 @@ impl ChatViewState {
 
     pub fn turn_active(&self) -> bool {
         self.turn_active
+    }
+
+    pub fn composer_action(&self) -> ComposerAction {
+        if self.turn_active {
+            ComposerAction::Stop
+        } else {
+            ComposerAction::Send
+        }
+    }
+
+    pub fn queued_message_label(&self) -> Option<String> {
+        (self.queued_count > 0).then(|| format!("{} queued", self.queued_count))
     }
 
     pub fn turn_elapsed_ms(&self) -> Option<u64> {
@@ -339,7 +380,7 @@ impl ChatViewState {
         self.pending_question.as_ref()
     }
 
-    pub fn pending_approval(&self) -> Option<&ApprovalPrompt> {
+    pub fn pending_approval(&self) -> Option<&ApprovalBatchPrompt> {
         self.pending_approval.as_ref()
     }
 
@@ -372,13 +413,14 @@ impl ChatViewState {
 #[cfg(test)]
 mod tests {
     use rustcode::controller::{
-        ApprovalPrompt, ControllerError, ControllerSnapshot, ControllerUpdate, TurnUpdate,
+        ApprovalAction, ApprovalBatchPrompt, ControllerError, ControllerSnapshot, ControllerUpdate,
+        TurnUpdate,
     };
     use rustcode::controller::{QuestionPrompt, TranscriptItem};
 
     use super::{
-        ChatViewState, ProjectionRow, ToolStatus, answer_for_question, can_submit, project_rows,
-        stop_available, toggle_option,
+        ChatViewState, ComposerAction, ProjectionRow, ToolStatus, answer_for_question, can_submit,
+        project_rows, stop_available, toggle_option, tool_row_presentation,
     };
 
     fn user(content: &str) -> TranscriptItem {
@@ -448,6 +490,69 @@ mod tests {
             ]
         );
         assert_eq!(transcript, original);
+    }
+
+    #[test]
+    fn tool_presentation_distinguishes_activity_states_and_expandable_output() {
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Running, ""),
+            super::ToolRowPresentation {
+                status: ToolStatus::Running,
+                status_label: "Running",
+                output_expandable: false,
+            }
+        );
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Completed, "result"),
+            super::ToolRowPresentation {
+                status: ToolStatus::Completed,
+                status_label: "Done",
+                output_expandable: true,
+            }
+        );
+        assert_eq!(
+            tool_row_presentation(ToolStatus::Failed, "failure"),
+            super::ToolRowPresentation {
+                status: ToolStatus::Failed,
+                status_label: "Failed",
+                output_expandable: true,
+            }
+        );
+        assert!(tool_row_presentation(ToolStatus::Completed, "").output_expandable);
+        assert!(tool_row_presentation(ToolStatus::Failed, " \n ").output_expandable);
+    }
+
+    #[test]
+    fn completed_and_failed_tool_events_keep_literal_output_for_rendering() {
+        for (id, success, status, content) in [
+            ("completed", true, ToolStatus::Completed, "completed output"),
+            ("failed", false, ToolStatus::Failed, "failed output"),
+        ] {
+            let mut view = ChatViewState::default();
+            view.apply_turn_update(TurnUpdate::ToolStarted {
+                id: id.to_owned(),
+                name: "run_command".to_owned(),
+                detail: None,
+            });
+            view.apply_turn_update(TurnUpdate::ToolFinished {
+                id: id.to_owned(),
+                content: content.to_owned(),
+                success,
+                pending: false,
+            });
+
+            let ProjectionRow::Tool {
+                content: projected,
+                status: projected_status,
+                ..
+            } = &view.stream_rows()[0]
+            else {
+                panic!("tool event must remain a tool row");
+            };
+            assert_eq!(projected_status, &status);
+            assert_eq!(projected, content);
+            assert!(tool_row_presentation(status, projected).output_expandable);
+        }
     }
 
     #[test]
@@ -624,7 +729,8 @@ mod tests {
             turn_active,
             auto_approve: true,
             pending_question: None,
-            pending_approval: None::<ApprovalPrompt>,
+            pending_approval: None,
+            pending_approval_batch: None::<ApprovalBatchPrompt>,
         }
     }
 
@@ -692,6 +798,26 @@ mod tests {
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::TurnFinished));
         assert!(!view.turn_active());
         assert!(!stop_available(view.turn_active()));
+    }
+
+    #[test]
+    fn composer_action_and_queue_label_follow_the_latest_snapshot() {
+        let mut view = ChatViewState::default();
+        let mut idle = snapshot(false);
+        idle.queued_count = 2;
+        view.apply_update(ControllerUpdate::Snapshot(idle));
+
+        assert_eq!(view.composer_action(), ComposerAction::Send);
+        assert_eq!(view.queued_message_label().as_deref(), Some("2 queued"));
+
+        let mut active = snapshot(true);
+        active.queued_count = 1;
+        view.apply_update(ControllerUpdate::Snapshot(active));
+        assert_eq!(view.composer_action(), ComposerAction::Stop);
+        assert_eq!(view.queued_message_label().as_deref(), Some("1 queued"));
+
+        view.apply_update(ControllerUpdate::Snapshot(snapshot(false)));
+        assert_eq!(view.queued_message_label(), None);
     }
 
     #[test]
@@ -799,21 +925,99 @@ mod tests {
             descriptions: vec![],
             multiple: false,
         };
-        let approval = ApprovalPrompt {
-            tool_name: "write_file".to_owned(),
-            description: "src/main.rs".to_owned(),
-        };
+        let approval = ApprovalBatchPrompt::new(vec![ApprovalAction::new(
+            "write-file-1".to_owned(),
+            "write_file".to_owned(),
+            "write_file · src/main.rs".to_owned(),
+            "This action requires your approval before it can continue.".to_owned(),
+            "src/main.rs".to_owned(),
+        )])
+        .with_batch_id("controller:projection:1".to_owned());
 
         view.apply_update(ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
             question.clone(),
         )));
         assert_eq!(view.pending_question(), Some(&question));
 
-        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
             approval.clone(),
-        ])));
+        )));
         assert_eq!(view.pending_approval(), Some(&approval));
         assert!(view.turn_active());
+    }
+
+    #[test]
+    fn streamed_approval_discloses_every_action_and_uses_batch_identity() {
+        let mut view = ChatViewState::default();
+        let batch = ApprovalBatchPrompt::new(vec![
+            ApprovalAction::new(
+                "7:call-a".to_owned(),
+                "write_file".to_owned(),
+                "write_file · src/a.txt".to_owned(),
+                "This action requires your approval before it can continue.".to_owned(),
+                r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+            ),
+            ApprovalAction::new(
+                "7:call-b".to_owned(),
+                "run_command".to_owned(),
+                "run_command · cargo test".to_owned(),
+                "This action requires your approval before it can continue.".to_owned(),
+                r#"{"command":"cargo test"}"#.to_owned(),
+            ),
+        ])
+        .with_batch_id("controller:7:41".to_owned());
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
+            batch,
+        )));
+
+        let batch = view.pending_approval().expect("pending approval batch");
+        assert_eq!(batch.actions.len(), 2);
+        assert_eq!(batch.actions[0].action_summary, "write_file · src/a.txt");
+        assert_eq!(batch.actions[1].action_summary, "run_command · cargo test");
+        assert_eq!(
+            batch.request_id, "batch:2:8:7:call-a:8:7:call-b",
+            "the presentation signature should preserve the disclosed action IDs"
+        );
+        assert_eq!(batch.batch_id, "controller:7:41");
+        assert!(batch.actions[0].description.contains("src/a.txt"));
+        assert!(batch.actions[1].description.contains("cargo test"));
+    }
+
+    #[test]
+    fn approval_lifecycle_keeps_the_exact_request_until_resolution_snapshot() {
+        let mut view = ChatViewState::default();
+        let approval = ApprovalBatchPrompt::new(vec![ApprovalAction::new(
+            "9:call-approval".to_owned(),
+            "write_file".to_owned(),
+            "write_file · src/main.rs".to_owned(),
+            "This action requires your approval before it can continue.".to_owned(),
+            "src/main.rs".to_owned(),
+        )])
+        .with_batch_id("controller:projection:2".to_owned());
+
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ApprovalBatchRequested(
+            approval.clone(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::TextDelta(
+            "progress while waiting".to_owned(),
+        )));
+        view.apply_update(ControllerUpdate::Turn(TurnUpdate::ToolStarted {
+            id: "other-tool".to_owned(),
+            name: "read_file".to_owned(),
+            detail: Some("README.md".to_owned()),
+        }));
+        assert_eq!(view.pending_approval(), Some(&approval));
+
+        let mut still_pending = snapshot(true);
+        still_pending.pending_approval_batch = Some(approval.clone());
+        view.apply_update(ControllerUpdate::Snapshot(still_pending));
+        assert_eq!(view.pending_approval(), Some(&approval));
+
+        let mut resolved = snapshot(false);
+        resolved.pending_approval_batch = None;
+        view.apply_update(ControllerUpdate::Snapshot(resolved));
+        assert_eq!(view.pending_approval(), None);
     }
 
     #[test]

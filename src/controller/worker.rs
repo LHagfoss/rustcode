@@ -184,7 +184,9 @@ async fn controller_worker(
                     QueuePrompt::Empty => {
                         send_snapshot(&updates, session.generation, &session.state).await;
                     }
-                    QueuePrompt::Queued => {}
+                    QueuePrompt::Queued => {
+                        send_snapshot(&updates, session.generation, &session.state).await;
+                    }
                     QueuePrompt::Start(lease, starting_history_len) => {
                         session.turn_task = Some(spawn_turn(
                             session.generation,
@@ -312,12 +314,32 @@ async fn controller_worker(
                     Err(error) => send_error(&updates, session.generation, error),
                 }
             }
-            Command::Approval(choice) => {
+            Command::Approval(_choice) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                send_error(
+                    &updates,
+                    session.generation,
+                    ControllerError::Provider(
+                        "approval decision requires the reviewed batch identity".to_owned(),
+                    ),
+                );
+            }
+            Command::ApprovalBatch { batch_id, choice } => {
                 let Some(session) = active.as_mut() else {
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
-                match apply_approval(&session.state, &mut session.cancel_token, choice).await {
+                match apply_approval(
+                    &session.state,
+                    &mut session.cancel_token,
+                    &batch_id,
+                    choice,
+                )
+                .await
+                {
                     Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
                     Err(error) => send_error(&updates, session.generation, error),
                 }
@@ -372,6 +394,22 @@ async fn run_native_slash(
         NativeSlashCommand::Help => {
             let mut state = session.state.lock().await;
             state.set_notice(HELP);
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Info => {
+            let mut state = session.state.lock().await;
+            let snapshot = ControllerSnapshot::from_state(session.generation, &state);
+            let session_id = snapshot.session_id.as_deref().unwrap_or("none");
+            let model = snapshot.selected_model.as_deref().unwrap_or("unknown");
+            let turn = if snapshot.turn_active {
+                "active"
+            } else {
+                "inactive"
+            };
+            state.set_notice(format!(
+                "Session: {session_id}\nModel: {model}\nTurn: {turn}\nQueue: {}",
+                snapshot.queued_count
+            ));
             send_snapshot_locked(updates, session.generation, &state);
         }
         NativeSlashCommand::Model(None) => {
@@ -600,6 +638,7 @@ fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
         auto_approve,
         pending_question: None,
         pending_approval: None,
+        pending_approval_batch: None,
     }
 }
 
@@ -681,6 +720,8 @@ async fn cancel_active_turn_inner(
             let _ = response.send("User cancelled prompt.".to_owned());
         }
         state.pending_tool_confirmation = None;
+        state.pending_approval_details = None;
+        state.pending_approval_batch_id = None;
         state.pending_question = None;
         state.clear_question_chain();
     }
@@ -737,22 +778,27 @@ pub(super) async fn answer_question(
 pub(super) async fn apply_approval(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut CancellationToken,
+    batch_id: &str,
     choice: ApprovalChoice,
 ) -> Result<(), ControllerError> {
-    {
-        let state = state.lock().await;
-        if state.pending_tool_confirmation.is_none() || state.tool_confirmation_response.is_none() {
-            return Err(ControllerError::Session(
-                "there is no pending tool approval".to_owned(),
-            ));
-        }
-    }
     let decision = match choice {
         ApprovalChoice::Approve => crate::app::ApprovalDecision::Approve,
         ApprovalChoice::Deny => crate::app::ApprovalDecision::Deny,
     };
-    crate::app::runtime::apply_approval_decision(state, cancel_token, decision).await;
-    Ok(())
+    if crate::app::runtime::apply_approval_decision_for_batch(
+        state,
+        cancel_token,
+        batch_id,
+        decision,
+    )
+    .await
+    {
+        Ok(())
+    } else {
+        Err(ControllerError::Session(
+            "the pending tool approval changed before the decision arrived".to_owned(),
+        ))
+    }
 }
 
 fn spawn_turn(
@@ -785,7 +831,7 @@ fn spawn_turn(
                 event = event_receiver.recv(), if event_stream_open => {
                     match event {
                         Some(event) => {
-                            if let Some(public) = events::from_agent_ui_event(generation, event) {
+                            for public in events::from_agent_ui_event(generation, event) {
                                 let _ = updates.send(public);
                             }
                         }

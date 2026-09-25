@@ -183,6 +183,11 @@ pub struct AppState {
     pub last_copy_text: Option<(String, std::time::Instant)>,
     pub generation_start_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
+    /// Complete serialized arguments for the pending confirmation actions.
+    /// Kept separately from the bounded terminal/UI preview on each action.
+    pub pending_approval_details: Option<Vec<String>>,
+    /// Controller-issued identity for the currently pending approval batch.
+    pub pending_approval_batch_id: Option<String>,
     pub modal_scroll_row: u16,
     /// Selected approval row: 0 = approve, 1 = deny. UI-only state.
     pub tool_confirmation_selected: usize,
@@ -1085,6 +1090,8 @@ impl AppState {
             last_copy_text: None,
             generation_start_time: None,
             pending_tool_confirmation: None,
+            pending_approval_details: None,
+            pending_approval_batch_id: None,
             modal_scroll_row: 0,
             tool_confirmation_selected: 0,
             tool_confirmation_response: None,

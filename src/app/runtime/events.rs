@@ -67,7 +67,51 @@ pub(crate) async fn apply_approval_decision(
         let _ = tx.send(response);
     }
     state.pending_tool_confirmation = None;
+    state.pending_approval_details = None;
+    state.pending_approval_batch_id = None;
     state.request_redraw();
+}
+
+/// Resolves a native approval only while the controller-issued identity still
+/// names the batch currently held by the policy. The comparison and channel
+/// take happen under the same state lock so a delayed callback cannot resolve
+/// a replacement batch.
+pub(crate) async fn apply_approval_decision_for_batch(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    expected_batch_id: &str,
+    decision: ApprovalDecision,
+) -> bool {
+    let mut state = state.lock().await;
+    if state.pending_tool_confirmation.is_none()
+        || state.tool_confirmation_response.is_none()
+        || state.pending_approval_batch_id.as_deref() != Some(expected_batch_id)
+    {
+        return false;
+    }
+
+    let approved = match decision {
+        ApprovalDecision::Approve => true,
+        ApprovalDecision::Deny => false,
+        _ => return false,
+    };
+    if !approved {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+    }
+    if let Some(tx) = state.tool_confirmation_response.take() {
+        let response = if approved {
+            crate::app::ToolConfirmationResponse::Approve
+        } else {
+            crate::app::ToolConfirmationResponse::Deny
+        };
+        let _ = tx.send(response);
+    }
+    state.pending_tool_confirmation = None;
+    state.pending_approval_details = None;
+    state.pending_approval_batch_id = None;
+    state.request_redraw();
+    true
 }
 
 pub(crate) async fn apply_question_answer(

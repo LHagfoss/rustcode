@@ -194,6 +194,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.recent_read_outputs.clear();
     s.continuous_mode = false;
     s.pending_tool_confirmation = None;
+    s.pending_approval_details = None;
+    s.pending_approval_batch_id = None;
     s.tool_confirmation_response = None;
     s.clear_question_chain();
     s.question_response = None;

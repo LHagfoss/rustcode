@@ -3,7 +3,7 @@ use super::events::{AgentEvent, FinishReason};
 use super::events::{ToolResult, ToolResultMetadata};
 use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
-use crate::tools::{ToolCall, resolve_tool_calls};
+use crate::tools::resolve_tool_calls;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
@@ -30,7 +30,8 @@ pub(crate) enum AgentUiEvent {
         detail: Option<String>,
     },
     ApprovalRequested {
-        calls: Vec<ToolCall>,
+        batch_id: String,
+        actions: Vec<crate::controller::ApprovalAction>,
     },
     QuestionRequested {
         prompt: crate::controller::QuestionPrompt,
@@ -189,7 +190,7 @@ async fn publish_snapshot(
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
-    approval_sent: &mut bool,
+    last_approval_batch_id: &mut Option<String>,
     previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
 ) {
@@ -200,7 +201,7 @@ async fn publish_snapshot(
         previous_history_len,
         started_tools,
         finished_tools,
-        approval_sent,
+        last_approval_batch_id,
         previous_question,
         previous_subagents,
         false,
@@ -215,7 +216,7 @@ async fn publish_snapshot_with_mode(
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
-    approval_sent: &mut bool,
+    last_approval_batch_id: &mut Option<String>,
     previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
     suppress_synthetic_background_completion: bool,
@@ -225,7 +226,8 @@ async fn publish_snapshot_with_mode(
         response_revision,
         response_last_rewrite_revision,
         live_tools,
-        pending_approval,
+        pending_approval_batch_id,
+        pending_approval_actions,
         pending_question,
         protocol,
         history,
@@ -238,7 +240,31 @@ async fn publish_snapshot_with_mode(
             state.current_response_revision,
             state.current_response_last_rewrite_revision,
             Arc::clone(&state.live_tool_calls),
-            state.pending_tool_confirmation.is_some(),
+            state.pending_approval_batch_id.clone(),
+            state
+                .pending_tool_confirmation
+                .as_ref()
+                .map(|confirmations| {
+                    confirmations
+                        .iter()
+                        .enumerate()
+                        .map(|(index, confirmation)| {
+                            let mut action = crate::controller::ApprovalAction::from_confirmation(
+                                confirmation,
+                                index,
+                            );
+                            if let Some(full_details) = state
+                                .pending_approval_details
+                                .as_ref()
+                                .and_then(|details| details.get(index))
+                            {
+                                action.full_details = full_details.clone();
+                            }
+                            action
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
             state
                 .pending_question
                 .as_ref()
@@ -329,24 +355,18 @@ async fn publish_snapshot_with_mode(
         }
     }
 
-    if pending_approval && !*approval_sent {
-        let calls = {
-            let state = state.lock().await;
-            state
-                .history
-                .iter()
-                .rev()
-                .find(|message| message.role == "assistant")
-                .map(|message| resolve_tool_calls(message, protocol))
-                .filter(|calls| !calls.is_empty())
-                .unwrap_or_else(|| crate::tools::parse_tool_calls(&response, protocol))
-        };
-        if !calls.is_empty() {
-            sender.send(AgentUiEvent::ApprovalRequested { calls });
-            *approval_sent = true;
+    if !pending_approval_actions.is_empty() {
+        if let Some(batch_id) = pending_approval_batch_id
+            && last_approval_batch_id.as_deref() != Some(batch_id.as_str())
+        {
+            sender.send(AgentUiEvent::ApprovalRequested {
+                batch_id: batch_id.clone(),
+                actions: pending_approval_actions,
+            });
+            *last_approval_batch_id = Some(batch_id);
         }
-    } else if !pending_approval {
-        *approval_sent = false;
+    } else if pending_approval_actions.is_empty() {
+        *last_approval_batch_id = None;
     }
 
     if *previous_question != pending_question {
@@ -541,7 +561,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
     let mut previous_history_len = starting_history_len;
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();
-    let mut approval_sent = false;
+    let mut last_approval_batch_id = None;
     let mut previous_question = None;
     let mut previous_subagents = std::collections::HashMap::new();
 
@@ -560,7 +580,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
                     &mut previous_history_len,
                     &mut started_tools,
                     &mut finished_tools,
-                    &mut approval_sent,
+                    &mut last_approval_batch_id,
                     &mut previous_question,
                     &mut previous_subagents,
                     suppress_synthetic_background_completion,
@@ -576,7 +596,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
         &mut previous_history_len,
         &mut started_tools,
         &mut finished_tools,
-        &mut approval_sent,
+        &mut last_approval_batch_id,
         &mut previous_question,
         &mut previous_subagents,
         suppress_synthetic_background_completion,
@@ -812,7 +832,7 @@ mod tests {
         let mut response = super::ResponseDeltaTracker::default();
         let mut started = std::collections::HashSet::new();
         let mut finished = std::collections::HashSet::new();
-        let mut approval = false;
+        let mut approval = None;
         let mut question = None;
         let mut subagents = std::collections::HashMap::new();
         publish_snapshot(
@@ -955,7 +975,10 @@ mod tests {
             status: crate::app::SubAgentStatus::Running,
             active_turn: true,
         });
-        sender.send(AgentUiEvent::ApprovalRequested { calls: Vec::new() });
+        sender.send(AgentUiEvent::ApprovalRequested {
+            batch_id: "controller:test:1".to_owned(),
+            actions: Vec::new(),
+        });
         sender.send(AgentUiEvent::TurnRecovered {
             message: "retrying".to_owned(),
         });
@@ -970,12 +993,172 @@ mod tests {
         ));
         assert!(matches!(
             receiver.recv().await,
-            Some(AgentUiEvent::ApprovalRequested { calls }) if calls.is_empty()
+            Some(AgentUiEvent::ApprovalRequested { actions, .. }) if actions.is_empty()
         ));
         assert!(matches!(
             receiver.recv().await,
             Some(AgentUiEvent::TurnRecovered { message }) if message == "retrying"
         ));
+    }
+
+    #[tokio::test]
+    async fn streamed_approval_uses_only_actions_in_the_policy_confirmation_batch() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.history.push(
+                crate::app::ChatMessage::new("assistant", "batch").with_tool_calls(vec![
+                    crate::app::ToolCallRef {
+                        id: "safe-read".to_owned(),
+                        name: "view_file".to_owned(),
+                        arguments: r#"{"path":"README.md"}"#.to_owned(),
+                    },
+                    crate::app::ToolCallRef {
+                        id: "call-a".to_owned(),
+                        name: "write_file".to_owned(),
+                        arguments: r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+                    },
+                    crate::app::ToolCallRef {
+                        id: "call-b".to_owned(),
+                        name: "run_command".to_owned(),
+                        arguments: r#"{"command":"cargo test"}"#.to_owned(),
+                    },
+                ]),
+            );
+            state.pending_tool_confirmation = Some(vec![
+                crate::app::ToolConfirmation {
+                    request_id: Some("call-a".to_owned()),
+                    tool_name: "write_file".to_owned(),
+                    path: "src/a.txt".to_owned(),
+                    content_preview: "first".to_owned(),
+                    content_bytes: 5,
+                    rememberable_prefix: None,
+                    forbidden_prefix: None,
+                },
+                crate::app::ToolConfirmation {
+                    request_id: Some("call-b".to_owned()),
+                    tool_name: "run_command".to_owned(),
+                    path: "cargo test".to_owned(),
+                    content_preview: "command scope".to_owned(),
+                    content_bytes: 10,
+                    rememberable_prefix: None,
+                    forbidden_prefix: None,
+                },
+            ]);
+            state.pending_approval_details = Some(vec![
+                r#"{"path":"src/a.txt","content":"first"}"#.to_owned(),
+                r#"{"command":"cargo test"}"#.to_owned(),
+            ]);
+            state.pending_approval_batch_id = Some("controller:test:1".to_owned());
+        }
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut last_approval_batch_id = None;
+        let mut previous_question = None;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut last_approval_batch_id,
+            &mut previous_question,
+            &mut previous_subagents,
+        )
+        .await;
+
+        let Some(AgentUiEvent::ApprovalRequested { batch_id, actions }) = receiver.recv().await
+        else {
+            panic!("pending policy batch should produce one approval event");
+        };
+        assert_eq!(batch_id, "controller:test:1");
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].request_id, "call-a");
+        assert_eq!(actions[0].action_summary, "write_file · src/a.txt");
+        assert_eq!(actions[0].description, "src/a.txt\nfirst");
+        assert_eq!(actions[1].request_id, "call-b");
+        assert_eq!(actions[1].action_summary, "run_command · cargo test");
+        assert_eq!(actions[1].description, "cargo test\ncommand scope");
+        assert_eq!(actions[1].full_details, r#"{"command":"cargo test"}"#);
+    }
+
+    #[tokio::test]
+    async fn replacing_pending_approval_batch_emits_new_id_once_without_empty_gap() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let confirmation = |request_id: &str, path: &str| crate::app::ToolConfirmation {
+            request_id: Some(request_id.to_owned()),
+            tool_name: "write_file".to_owned(),
+            path: path.to_owned(),
+            content_preview: String::new(),
+            content_bytes: 0,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        };
+        {
+            let mut state = state.lock().await;
+            state.pending_tool_confirmation = Some(vec![confirmation("call-a", "a.txt")]);
+            state.pending_approval_batch_id = Some("batch-a".to_owned());
+        }
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut last_approval_batch_id = None;
+        let mut previous_question = None;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        for expected_id in ["batch-a", "batch-b"] {
+            if expected_id == "batch-b" {
+                let mut state = state.lock().await;
+                state.pending_tool_confirmation = Some(vec![confirmation("call-b", "b.txt")]);
+                state.pending_approval_batch_id = Some(expected_id.to_owned());
+            }
+            publish_snapshot(
+                &state,
+                &sender,
+                &mut previous_response,
+                &mut previous_history_len,
+                &mut started_tools,
+                &mut finished_tools,
+                &mut last_approval_batch_id,
+                &mut previous_question,
+                &mut previous_subagents,
+            )
+            .await;
+            if expected_id == "batch-b" && receiver.is_empty() {
+                panic!("replacement batch B should be emitted directly after A");
+            }
+            if let Ok(AgentUiEvent::ApprovalRequested { batch_id, .. }) = receiver.try_recv() {
+                assert_eq!(batch_id, expected_id);
+                if expected_id == "batch-b" {
+                    publish_snapshot(
+                        &state,
+                        &sender,
+                        &mut previous_response,
+                        &mut previous_history_len,
+                        &mut started_tools,
+                        &mut finished_tools,
+                        &mut last_approval_batch_id,
+                        &mut previous_question,
+                        &mut previous_subagents,
+                    )
+                    .await;
+                    assert!(
+                        receiver.try_recv().is_err(),
+                        "same batch ID must not duplicate"
+                    );
+                }
+            } else if expected_id != "batch-b" {
+                panic!("batch A should be emitted");
+            }
+        }
     }
 
     #[tokio::test]
@@ -990,7 +1173,7 @@ mod tests {
         let mut previous_history_len = 0;
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
-        let mut approval_sent = false;
+        let mut last_approval_batch_id = None;
         let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
@@ -1001,7 +1184,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1027,7 +1210,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1053,7 +1236,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1077,7 +1260,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )
@@ -1114,7 +1297,7 @@ mod tests {
         let mut previous_history_len = 0;
         let mut started_tools = std::collections::HashSet::new();
         let mut finished_tools = std::collections::HashSet::new();
-        let mut approval_sent = false;
+        let mut last_approval_batch_id = None;
         let mut previous_question = None;
         let mut previous_subagents = std::collections::HashMap::new();
 
@@ -1125,7 +1308,7 @@ mod tests {
             &mut previous_history_len,
             &mut started_tools,
             &mut finished_tools,
-            &mut approval_sent,
+            &mut last_approval_batch_id,
             &mut previous_question,
             &mut previous_subagents,
         )

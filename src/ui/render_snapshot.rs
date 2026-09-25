@@ -718,6 +718,7 @@ mod tests {
         state.current_thought_time_ms = 42;
         state.current_thought_tokens = 7;
         state.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+            request_id: None,
             tool_name: "run_command".to_owned(),
             path: "cargo test".to_owned(),
             content_preview: String::new(),

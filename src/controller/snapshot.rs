@@ -18,7 +18,14 @@ pub enum Command {
     SetAutoApprove(bool),
     SelectModel(String),
     AnswerQuestion(String),
+    /// Legacy unbound decision. The controller rejects it because it cannot
+    /// identify which pending batch the caller reviewed.
     Approval(ApprovalChoice),
+    /// Resolve only the controller-owned batch the caller reviewed.
+    ApprovalBatch {
+        batch_id: String,
+        choice: ApprovalChoice,
+    },
     Shutdown,
 }
 
@@ -76,9 +83,111 @@ pub struct QuestionPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalAction {
+    pub request_id: String,
+    pub tool_name: String,
+    pub action_summary: String,
+    pub risk_context: String,
+    pub description: String,
+    /// Complete literal arguments, retained independently of the preview.
+    pub full_details: String,
+}
+
+impl ApprovalAction {
+    pub fn new(
+        request_id: String,
+        tool_name: String,
+        action_summary: String,
+        risk_context: String,
+        description: String,
+    ) -> Self {
+        Self {
+            request_id,
+            tool_name,
+            action_summary: bounded_preview(&action_summary, 160),
+            risk_context,
+            description: bounded_preview(&description, 320),
+            full_details: description,
+        }
+    }
+
+    pub(crate) fn from_confirmation(
+        confirmation: &crate::app::ToolConfirmation,
+        index: usize,
+    ) -> Self {
+        let request_id = confirmation.request_id.clone().unwrap_or_else(|| {
+            format!(
+                "local:{index}:{}:{}:{}",
+                confirmation.tool_name, confirmation.path, confirmation.content_bytes
+            )
+        });
+        let description = if confirmation.content_preview.is_empty() {
+            confirmation.path.clone()
+        } else {
+            format!("{}\n{}", confirmation.path, confirmation.content_preview)
+        };
+        Self::new(
+            request_id,
+            confirmation.tool_name.clone(),
+            format!("{} · {}", confirmation.tool_name, confirmation.path),
+            "This action requires your approval before it can continue.".to_owned(),
+            description,
+        )
+    }
+
+    pub(crate) fn with_generation(mut self, generation: u64) -> Self {
+        self.request_id = format!("{generation}:{}", self.request_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPrompt {
     pub tool_name: String,
     pub description: String,
+}
+
+/// Exact, controller-owned approval batch for batch-aware frontends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalBatchPrompt {
+    /// Presentation signature for the action request IDs in this batch.
+    pub request_id: String,
+    /// Controller-owned authorization token for this exact pending batch.
+    pub batch_id: String,
+    pub actions: Vec<ApprovalAction>,
+}
+
+impl ApprovalBatchPrompt {
+    pub fn new(actions: Vec<ApprovalAction>) -> Self {
+        let mut request_id = format!("batch:{}", actions.len());
+        for action in &actions {
+            request_id.push_str(&format!(
+                ":{}:{}",
+                action.request_id.len(),
+                action.request_id
+            ));
+        }
+        Self {
+            batch_id: String::new(),
+            request_id,
+            actions,
+        }
+    }
+
+    pub fn with_batch_id(mut self, batch_id: String) -> Self {
+        self.batch_id = batch_id;
+        self
+    }
+}
+
+fn bounded_preview(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let preview = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}… [truncated]")
+    } else {
+        preview
+    }
 }
 
 /// An owned, presentation-independent view of the current interactive session.
@@ -96,23 +205,47 @@ pub struct ControllerSnapshot {
     pub turn_active: bool,
     pub auto_approve: bool,
     pub pending_question: Option<QuestionPrompt>,
+    /// Legacy presentation-only projection. It carries no authorization token.
     pub pending_approval: Option<ApprovalPrompt>,
+    /// Exact batch-aware approval data for native frontends.
+    pub pending_approval_batch: Option<ApprovalBatchPrompt>,
 }
 
 impl ControllerSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_state(generation: u64, state: &AppState) -> Self {
-        let pending_approval = state
+        let pending_approval_batch = state
             .pending_tool_confirmation
             .as_ref()
-            .and_then(|confirmations| confirmations.first())
-            .map(|confirmation| ApprovalPrompt {
-                tool_name: confirmation.tool_name.clone(),
-                description: if confirmation.content_preview.is_empty() {
-                    confirmation.path.clone()
-                } else {
-                    format!("{}\n{}", confirmation.path, confirmation.content_preview)
-                },
+            .filter(|confirmations| !confirmations.is_empty())
+            .and_then(|confirmations| {
+                let actions = confirmations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, confirmation)| {
+                        let mut action = ApprovalAction::from_confirmation(confirmation, index);
+                        if let Some(full_details) = state
+                            .pending_approval_details
+                            .as_ref()
+                            .and_then(|details| details.get(index))
+                        {
+                            action.full_details = full_details.clone();
+                        }
+                        action.with_generation(generation)
+                    })
+                    .collect();
+                let prompt = ApprovalBatchPrompt::new(actions);
+                state
+                    .pending_approval_batch_id
+                    .as_ref()
+                    .map(|batch_id| prompt.with_batch_id(batch_id.clone()))
+            });
+        let pending_approval = pending_approval_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.first())
+            .map(|action| ApprovalPrompt {
+                tool_name: action.tool_name.clone(),
+                description: action.description.clone(),
             });
         let mut details = std::collections::HashMap::new();
         let transcript = state
@@ -236,7 +369,7 @@ impl ControllerSnapshot {
             ),
             transcript,
             live_response: state.current_response.as_ref().clone(),
-            queued_count: state.pending_queue.len(),
+            queued_count: state.pending_queue.len() + state.pending_steers.len(),
             turn_active: matches!(
                 state.status,
                 AppStatus::Streaming
@@ -256,6 +389,7 @@ impl ControllerSnapshot {
                     multiple: question.is_multi_select,
                 }),
             pending_approval,
+            pending_approval_batch,
         }
     }
 }

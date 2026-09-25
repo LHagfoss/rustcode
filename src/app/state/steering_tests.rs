@@ -43,6 +43,7 @@ fn rejects_steers_without_a_regular_active_streaming_turn() {
 
     state.status = AppStatus::Streaming;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_file".to_owned(),
         path: "file.txt".to_owned(),
         content_preview: String::new(),

@@ -11,6 +11,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
     let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
     crate::ui::theme::set_active_theme("nord");
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_string(),
         path: "git commit --message \"hello\"".to_string(),
         content_preview: String::new(),
@@ -73,6 +74,7 @@ fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
     let mut state = AppState::new();
     let command = "git log v0.17.0..HEAD --oneline --no-merges; echo ---; git log -3 --oneline; echo ---; git tag --sort=-v:refname | head -5";
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: command.to_owned(),
         content_preview: format!(
@@ -129,6 +131,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_to_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "+new line".to_owned(),
@@ -159,6 +162,7 @@ fn approval_selection_visibly_moves_to_deny() {
     let mut state = AppState::new();
     state.tool_confirmation_selected = 1;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: "cargo test".to_owned(),
         content_preview: String::new(),
@@ -195,6 +199,7 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
     let mut state = AppState::new();
     state.tool_confirmation_selected = 2;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "agent-1 · run_command".to_owned(),
         path: "cargo test --lib".to_owned(),
         content_preview: String::new(),
@@ -226,6 +231,7 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
     let mut terminal = Terminal::new(TestBackend::new(90, 12)).unwrap();
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: "curl https://example.com".to_owned(),
         content_preview: String::new(),
@@ -267,6 +273,7 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
 fn approval_selection_reaches_allow_and_forbid_prefix_choices() {
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "run_command".to_owned(),
         path: "cargo test --lib".to_owned(),
         content_preview: String::new(),
@@ -290,6 +297,7 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
     let mut state = AppState::new();
     state.pending_tool_confirmation = Some(vec![
         ToolConfirmation {
+            request_id: None,
             tool_name: "write_to_file".to_owned(),
             path: "src/one.rs".to_owned(),
             content_preview: String::new(),
@@ -298,6 +306,7 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
             forbidden_prefix: None,
         },
         ToolConfirmation {
+            request_id: None,
             tool_name: "run_command".to_owned(),
             path: "cargo check".to_owned(),
             content_preview: String::new(),
