@@ -1795,6 +1795,26 @@ fn turn_segments(parts: Vec<ProjectionRow>) -> Vec<Vec<ProjectionRow>> {
     segments
 }
 
+fn literal_tool_output_markdown(output: &str) -> String {
+    let mut longest_tilde_run = 0;
+    let mut tilde_run = 0;
+    for character in output.chars() {
+        if character == '~' {
+            tilde_run += 1;
+            longest_tilde_run = longest_tilde_run.max(tilde_run);
+        } else {
+            tilde_run = 0;
+        }
+    }
+    let fence = "~".repeat(longest_tilde_run.max(2) + 1);
+    let mut markdown = format!("{fence}text\n{output}");
+    if !output.ends_with('\n') {
+        markdown.push('\n');
+    }
+    markdown.push_str(&fence);
+    markdown
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_turn(
     parts: Vec<ProjectionRow>,
@@ -2235,7 +2255,7 @@ fn render_tool_detail(
                     .child(
                         TextView::markdown(
                             format!("tool-output-{turn_index}-{tool_index}"),
-                            content,
+                            literal_tool_output_markdown(&content),
                         )
                         .text_size(px(12.))
                         .text_color(rgb(Palette::TEXT_MUTED))
@@ -2844,8 +2864,8 @@ mod tests {
 
     use super::{
         AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
-        SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen,
-        slash_menu_key_decision, turn_segments,
+        SettingsSection, ToolStatus, group_turn_rows, literal_tool_output_markdown,
+        should_show_start_screen, slash_menu_key_decision, turn_segments,
     };
 
     #[test]
@@ -2855,6 +2875,21 @@ mod tests {
             super::MESSAGE_COPY_CONTROL_HEIGHT,
         ));
         assert!(!super::copy_control_stays_in_hover_region(-27., 0.));
+    }
+
+    #[test]
+    fn tool_output_viewport_preserves_markdown_links_and_images_as_literal_source() {
+        let output =
+            "[link](https://example.test) ![image](file:///private/image.png)\n~~~\nmore output";
+        let rendered_source = literal_tool_output_markdown(output);
+        let opening = rendered_source.lines().next().expect("opening code fence");
+        let fence = opening.strip_suffix("text").expect("text fence info");
+        assert!(fence.len() >= 3 && fence.chars().all(|character| character == '~'));
+        let body = rendered_source
+            .strip_prefix(&format!("{opening}\n"))
+            .and_then(|source| source.strip_suffix(&format!("\n{fence}")))
+            .expect("closed code fence");
+        assert_eq!(body, output);
     }
 
     #[test]
