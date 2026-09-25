@@ -186,6 +186,7 @@ impl DaemonLifecycle {
             metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0,
             "daemon directory must be private (0700)"
         );
+        let lock_path = self.directory.join(name);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -193,12 +194,25 @@ impl DaemonLifecycle {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(self.directory.join(name))?;
+            .open(&lock_path)?;
         // SAFETY: file owns a valid descriptor; the lock is released on drop.
-        ensure!(
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "daemon ownership is busy"
-        );
+        loop {
+            // SAFETY: file owns a valid descriptor.
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                break;
+            }
+
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                bail!("daemon lock {} is busy: {error}", lock_path.display());
+            }
+            return Err(error)
+                .with_context(|| format!("failed to acquire daemon lock {}", lock_path.display()));
+        }
         Ok(file)
     }
 
@@ -434,6 +448,17 @@ mod tests {
             0o600
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn busy_lock_error_names_the_lock_file() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let lifecycle = DaemonLifecycle::new(dir.path());
+        let _held_lock = lifecycle.lock("start.lock").unwrap();
+
+        let error = lifecycle.lock("start.lock").unwrap_err();
+        assert!(error.to_string().contains("start.lock"), "{error:#}");
+        assert!(error.to_string().contains("busy"), "{error:#}");
     }
 
     #[tokio::test]
