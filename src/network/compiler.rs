@@ -374,12 +374,18 @@ fn classify_compiler_output(
 }
 
 fn has_recognized_source_diagnostic(output: &str) -> bool {
-    static BIOME_LOCATION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^.+:\d+:\d+\s+(?:lint|assist|format)/").unwrap());
+    static TYPESCRIPT_DIAGNOSTIC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(.+\.(?i:tsx?|jsx?))\((\d+),(\d+)\):\s*error\s+TS\d+\b").unwrap()
+    });
+    static BIOME_DIAGNOSTIC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"^(.+\.(?i:tsx?|jsx?|mjs|cjs|jsonc?|css|scss|html|vue|svelte|astro|graphql|gql|ya?ml)):\d+:\d+\s+(?:lint|assist|format)/",
+        )
+        .unwrap()
+    });
     static RUST_SOURCE_LOCATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*-->\s+\S+\.rs:\d+:\d+").unwrap());
     let lower = output.to_lowercase();
-    let has_location = !compiler_diagnostic_locations(output).is_empty();
     let has_rust_source_location = output
         .lines()
         .any(|line| RUST_SOURCE_LOCATION.is_match(line));
@@ -388,9 +394,40 @@ fn has_recognized_source_diagnostic(output: &str) -> bool {
             || lower
                 .lines()
                 .any(|line| line.trim_start().starts_with("error:")));
-    let typescript_diagnostic = lower.contains("error ts") && has_location;
-    let biome_diagnostic = output.lines().any(|line| BIOME_LOCATION.is_match(line));
+    let typescript_diagnostic = output.lines().any(|line| {
+        TYPESCRIPT_DIAGNOSTIC
+            .captures(line)
+            .is_some_and(|captures| {
+                captures
+                    .get(1)
+                    .is_some_and(|path| is_plausible_source_path(path.as_str()))
+            })
+    });
+    let biome_diagnostic = output.lines().any(|line| {
+        BIOME_DIAGNOSTIC.captures(line).is_some_and(|captures| {
+            captures
+                .get(1)
+                .is_some_and(|path| is_plausible_source_path(path.as_str()))
+        })
+    });
     rust_diagnostic || typescript_diagnostic || biome_diagnostic
+}
+
+fn is_plausible_source_path(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() || path != path.trim_start() || path.contains(':') {
+        return false;
+    }
+    let has_path_prefix = path.starts_with('/')
+        || path.starts_with("./")
+        || path.starts_with("../")
+        || path.starts_with(".\\")
+        || path.starts_with("..\\")
+        || path
+            .split(['/', '\\'])
+            .next()
+            .is_some_and(|component| matches!(component, "src" | "lib" | "app" | "packages"));
+    !path.chars().any(char::is_whitespace) || has_path_prefix
 }
 
 fn fingerprint_compiler_diagnostics(diagnostics: &str) -> String {
@@ -468,7 +505,7 @@ pub(crate) fn append_compiler_outcome(result: &mut ToolResult, outcome: &Compile
 
 fn compiler_diagnostic_locations(diagnostics: &str) -> Vec<(String, usize, usize)> {
     static TYPESCRIPT_LOCATION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(.+)\((\d+),(\d+)\):").unwrap());
+        LazyLock::new(|| Regex::new(r"^(.+\.(?i:tsx?|jsx?))\((\d+),(\d+)\):").unwrap());
     static RUST_LOCATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*-->\s+(\S+):(\d+):(\d+)").unwrap());
 
@@ -774,6 +811,15 @@ mod compiler_execution_tests {
         ));
         assert!(!has_recognized_source_diagnostic(
             "warning: cache at /tmp/my file.ts:3:1 could not be opened"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "error TS2322: wrong type\nfoo(3,1): PermissionDenied"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "error: failed to write temp file:3:1 lint/suspicious/noConsole"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "foo(3,1): error TS2322: wrong type"
         ));
     }
 

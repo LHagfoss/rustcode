@@ -1114,9 +1114,25 @@ fn bound_reasoning_chunk(
     }
 }
 
+fn request_workspace_root(state: &crate::app::AppState) -> Option<std::path::PathBuf> {
+    state.effective_workspace_root()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_workspace_uses_session_boundary_without_process_cwd_fallback() {
+        let source = tempfile::tempdir().unwrap();
+        let state =
+            crate::app::AppState::new_with_workspace_session(source.path(), Some("request-source"));
+
+        assert_eq!(
+            request_workspace_root(&state).as_deref(),
+            Some(source.path())
+        );
+    }
 
     #[test]
     fn request_session_attribution_survives_active_session_switch() {
@@ -3388,10 +3404,7 @@ async fn stream_request_with_timeouts(
         (
             s.active_tool_protocol(),
             s.agent_mode,
-            s.task_working_directory
-                .clone()
-                .or_else(|| s.workspace_root.clone())
-                .or_else(|| std::env::current_dir().ok()),
+            request_workspace_root(&s),
         )
     };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative)

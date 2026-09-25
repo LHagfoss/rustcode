@@ -433,7 +433,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let s = state.lock().await;
         let execution_workspace_root = workspace_root
             .clone()
-            .or_else(|| s.executor_workspace_root());
+            .or_else(|| s.effective_workspace_root());
         (
             s.agent_mode,
             s.auto_confirm,
@@ -1257,7 +1257,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                     std::time::Duration::ZERO,
                 )
             } else {
-                let workspace_root = { state_clone.lock().await.workspace_root.clone() };
+                let workspace_root = { state_clone.lock().await.effective_workspace_root() };
                 confirm_and_execute_for_call_with_assessment(
                     &client_clone,
                     &state_clone,
@@ -1376,8 +1376,15 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                     && mutation_made_progress(result.metadata.success, &result.content)
             })
             .and_then(|(call, _)| get_tool_project_root(&call.name, &call.arguments))
-            .or_else(|| edit_root.clone())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            .or_else(|| edit_root.clone());
+        let root = match root {
+            Some(root) => root,
+            None => state
+                .lock()
+                .await
+                .effective_workspace_root()
+                .unwrap_or_default(),
+        };
         if let Some(compiler_errors) =
             cached_compiler_check(&root, compile_dirty, compile_cache, cancel_token).await
         {
@@ -1609,7 +1616,7 @@ mod workspace_propagation_tests {
             workspace.path(),
             Some("workspace-propagation-test"),
         )));
-        let active_workspace = state.lock().await.executor_workspace_root();
+        let active_workspace = state.lock().await.effective_workspace_root();
         assert_eq!(state.lock().await.workspace_root, None);
         let (output, _, _) = confirm_and_execute_for_call_with_assessment(
             &reqwest::Client::new(),
@@ -1644,7 +1651,7 @@ mod workspace_propagation_tests {
             workspace.path(),
             Some("approved-workspace-propagation-test"),
         )));
-        let active_workspace = state.lock().await.executor_workspace_root();
+        let active_workspace = state.lock().await.effective_workspace_root();
         let state_for_task = Arc::clone(&state);
         let command_for_task = format!("pwd && touch '{}'", output_path.display());
         let task = tokio::spawn(async move {
@@ -1699,7 +1706,7 @@ mod workspace_propagation_tests {
         state.lock().await.workspace_root = Some(isolated.path().to_path_buf());
         // `/workspace cleanup confirm` clears only the active managed boundary.
         state.lock().await.workspace_root = None;
-        let execution_workspace = state.lock().await.executor_workspace_root();
+        let execution_workspace = state.lock().await.effective_workspace_root();
         assert_eq!(execution_workspace.as_deref(), Some(source.path()));
 
         let (output, _, _) = confirm_and_execute_for_call_with_assessment(

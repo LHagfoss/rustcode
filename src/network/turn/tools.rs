@@ -1907,7 +1907,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .compiler
                         .edit_root
                         .clone()
-                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                        .or_else(|| s.effective_workspace_root())
+                        .unwrap_or_default();
                     drop(s);
                     let compiler_errors = cached_compiler_check(
                         &root,
