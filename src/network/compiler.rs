@@ -375,7 +375,7 @@ fn classify_compiler_output(
 
 fn has_recognized_source_diagnostic(output: &str) -> bool {
     static BIOME_LOCATION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\S+:\d+:\d+\s+(?:lint|assist|format)/").unwrap());
+        LazyLock::new(|| Regex::new(r"^.+:\d+:\d+\s+(?:lint|assist|format)/").unwrap());
     static RUST_SOURCE_LOCATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*-->\s+\S+\.rs:\d+:\d+").unwrap());
     let lower = output.to_lowercase();
@@ -468,7 +468,7 @@ pub(crate) fn append_compiler_outcome(result: &mut ToolResult, outcome: &Compile
 
 fn compiler_diagnostic_locations(diagnostics: &str) -> Vec<(String, usize, usize)> {
     static TYPESCRIPT_LOCATION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(\S+)\((\d+),(\d+)\):").unwrap());
+        LazyLock::new(|| Regex::new(r"^(.+)\((\d+),(\d+)\):").unwrap());
     static RUST_LOCATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*-->\s+(\S+):(\d+):(\d+)").unwrap());
 
@@ -755,6 +755,26 @@ mod compiler_execution_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn source_locations_accept_spaces_without_matching_infrastructure_lines() {
+        assert!(has_recognized_source_diagnostic(
+            "src/my file.ts(3,1): error TS2322: wrong type"
+        ));
+        assert_eq!(
+            compiler_diagnostic_locations("src/my file.ts(3,1): error TS2322: wrong type"),
+            vec![("src/my file.ts".to_owned(), 3, 1)]
+        );
+        assert!(has_recognized_source_diagnostic(
+            "src/my file.ts:3:1 lint/suspicious/noConsole ━━━━━"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "error: failed to create temporary directory at /tmp/my build: PermissionDenied"
+        ));
+        assert!(!has_recognized_source_diagnostic(
+            "warning: cache at /tmp/my file.ts:3:1 could not be opened"
+        ));
     }
 
     #[tokio::test]

@@ -242,8 +242,7 @@ pub(crate) fn build_loaded_app_state(
     cwd: &std::path::Path,
     history: Vec<crate::app::ChatMessage>,
 ) -> crate::app::AppState {
-    let mut state = crate::app::AppState::new();
-    state.active_session_id = session_id.to_owned();
+    let mut state = crate::app::AppState::new_with_workspace_session(cwd, Some(session_id));
     state.task_working_directory = Some(cwd.to_path_buf());
     state.workspace_root = Some(cwd.to_path_buf());
     state.history.replace(history);
@@ -646,7 +645,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
-                    let mut state = crate::app::AppState::new();
+                    let mut state = crate::app::AppState::new_with_workspace_session(&cwd, None);
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
                     state.task_working_directory = Some(cwd.clone());
@@ -1242,6 +1241,10 @@ mod tests {
         assert_eq!(state.task_working_directory.as_deref(), Some(cwd.path()));
         assert_eq!(state.workspace_root.as_deref(), Some(cwd.path()));
         assert_eq!(state.history.to_vec(), history);
+
+        let mut state = state;
+        state.workspace_root = None;
+        assert_eq!(state.executor_workspace_root().as_deref(), Some(cwd.path()));
     }
 
     #[test]

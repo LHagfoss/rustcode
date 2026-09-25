@@ -1158,8 +1158,7 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
                 return;
             };
             let source = s
-                .workspace_root
-                .clone()
+                .executor_workspace_root()
                 .or_else(|| std::env::current_dir().ok());
             let Some(source) = source else {
                 s.history.push(ChatMessage::new(
