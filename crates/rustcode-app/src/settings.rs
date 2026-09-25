@@ -32,6 +32,14 @@ impl SettingsState {
             .find(|model| self.selected_model.as_deref() == Some(model.id.as_str()))
             .map(|model| model.label.as_str())
     }
+
+    pub fn approval_mode_label(&self) -> &'static str {
+        if self.auto_approve {
+            "Auto approve"
+        } else {
+            "Ask first"
+        }
+    }
 }
 
 #[cfg(test)]
@@ -74,6 +82,18 @@ mod tests {
         assert_eq!(state.selected_model_label(), Some("Remote model"));
         assert!(!state.auto_approve);
         assert!(state.has_session);
+    }
+
+    #[test]
+    fn settings_approval_label_tracks_the_persisted_controller_value() {
+        let ask_first = SettingsState::from_snapshot(Some(&snapshot()));
+        let auto_approve = SettingsState::from_snapshot(Some(&ControllerSnapshot {
+            auto_approve: true,
+            ..snapshot()
+        }));
+
+        assert_eq!(ask_first.approval_mode_label(), "Ask first");
+        assert_eq!(auto_approve.approval_mode_label(), "Auto approve");
     }
 
     #[test]
