@@ -152,6 +152,12 @@ Chat/tool state changes may use short opacity/position transitions where GPUI su
 
 The native command parser and slash registry add `/info` as the canonical diagnostic command. It renders the active session ID plus selected model, active/idle state, and queued-message count from the controller snapshot. `/session` may be provided as a discoverable alias if it uses the same tested handler. Only commands backed by native controller behavior appear in suggestions; the larger TUI registry remains an incremental roadmap.
 
+### Transcript position rail
+
+The chat transcript gains a quiet right-edge position rail made from short neutral dashes. It is driven by the virtual list's actual logical top row, not by message count or tail-following guesses. As the user scrolls, the current dash becomes brighter and slightly wider with a short reduced-motion-aware transition. Markers are clickable and scroll to the represented display row.
+
+Each grouped `DisplayRow` is one navigation position for normal-size conversations. Long conversations use a fixed maximum number of representative markers, mapping rows proportionally into those markers, so the rail has stable visual density and constant rendering cost instead of creating an element for every historical row. The rail is absent when there is no meaningful position choice and does not replace the existing jump-to-latest action or virtualized scrolling.
+
 ## Harness Reliability Design
 
 ### Captured failure

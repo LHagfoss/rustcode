@@ -224,3 +224,17 @@
 - [ ] Move user and assistant copy actions to the left beneath content. Increase the icon slightly and provide a padded/minimum-size transparent click target as hit slop while preserving the shared hover bridge and selectable text.
 - [ ] Add structural tests for left-aligned copy target/minimum hit size and flush divider policy; visually verify Settings and both message types at 900×620 and 1200×800.
 - [ ] Run focused view tests, `cargo fmt --check`, `cargo check -p rustcode-app --tests`, and `cargo test -p rustcode-app`; commit the feedback changes.
+
+## Task 11: Add a smooth transcript position rail
+
+**Files:**
+- Modify or add the smallest app-owned transcript-scroller layer needed to expose the virtual list's logical top row.
+- Modify: `crates/rustcode-app/src/view.rs`
+- Test: the app-owned transcript position/marker mapping helpers and focused view tests.
+
+- [ ] Add failing pure tests for row-to-marker mapping, active-marker selection from the logical top row, short conversations, and bounded compaction for long conversations.
+- [ ] Render a narrow right-edge rail with one dash per display row when the row count is small, and a fixed upper bound of representative markers when it is large so rendering remains O(1) in transcript length.
+- [ ] Drive the active marker from the virtual list's real logical scroll position. The active dash is brighter and wider; width/color changes use a short reduced-motion-aware transition without affecting hit testing.
+- [ ] Make each marker clickable to scroll to its represented display row while preserving the existing virtualized transcript, jump-to-latest behavior, wheel chaining, search navigation, and tail following.
+- [ ] Keep the rail visually quiet, neutral gray/white, keyboard/assistive semantics no worse than the existing scrollbar, and hidden when fewer than two display rows exist.
+- [ ] Run focused rail/view tests, `cargo fmt --check`, `cargo check -p rustcode-app --tests`, and `cargo test -p rustcode-app`; visually verify near the top, middle, and bottom of both short and long transcripts; commit the task.
