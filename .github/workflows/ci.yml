@@ -138,6 +138,9 @@ jobs:
             - name: Check shell installer syntax
               run: bash -n scripts/install.sh
 
+            - name: Check native app bundler syntax
+              run: bash -n scripts/build-native-app.sh
+
             - name: Check CI change matcher
               run: bash scripts/test-ci-relevant-changes.sh
 
