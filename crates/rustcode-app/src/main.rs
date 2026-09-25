@@ -58,9 +58,14 @@ fn main() {
                         let settings_window = window.window_handle();
                         let settings_view = view.downgrade();
                         cx.on_action(move |_: &OpenSettings, cx| {
-                            let _ = cx.update_window(settings_window, |_, window, cx| {
-                                let _ = settings_view.update(cx, |view, cx| {
-                                    view.open_settings(window, cx);
+                            let settings_view = settings_view.clone();
+                            cx.defer(move |cx| {
+                                // Global actions run while the active window is being dispatched.
+                                // Defer until GPUI has returned it to the app before updating it.
+                                let _ = cx.update_window(settings_window, |_, window, cx| {
+                                    let _ = settings_view.update(cx, |view, cx| {
+                                        view.open_settings(window, cx);
+                                    });
                                 });
                             });
                         });
