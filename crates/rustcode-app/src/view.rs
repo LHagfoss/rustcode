@@ -1107,16 +1107,31 @@ impl AppView {
             })
             .flex()
             .flex_col()
-            .gap_4()
-            .child(div().text_lg().font_semibold().child("Settings"))
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .text_color(rgb(Palette::TEXT_SECONDARY))
+                    .child("Settings"),
+            )
             .child(
                 Button::new("settings-section-general")
                     .ghost()
                     .compact()
+                    .xsmall()
                     .w_full()
                     .selected(true)
-                    .label("General")
-                    .icon(IconName::Settings)
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_start()
+                            .gap_2()
+                            .child(Icon::new(IconName::Settings).size_4())
+                            .child(div().text_sm().child("General")),
+                    )
                     .accessibility_label("General settings"),
             );
 
@@ -1315,17 +1330,25 @@ impl AppView {
             .w_full()
             .flex()
             .flex_col()
-            .gap_2()
-            .pt_2()
+            .pt_1()
             .border_t_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
             .child(
                 Button::new("sidebar-settings")
                     .ghost()
                     .compact()
+                    .xsmall()
                     .w_full()
-                    .icon(IconName::Settings)
-                    .label("Settings")
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_start()
+                            .gap_2()
+                            .child(Icon::new(IconName::Settings).size_4())
+                            .child(div().text_sm().child("Settings")),
+                    )
                     .selected(matches!(
                         self.navigation.destination,
                         AppDestination::Settings(_)
@@ -1342,6 +1365,7 @@ impl AppView {
             .w(px(SIDEBAR_WIDTH))
             .bg(rgb(Palette::SIDEBAR))
             .border_color(rgb(Palette::BORDER_SUBTLE))
+            .border_r_1()
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(collapsed)
             .header(header)
@@ -1684,50 +1708,58 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
         .child(
             div()
                 .max_w(px(620.))
+                .w_full()
                 .relative()
                 .group("user-message")
-                .px_4()
-                .py_3()
-                .rounded_xl()
-                .bg(rgb(Palette::SURFACE_COMPOSER))
-                .text_size(px(15.))
-                .line_height(px(22.))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .children(parts.into_iter().enumerate().map(|(part_index, part)| {
-                    match part {
-                        crate::image_attachment::UserPart::Text(text) => {
-                            TextView::markdown(format!("user-{index}-{part_index}"), text)
-                                .style(markdown_style())
-                                .text_size(px(15.))
-                                .line_height(px(22.))
-                                .text_color(rgb(Palette::TEXT_PRIMARY))
-                                .selectable(true)
-                                .into_any_element()
-                        }
-                        crate::image_attachment::UserPart::Image(path) => {
-                            if path.exists() {
-                                div()
-                                    .size(px(124.))
-                                    .rounded_lg()
-                                    .overflow_hidden()
-                                    .child(
-                                        gpui_kit::img(path)
-                                            .size_full()
-                                            .object_fit(gpui_kit::ObjectFit::Cover),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(Palette::TEXT_MUTED))
-                                    .child("Image unavailable")
-                                    .into_any_element()
+                .items_end()
+                .child(
+                    div()
+                        .max_w_full()
+                        .px_4()
+                        .py_3()
+                        .rounded_xl()
+                        .bg(rgb(Palette::SURFACE_COMPOSER))
+                        .text_size(px(15.))
+                        .line_height(px(22.))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(parts.into_iter().enumerate().map(|(part_index, part)| {
+                            match part {
+                                crate::image_attachment::UserPart::Text(text) => {
+                                    TextView::markdown(format!("user-{index}-{part_index}"), text)
+                                        .style(markdown_style())
+                                        .text_size(px(15.))
+                                        .line_height(px(22.))
+                                        .text_color(rgb(Palette::TEXT_PRIMARY))
+                                        .selectable(true)
+                                        .into_any_element()
+                                }
+                                crate::image_attachment::UserPart::Image(path) => {
+                                    if path.exists() {
+                                        div()
+                                            .size(px(124.))
+                                            .rounded_lg()
+                                            .overflow_hidden()
+                                            .child(
+                                                gpui_kit::img(path)
+                                                    .size_full()
+                                                    .object_fit(gpui_kit::ObjectFit::Cover),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(Palette::TEXT_MUTED))
+                                            .child("Image unavailable")
+                                            .into_any_element()
+                                    }
+                                }
                             }
-                        }
-                    }
-                }))
+                        })),
+                )
                 .child(
                     div()
                         .h(px(
@@ -2796,7 +2828,7 @@ impl Render for AppView {
         let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
-            .border_color(rgb(Palette::BORDER_SUBTLE))
+            .border_b_0()
             .child(
                 div()
                     .h_full()
@@ -2869,7 +2901,7 @@ mod tests {
     };
 
     #[test]
-    fn copy_control_region_remains_inside_the_message_hover_group() {
+    fn user_copy_footer_reserves_hit_height_inside_the_parent_hover_group() {
         assert!(super::copy_control_stays_in_hover_region(
             super::MESSAGE_COPY_CONTROL_BOTTOM_OFFSET,
             super::MESSAGE_COPY_CONTROL_HEIGHT,
