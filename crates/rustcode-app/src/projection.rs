@@ -800,7 +800,10 @@ mod tests {
             multiple: false,
         };
         let approval = ApprovalPrompt {
+            request_id: "write-file-1".to_owned(),
             tool_name: "write_file".to_owned(),
+            action_summary: "write_file · src/main.rs".to_owned(),
+            risk_context: "This action requires your approval before it can continue.".to_owned(),
             description: "src/main.rs".to_owned(),
         };
 

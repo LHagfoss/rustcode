@@ -171,6 +171,12 @@ impl InteractivePolicy {
                     };
 
                     confirmations.push(ToolConfirmation {
+                        request_id: Some(call.call_id.clone().unwrap_or_else(|| {
+                            format!(
+                                "local:{}",
+                                super::tool_exec::stable_arguments_hash(&call.arguments)
+                            )
+                        })),
                         tool_name: call.name.clone(),
                         path,
                         content_preview: preview,

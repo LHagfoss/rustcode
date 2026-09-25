@@ -22,6 +22,7 @@ pub enum AppStatus {
 
 #[derive(Debug, Clone)]
 pub struct ToolConfirmation {
+    pub request_id: Option<String>,
     pub tool_name: String,
     pub path: String,
     pub content_preview: String,

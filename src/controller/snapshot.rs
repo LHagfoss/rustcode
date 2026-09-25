@@ -77,7 +77,10 @@ pub struct QuestionPrompt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPrompt {
+    pub request_id: String,
     pub tool_name: String,
+    pub action_summary: String,
+    pub risk_context: String,
     pub description: String,
 }
 
@@ -107,7 +110,19 @@ impl ControllerSnapshot {
             .as_ref()
             .and_then(|confirmations| confirmations.first())
             .map(|confirmation| ApprovalPrompt {
+                request_id: format!(
+                    "{generation}:{}",
+                    confirmation.request_id.clone().unwrap_or_else(|| {
+                        format!(
+                            "local:{}:{}:{}",
+                            confirmation.tool_name, confirmation.path, confirmation.content_bytes
+                        )
+                    })
+                ),
                 tool_name: confirmation.tool_name.clone(),
+                action_summary: format!("{} · {}", confirmation.tool_name, confirmation.path),
+                risk_context: "This action requires your approval before it can continue."
+                    .to_owned(),
                 description: if confirmation.content_preview.is_empty() {
                     confirmation.path.clone()
                 } else {

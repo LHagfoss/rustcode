@@ -703,6 +703,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             s.modal_scroll_row = 0;
             s.tool_confirmation_selected = 0;
             s.pending_tool_confirmation = Some(vec![ToolConfirmation {
+                request_id: Some(
+                    call_id
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("local:{}", stable_arguments_hash(args))),
+                ),
                 tool_name: display_name.to_string(),
                 path,
                 content_preview: preview,

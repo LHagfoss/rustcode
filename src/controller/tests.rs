@@ -623,6 +623,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         .with_descriptions(vec!["Local files".to_owned(), "Remote API".to_owned()]),
     );
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("tool-call-13".to_owned()),
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),
@@ -634,6 +635,13 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     let snapshot = ControllerSnapshot::from_state(7, &state);
 
     assert_eq!(snapshot.generation, 7);
+    assert_eq!(
+        snapshot
+            .pending_approval
+            .as_ref()
+            .map(|approval| approval.request_id.as_str()),
+        Some("7:tool-call-13")
+    );
     assert_eq!(snapshot.session_id.as_deref(), Some("session-7"));
     assert_eq!(
         snapshot.workspace.as_deref(),
@@ -743,6 +751,7 @@ async fn controller_approval_resolves_the_existing_response_channel() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),
@@ -913,6 +922,7 @@ async fn cancel_resolves_pending_approval_and_question_before_followup_submit() 
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: None,
         tool_name: "write_file".to_owned(),
         path: "src/main.rs".to_owned(),
         content_preview: "fn main() {}".to_owned(),

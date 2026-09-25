@@ -93,9 +93,34 @@ pub(crate) fn from_agent_ui_event(
             ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(
                 calls
                     .into_iter()
-                    .map(|call| ApprovalPrompt {
-                        tool_name: call.name,
-                        description: call.arguments.to_string(),
+                    .map(|call| {
+                        let action_summary = call
+                            .arguments
+                            .get("path")
+                            .or_else(|| call.arguments.get("command"))
+                            .or_else(|| call.arguments.get("url"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(|target| format!("{} · {target}", call.name))
+                            .unwrap_or_else(|| call.name.clone());
+                        ApprovalPrompt {
+                            request_id: format!(
+                                "{generation}:{}",
+                                call.call_id.unwrap_or_else(|| {
+                                    format!(
+                                        "local:{}",
+                                        crate::network::tool_exec::stable_arguments_hash(
+                                            &call.arguments
+                                        )
+                                    )
+                                })
+                            ),
+                            tool_name: call.name,
+                            action_summary,
+                            risk_context:
+                                "This action requires your approval before it can continue."
+                                    .to_owned(),
+                            description: call.arguments.to_string(),
+                        }
                     })
                     .collect(),
             ))
@@ -128,11 +153,23 @@ mod tests {
             public.update,
             ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(vec![
                 super::super::ApprovalPrompt {
+                    request_id: "13:call-13".to_owned(),
                     tool_name: "write_file".to_owned(),
+                    action_summary: "write_file · src/main.rs".to_owned(),
+                    risk_context: "This action requires your approval before it can continue."
+                        .to_owned(),
                     description: r#"{"path":"src/main.rs"}"#.to_owned(),
                 },
             ]))
         );
+        let ControllerUpdate::Turn(TurnUpdate::ApprovalRequested(approvals)) = public.update else {
+            unreachable!();
+        };
+        let approval = &approvals[0];
+        assert_eq!(approval.request_id, "13:call-13");
+        assert_eq!(approval.action_summary, "write_file · src/main.rs");
+        assert!(approval.risk_context.contains("requires your approval"));
+        assert_eq!(approval.description, r#"{"path":"src/main.rs"}"#);
     }
 
     #[test]

@@ -49,6 +49,8 @@ const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
 const TITLE_BAR_CHILD_GAP: f32 = 8.;
 const SETTINGS_RAIL_WIDTH: f32 = 180.;
 const SETTINGS_CONTENT_WIDTH: f32 = 680.;
+const MESSAGE_COPY_CONTROL_HEIGHT: f32 = 24.;
+const MESSAGE_COPY_CONTROL_BOTTOM_OFFSET: f32 = 0.;
 const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
     - TITLE_BAR_LEFT_PADDING
     - SIDEBAR_TOGGLE_SIZE
@@ -81,6 +83,10 @@ fn current_branch(project: &Path) -> Option<String> {
     let branch = String::from_utf8(output.stdout).ok()?;
     let branch = branch.trim();
     (!branch.is_empty()).then(|| branch.to_owned())
+}
+
+fn copy_control_stays_in_hover_region(bottom_offset: f32, reserved_height: f32) -> bool {
+    bottom_offset >= 0. && reserved_height >= MESSAGE_COPY_CONTROL_HEIGHT
 }
 
 use crate::search::ConversationSearch;
@@ -128,6 +134,7 @@ pub struct AppView {
     reset_search_input_on_render: bool,
     focus_search_on_render: bool,
     focus_composer_on_render: bool,
+    approval_in_flight: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -256,6 +263,7 @@ impl AppView {
             reset_search_input_on_render: false,
             focus_search_on_render: false,
             focus_composer_on_render: false,
+            approval_in_flight: None,
         }
     }
 
@@ -284,10 +292,24 @@ impl AppView {
         {
             self.selected_question_options.clear();
         }
+        if let ControllerUpdate::Turn(rustcode::controller::TurnUpdate::ApprovalRequested(
+            approvals,
+        )) = &event.update
+            && self.approval_in_flight.as_ref().is_some_and(|request_id| {
+                !approvals
+                    .iter()
+                    .any(|approval| &approval.request_id == request_id)
+            })
+        {
+            self.approval_in_flight = None;
+        }
 
         self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
+                if snapshot.pending_approval.is_none() {
+                    self.approval_in_flight = None;
+                }
                 if !snapshot.sessions.is_empty() {
                     self.recent_sessions = snapshot.sessions.clone();
                 }
@@ -358,6 +380,7 @@ impl AppView {
             ControllerUpdate::Turn(_) => {}
             ControllerUpdate::Error(_) => {
                 self.status = None;
+                self.approval_in_flight = None;
                 if self.starting_new_session {
                     self.starting_new_session = false;
                     self.pending_prompt = None;
@@ -1438,37 +1461,99 @@ impl AppView {
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_approval.clone())
         })?;
-        let controller = self.backend.controller().clone();
-        let approve_controller = controller.clone();
-        let view = cx.entity().downgrade();
-        let approve_view = view.clone();
+        let request_id = prompt.request_id.clone();
+        let approve_view = cx.entity().downgrade();
+        let deny_view = approve_view.clone();
+        let approve_controller = self.backend.controller().clone();
+        let deny_controller = approve_controller.clone();
+        let approve_id = request_id.clone();
+        let deny_id = request_id;
+        let in_flight = self.approval_in_flight.is_some();
         Some(
-            AlertDialog::new(cx)
-                .title(format!("Approve {}?", prompt.tool_name))
-                .description(prompt.description)
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Approve")
-                        .cancel_text("Deny")
-                        .show_cancel(true),
+            div()
+                .w_full()
+                .max_w(px(760.))
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(Palette::BORDER_SUBTLE))
+                .bg(rgb(Palette::SURFACE_ELEVATED))
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().font_semibold().child("Permission required"))
+                .child(div().text_sm().child(prompt.action_summary))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(Palette::TEXT_MUTED))
+                        .child(prompt.risk_context),
                 )
-                .on_ok(move |_, _, cx| {
-                    let _ = approve_controller.send(Command::Approval(ApprovalChoice::Approve));
-                    let _ = approve_view.update(cx, |this, cx| {
-                        this.chat_state.begin_user_action();
-                        cx.notify();
-                    });
-                    true
-                })
-                .on_cancel(move |_, _, cx| {
-                    let _ = controller.send(Command::Approval(ApprovalChoice::Deny));
-                    let _ = view.update(cx, |this, cx| {
-                        this.chat_state.begin_user_action();
-                        this.chat_state.set_approval_denied();
-                        cx.notify();
-                    });
-                    true
-                }),
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                        .child(prompt.description),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            Button::new("approval-deny")
+                                .label(if in_flight { "Denying…" } else { "Deny" })
+                                .disabled(in_flight)
+                                .on_click(move |_, _, cx| {
+                                    let _ =
+                                        deny_view.update(cx, |this, cx| {
+                                            if this.chat_state.pending_approval().is_some_and(
+                                                |pending| pending.request_id == deny_id,
+                                            ) && this.approval_in_flight.is_none()
+                                            {
+                                                this.approval_in_flight = Some(deny_id.clone());
+                                                this.chat_state.begin_user_action();
+                                                this.chat_state.set_approval_denied();
+                                                if let Err(error) = deny_controller
+                                                    .send(Command::Approval(ApprovalChoice::Deny))
+                                                {
+                                                    this.approval_in_flight = None;
+                                                    this.status = Some(format!(
+                                                        "Could not deny approval: {error:?}"
+                                                    ));
+                                                }
+                                                cx.notify();
+                                            }
+                                        });
+                                }),
+                        )
+                        .child(
+                            Button::new("approval-approve")
+                                .primary()
+                                .label(if in_flight { "Approving…" } else { "Approve" })
+                                .disabled(in_flight)
+                                .on_click(move |_, _, cx| {
+                                    let _ =
+                                        approve_view.update(cx, |this, cx| {
+                                            if this.chat_state.pending_approval().is_some_and(
+                                                |pending| pending.request_id == approve_id,
+                                            ) && this.approval_in_flight.is_none()
+                                            {
+                                                this.approval_in_flight = Some(approve_id.clone());
+                                                this.chat_state.begin_user_action();
+                                                if let Err(error) = approve_controller.send(
+                                                    Command::Approval(ApprovalChoice::Approve),
+                                                ) {
+                                                    this.approval_in_flight = None;
+                                                    this.status = Some(format!(
+                                                        "Could not approve action: {error:?}"
+                                                    ));
+                                                }
+                                                cx.notify();
+                                            }
+                                        });
+                                }),
+                        ),
+                ),
         )
     }
 }
@@ -1599,36 +1684,54 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .children(parts.into_iter().map(|part| match part {
-                    crate::image_attachment::UserPart::Text(text) => {
-                        div().child(text).into_any_element()
-                    }
-                    crate::image_attachment::UserPart::Image(path) => {
-                        if path.exists() {
-                            div()
-                                .size(px(124.))
-                                .rounded_lg()
-                                .overflow_hidden()
-                                .child(
-                                    gpui_kit::img(path)
-                                        .size_full()
-                                        .object_fit(gpui_kit::ObjectFit::Cover),
-                                )
+                .children(parts.into_iter().enumerate().map(|(part_index, part)| {
+                    match part {
+                        crate::image_attachment::UserPart::Text(text) => {
+                            TextView::markdown(format!("user-{index}-{part_index}"), text)
+                                .style(markdown_style())
+                                .text_size(px(15.))
+                                .line_height(px(22.))
+                                .text_color(rgb(Palette::TEXT_PRIMARY))
+                                .selectable(true)
                                 .into_any_element()
-                        } else {
-                            div()
-                                .text_xs()
-                                .text_color(rgb(Palette::TEXT_MUTED))
-                                .child("Image unavailable")
-                                .into_any_element()
+                        }
+                        crate::image_attachment::UserPart::Image(path) => {
+                            if path.exists() {
+                                div()
+                                    .size(px(124.))
+                                    .rounded_lg()
+                                    .overflow_hidden()
+                                    .child(
+                                        gpui_kit::img(path)
+                                            .size_full()
+                                            .object_fit(gpui_kit::ObjectFit::Cover),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(Palette::TEXT_MUTED))
+                                    .child("Image unavailable")
+                                    .into_any_element()
+                            }
                         }
                     }
                 }))
                 .child(
                     div()
-                        .absolute()
-                        .bottom(px(-27.))
-                        .right_0()
+                        .h(px(
+                            if copy_control_stays_in_hover_region(
+                                MESSAGE_COPY_CONTROL_BOTTOM_OFFSET,
+                                MESSAGE_COPY_CONTROL_HEIGHT,
+                            ) {
+                                MESSAGE_COPY_CONTROL_HEIGHT
+                            } else {
+                                0.
+                            },
+                        ))
+                        .w_full()
+                        .flex()
+                        .justify_end()
                         .invisible()
                         .group_hover("user-message", |this| this.visible())
                         .child(
@@ -1958,9 +2061,19 @@ fn render_turn_segment(
                         )
                         .child(
                             div()
-                                .absolute()
-                                .bottom(px(-27.))
-                                .right_0()
+                                .h(px(
+                                    if copy_control_stays_in_hover_region(
+                                        MESSAGE_COPY_CONTROL_BOTTOM_OFFSET,
+                                        MESSAGE_COPY_CONTROL_HEIGHT,
+                                    ) {
+                                        MESSAGE_COPY_CONTROL_HEIGHT
+                                    } else {
+                                        0.
+                                    },
+                                ))
+                                .w_full()
+                                .flex()
+                                .justify_end()
                                 .invisible()
                                 .group_hover("assistant-message", |this| this.visible())
                                 .child(
@@ -2663,6 +2776,15 @@ mod tests {
         SettingsSection, ToolStatus, group_turn_rows, should_show_start_screen,
         slash_menu_key_decision, turn_segments,
     };
+
+    #[test]
+    fn copy_control_region_remains_inside_the_message_hover_group() {
+        assert!(super::copy_control_stays_in_hover_region(
+            super::MESSAGE_COPY_CONTROL_BOTTOM_OFFSET,
+            super::MESSAGE_COPY_CONTROL_HEIGHT,
+        ));
+        assert!(!super::copy_control_stays_in_hover_region(-27., 0.));
+    }
 
     #[test]
     fn composer_routes_gpui_arrow_names_to_slash_navigation() {
