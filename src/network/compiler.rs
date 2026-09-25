@@ -206,12 +206,21 @@ fn classify_compiler_output(
     if success {
         return CompilerCheckOutcome::Passed;
     }
-    // Cargo's manifest, dependency, and toolchain failures often have no JSON
-    // diagnostic. A nonzero exit must never be cached or reported as a pass.
     let mut diagnostics = normalized.trim().to_owned();
     if diagnostics.is_empty() {
         return CompilerCheckOutcome::UnverifiedInfrastructure {
             reason: format!("`{command}` exited unsuccessfully without output"),
+        };
+    }
+    if !has_recognized_source_diagnostic(&diagnostics) {
+        let status = exit_code.map_or_else(
+            || "terminated without an exit code".to_owned(),
+            |code| format!("exited with status {code}"),
+        );
+        return CompilerCheckOutcome::UnverifiedInfrastructure {
+            reason: format!(
+                "`{command}` {status}; output did not match a known compiler or linter diagnostic:\n{diagnostics}"
+            ),
         };
     }
     const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
@@ -234,6 +243,20 @@ fn classify_compiler_output(
         fingerprint: fingerprint_compiler_diagnostics(&rendered),
         output: rendered,
     }
+}
+
+fn has_recognized_source_diagnostic(output: &str) -> bool {
+    static BIOME_LOCATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\S+:\d+:\d+\s+(?:lint|assist|format)/").unwrap());
+    let lower = output.to_lowercase();
+    let has_location = !compiler_diagnostic_locations(output).is_empty();
+    let rust_diagnostic = lower.contains("error[")
+        && lower
+            .lines()
+            .any(|line| line.trim_start().starts_with("-->"));
+    let typescript_diagnostic = lower.contains("error ts") && has_location;
+    let biome_diagnostic = output.lines().any(|line| BIOME_LOCATION.is_match(line));
+    rust_diagnostic || typescript_diagnostic || biome_diagnostic
 }
 
 fn fingerprint_compiler_diagnostics(diagnostics: &str) -> String {
@@ -416,8 +439,121 @@ mod compiler_execution_tests {
         ));
     }
 
+    #[test]
+    fn only_recognized_source_diagnostics_affect_the_diagnostic_streak() {
+        let rustc_json = r#"{"reason":"compiler-message","message":{"level":"error","rendered":"error[E0425]: cannot find value `missing` in this scope\n --> src/lib.rs:3:5\n"}}"#;
+        let cases = [
+            (
+                "rustc JSON diagnostic",
+                "cargo check",
+                true,
+                rustc_json,
+                "",
+                true,
+            ),
+            (
+                "rustc rendered diagnostic",
+                "rustc",
+                false,
+                "error[E0425]: cannot find value `missing` in this scope\n --> src/lib.rs:3:5",
+                "",
+                true,
+            ),
+            (
+                "TypeScript diagnostic",
+                "tsc --noEmit",
+                false,
+                "src/main.ts(3,1): error TS2322: wrong type",
+                "",
+                true,
+            ),
+            (
+                "Biome lint diagnostic",
+                "biome check .",
+                false,
+                "src/main.ts:3:1 lint/suspicious/noConsole ━━━━━\n× Avoid console output",
+                "",
+                true,
+            ),
+            (
+                "manifest parse failure",
+                "cargo check",
+                true,
+                "",
+                "error: failed to parse manifest at Cargo.toml",
+                false,
+            ),
+            (
+                "dependency resolution failure",
+                "cargo check",
+                true,
+                "",
+                "error: failed to get `serde` as a dependency of package `app`",
+                false,
+            ),
+            (
+                "toolchain setup failure",
+                "cargo check",
+                true,
+                "",
+                "error: toolchain `nightly-x` is not installed",
+                false,
+            ),
+            (
+                "linter configuration failure",
+                "biome check .",
+                false,
+                "",
+                "Invalid configuration: unknown key `formatter`",
+                false,
+            ),
+            (
+                "network download failure",
+                "cargo check",
+                true,
+                "",
+                "error: failed to download from https://example.test; connection timed out",
+                false,
+            ),
+            (
+                "unknown nonzero failure",
+                "compiler check",
+                false,
+                "process failed for an unknown reason",
+                "",
+                false,
+            ),
+        ];
+
+        for (name, command, cargo, stdout, stderr, is_source) in cases {
+            let outcome = classify_compiler_output(command, cargo, false, Some(1), stdout, stderr);
+            assert_eq!(
+                matches!(outcome, CompilerCheckOutcome::SourceDiagnostics { .. }),
+                is_source,
+                "incorrect classification for {name}: {outcome:?}"
+            );
+
+            let mut ctx = TurnContext::new();
+            ctx.compiler.consecutive_diagnostics = 2;
+            ctx.compiler.last_diagnostic_fingerprint = Some("previous source failure".into());
+            update_compiler_outcome_streak(&mut ctx, &outcome);
+            assert_eq!(
+                ctx.compiler.consecutive_diagnostics,
+                if is_source { 1 } else { 2 },
+                "incorrect diagnostic accounting for {name}"
+            );
+            if !is_source {
+                assert_eq!(
+                    ctx.compiler.last_diagnostic_fingerprint.as_deref(),
+                    Some("previous source failure"),
+                    "infrastructure outcome cleared fingerprint for {name}"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn stderr_only_cargo_failure_is_not_cached_as_passed() {
+    async fn manifest_parse_failure_is_unverified_and_not_cached_as_passed() {
         if !crate::tools::exec::sandbox::runtime_tests_available() {
             return;
         }
@@ -433,14 +569,11 @@ mod compiler_execution_tests {
         let result = cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
             .await
             .unwrap();
+        assert!(result.starts_with("__BUILD_UNVERIFIED__"), "{result}");
         assert!(result.contains("status 101"), "{result}");
         assert!(result.contains("not-a-version"), "{result}");
-        assert!(!result.starts_with("__BUILD_UNVERIFIED__"));
-        assert!(!dirty);
-        assert_eq!(
-            cached_compiler_check(project.path(), &mut dirty, &mut cache, &token).await,
-            Some(result)
-        );
+        assert!(dirty);
+        assert!(cache.is_none());
     }
 
     #[tokio::test]
