@@ -5,7 +5,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, Context, PathPromptOptions, Render, Window, actions,
+    Anchor, Context, KeyDownEvent, PathPromptOptions, Render, Window, actions,
     component::{
         Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
         button::{Button, ButtonVariants},
@@ -71,6 +71,8 @@ pub struct AppView {
     pending_model_selection: Option<String>,
     starting_new_session: bool,
     clear_composer_on_render: bool,
+    slash_selection: usize,
+    slash_picker_dismissed: bool,
     sidebar_collapsed: bool,
     git_branch: Option<String>,
     expanded_thoughts: HashSet<(usize, usize)>,
@@ -96,8 +98,10 @@ impl AppView {
                 .auto_grow(2, 6)
                 .submit_on_enter(true)
         });
-        let composer_subscription = cx.subscribe(&composer, |_, _, event: &InputEvent, cx| {
+        let composer_subscription = cx.subscribe(&composer, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.slash_selection = 0;
+                this.slash_picker_dismissed = false;
                 cx.notify();
             }
         });
@@ -129,6 +133,8 @@ impl AppView {
             pending_model_selection: None,
             starting_new_session: false,
             clear_composer_on_render: false,
+            slash_selection: 0,
+            slash_picker_dismissed: false,
             sidebar_collapsed: false,
         }
     }
@@ -378,11 +384,14 @@ impl AppView {
             return;
         }
         let draft = self.composer.read(cx).value().to_string();
-        let suggestions = crate::slash::suggestions(&draft);
-        if suggestions.len() == 1 && draft.trim() != suggestions[0].name {
-            let completed = crate::slash::complete(suggestions[0].name);
+        if !self.slash_picker_dismissed
+            && let Some(completed) = crate::slash::complete_selection(&draft, self.slash_selection)
+        {
             self.composer
                 .update(cx, |state, cx| state.set_value(&completed, window, cx));
+            self.composer
+                .update(cx, |state, cx| state.focus(window, cx));
+            self.slash_picker_dismissed = true;
             cx.notify();
             return;
         }
@@ -1496,6 +1505,9 @@ impl Render for AppView {
             && (can_submit(&self.composer.read(cx).value())
                 || (!pending_question && !self.pending_images.is_empty()));
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
+        self.slash_selection = self
+            .slash_selection
+            .min(slash_suggestions.len().saturating_sub(1));
         let has_session = !should_show_start_screen(self.snapshot.as_ref());
         let conversation_title = self.snapshot.as_ref().and_then(|snapshot| {
             let id = snapshot.session_id.as_ref()?;
@@ -1619,6 +1631,39 @@ impl Render for AppView {
             })
             .child(
                 div()
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        let suggestions =
+                            crate::slash::suggestions(&this.composer.read(cx).value());
+                        if suggestions.is_empty() || this.slash_picker_dismissed {
+                            return;
+                        }
+                        match event.keystroke.key.as_str() {
+                            "up" => {
+                                this.slash_selection = crate::slash::move_selection(
+                                    this.slash_selection,
+                                    suggestions.len(),
+                                    false,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            "down" => {
+                                this.slash_selection = crate::slash::move_selection(
+                                    this.slash_selection,
+                                    suggestions.len(),
+                                    true,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            "escape" => {
+                                this.slash_picker_dismissed = true;
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }))
                     .on_action(cx.listener(|this, action: &Enter, window, cx| {
                         if !action.shift && !action.secondary {
                             this.submit_composer(window, cx);
@@ -1828,56 +1873,72 @@ impl Render for AppView {
                     .gap_0()
                     .child(context_row)
                     .child(composer)
-                    .when(!slash_suggestions.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .w_full()
-                                .absolute()
-                                .bottom_full()
-                                .mb_2()
-                                .p_1()
-                                .rounded_lg()
-                                .border_1()
-                                .border_color(rgb(0x414348))
-                                .bg(rgb(0x292b2e))
-                                .children(slash_suggestions.into_iter().map(|suggestion| {
-                                    let completion = crate::slash::complete(suggestion.name);
-                                    let view = cx.entity().downgrade();
-                                    div()
-                                        .id(format!("slash-{}", suggestion.name))
-                                        .w_full()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .hover(|this| this.bg(rgb(0x393b40)))
-                                        .child(
+                    .when(
+                        !slash_suggestions.is_empty() && !self.slash_picker_dismissed,
+                        |this| {
+                            this.child(
+                                div()
+                                    .w(px(460.))
+                                    .max_w(px(460.))
+                                    .absolute()
+                                    .left_0()
+                                    .bottom_full()
+                                    .mb_2()
+                                    .p_2()
+                                    .rounded(px(23.))
+                                    .border_1()
+                                    .border_color(rgb(0x414348))
+                                    .bg(rgb(0x292b2e))
+                                    .children(slash_suggestions.into_iter().enumerate().map(
+                                        |(index, suggestion)| {
+                                            let completion =
+                                                crate::slash::complete(suggestion.name);
+                                            let view = cx.entity().downgrade();
                                             div()
-                                                .min_w(px(100.))
-                                                .font_medium()
-                                                .child(suggestion.name),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(0xa5a8af))
-                                                .child(suggestion.description),
-                                        )
-                                        .on_click(move |_, window, cx| {
-                                            let _ = view.update(cx, |this, cx| {
-                                                this.composer.update(cx, |state, cx| {
-                                                    state.set_value(&completion, window, cx);
-                                                    state.focus(window, cx);
-                                                });
-                                                cx.notify();
-                                            });
-                                        })
-                                })),
-                        )
-                    }),
+                                                .id(format!("slash-{}", suggestion.name))
+                                                .w_full()
+                                                .flex()
+                                                .items_center()
+                                                .gap_3()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_lg()
+                                                .when(index == self.slash_selection, |this| {
+                                                    this.bg(rgb(0x393b40))
+                                                })
+                                                .cursor_pointer()
+                                                .hover(|this| this.bg(rgb(0x45474d)))
+                                                .child(
+                                                    div()
+                                                        .min_w(px(112.))
+                                                        .font_medium()
+                                                        .child(suggestion.name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(0xa5a8af))
+                                                        .child(suggestion.description),
+                                                )
+                                                .on_click(move |_, window, cx| {
+                                                    let _ = view.update(cx, |this, cx| {
+                                                        this.composer.update(cx, |state, cx| {
+                                                            state.set_value(
+                                                                &completion,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                            state.focus(window, cx);
+                                                        });
+                                                        this.slash_picker_dismissed = true;
+                                                        cx.notify();
+                                                    });
+                                                })
+                                        },
+                                    )),
+                            )
+                        },
+                    ),
             );
 
         let toggle_icon = IconName::PanelLeft;
