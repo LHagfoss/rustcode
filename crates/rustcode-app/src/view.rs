@@ -10,7 +10,7 @@ use gpui_kit::{
         Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, TitleBar,
         button::{Button, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Enter, Textarea, TextareaState},
+        input::{Enter, InputEvent, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         message_scroller::{MessageScroller, MessageScrollerState},
         scroll::ScrollableElement,
@@ -58,6 +58,8 @@ pub struct AppView {
     launch_dir: PathBuf,
     selected_project: PathBuf,
     composer: gpui_kit::Entity<TextareaState>,
+    _composer_subscription: gpui_kit::Subscription,
+    pending_images: Vec<crate::image_attachment::ImageAttachment>,
     question_answer: gpui_kit::Entity<TextareaState>,
     messages: gpui_kit::Entity<MessageScrollerState>,
     snapshot: Option<ControllerSnapshot>,
@@ -94,7 +96,16 @@ impl AppView {
                 .auto_grow(2, 6)
                 .submit_on_enter(true)
         });
-        let question_answer = cx.new(|cx| TextareaState::new(window, cx));
+        let composer_subscription = cx.subscribe(&composer, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
+        let question_answer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Or type your answer")
+                .auto_grow(1, 3)
+        });
         let messages = cx.new(|cx| MessageScrollerState::new(0, cx));
         Self {
             backend,
@@ -105,6 +116,8 @@ impl AppView {
             selected_project: launch_dir.clone(),
             launch_dir,
             composer,
+            _composer_subscription: composer_subscription,
+            pending_images: Vec::new(),
             question_answer,
             messages,
             snapshot: None,
@@ -163,12 +176,8 @@ impl AppView {
                 let previous_question = self
                     .snapshot
                     .as_ref()
-                    .and_then(|snapshot| snapshot.pending_question.as_ref())
-                    .map(|question| question.text.as_str());
-                let next_question = snapshot
-                    .pending_question
-                    .as_ref()
-                    .map(|question| question.text.as_str());
+                    .and_then(|snapshot| snapshot.pending_question.as_ref());
+                let next_question = snapshot.pending_question.as_ref();
                 if previous_question != next_question {
                     self.selected_question_options.clear();
                 }
@@ -196,6 +205,7 @@ impl AppView {
                         && self.send_command(Command::Submit(prompt), cx)
                     {
                         self.clear_composer_on_render = true;
+                        self.pending_images.clear();
                     }
                 }
             }
@@ -367,15 +377,30 @@ impl AppView {
         {
             return;
         }
-        let text = self.composer.read(cx).value().to_string();
-        if !can_submit(&text) {
+        let draft = self.composer.read(cx).value().to_string();
+        let suggestions = crate::slash::suggestions(&draft);
+        if suggestions.len() == 1 && draft.trim() != suggestions[0].name {
+            let completed = crate::slash::complete(suggestions[0].name);
+            self.composer
+                .update(cx, |state, cx| state.set_value(&completed, window, cx));
+            cx.notify();
             return;
         }
-        let command = if let Some(question) = self.chat_state.pending_question().or_else(|| {
+        let answering_question = self.chat_state.pending_question().or_else(|| {
             self.snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.pending_question.as_ref())
-        }) {
+        });
+        let is_answering_question = answering_question.is_some();
+        let text = if is_answering_question {
+            draft
+        } else {
+            crate::image_attachment::prompt_with_images(&draft, &self.pending_images)
+        };
+        if !can_submit(&text) {
+            return;
+        }
+        let command = if let Some(question) = answering_question {
             crate::projection::answer_for_question(question, None, &text)
                 .map(Command::AnswerQuestion)
         } else {
@@ -405,6 +430,10 @@ impl AppView {
         {
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
+            if !is_answering_question {
+                self.pending_images.clear();
+            }
+            cx.notify();
         }
     }
 
@@ -495,7 +524,7 @@ impl AppView {
                     view.clone(),
                     turn_active && index + 1 == rendered_rows.len(),
                 ),
-                Some(DisplayRow::User(text)) => render_user_message(text),
+                Some(DisplayRow::User(text)) => render_user_message(text, index),
                 Some(DisplayRow::System(text)) => render_system_message(text, index),
                 None => div().child("Message unavailable").into_any_element(),
             };
@@ -677,41 +706,79 @@ impl AppView {
                 .and_then(|snapshot| snapshot.pending_question.clone())
         })?;
         let controller = self.backend.controller().clone();
+        let cancel_controller = controller.clone();
         let composer = self.question_answer.clone();
         let view = cx.entity().downgrade();
+        let cancel_view = view.clone();
         let options = prompt.options.clone();
+        let descriptions = prompt.descriptions.clone();
         let multiple = prompt.multiple;
         Some(
             AlertDialog::new(cx)
-                .title("The agent has a question")
+                .title(if prompt.header.trim().is_empty() {
+                    "The agent has a question".to_owned()
+                } else {
+                    prompt.header.clone()
+                })
                 .description(prompt.text)
-                .button_props(DialogButtonProps::default().ok_text("Answer"))
-                .child(Textarea::new(&self.question_answer).h(px(100.)))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Answer")
+                        .cancel_text("Stop turn")
+                        .show_cancel(true),
+                )
+                .child(Textarea::new(&self.question_answer).h(px(52.)))
                 .children(options.into_iter().enumerate().map(|(index, option)| {
                     let answer = option.clone();
                     let controller = controller.clone();
                     let composer = composer.clone();
                     let view = view.clone();
                     let selected = self.selected_question_options.contains(&option);
-                    Button::new(format!("question-option-{index}"))
-                        .label(option)
-                        .selected(selected)
-                        .on_click(move |_, window, cx| {
-                            if multiple {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.chat_state.begin_user_action();
-                                    toggle_option(&mut this.selected_question_options, &answer);
-                                    cx.notify();
-                                });
-                            } else {
-                                let _ = controller.send(Command::AnswerQuestion(answer.clone()));
-                                let _ = view.update(cx, |this, cx| {
-                                    this.chat_state.begin_user_action();
-                                    cx.notify();
-                                });
-                                composer.update(cx, |state, cx| state.set_value("", window, cx));
-                            }
-                        })
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            Button::new(format!("question-option-{index}"))
+                                .label(option)
+                                .selected(selected)
+                                .on_click(move |_, window, cx| {
+                                    if multiple {
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.chat_state.begin_user_action();
+                                            toggle_option(
+                                                &mut this.selected_question_options,
+                                                &answer,
+                                            );
+                                            cx.notify();
+                                        });
+                                    } else {
+                                        let _ = controller
+                                            .send(Command::AnswerQuestion(answer.clone()));
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.chat_state.begin_user_action();
+                                            cx.notify();
+                                        });
+                                        composer.update(cx, |state, cx| {
+                                            state.set_value("", window, cx)
+                                        });
+                                    }
+                                }),
+                        )
+                        .when_some(
+                            descriptions
+                                .get(index)
+                                .filter(|text| !text.trim().is_empty()),
+                            |this, description| {
+                                this.child(
+                                    div()
+                                        .pl_2()
+                                        .text_xs()
+                                        .text_color(rgb(0xa5a8af))
+                                        .child(description.clone()),
+                                )
+                            },
+                        )
                 }))
                 .on_ok(move |_, window, app| {
                     let selected = view
@@ -732,6 +799,14 @@ impl AppView {
                         cx.notify();
                     });
                     composer.update(app, |state, cx| state.set_value("", window, cx));
+                    true
+                })
+                .on_cancel(move |_, _, cx| {
+                    let _ = cancel_controller.send(Command::Cancel);
+                    let _ = cancel_view.update(cx, |this, cx| {
+                        this.chat_state.begin_user_action();
+                        cx.notify();
+                    });
                     true
                 }),
         )
@@ -883,7 +958,9 @@ fn tool_summary(tools: &[ProjectionRow]) -> String {
         .join(" · ")
 }
 
-fn render_user_message(text: String) -> gpui_kit::AnyElement {
+fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
+    let copy_text = text.clone();
+    let parts = crate::image_attachment::user_parts(&text);
     div()
         .w_full()
         .flex()
@@ -891,13 +968,61 @@ fn render_user_message(text: String) -> gpui_kit::AnyElement {
         .child(
             div()
                 .max_w(px(620.))
+                .relative()
+                .group("user-message")
                 .px_4()
                 .py_3()
                 .rounded_xl()
                 .bg(rgb(0x303236))
                 .text_size(px(15.))
                 .line_height(px(22.))
-                .child(text),
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(parts.into_iter().map(|part| match part {
+                    crate::image_attachment::UserPart::Text(text) => {
+                        div().child(text).into_any_element()
+                    }
+                    crate::image_attachment::UserPart::Image(path) => {
+                        if path.exists() {
+                            div()
+                                .size(px(124.))
+                                .rounded_lg()
+                                .overflow_hidden()
+                                .child(
+                                    gpui_kit::img(path)
+                                        .size_full()
+                                        .object_fit(gpui_kit::ObjectFit::Cover),
+                                )
+                                .into_any_element()
+                        } else {
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x9a9da5))
+                                .child("Image unavailable")
+                                .into_any_element()
+                        }
+                    }
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(px(-27.))
+                        .right_0()
+                        .invisible()
+                        .group_hover("user-message", |this| this.visible())
+                        .child(
+                            Button::new(format!("copy-user-message-{index}"))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Copy)
+                                .accessibility_label("Copy message")
+                                .tooltip("Copy message")
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(copy_text.clone().into());
+                                }),
+                        ),
+                ),
         )
         .into_any_element()
 }
@@ -1192,9 +1317,12 @@ fn render_turn_segment(
                 .into_iter()
                 .enumerate()
                 .map(|(answer_index, answer)| {
+                    let copy_text = answer.clone();
                     div()
                         .w_full()
                         .min_w_0()
+                        .relative()
+                        .group("assistant-message")
                         .text_size(px(15.))
                         .line_height(px(23.))
                         .child(
@@ -1207,6 +1335,29 @@ fn render_turn_segment(
                             .line_height(px(23.))
                             .font_weight(gpui_kit::FontWeight::NORMAL)
                             .text_color(rgb(0xdfe1e5)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom(px(-27.))
+                                .right_0()
+                                .invisible()
+                                .group_hover("assistant-message", |this| this.visible())
+                                .child(
+                                    Button::new(format!(
+                                        "copy-assistant-{index}-{segment_index}-{answer_index}"
+                                    ))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Copy)
+                                    .accessibility_label("Copy reply")
+                                    .tooltip("Copy reply")
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(copy_text.clone().into());
+                                        },
+                                    ),
+                                ),
                         )
                 }),
         )
@@ -1334,17 +1485,32 @@ impl Render for AppView {
             .as_ref()
             .is_none_or(|snapshot| snapshot.auto_approve);
         let composer_enabled = self.chat_state.composer_enabled();
-        let send_enabled = composer_enabled
-            && self.pending_prompt.is_none()
-            && !self.starting_new_session
-            && can_submit(&self.composer.read(cx).value());
-        let has_session = !should_show_start_screen(self.snapshot.as_ref());
         let pending_question = self.chat_state.pending_question().is_some()
             || self
                 .snapshot
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.pending_question.is_some());
-
+        let send_enabled = composer_enabled
+            && self.pending_prompt.is_none()
+            && !self.starting_new_session
+            && (can_submit(&self.composer.read(cx).value())
+                || (!pending_question && !self.pending_images.is_empty()));
+        let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
+        let has_session = !should_show_start_screen(self.snapshot.as_ref());
+        let conversation_title = self.snapshot.as_ref().and_then(|snapshot| {
+            let id = snapshot.session_id.as_ref()?;
+            self.recent_sessions
+                .iter()
+                .find(|session| &session.id == id)
+                .map(|session| session.title.clone())
+                .or_else(|| {
+                    snapshot
+                        .transcript
+                        .iter()
+                        .find(|item| item.role == "user")
+                        .map(|item| item.content.lines().next().unwrap_or("").to_owned())
+                })
+        });
         let sidebar = self.render_sidebar(cx);
 
         let welcome = div()
@@ -1398,17 +1564,59 @@ impl Render for AppView {
                 this.child(Icon::new(IconName::Network).size_4())
                     .child(branch)
             });
+        let paste_view = cx.entity().downgrade();
         let composer = div()
             .w_full()
             .max_w(px(760.))
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
-            .bg(rgb(0x2b2c30))
+            .gap_3()
+            .p_4()
+            .bg(rgb(0x303236))
             .border_1()
-            .border_color(rgb(0x383a40))
-            .rounded_xl()
+            .border_color(rgb(0x3c3e43))
+            .rounded(px(23.))
+            .when(!self.pending_images.is_empty(), |this| {
+                this.child(
+                    div().flex().flex_wrap().gap_2().children(
+                        self.pending_images
+                            .iter()
+                            .enumerate()
+                            .map(|(index, image)| {
+                                let view = cx.entity().downgrade();
+                                div()
+                                    .relative()
+                                    .size(px(68.))
+                                    .rounded_lg()
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(rgb(0x55585e))
+                                    .child(
+                                        gpui_kit::img(image.path.clone())
+                                            .size_full()
+                                            .object_fit(gpui_kit::ObjectFit::Cover),
+                                    )
+                                    .child(
+                                        Button::new(format!("remove-image-{index}"))
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Close)
+                                            .accessibility_label("Remove image")
+                                            .absolute()
+                                            .top_0()
+                                            .right_0()
+                                            .tooltip("Remove image")
+                                            .on_click(move |_, _, cx| {
+                                                let _ = view.update(cx, |this, cx| {
+                                                    this.pending_images.remove(index);
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                            }),
+                    ),
+                )
+            })
             .child(
                 div()
                     .on_action(cx.listener(|this, action: &Enter, window, cx| {
@@ -1420,7 +1628,39 @@ impl Render for AppView {
                         Textarea::new(&self.composer)
                             .appearance(false)
                             .bordered(false)
-                            .disabled(!composer_enabled),
+                            .disabled(!composer_enabled)
+                            .on_paste(move |item, _, cx| {
+                                if pending_question
+                                    && crate::image_attachment::contains_images(item)
+                                {
+                                    let _ = paste_view.update(cx, |this, cx| {
+                                        this.status = Some(
+                                            "Answer the question before attaching an image"
+                                                .to_owned(),
+                                        );
+                                        cx.notify();
+                                    });
+                                    return true;
+                                }
+                                match crate::image_attachment::paste_images(item) {
+                                    Ok(None) => false,
+                                    Ok(Some(images)) => {
+                                        let _ = paste_view.update(cx, |this, cx| {
+                                            this.pending_images.extend(images);
+                                            this.status = None;
+                                            cx.notify();
+                                        });
+                                        true
+                                    }
+                                    Err(error) => {
+                                        let _ = paste_view.update(cx, |this, cx| {
+                                            this.status = Some(error);
+                                            cx.notify();
+                                        });
+                                        true
+                                    }
+                                }
+                            }),
                     ),
             )
             .when_some(status.clone(), |this, message| {
@@ -1449,26 +1689,36 @@ impl Render for AppView {
                     .gap_2()
                     .child(
                         div().flex_1().flex().items_center().child(
-                            Button::new("auto-approve")
-                                .ghost()
-                                .compact()
-                                .xsmall()
-                                .w(px(155.))
-                                .justify_start()
-                                .icon(if auto_approve {
-                                    IconName::CircleCheck
-                                } else {
-                                    IconName::CircleX
-                                })
-                                .label(if auto_approve {
+                            div()
+                                .id("auto-approve")
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_1()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .text_xs()
+                                .hover(|this| this.bg(rgb(0x3b3d42)))
+                                .child(
+                                    Icon::new(if auto_approve {
+                                        IconName::CircleCheck
+                                    } else {
+                                        IconName::CircleX
+                                    })
+                                    .size_4(),
+                                )
+                                .child(if auto_approve {
                                     "Auto approve"
                                 } else {
                                     "Ask first"
                                 })
-                                .tooltip(if auto_approve {
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(if auto_approve {
                                     "Tool actions are approved automatically. Click to ask first."
                                 } else {
                                     "Tool actions ask for approval. Click to auto approve."
+                                }).build(window, cx)
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     let enabled = this
@@ -1525,10 +1775,30 @@ impl Render for AppView {
             .flex()
             .flex_col()
             .items_center()
-            .gap_4()
+            .gap_2()
             .px_6()
-            .pt(px(16.))
-            .pb_5()
+            .pt(px(50.))
+            .pb_3()
+            .when_some(conversation_title.filter(|_| has_session), |this, title| {
+                this.child(
+                    div()
+                        .w_full()
+                        .h(px(42.))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(rgb(0x34363a))
+                        .text_sm()
+                        .font_medium()
+                        .child(
+                            Icon::new(IconName::FolderOpen)
+                                .size_4()
+                                .text_color(rgb(0xaaaeb6)),
+                        )
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(title)),
+                )
+            })
             .child(
                 div()
                     .w_full()
@@ -1552,30 +1822,74 @@ impl Render for AppView {
                 div()
                     .w_full()
                     .max_w(px(760.))
+                    .relative()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_0()
                     .child(context_row)
-                    .child(composer),
+                    .child(composer)
+                    .when(!slash_suggestions.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .w_full()
+                                .absolute()
+                                .bottom_full()
+                                .mb_2()
+                                .p_1()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0x414348))
+                                .bg(rgb(0x292b2e))
+                                .children(slash_suggestions.into_iter().map(|suggestion| {
+                                    let completion = crate::slash::complete(suggestion.name);
+                                    let view = cx.entity().downgrade();
+                                    div()
+                                        .id(format!("slash-{}", suggestion.name))
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(|this| this.bg(rgb(0x393b40)))
+                                        .child(
+                                            div()
+                                                .min_w(px(100.))
+                                                .font_medium()
+                                                .child(suggestion.name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(0xa5a8af))
+                                                .child(suggestion.description),
+                                        )
+                                        .on_click(move |_, window, cx| {
+                                            let _ = view.update(cx, |this, cx| {
+                                                this.composer.update(cx, |state, cx| {
+                                                    state.set_value(&completion, window, cx);
+                                                    state.focus(window, cx);
+                                                });
+                                                cx.notify();
+                                            });
+                                        })
+                                })),
+                        )
+                    }),
             );
 
-        // SidebarToggleButton hardcodes a small button and a 16px icon with
-        // no size override, so use a ghost button directly. Large (24px
-        // icon) reads chunky next to the traffic lights; a 28px box lands
-        // the icon at ~21px, between small and large.
-        let toggle_icon = if self.sidebar_collapsed {
-            IconName::PanelLeftOpen
-        } else {
-            IconName::PanelLeftClose
-        };
+        let toggle_icon = IconName::PanelLeft;
         let title_bar = TitleBar::new()
             .bg(gpui_kit::rgba(0x00000000))
             .border_color(gpui_kit::rgba(0x00000000))
             .child(
                 Button::new("sidebar-toggle")
                     .ghost()
-                    .with_size(px(28.))
+                    .with_size(px(24.))
                     .icon(toggle_icon)
+                    .text_color(rgb(0x9a9da5))
                     .tooltip("Toggle sidebar")
                     .accessibility_label("Toggle sidebar")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),

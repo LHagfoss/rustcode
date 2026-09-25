@@ -573,8 +573,10 @@ mod tests {
     #[test]
     fn question_options_and_freeform_answers_keep_their_text() {
         let question = QuestionPrompt {
+            header: "Question".to_owned(),
             text: "Choose".to_owned(),
             options: vec!["One".to_owned(), "Two".to_owned()],
+            descriptions: vec![],
             multiple: false,
         };
         assert_eq!(
@@ -791,8 +793,10 @@ mod tests {
     fn streamed_question_and_approval_events_open_their_dialog_state() {
         let mut view = ChatViewState::default();
         let question = QuestionPrompt {
+            header: "Question".to_owned(),
             text: "Continue?".to_owned(),
             options: vec!["Proceed".to_owned()],
+            descriptions: vec![],
             multiple: false,
         };
         let approval = ApprovalPrompt {

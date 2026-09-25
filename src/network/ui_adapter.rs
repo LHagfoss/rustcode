@@ -237,8 +237,10 @@ async fn publish_snapshot_with_mode(
                 .pending_question
                 .as_ref()
                 .map(|question| crate::controller::QuestionPrompt {
+                    header: question.header.clone(),
                     text: question.question.clone(),
                     options: question.options.clone(),
+                    descriptions: question.descriptions.clone(),
                     multiple: question.is_multi_select,
                 }),
             state.active_tool_protocol(),
@@ -950,11 +952,15 @@ mod tests {
         let (response, mut waiting) = tokio::sync::oneshot::channel();
         {
             let mut state = state.lock().await;
-            state.pending_question = Some(crate::app::PendingQuestion::new(
-                "Choose a direction".to_owned(),
-                vec!["Left".to_owned(), "Right".to_owned()],
-                false,
-            ));
+            state.pending_question = Some(
+                crate::app::PendingQuestion::new(
+                    "Choose a direction".to_owned(),
+                    vec!["Left".to_owned(), "Right".to_owned()],
+                    false,
+                )
+                .with_header("Direction".to_owned())
+                .with_descriptions(vec!["Local".to_owned(), "Remote".to_owned()]),
+            );
             state.question_response = Some(response);
             state.status = crate::app::AppStatus::AwaitingQuestion;
         }
@@ -984,8 +990,10 @@ mod tests {
             receiver.recv().await,
             Some(AgentUiEvent::QuestionRequested {
                 prompt: crate::controller::QuestionPrompt {
+                    header: "Direction".to_owned(),
                     text: "Choose a direction".to_owned(),
                     options: vec!["Left".to_owned(), "Right".to_owned()],
+                    descriptions: vec!["Local".to_owned(), "Remote".to_owned()],
                     multiple: false,
                 },
             })
