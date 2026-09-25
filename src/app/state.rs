@@ -134,8 +134,12 @@ pub struct AppState {
     pub cwd_and_branch: String,
     /// Cached workspace path and Git branch used by the composer footer.
     pub(crate) workspace_location: crate::app::workspace::WorkspaceLocationCache,
-    /// Workspace root supplied by an external frontend such as ACP.
+    /// Active managed or externally supplied workspace; sandbox backends
+    /// canonicalize it before use.
     pub workspace_root: Option<std::path::PathBuf>,
+    /// Immutable source checkout for this session. Used for execution when no
+    /// managed or externally supplied workspace is active.
+    source_session_workspace_root: Option<std::path::PathBuf>,
     /// Task/project directory supplied by an external frontend. This is the
     /// default navigation scope; `workspace_root` remains the hard boundary.
     pub task_working_directory: Option<std::path::PathBuf>,
@@ -981,6 +985,12 @@ impl AppState {
         Self::new_with_workspace_session(&workspace, None)
     }
 
+    pub(crate) fn effective_workspace_root(&self) -> Option<std::path::PathBuf> {
+        self.workspace_root
+            .clone()
+            .or_else(|| self.source_session_workspace_root.clone())
+    }
+
     /// Explicit construction for daemon turns without changing the active TUI session.
     pub(crate) fn new_with_workspace_session(
         workspace: &std::path::Path,
@@ -1055,6 +1065,7 @@ impl AppState {
             cwd_and_branch,
             workspace_location,
             workspace_root: None,
+            source_session_workspace_root: Some(workspace.to_path_buf()),
             task_working_directory: None,
             update_check: crate::update::UpdateState::Unknown,
             show_update_prompt: false,

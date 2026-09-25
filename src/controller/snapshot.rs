@@ -344,7 +344,7 @@ impl ControllerSnapshot {
             workspace: state
                 .task_working_directory
                 .clone()
-                .or_else(|| state.workspace_root.clone()),
+                .or_else(|| state.effective_workspace_root()),
             session_id: Some(state.active_session_id.clone()),
             sessions,
             models: state
@@ -398,6 +398,20 @@ impl ControllerSnapshot {
 mod detail_tests {
     use super::ControllerSnapshot;
     use crate::app::{AppState, ChatMessage, ToolCallRef, ToolResultRecord};
+
+    #[test]
+    fn snapshot_workspace_falls_back_to_the_session_source_boundary() {
+        let source = tempfile::tempdir().unwrap();
+        let state = AppState::new_with_workspace_session(source.path(), Some("snapshot-source"));
+
+        assert_eq!(state.workspace_root, None);
+        assert_eq!(
+            ControllerSnapshot::from_state(1, &state)
+                .workspace
+                .as_deref(),
+            Some(source.path())
+        );
+    }
 
     #[test]
     fn saved_tool_details_follow_call_ids_not_result_order() {

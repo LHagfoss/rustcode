@@ -412,7 +412,13 @@ fn command_with_seatbelt_path(
     // argv boundary and keep shell syntax in the original command as data.
     // Keep compiler and build-tool temporary files inside a writable root.
     // The inherited host TMPDIR usually points outside Seatbelt's policy.
-    let temp_dir = shell_quote(&workspace.to_string_lossy());
+    let temp_dir = policy
+        .session_scratch_roots
+        .iter()
+        .find(|scratch| scratch.is_dir())
+        .map(|scratch| scratch.to_string_lossy().into_owned())
+        .unwrap_or_else(|| workspace.to_string_lossy().into_owned());
+    let temp_dir = shell_quote(&temp_dir);
     let mut wrapped = format!("TMPDIR={temp_dir} TMP={temp_dir} TEMP={temp_dir} ");
     wrapped.push_str(&shell_quote(&seatbelt.to_string_lossy()));
     for argument in arguments {

@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage};
 
+use super::super::compiler::{CompilerCheckOutcome, update_compiler_outcome_streak};
 use super::super::events::{self, ToolResult};
 use super::super::lifecycle;
 use super::super::loop_detect;
@@ -848,11 +849,25 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .iter()
                 .any(|result| is_mutating_tool(&result.tool_name));
             if mutation_batch {
-                let diagnostics = results
+                let diagnostic = results
                     .iter()
                     .find_map(|result| compiler_diagnostic_fingerprint(&result.content));
-                if diagnostics.is_some() || !ctx.compiler.dirty {
-                    update_compiler_diagnostic_streak(ctx, diagnostics);
+                if let Some(fingerprint) = diagnostic {
+                    update_compiler_diagnostic_streak(ctx, Some(fingerprint));
+                } else if !ctx.compiler.dirty {
+                    update_compiler_diagnostic_streak(ctx, None);
+                } else if let Some(reason) = results.iter().find_map(|result| {
+                    result
+                        .content
+                        .strip_prefix("__BUILD_UNVERIFIED__:")
+                        .map(str::trim)
+                }) {
+                    update_compiler_outcome_streak(
+                        ctx,
+                        &CompilerCheckOutcome::UnverifiedInfrastructure {
+                            reason: reason.to_string(),
+                        },
+                    );
                 }
             }
 
@@ -1892,7 +1907,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .compiler
                         .edit_root
                         .clone()
-                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                        .or_else(|| s.effective_workspace_root())
+                        .unwrap_or_default();
                     drop(s);
                     let compiler_errors = cached_compiler_check(
                         &root,

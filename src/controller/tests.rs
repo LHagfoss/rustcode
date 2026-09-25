@@ -138,7 +138,7 @@ async fn legacy_approval_command_is_rejected_without_a_batch_identity() {
     ));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
     use tokio::io::AsyncWriteExt;
 

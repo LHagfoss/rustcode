@@ -2,6 +2,81 @@ use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prom
 use super::*;
 
 #[test]
+fn app_state_separates_source_from_active_workspace_root() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let state = AppState::new_with_workspace_session(workspace.path(), Some("workspace-root-test"));
+
+    assert_eq!(state.workspace_root, None);
+    assert_eq!(
+        state.effective_workspace_root().as_deref(),
+        Some(workspace.path())
+    );
+}
+
+#[test]
+fn ordinary_app_state_keeps_the_source_separate_from_active_workspace() {
+    let source = std::env::current_dir().expect("current source workspace");
+    let state = AppState::new();
+
+    assert_eq!(state.workspace_root, None);
+    assert_eq!(
+        state.effective_workspace_root().as_deref(),
+        Some(source.as_path())
+    );
+}
+
+#[test]
+fn active_workspace_overrides_source_and_cleanup_falls_back_to_source() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let isolated = tempfile::tempdir().expect("isolated workspace");
+    let mut state =
+        AppState::new_with_workspace_session(source.path(), Some("workspace-root-test"));
+    state.workspace_root = Some(isolated.path().to_path_buf());
+
+    assert_eq!(
+        state.effective_workspace_root().as_deref(),
+        Some(isolated.path())
+    );
+
+    state.workspace_root = None;
+    assert_eq!(
+        state.effective_workspace_root().as_deref(),
+        Some(source.path())
+    );
+}
+
+#[test]
+fn deleted_active_workspace_does_not_fall_back_to_source() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let deleted = tempfile::tempdir().expect("isolated workspace");
+    let deleted_path = deleted.path().to_path_buf();
+    let mut state =
+        AppState::new_with_workspace_session(source.path(), Some("workspace-root-test"));
+    state.workspace_root = Some(deleted_path.clone());
+    drop(deleted);
+
+    assert_eq!(state.effective_workspace_root(), Some(deleted_path));
+}
+
+#[test]
+fn request_context_uses_effective_boundary_and_preserves_task_scope() {
+    let source = tempfile::tempdir().expect("source workspace");
+    let active = tempfile::tempdir().expect("active workspace");
+    let task_scope = tempfile::tempdir().expect("task working directory");
+    let mut state = AppState::new_with_workspace_session(source.path(), Some("request-roots"));
+    state.task_working_directory = Some(task_scope.path().to_path_buf());
+
+    let (boundary, scope) = super::request_context_roots(&state);
+    assert_eq!(boundary.as_deref(), Some(source.path()));
+    assert_eq!(scope.as_deref(), Some(task_scope.path()));
+
+    state.workspace_root = Some(active.path().to_path_buf());
+    let (boundary, scope) = super::request_context_roots(&state);
+    assert_eq!(boundary.as_deref(), Some(active.path()));
+    assert_eq!(scope.as_deref(), Some(task_scope.path()));
+}
+
+#[test]
 fn request_history_uses_full_transcript_until_soft_target_pressure_and_keeps_tool_pairs_valid() {
     let history = vec![
         ChatMessage::new("user", "first task"),
@@ -2987,15 +3062,239 @@ fn repeated_compiler_diagnostics_increment_and_reset_their_streak() {
 }
 
 #[test]
-fn repeated_compiler_diagnostics_trigger_the_budget() {
+fn compiler_outcomes_only_count_verified_source_diagnostics() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, update_compiler_outcome_streak,
+    };
+
     let mut ctx = TurnContext::new();
-    ctx.compiler.consecutive_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
+    let diagnostic = CompilerCheckOutcome::SourceDiagnostics {
+        output: "error[E0425]: missing_symbol".to_string(),
+        fingerprint: "error[E0425]: missing_symbol".to_string(),
+    };
+    let mut source_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    append_compiler_outcome(&mut source_result, &diagnostic);
+    update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    let marker = "LSP/Compiler errors detected in workspace, please fix:";
+    assert!(source_result.content.contains(marker));
+    assert_eq!(
+        compiler_diagnostic_fingerprint(&source_result.content),
+        Some("error[E0425]: missing_symbol".to_string())
+    );
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
+    update_compiler_outcome_streak(&mut ctx, &diagnostic);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
+
+    let mut infrastructure_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    let infrastructure = CompilerCheckOutcome::UnverifiedInfrastructure {
+        reason: "PermissionDenied while creating checker tempdir".to_string(),
+    };
+    append_compiler_outcome(&mut infrastructure_result, &infrastructure);
+    update_compiler_outcome_streak(&mut ctx, &infrastructure);
+    assert!(!infrastructure_result.content.contains(marker));
+    assert!(compiler_diagnostic_fingerprint(&infrastructure_result.content).is_none());
+    assert!(
+        infrastructure_result
+            .content
+            .contains("could not be verified")
+    );
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
+
+    let passed = CompilerCheckOutcome::Passed;
+    let mut passed_result = ToolResult {
+        tool_name: "replace_file_content".to_string(),
+        content: "edit applied".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata::default(),
+    };
+    append_compiler_outcome(&mut passed_result, &passed);
+    assert_eq!(passed_result.content, "edit applied");
+    update_compiler_outcome_streak(&mut ctx, &passed);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+    assert!(ctx.compiler.last_diagnostic_fingerprint.is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn repeated_compiler_diagnostics_trigger_the_budget() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, run_compiler_command_outcome,
+        update_compiler_outcome_streak,
+    };
+    use std::time::Duration;
+
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("compiler diagnostic workspace");
+    let command = "printf '%s\\n' 'src/main.ts(3,1): error TS2322: wrong type' >&2; exit 1";
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    for expected_streak in 1..=MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            command,
+            false,
+            Duration::from_secs(5),
+            &cancel_token,
+        )
+        .await;
+        assert!(
+            matches!(
+                &outcome,
+                CompilerCheckOutcome::SourceDiagnostics { output, .. }
+                    if output.contains("error TS2322")
+            ),
+            "checker output should classify as a source diagnostic: {outcome:?}"
+        );
+        let mut result = ToolResult {
+            tool_name: "delete_file".to_owned(),
+            content: format!("Applied mutation {}", expected_streak - 1),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        };
+        append_compiler_outcome(&mut result, &outcome);
+        update_compiler_outcome_streak(&mut ctx, &outcome);
+
+        assert!(
+            compiler_diagnostic_fingerprint(&result.content).is_some(),
+            "source diagnostic should be annotated for the compiler budget"
+        );
+        assert_eq!(ctx.compiler.consecutive_diagnostics, expected_streak);
+        if expected_streak < MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+            assert!(turn_budget_exceeded(&ctx).is_none());
+        }
+    }
+
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
         }
         other => panic!("expected CompilerDiagnostics limit, got {other:?}"),
     }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn originating_checker_failure_replay_preserves_budget_and_workspace() {
+    use crate::network::compiler::{
+        CompilerCheckOutcome, append_compiler_outcome, run_compiler_command_outcome,
+        update_compiler_outcome_streak,
+    };
+    use std::time::Duration;
+
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("replay workspace");
+    let mut ctx = TurnContext::new();
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let checker_command = concat!(
+        "printf 'checker temp artifact\\n' > \"$TMPDIR/.replay-check.hm\"; ",
+        "mkdir -p \"$BUN_INSTALL_CACHE_DIR/bunx-501-biome@latest\"; ",
+        "printf '{}\\n' > \"$BUN_INSTALL_CACHE_DIR/bunx-501-biome@latest/package.json\"; ",
+        "printf '%s\\n' 'error: bun is unable to write files to tempdir: PermissionDenied' >&2; ",
+        "exit 1"
+    );
+    let mut unverified_events = 0;
+
+    fn find_checker_artifacts(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("read checker workspace entry") {
+            let entry = entry.expect("checker workspace entry");
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".hm") || name.starts_with("bunx-") {
+                found.push(path);
+            } else if entry
+                .file_type()
+                .expect("inspect checker workspace entry")
+                .is_dir()
+            {
+                find_checker_artifacts(&path, found);
+            }
+        }
+    }
+
+    for mutation in 0..4 {
+        std::fs::write(
+            workspace.path().join(format!("mutation-{mutation}.txt")),
+            format!("applied mutation {mutation}\n"),
+        )
+        .expect("apply replay mutation");
+
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            checker_command,
+            false,
+            Duration::from_secs(5),
+            &cancel_token,
+        )
+        .await;
+        assert!(
+            matches!(
+                &outcome,
+                CompilerCheckOutcome::UnverifiedInfrastructure { reason }
+                    if reason.contains("PermissionDenied")
+            ),
+            "mutation {mutation} should emit an unverified infrastructure event: {outcome:?}"
+        );
+        unverified_events += 1;
+
+        let mut result = ToolResult {
+            tool_name: "delete_file".to_owned(),
+            content: format!("Applied mutation {mutation}"),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        };
+        append_compiler_outcome(&mut result, &outcome);
+        update_compiler_outcome_streak(&mut ctx, &outcome);
+
+        assert!(result.content.contains("could not be verified"));
+        assert!(compiler_diagnostic_fingerprint(&result.content).is_none());
+        assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+        assert!(turn_budget_exceeded(&ctx).is_none());
+    }
+
+    assert_eq!(unverified_events, 4);
+    let mut artifacts = Vec::new();
+    find_checker_artifacts(workspace.path(), &mut artifacts);
+    assert!(
+        artifacts.is_empty(),
+        "checker scratch artifacts leaked into the workspace: {artifacts:?}"
+    );
+
+    let shell = crate::tools::exec::run_command_output_with_workspace(
+        &serde_json::json!({ "command": "pwd" }),
+        Some(workspace.path().to_path_buf()),
+    )
+    .expect("active workspace should permit shell execution");
+    assert!(shell.success, "{}", shell.content);
+    assert!(
+        shell
+            .content
+            .contains(&workspace.path().display().to_string()),
+        "run_command did not execute in the active workspace: {}",
+        shell.content
+    );
 }
 
 #[test]
@@ -3545,6 +3844,54 @@ async fn test_run_compiler_check_success() {
     assert!(check.is_none());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn compiler_check_uses_disposable_temp_outside_workspace() {
+    if !crate::tools::exec::sandbox::runtime_tests_available() {
+        return;
+    }
+    use super::compiler::{CompilerCheckOutcome, run_compiler_command_outcome};
+    use std::time::Duration;
+
+    const CHILD_WORKSPACE: &str = "RUSTCODE_COMPILER_SCRATCH_TEST_WORKSPACE";
+    if let Some(workspace) = std::env::var_os(CHILD_WORKSPACE) {
+        let workspace = std::path::PathBuf::from(workspace);
+        let command = "test -f Cargo.toml || exit 20; for path in \"$TMPDIR\" \"$TMP\" \"$TEMP\" \"$XDG_CACHE_HOME\" \"$NPM_CONFIG_CACHE\" \"$BUN_INSTALL_CACHE_DIR\"; do case \"$path\" in \"$PWD\"|\"$PWD\"/*) exit 21;; esac; case \"$path\" in \"$TMPDIR\"|\"$TMPDIR\"/*) ;; *) exit 22;; esac; done; touch \"$TMPDIR/checker-cache\"";
+        let outcome = run_compiler_command_outcome(
+            &workspace,
+            command,
+            false,
+            Duration::from_secs(5),
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(outcome, CompilerCheckOutcome::Passed);
+        assert!(!workspace.join("checker-cache").exists());
+        return;
+    }
+
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "network::tests::compiler_check_uses_disposable_temp_outside_workspace",
+            "--nocapture",
+        ])
+        .env(CHILD_WORKSPACE, project.path())
+        .env("TMPDIR", project.path())
+        .env("TMP", project.path())
+        .env("TEMP", project.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child checker test failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn proactive_history_budget_leaves_soft_target_headroom() {
     let profile = crate::config::ModelProfile {
@@ -3893,7 +4240,7 @@ fn file_context_marks_fresh_and_stale_snapshots() {
 
 #[test]
 fn compiler_diagnostics_include_bounded_source_context_for_known_locations() {
-    let diagnostics = "src/network.rs(1,1): error TS2554: Expected 1 arguments, but got 2.";
+    let diagnostics = "error: mismatched arguments\n --> src/network.rs:1:1";
     let enriched = compiler_diagnostics_with_snippets(diagnostics);
     assert!(enriched.contains(diagnostics));
     assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
@@ -4967,23 +5314,28 @@ async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
 #[tokio::test]
 async fn view_file_reports_structured_truncation_only_when_content_is_omitted() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=1000).map(|line| format!("line {line}\n")).collect();
     std::fs::write(&file, content).expect("write");
     let path = file.to_string_lossy().to_string();
 
-    let truncated = run_one_tool(test_tool_call(
-        "view_file",
-        serde_json::json!({"path": path}),
-    ))
+    let truncated = run_one_tool_with_state(
+        &state,
+        test_tool_call("view_file", serde_json::json!({"path": path})),
+    )
     .await;
     assert!(truncated.metadata.success);
     assert!(truncated.metadata.truncated);
 
-    let targeted = run_one_tool(test_tool_call(
-        "view_file",
-        serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
-    ))
+    let targeted = run_one_tool_with_state(
+        &state,
+        test_tool_call(
+            "view_file",
+            serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+        ),
+    )
     .await;
     assert!(targeted.metadata.success);
     assert!(!targeted.metadata.truncated);
@@ -5023,8 +5375,9 @@ async fn repeated_failed_read_reexecutes_and_preserves_structured_failure() {
 
 #[tokio::test]
 async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=850).map(|line| format!("{line}\n")).collect();
     std::fs::write(&file, content).expect("write");
@@ -5048,8 +5401,9 @@ async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
 
 #[tokio::test]
 async fn repeated_unchanged_small_view_file_replays_cached_body() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("small.txt");
     std::fs::write(&file, "first line\nrecoverable body\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5070,8 +5424,9 @@ async fn repeated_unchanged_small_view_file_replays_cached_body() {
 
 #[tokio::test]
 async fn view_file_subrange_reuses_complete_cached_read() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5120,8 +5475,9 @@ async fn view_file_subrange_reuses_complete_cached_read() {
 
 #[tokio::test]
 async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5146,8 +5502,9 @@ async fn view_file_subrange_without_end_line_reexecutes_when_cache_is_finite() {
 
 #[tokio::test]
 async fn view_file_subrange_with_different_content_offset_reexecutes() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.js");
     std::fs::write(&file, "first\nsecond\nthird\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5177,8 +5534,9 @@ async fn view_file_subrange_with_different_content_offset_reexecutes() {
 
 #[tokio::test]
 async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("source.rs");
     let content: String = (1..=800)
         .map(|line| format!("line {line}: {}\n", "x".repeat(13)))
@@ -5269,8 +5627,9 @@ async fn repeated_over_limit_failed_read_reexecutes() {
 
 #[tokio::test]
 async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() {
-    let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("large.txt");
     let content: String = (1..=850)
         .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
@@ -5306,6 +5665,8 @@ async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() 
 #[tokio::test]
 async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     // The edit lands at line 50, not line 1 — the old argument-only
     // preview always reported line 1 because it had no idea where in
@@ -5323,7 +5684,7 @@ async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
             "new_string": "let target = 100;",
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     assert!(result.metadata.success, "got: {}", result.content);
     let diff = result.diff.expect("a real edit must produce a diff");
@@ -5344,6 +5705,8 @@ async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
     // inserted line as `+`, the anchor line as unchanged context) —
     // not a side-by-side line-for-line replacement of the whole block.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5356,7 +5719,7 @@ async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
             "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     let diff = result.diff.expect("an insertion must still produce a diff");
     assert!(diff.contains("+    let model_name = ...;"), "got: {diff}");
@@ -5375,6 +5738,8 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
     // PR #306 made the edit itself idempotent. A stale diff on a no-op
     // result would tell the user something changed when nothing did.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let status = Idle;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5384,13 +5749,15 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
         "new_string": "let status = Active;",
     });
 
-    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    let first =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args.clone())).await;
     assert!(
         first.diff.is_some(),
         "the first, real change must have a diff"
     );
 
-    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    let second =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args)).await;
     assert!(
         second
             .content
@@ -5409,6 +5776,8 @@ async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
 #[tokio::test]
 async fn multi_replacement_final_diff_is_real() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5423,7 +5792,7 @@ async fn multi_replacement_final_diff_is_real() {
             ],
         }),
     );
-    let result = run_one_tool(call).await;
+    let result = run_one_tool_with_state(&state, call).await;
 
     assert!(result.metadata.success, "got: {}", result.content);
     let diff = result
@@ -5595,6 +5964,8 @@ async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
     // final_tool_diff as a non-empty fallback, showing a diff for a
     // no-op that changed nothing.
     let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
     let file = dir.path().join("state.rs");
     std::fs::write(&file, "let status = Idle;\n").expect("write");
     let path = file.to_string_lossy().to_string();
@@ -5604,13 +5975,15 @@ async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
         "new_string": "let status = Active;",
     });
 
-    let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+    let first =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args.clone())).await;
     assert!(
         first.diff.is_some(),
         "the first, real change must have a diff"
     );
 
-    let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+    let second =
+        run_one_tool_with_state(&state, test_tool_call("replace_file_content", args)).await;
     assert!(
         second
             .content
