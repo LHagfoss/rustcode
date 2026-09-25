@@ -863,11 +863,11 @@ async fn cancelled_turn_can_be_followed_by_a_new_submit() {
     .await
     .expect("first text delta timeout");
     assert!(saw_first_text);
-    handle.send(Command::Cancel).expect("cancel active turn");
-    let _ = release_first_tx.send(());
     handle
         .send(Command::Submit("second prompt".to_owned()))
-        .expect("submit while cancellation unwinds");
+        .expect("queue second prompt while first turn is streaming");
+    handle.send(Command::Cancel).expect("cancel active turn");
+    let _ = release_first_tx.send(());
 
     let mut saw_cancelled = false;
     tokio::time::timeout(Duration::from_secs(10), async {

@@ -103,7 +103,7 @@ use crate::{
         NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
     },
     projection::{
-        ChatViewState, ProjectionRow, ToolStatus, can_submit, project_rows, stop_available,
+        ChatViewState, ComposerAction, ProjectionRow, ToolStatus, can_submit, project_rows,
         toggle_option,
     },
 };
@@ -200,7 +200,7 @@ impl AppView {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Ask RustCode anything")
-                .auto_grow(2, 6)
+                .auto_grow(1, 4)
                 .submit_on_enter(true)
         });
         let composer_subscription = cx.subscribe(&composer, |this, _, event: &InputEvent, cx| {
@@ -2241,7 +2241,7 @@ impl Render for AppView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Choose project".to_owned());
         let status = self.status.clone();
-        let turn_active = self.chat_state.turn_active();
+        let composer_action = self.chat_state.composer_action();
         let auto_approve = self
             .navigation
             .chat_snapshot
@@ -2351,8 +2351,9 @@ impl Render for AppView {
             .max_w(px(760.))
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4()
+            .gap_2()
+            .px_4()
+            .py_3()
             .bg(rgb(Palette::SURFACE_COMPOSER))
             .border_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -2502,6 +2503,15 @@ impl Render for AppView {
                         .child(error),
                 )
             })
+            .when_some(self.chat_state.queued_message_label(), |this, label| {
+                this.child(
+                    div()
+                        .px_1()
+                        .text_xs()
+                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                        .child(label),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -2552,42 +2562,41 @@ impl Render for AppView {
                         ),
                     )
                     .child(self.render_model_picker(cx))
-                    .when(stop_available(turn_active), |this| {
-                        this.child(
-                            Button::new("stop-turn")
-                                .primary()
-                                .rounded(px(999.))
-                                .size(px(32.))
-                                .child(
+                    .child(
+                        Button::new("composer-action")
+                            .primary()
+                            .rounded(px(999.))
+                            .size(px(32.))
+                            .when(composer_action == ComposerAction::Stop, |this| {
+                                this.child(
                                     div()
                                         .size(px(10.))
                                         .rounded(px(2.))
                                         .bg(Theme::global(cx).button_primary_foreground),
                                 )
-                                .accessibility_label("Stop turn")
-                                .tooltip("Stop turn")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                            })
+                            .when(composer_action == ComposerAction::Send, |this| {
+                                this.icon(IconName::ArrowUp)
+                            })
+                            .accessibility_label(match composer_action {
+                                ComposerAction::Stop => "Stop turn",
+                                ComposerAction::Send if pending_question => "Answer",
+                                ComposerAction::Send => "Send message",
+                            })
+                            .tooltip(match composer_action {
+                                ComposerAction::Stop => "Stop turn",
+                                ComposerAction::Send if pending_question => "Answer",
+                                ComposerAction::Send => "Send message",
+                            })
+                            .disabled(composer_action == ComposerAction::Send && !send_enabled)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if composer_action == ComposerAction::Stop {
                                     this.send_command(Command::Cancel, cx);
-                                })),
-                        )
-                    })
-                    .when(!turn_active || send_enabled, |this| {
-                        this.child(
-                            Button::new("send-message")
-                                .primary()
-                                .icon(IconName::ArrowUp)
-                                .rounded(px(999.))
-                                .accessibility_label(if pending_question {
-                                    "Answer"
                                 } else {
-                                    "Send message"
-                                })
-                                .disabled(!send_enabled)
-                                .on_click(cx.listener(|this, _, window, cx| {
                                     this.submit_composer(window, cx);
-                                })),
-                        )
-                    }),
+                                }
+                            })),
+                    ),
             );
 
         let chat_main = div()
