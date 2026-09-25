@@ -5,8 +5,10 @@ mod settings;
 mod backend;
 mod highlight;
 mod image_attachment;
+mod position_rail;
 mod slash;
 pub mod theme;
+mod transcript_scroller;
 mod view;
 
 use std::path::PathBuf;
