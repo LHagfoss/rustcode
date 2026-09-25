@@ -23,6 +23,7 @@ pub enum TurnUpdate {
     ToolStarted {
         id: String,
         name: String,
+        detail: Option<String>,
     },
     ToolFinished {
         id: String,
@@ -67,8 +68,8 @@ pub(crate) fn from_agent_ui_event(
             ControllerUpdate::Turn(TurnUpdate::PromptStarted(prompt))
         }
         AgentUiEvent::TextDelta { text } => ControllerUpdate::Turn(TurnUpdate::TextDelta(text)),
-        AgentUiEvent::ToolStarted { id, name } => {
-            ControllerUpdate::Turn(TurnUpdate::ToolStarted { id, name })
+        AgentUiEvent::ToolStarted { id, name, detail } => {
+            ControllerUpdate::Turn(TurnUpdate::ToolStarted { id, name, detail })
         }
         AgentUiEvent::ToolFinished { id, result } => {
             ControllerUpdate::Turn(TurnUpdate::ToolFinished {
@@ -166,6 +167,7 @@ mod tests {
         let event = crate::network::ui_adapter::AgentUiEvent::ToolStarted {
             id: "call-9".to_owned(),
             name: "read_file".to_owned(),
+            detail: Some("src/main.rs".to_owned()),
         };
         let public = from_agent_ui_event(12, event).expect("event should be projected");
         assert_eq!(public.generation, 12);
@@ -174,6 +176,7 @@ mod tests {
             ControllerUpdate::Turn(TurnUpdate::ToolStarted {
                 id: "call-9".to_owned(),
                 name: "read_file".to_owned(),
+                detail: Some("src/main.rs".to_owned()),
             })
         );
     }

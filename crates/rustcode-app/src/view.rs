@@ -16,6 +16,7 @@ use gpui_kit::{
         scroll::ScrollableElement,
         sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
         text::{TextView, TextViewStyle},
+        tooltip::Tooltip,
     },
     div,
     prelude::*,
@@ -629,10 +630,26 @@ impl AppView {
         } else {
             for session in &self.recent_sessions {
                 let session_id = session.id.clone();
+                let title = session.title.clone();
                 recent_menu = recent_menu.child(
                     SidebarMenuItem::new(session.title.clone())
                         .icon(Icon::new(IconName::FileText))
-                        .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
+                        // The toolkit's label is a flex row whose text child
+                        // clips before ellipsis. Give the suffix slot the
+                        // remaining width and render a constrained text block.
+                        .label_style(gpui_kit::StyleRefinement::default().flex_none().w_0())
+                        .suffix(move |_, _| {
+                            let tooltip_title = title.clone();
+                            div()
+                                .id("session-title")
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                })
+                                .child(title.clone())
+                        })
                         .active(selected_session == Some(session.id.as_str()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.resume_session(session_id.clone(), cx);
@@ -822,15 +839,24 @@ fn split_thinking(content: &str) -> (String, Option<(String, bool)>) {
 fn markdown_style() -> TextViewStyle {
     let mut scrollable_block = gpui_kit::StyleRefinement::default();
     scrollable_block.overflow.x = Some(gpui_kit::Overflow::Scroll);
-    TextViewStyle::default()
-        .paragraph_gap(gpui_kit::rems(0.75))
-        .heading_font_size(|level, _| match level {
-            1 => px(21.),
-            2 => px(18.),
-            _ => px(16.),
-        })
-        .code_block(scrollable_block.clone())
-        .table(scrollable_block)
+    TextViewStyle {
+        is_dark: true,
+        ..TextViewStyle::default()
+    }
+    .paragraph_gap(gpui_kit::rems(0.75))
+    .heading_font_size(|level, _| match level {
+        1 => px(21.),
+        2 => px(18.),
+        _ => px(16.),
+    })
+    .code_block(scrollable_block.clone())
+    .table(scrollable_block)
+    .table_head(
+        gpui_kit::StyleRefinement::default()
+            .bg(rgb(0x292c30))
+            .text_color(rgb(0xdfe1e5))
+            .font_semibold(),
+    )
 }
 
 fn tool_summary(tools: &[ProjectionRow]) -> String {
@@ -881,7 +907,12 @@ fn render_system_message(text: String, index: usize) -> gpui_kit::AnyElement {
         .w_full()
         .text_size(px(14.))
         .text_color(rgb(0x9a9da5))
-        .child(TextView::markdown(format!("system-{index}"), text).style(markdown_style()))
+        .child(
+            TextView::markdown(format!("system-{index}"), text)
+                .style(markdown_style())
+                .text_size(px(13.))
+                .text_color(rgb(0x92969e)),
+        )
         .into_any_element()
 }
 
@@ -1192,6 +1223,7 @@ fn render_tool_detail(
 ) -> gpui_kit::AnyElement {
     let ProjectionRow::Tool {
         name,
+        detail,
         content,
         status,
         elapsed_ms,
@@ -1232,7 +1264,10 @@ fn render_tool_detail(
                         .flex_1()
                         .min_w_0()
                         .text_ellipsis()
-                        .child(name.replace('_', " ")),
+                        .child(match detail {
+                            Some(detail) => format!("{} · {detail}", name.replace('_', " ")),
+                            None => name.replace('_', " "),
+                        }),
                 )
                 .child(div().text_xs().text_color(rgb(color)).child(status_label))
                 .when_some(elapsed_ms, |this, ms| {
@@ -1579,6 +1614,7 @@ mod tests {
             },
             ProjectionRow::Tool {
                 name: "view_file".into(),
+                detail: None,
                 content: "file output".into(),
                 status: ToolStatus::Completed,
                 elapsed_ms: Some(10),
@@ -1605,6 +1641,7 @@ mod tests {
         };
         let tool = ProjectionRow::Tool {
             name: "view_file".into(),
+            detail: None,
             content: "file".into(),
             status: ToolStatus::Completed,
             elapsed_ms: None,
