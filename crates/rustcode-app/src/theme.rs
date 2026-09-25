@@ -6,10 +6,12 @@ impl NativePalette {
     pub const SIDEBAR: u32 = 0x222426;
     pub const SURFACE_ELEVATED: u32 = 0x282a2d;
     pub const SURFACE_COMPOSER: u32 = 0x303236;
-    pub const SURFACE_SELECTED: u32 = 0x393b40;
-    pub const SURFACE_HOVER: u32 = 0x45474d;
-    pub const SIDEBAR_HOVER: u32 = 0x363b43;
-    pub const SIDEBAR_SELECTED: u32 = 0x3b414a;
+    pub const SURFACE_SELECTED: u32 = 0x424242;
+    pub const SURFACE_HOVER: u32 = 0x474747;
+    pub const SIDEBAR_HOVER: u32 = 0x363636;
+    pub const SIDEBAR_SELECTED: u32 = 0x424242;
+    pub const INLINE_CODE_BACKGROUND: u32 = 0x383838;
+    pub const TEXT_SELECTION_BACKGROUND: u32 = 0x555555;
 
     pub const BORDER_SUBTLE: u32 = 0x34383d;
     pub const BORDER_STRONG: u32 = 0x484c54;
@@ -18,15 +20,15 @@ impl NativePalette {
     pub const TEXT_SECONDARY: u32 = 0xb5b7bd;
     pub const TEXT_MUTED: u32 = 0x92969e;
 
-    pub const COMMAND_ACCENT: u32 = 0xb69af5;
-    pub const BUTTON_PRIMARY_BACKGROUND: u32 = 0x624690;
-    pub const BUTTON_PRIMARY_HOVER_BACKGROUND: u32 = 0x7257ab;
+    pub const COMMAND_ACCENT: u32 = 0xe8e9ed;
+    pub const BUTTON_PRIMARY_BACKGROUND: u32 = 0x4a4a4a;
+    pub const BUTTON_PRIMARY_HOVER_BACKGROUND: u32 = 0x575757;
     pub const BUTTON_PRIMARY_FOREGROUND: u32 = 0xe8e9ed;
     pub const DESTRUCTIVE: u32 = 0xf0a0a0;
     pub const DESTRUCTIVE_SURFACE: u32 = 0x482d32;
     pub const APPROVAL: u32 = 0xe2c07a;
     pub const APPROVAL_SURFACE: u32 = 0x403923;
-    pub const FOCUS_RING: u32 = 0xb69af5;
+    pub const FOCUS_RING: u32 = 0xb0b0b0;
 }
 
 #[cfg(test)]
@@ -69,6 +71,34 @@ mod tests {
     }
 
     #[test]
+    fn interactive_and_inline_code_accents_use_neutral_colors() {
+        let neutral = |color: u32| {
+            let red = (color >> 16) & 0xff;
+            let green = (color >> 8) & 0xff;
+            let blue = color & 0xff;
+            red.abs_diff(green) <= 8 && green.abs_diff(blue) <= 8
+        };
+
+        for (name, color) in [
+            ("recognized command", NativePalette::COMMAND_ACCENT),
+            ("selection", NativePalette::SIDEBAR_SELECTED),
+            ("focus", NativePalette::FOCUS_RING),
+            ("inline code", NativePalette::INLINE_CODE_BACKGROUND),
+            (
+                "selection background",
+                NativePalette::TEXT_SELECTION_BACKGROUND,
+            ),
+            ("primary action", NativePalette::BUTTON_PRIMARY_BACKGROUND),
+            (
+                "primary action hover",
+                NativePalette::BUTTON_PRIMARY_HOVER_BACKGROUND,
+            ),
+        ] {
+            assert!(neutral(color), "{name} color {color:#08x} must be neutral");
+        }
+    }
+
+    #[test]
     fn primary_button_text_meets_normal_text_contrast_in_both_states() {
         assert!(
             contrast_ratio(
@@ -83,6 +113,20 @@ mod tests {
                 NativePalette::BUTTON_PRIMARY_HOVER_BACKGROUND
             ) >= 4.5,
             "primary button hover contrast must be at least 4.5:1"
+        );
+        assert!(
+            contrast_ratio(
+                NativePalette::TEXT_PRIMARY,
+                NativePalette::INLINE_CODE_BACKGROUND
+            ) >= 4.5,
+            "inline code contrast must be at least 4.5:1"
+        );
+        assert!(
+            contrast_ratio(
+                NativePalette::TEXT_PRIMARY,
+                NativePalette::TEXT_SELECTION_BACKGROUND
+            ) >= 4.5,
+            "selected text contrast must be at least 4.5:1"
         );
     }
 }

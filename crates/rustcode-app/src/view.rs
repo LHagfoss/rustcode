@@ -16,7 +16,9 @@ use gpui_kit::{
         menu::{DropdownMenu, PopupMenuItem},
         message_scroller::{MessageScroller, MessageScrollerState},
         scroll::ScrollableElement,
-        sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
+        sidebar::{
+            Sidebar, SidebarCollapsible, SidebarGroup, SidebarItem, SidebarMenu, SidebarMenuItem,
+        },
         text::{TextView, TextViewStyle},
         tooltip::Tooltip,
     },
@@ -1116,23 +1118,14 @@ impl AppView {
                     .child("Settings"),
             )
             .child(
-                Button::new("settings-section-general")
-                    .ghost()
-                    .compact()
-                    .xsmall()
-                    .w_full()
-                    .selected(true)
+                SidebarMenu::new()
                     .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_start()
-                            .gap_2()
-                            .child(Icon::new(IconName::Settings).size_4())
-                            .child(div().text_sm().child("General")),
+                        SidebarMenuItem::new("General")
+                            .icon(Icon::new(IconName::Settings))
+                            .active(true),
                     )
-                    .accessibility_label("General settings"),
+                    .render("settings-general-navigation", window, cx)
+                    .into_any_element(),
             );
 
         let model_row = div()
@@ -1244,7 +1237,7 @@ impl AppView {
             .into_any_element()
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let collapsed = self.sidebar_collapsed;
         let project = self
             .navigation
@@ -1326,6 +1319,22 @@ impl AppView {
             }
         }
 
+        let footer_menu = SidebarMenu::new()
+            .child(
+                SidebarMenuItem::new("Settings")
+                    .icon(Icon::new(IconName::Settings))
+                    .active(matches!(
+                        self.navigation.destination,
+                        AppDestination::Settings(_)
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.navigation.open_settings();
+                        cx.notify();
+                    })),
+            )
+            .render("sidebar-footer-navigation", window, cx)
+            .into_any_element();
+
         let footer = div()
             .w_full()
             .flex()
@@ -1333,33 +1342,7 @@ impl AppView {
             .pt_1()
             .border_t_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
-            .child(
-                Button::new("sidebar-settings")
-                    .ghost()
-                    .compact()
-                    .xsmall()
-                    .w_full()
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_start()
-                            .gap_2()
-                            .child(Icon::new(IconName::Settings).size_4())
-                            .child(div().text_sm().child("Settings")),
-                    )
-                    .selected(matches!(
-                        self.navigation.destination,
-                        AppDestination::Settings(_)
-                    ))
-                    .accessibility_label("Settings")
-                    .tooltip("Settings (⌘,)")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.navigation.open_settings();
-                        cx.notify();
-                    })),
-            );
+            .child(footer_menu);
 
         Sidebar::new("session-sidebar")
             .w(px(SIDEBAR_WIDTH))
@@ -1664,6 +1647,11 @@ fn markdown_style() -> TextViewStyle {
         2 => px(18.),
         _ => px(16.),
     })
+    .inline_code(gpui_kit::HighlightStyle {
+        color: Some(rgb(Palette::TEXT_PRIMARY).into()),
+        background_color: Some(rgb(Palette::INLINE_CODE_BACKGROUND).into()),
+        ..Default::default()
+    })
     .code_block(scrollable_block.clone())
     .table(scrollable_block)
     .table_head(
@@ -1845,6 +1833,20 @@ fn literal_tool_output_markdown(output: &str) -> String {
     }
     markdown.push_str(&fence);
     markdown
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ToolOutputState<'a> {
+    NoOutput,
+    Literal(&'a str),
+}
+
+fn tool_output_state(output: &str) -> ToolOutputState<'_> {
+    if output.is_empty() {
+        ToolOutputState::NoOutput
+    } else {
+        ToolOutputState::Literal(output)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2284,16 +2286,23 @@ fn render_tool_detail(
                     .bg(rgb(Palette::SURFACE_ELEVATED))
                     .px_3()
                     .py_2()
-                    .child(
-                        TextView::markdown(
+                    .child(match tool_output_state(&content) {
+                        ToolOutputState::NoOutput => div()
+                            .text_size(px(12.))
+                            .text_color(rgb(Palette::TEXT_MUTED))
+                            .font_family(mono_font.clone())
+                            .child("No output")
+                            .into_any_element(),
+                        ToolOutputState::Literal(output) => TextView::markdown(
                             format!("tool-output-{turn_index}-{tool_index}"),
-                            literal_tool_output_markdown(&content),
+                            literal_tool_output_markdown(output),
                         )
                         .text_size(px(12.))
                         .text_color(rgb(Palette::TEXT_MUTED))
                         .font_family(mono_font)
-                        .selectable(true),
-                    ),
+                        .selectable(true)
+                        .into_any_element(),
+                    }),
             )
         })
         .into_any_element()
@@ -2381,7 +2390,7 @@ impl Render for AppView {
                         .map(|item| item.content.lines().next().unwrap_or("").to_owned())
                 })
         });
-        let sidebar = self.render_sidebar(cx);
+        let sidebar = self.render_sidebar(window, cx);
 
         let welcome = div()
             .flex_1()
@@ -2896,8 +2905,9 @@ mod tests {
 
     use super::{
         AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
-        SettingsSection, ToolStatus, group_turn_rows, literal_tool_output_markdown,
-        should_show_start_screen, slash_menu_key_decision, turn_segments,
+        SettingsSection, ToolOutputState, ToolStatus, group_turn_rows,
+        literal_tool_output_markdown, should_show_start_screen, slash_menu_key_decision,
+        tool_output_state, turn_segments,
     };
 
     #[test]
@@ -2922,6 +2932,16 @@ mod tests {
             .and_then(|source| source.strip_suffix(&format!("\n{fence}")))
             .expect("closed code fence");
         assert_eq!(body, output);
+    }
+
+    #[test]
+    fn tool_output_state_uses_no_output_only_for_an_empty_result() {
+        assert_eq!(tool_output_state(""), ToolOutputState::NoOutput);
+        assert_eq!(tool_output_state(" \n "), ToolOutputState::Literal(" \n "));
+        assert_eq!(
+            tool_output_state("result"),
+            ToolOutputState::Literal("result")
+        );
     }
 
     #[test]

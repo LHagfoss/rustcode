@@ -64,6 +64,7 @@ fn main() {
                 colors.border = rgb(Palette::BORDER_SUBTLE).into();
                 colors.input = rgb(Palette::BORDER_STRONG).into();
                 colors.ring = rgb(Palette::FOCUS_RING).into();
+                colors.selection = rgb(Palette::TEXT_SELECTION_BACKGROUND).into();
                 colors.sidebar = rgb(Palette::SIDEBAR).into();
                 colors.sidebar_border = rgb(Palette::BORDER_SUBTLE).into();
                 colors.sidebar_foreground = rgb(Palette::TEXT_SECONDARY).into();
@@ -76,7 +77,7 @@ fn main() {
                 colors.muted = rgb(Palette::SURFACE_ELEVATED).into();
                 colors.muted_foreground = rgb(Palette::TEXT_MUTED).into();
                 colors.secondary_foreground = rgb(Palette::TEXT_SECONDARY).into();
-                colors.accent = rgb(Palette::COMMAND_ACCENT).into();
+                colors.accent = rgb(Palette::INLINE_CODE_BACKGROUND).into();
                 colors.accent_foreground = rgb(Palette::TEXT_PRIMARY).into();
                 colors.primary = rgb(Palette::BUTTON_PRIMARY_BACKGROUND).into();
                 colors.primary_hover = rgb(Palette::BUTTON_PRIMARY_HOVER_BACKGROUND).into();
