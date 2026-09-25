@@ -720,6 +720,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     .flatten(),
             }]);
             s.pending_approval_details = Some(vec![args.to_string()]);
+            s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
             s.request_redraw();
@@ -1481,6 +1482,100 @@ mod cancellation_tests {
             Some(crate::tools::ToolErrorKind::Cancelled)
         );
         assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_confirmation_installs_a_stable_controller_batch_identity() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let args = serde_json::json!({
+            "command": "true",
+            "network_access": true,
+        });
+        let client = reqwest::Client::new();
+        let run = |state: Arc<Mutex<AppState>>| {
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            let args = args.clone();
+            let client = client.clone();
+            let task_cancellation = cancellation.clone();
+            let task = tokio::spawn(async move {
+                super::confirm_and_execute_for_call(
+                    &client,
+                    &state,
+                    &task_cancellation,
+                    "run_command",
+                    &args,
+                    "run_command",
+                    false,
+                    None,
+                    None,
+                    Some("repeated-provider-call"),
+                )
+                .await
+            });
+            (task, cancellation)
+        };
+
+        async fn wait_for_snapshot(state: &Arc<Mutex<AppState>>) -> String {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if state.lock().await.pending_tool_confirmation.is_some() {
+                        let snapshot = crate::controller::ControllerSnapshot::from_state(
+                            7,
+                            &*state.lock().await,
+                        );
+                        let prompt = snapshot.pending_approval.expect(
+                            "direct confirmation must already have a controller batch identity",
+                        );
+                        return prompt.batch_id;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("direct confirmation should become pending")
+        }
+
+        let (first_run, mut first_cancellation) = run(Arc::clone(&state));
+        let first_id = wait_for_snapshot(&state).await;
+        assert!(first_id.starts_with("controller:"));
+        let approved = crate::app::runtime::apply_approval_decision_for_batch(
+            &state,
+            &mut first_cancellation,
+            &first_id,
+            crate::app::ApprovalDecision::Deny,
+        )
+        .await;
+        assert!(
+            approved,
+            "the current direct-confirmation ID should resolve"
+        );
+        first_run.await.expect("confirmation task should finish");
+
+        let (second_run, mut second_cancellation) = run(Arc::clone(&state));
+        let second_id = wait_for_snapshot(&state).await;
+        assert_ne!(
+            first_id, second_id,
+            "repeated provider IDs need fresh batch IDs"
+        );
+        let second_snapshot =
+            crate::controller::ControllerSnapshot::from_state(7, &*state.lock().await);
+        assert_eq!(
+            second_snapshot
+                .pending_approval
+                .expect("current batch")
+                .batch_id,
+            second_id,
+            "snapshots must expose the final token installed with the batch"
+        );
+        let approved = crate::app::runtime::apply_approval_decision_for_batch(
+            &state,
+            &mut second_cancellation,
+            &second_id,
+            crate::app::ApprovalDecision::Approve,
+        )
+        .await;
+        assert!(approved, "the current repeated-call ID should resolve");
+        second_run.await.expect("confirmation task should finish");
     }
 }
 

@@ -669,6 +669,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
         rememberable_prefix: None,
         forbidden_prefix: None,
     }]);
+    state.pending_approval_batch_id = Some("controller:snapshot:1".to_owned());
 
     let snapshot = ControllerSnapshot::from_state(7, &state);
 
@@ -756,6 +757,7 @@ fn snapshot_approval_discloses_full_confirmation_batch_with_bounded_details() {
             forbidden_prefix: None,
         },
     ]);
+    state.pending_approval_batch_id = Some("controller:snapshot:2".to_owned());
 
     let snapshot = ControllerSnapshot::from_state(7, &state);
     let batch = snapshot
@@ -770,6 +772,28 @@ fn snapshot_approval_discloses_full_confirmation_batch_with_bounded_details() {
     assert!(batch.actions[1].description.contains("cargo test"));
     assert!(batch.actions[1].description.chars().count() <= 340);
     assert!(batch.actions[1].description.contains("[truncated]"));
+}
+
+#[test]
+fn snapshot_fails_closed_without_a_controller_owned_approval_batch_id() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("unidentified"));
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        request_id: Some("repeated-provider-call".to_owned()),
+        tool_name: "run_command".to_owned(),
+        path: "true".to_owned(),
+        content_preview: "true".to_owned(),
+        content_bytes: 4,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+
+    let snapshot = ControllerSnapshot::from_state(7, &state);
+
+    assert!(
+        snapshot.pending_approval.is_none(),
+        "an action-derived presentation ID must never be offered as an authorization token"
+    );
 }
 
 #[test]
