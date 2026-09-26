@@ -1666,6 +1666,35 @@ impl AppState {
         }
     }
 
+    /// Remove one controller-addressed user prompt only when its identity still
+    /// matches the snapshot the frontend acted on. This prevents a stale row
+    /// from removing a newer duplicate after the queue changes.
+    pub(crate) fn remove_pending_user_prompt(
+        &mut self,
+        mode: DraftSubmitMode,
+        position: usize,
+        expected_text: &str,
+    ) -> Option<String> {
+        match mode {
+            DraftSubmitMode::Steer => {
+                let prompt = self.pending_steers.get(position)?;
+                if prompt.session_id != self.active_session_id || prompt.text != expected_text {
+                    return None;
+                }
+                Some(self.pending_steers.remove(position).text)
+            }
+            DraftSubmitMode::Queue => {
+                let prompt = self.pending_queue.get(position)?;
+                if prompt.starts_with("__task_wakeup__:") || prompt != expected_text {
+                    return None;
+                }
+                let prompt = self.pending_queue.remove(position);
+                self.note_pending_prompt_removed(position);
+                Some(prompt)
+            }
+        }
+    }
+
     /// Remove background wakeups whose results are already part of the history
     /// snapshot being sent to the model. User prompts remain queued in order.
     pub(crate) fn consume_observed_background_wakeups(&mut self) -> usize {

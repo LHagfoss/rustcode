@@ -105,7 +105,7 @@ pub use commands::*;
 pub use enter::handle_enter;
 pub(crate) use enter::handle_enter_with_ui_events;
 pub use session::*;
-pub(crate) use submit::{SubmitOutcome, submit_plain_prompt};
+pub(crate) use submit::{SubmitOutcome, submit_plain_prompt, submit_plain_prompt_with_mode};
 
 #[cfg(test)]
 use commands::append_codex_rate_limits;

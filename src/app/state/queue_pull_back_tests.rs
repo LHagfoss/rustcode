@@ -1,4 +1,4 @@
-use super::AppState;
+use super::{AppState, AppStatus, DraftSubmitMode};
 
 #[test]
 fn pop_queued_prompt_pulls_latest_user_prompt_skipping_wakeups() {
@@ -57,4 +57,42 @@ fn pulling_back_promoted_steers_updates_the_tracked_prefix() {
         s.pending_queue,
         ["first correction", "__task_wakeup__:productive_segment"]
     );
+}
+
+#[test]
+fn exact_pending_queue_item_can_be_removed_without_confusing_duplicates() {
+    let mut state = AppState::new();
+    state.pending_queue = vec![
+        "same".to_owned(),
+        "__task_wakeup__:task".to_owned(),
+        "same".to_owned(),
+    ];
+    state.promoted_steer_prefix_count = 1;
+
+    assert_eq!(
+        state.remove_pending_user_prompt(DraftSubmitMode::Queue, 2, "same"),
+        Some("same".to_owned())
+    );
+    assert_eq!(state.pending_queue, ["same", "__task_wakeup__:task"]);
+    assert_eq!(state.promoted_steer_prefix_count, 1);
+    assert_eq!(
+        state.remove_pending_user_prompt(DraftSubmitMode::Queue, 0, "stale"),
+        None
+    );
+}
+
+#[test]
+fn exact_pending_steer_can_be_removed_for_editing() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.active_turn_steerable_session = Some(state.active_session_id.clone());
+    assert!(state.queue_steer("first".to_owned()));
+    assert!(state.queue_steer("second".to_owned()));
+
+    assert_eq!(
+        state.remove_pending_user_prompt(DraftSubmitMode::Steer, 0, "first"),
+        Some("first".to_owned())
+    );
+    assert_eq!(state.pending_steers.len(), 1);
+    assert_eq!(state.pending_steers[0].text, "second");
 }

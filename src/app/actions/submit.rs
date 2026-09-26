@@ -7,6 +7,15 @@ pub(crate) enum SubmitOutcome {
     Queued,
 }
 
+pub(crate) fn submit_plain_prompt_with_mode(
+    state: &mut AppState,
+    text: String,
+    mode: DraftSubmitMode,
+) -> SubmitOutcome {
+    state.draft_submit_mode = mode;
+    submit_plain_prompt(state, text)
+}
+
 pub(crate) fn submit_plain_prompt(state: &mut AppState, text: String) -> SubmitOutcome {
     let text = text.trim().to_owned();
     if text.is_empty() {

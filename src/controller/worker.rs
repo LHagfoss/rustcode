@@ -84,7 +84,8 @@ async fn controller_worker(
                 generation += 1;
                 let mut state = AppState::new_with_workspace_session(&workspace, None);
                 state.workspace_root = Some(workspace.clone());
-                state.task_working_directory = Some(workspace);
+                state.task_working_directory = Some(workspace.clone());
+                persist_session_workspace(&state.active_session_id, &workspace);
                 // Native frontends do not have the TUI confirmation overlay.
                 state.auto_confirm = auto_approve;
                 let session = ActiveSession {
@@ -132,7 +133,7 @@ async fn controller_worker(
                 }
                 let mut state = AppState::new_with_workspace_session(&workspace, Some(&session_id));
                 state.workspace_root = Some(workspace.clone());
-                state.task_working_directory = Some(workspace);
+                state.task_working_directory = Some(workspace.clone());
                 if let Err(error) = crate::app::session_controller::SessionController::default()
                     .resume(
                         &mut state,
@@ -162,6 +163,7 @@ async fn controller_worker(
                 }
                 generation += 1;
                 state.auto_confirm = auto_approve;
+                persist_session_workspace(&state.active_session_id, &workspace);
                 let session = ActiveSession {
                     generation,
                     state: Arc::new(Mutex::new(state)),
@@ -199,6 +201,79 @@ async fn controller_worker(
                         ));
                     }
                 }
+            }
+            Command::SubmitWithMode { prompt, mode } => {
+                let Some(session) = active.as_mut() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                if let Some(command) = super::native_commands::parse(&prompt) {
+                    run_native_slash(command, session, &mut generation, &updates).await;
+                    continue;
+                }
+                match queue_prompt_with_mode(&session.state, prompt, mode).await {
+                    QueuePrompt::Empty | QueuePrompt::Queued => {
+                        send_snapshot(&updates, session.generation, &session.state).await;
+                    }
+                    QueuePrompt::Start(lease, starting_history_len) => {
+                        session.turn_task = Some(spawn_turn(
+                            session.generation,
+                            Arc::clone(&session.state),
+                            session.cancel_token.clone(),
+                            client.clone(),
+                            lease,
+                            starting_history_len,
+                            updates.clone(),
+                        ));
+                    }
+                }
+            }
+            Command::RestorePendingPrompt(prompt) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                let mut state = session.state.lock().await;
+                if !pending_prompt_targets(session.generation, &state, &prompt) {
+                    drop(state);
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                    continue;
+                }
+                let mode = match prompt.kind {
+                    PendingPromptKind::Steer => crate::app::DraftSubmitMode::Steer,
+                    PendingPromptKind::Queue => crate::app::DraftSubmitMode::Queue,
+                };
+                let removed =
+                    state.remove_pending_user_prompt(mode, prompt.position, &prompt.text);
+                drop(state);
+                if let Some(text) = removed {
+                    let mut restored = prompt;
+                    restored.text = text;
+                    let _ = updates.send(ControllerEvent {
+                        generation: session.generation,
+                        update: ControllerUpdate::PromptRestored(restored),
+                    });
+                }
+                send_snapshot(&updates, session.generation, &session.state).await;
+            }
+            Command::RemovePendingPrompt(prompt) => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                let mut state = session.state.lock().await;
+                if !pending_prompt_targets(session.generation, &state, &prompt) {
+                    drop(state);
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                    continue;
+                }
+                let mode = match prompt.kind {
+                    PendingPromptKind::Steer => crate::app::DraftSubmitMode::Steer,
+                    PendingPromptKind::Queue => crate::app::DraftSubmitMode::Queue,
+                };
+                state.remove_pending_user_prompt(mode, prompt.position, &prompt.text);
+                drop(state);
+                send_snapshot(&updates, session.generation, &session.state).await;
             }
             Command::Cancel => {
                 if let Some(session) = active.as_mut() {
@@ -269,13 +344,7 @@ async fn controller_worker(
                     let mut snapshot = ControllerSnapshot::from_state(session.generation, &state);
                     snapshot.sessions = sessions
                         .into_iter()
-                        .map(|session| SessionChoice {
-                            id: crate::config::session_id_from_path(&session.path)
-                                .unwrap_or_default(),
-                            title: session.title,
-                            when: session.when,
-                            message_count: session.message_count,
-                        })
+                        .map(|session| SessionChoice::from_meta(&session))
                         .collect();
                     if crate::config::session_has_content(&state.history) {
                         snapshot
@@ -289,10 +358,14 @@ async fn controller_worker(
                                     .unwrap_or_else(|| crate::config::session_title(&state.history)),
                                 when: state
                                     .history
-                                    .first()
+                                    .last()
                                     .map(|message| message.timestamp.clone())
                                     .unwrap_or_default(),
                                 message_count: state.history.len(),
+                                workspace: state
+                                    .task_working_directory
+                                    .clone()
+                                    .or_else(|| state.effective_workspace_root()),
                             },
                         );
                     }
@@ -633,6 +706,16 @@ async fn start_pending_turn(
     }
 }
 
+fn persist_session_workspace(session_id: &str, workspace: &std::path::Path) {
+    let _ = crate::config::save_session_workspace(
+        session_id,
+        &rustcode_session::SessionWorkspace {
+            cwd: workspace.to_path_buf(),
+            additional_directories: Vec::new(),
+        },
+    );
+}
+
 fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
     ControllerSnapshot {
         generation,
@@ -644,6 +727,8 @@ fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
         transcript: Vec::new(),
         live_response: String::new(),
         queued_count: 0,
+        can_steer: false,
+        pending_prompts: Vec::new(),
         turn_active: false,
         auto_approve,
         pending_question: None,
@@ -689,9 +774,41 @@ pub(super) enum QueuePrompt {
     Start(crate::app::OrchestratorLease, usize),
 }
 
+pub(super) fn pending_prompt_targets(
+    generation: u64,
+    state: &AppState,
+    prompt: &PendingPrompt,
+) -> bool {
+    prompt.generation == generation && prompt.session_id == state.active_session_id
+}
+
 pub(super) async fn queue_prompt(state: &Arc<Mutex<AppState>>, prompt: String) -> QueuePrompt {
+    queue_prompt_inner(state, prompt, None).await
+}
+
+pub(super) async fn queue_prompt_with_mode(
+    state: &Arc<Mutex<AppState>>,
+    prompt: String,
+    mode: PromptSubmitMode,
+) -> QueuePrompt {
+    let mode = match mode {
+        PromptSubmitMode::Steer => crate::app::DraftSubmitMode::Steer,
+        PromptSubmitMode::Queue => crate::app::DraftSubmitMode::Queue,
+    };
+    queue_prompt_inner(state, prompt, Some(mode)).await
+}
+
+async fn queue_prompt_inner(
+    state: &Arc<Mutex<AppState>>,
+    prompt: String,
+    mode: Option<crate::app::DraftSubmitMode>,
+) -> QueuePrompt {
     let mut state = state.lock().await;
-    if crate::app::submit_plain_prompt(&mut state, prompt) == crate::app::SubmitOutcome::Empty {
+    let outcome = match mode {
+        Some(mode) => crate::app::submit_plain_prompt_with_mode(&mut state, prompt, mode),
+        None => crate::app::submit_plain_prompt(&mut state, prompt),
+    };
+    if outcome == crate::app::SubmitOutcome::Empty {
         return QueuePrompt::Empty;
     }
     let starting_history_len = state.history.len();
