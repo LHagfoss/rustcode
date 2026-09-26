@@ -233,15 +233,19 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
+                let mut state = session.state.lock().await;
+                if !pending_prompt_targets(session.generation, &state, &prompt) {
+                    drop(state);
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                    continue;
+                }
                 let mode = match prompt.kind {
                     PendingPromptKind::Steer => crate::app::DraftSubmitMode::Steer,
                     PendingPromptKind::Queue => crate::app::DraftSubmitMode::Queue,
                 };
-                let removed = session.state.lock().await.remove_pending_user_prompt(
-                    mode,
-                    prompt.position,
-                    &prompt.text,
-                );
+                let removed =
+                    state.remove_pending_user_prompt(mode, prompt.position, &prompt.text);
+                drop(state);
                 if let Some(text) = removed {
                     let _ = updates.send(ControllerEvent {
                         generation: session.generation,
@@ -255,15 +259,18 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                     continue;
                 };
+                let mut state = session.state.lock().await;
+                if !pending_prompt_targets(session.generation, &state, &prompt) {
+                    drop(state);
+                    send_snapshot(&updates, session.generation, &session.state).await;
+                    continue;
+                }
                 let mode = match prompt.kind {
                     PendingPromptKind::Steer => crate::app::DraftSubmitMode::Steer,
                     PendingPromptKind::Queue => crate::app::DraftSubmitMode::Queue,
                 };
-                session.state.lock().await.remove_pending_user_prompt(
-                    mode,
-                    prompt.position,
-                    &prompt.text,
-                );
+                state.remove_pending_user_prompt(mode, prompt.position, &prompt.text);
+                drop(state);
                 send_snapshot(&updates, session.generation, &session.state).await;
             }
             Command::Cancel => {
@@ -349,7 +356,7 @@ async fn controller_worker(
                                     .unwrap_or_else(|| crate::config::session_title(&state.history)),
                                 when: state
                                     .history
-                                    .first()
+                                    .last()
                                     .map(|message| message.timestamp.clone())
                                     .unwrap_or_default(),
                                 message_count: state.history.len(),
@@ -763,6 +770,14 @@ pub(super) enum QueuePrompt {
     Empty,
     Queued,
     Start(crate::app::OrchestratorLease, usize),
+}
+
+pub(super) fn pending_prompt_targets(
+    generation: u64,
+    state: &AppState,
+    prompt: &PendingPrompt,
+) -> bool {
+    prompt.generation == generation && prompt.session_id == state.active_session_id
 }
 
 pub(super) async fn queue_prompt(state: &Arc<Mutex<AppState>>, prompt: String) -> QueuePrompt {

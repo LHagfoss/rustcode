@@ -96,6 +96,8 @@ pub enum PendingPromptKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingPrompt {
+    pub session_id: String,
+    pub generation: u64,
     pub kind: PendingPromptKind,
     /// Index in the controller's source collection. This intentionally keeps
     /// duplicate prompts independently addressable.
@@ -296,6 +298,8 @@ impl ControllerSnapshot {
             .iter()
             .enumerate()
             .map(|(position, prompt)| PendingPrompt {
+                session_id: state.active_session_id.clone(),
+                generation,
                 kind: PendingPromptKind::Steer,
                 position,
                 text: prompt.text.clone(),
@@ -307,6 +311,8 @@ impl ControllerSnapshot {
                     .enumerate()
                     .filter(|(_, prompt)| !prompt.starts_with("__task_wakeup__:"))
                     .map(|(position, prompt)| PendingPrompt {
+                        session_id: state.active_session_id.clone(),
+                        generation,
                         kind: PendingPromptKind::Queue,
                         position,
                         text: prompt.clone(),
@@ -393,7 +399,7 @@ impl ControllerSnapshot {
                         .unwrap_or_else(|| crate::config::session_title(&state.history)),
                     when: state
                         .history
-                        .first()
+                        .last()
                         .map(|message| message.timestamp.clone())
                         .unwrap_or_default(),
                     message_count: state.history.len(),
@@ -485,16 +491,22 @@ mod detail_tests {
             snapshot.pending_prompts,
             vec![
                 PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
                     kind: PendingPromptKind::Steer,
                     position: 0,
                     text: "correct the approach".to_owned(),
                 },
                 PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
                     kind: PendingPromptKind::Queue,
                     position: 0,
                     text: "first follow-up".to_owned(),
                 },
                 PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
                     kind: PendingPromptKind::Queue,
                     position: 2,
                     text: "second follow-up".to_owned(),

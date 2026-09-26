@@ -1,6 +1,6 @@
 use super::{
-    Command, ControllerSnapshot, ControllerUpdate, InteractiveController, PromptSubmitMode,
-    accepts_generation,
+    Command, ControllerSnapshot, ControllerUpdate, InteractiveController, PendingPrompt,
+    PendingPromptKind, PromptSubmitMode, accepts_generation,
 };
 use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion, ToolConfirmation};
 use std::time::Duration;
@@ -1254,6 +1254,28 @@ async fn explicit_follow_up_mode_routes_without_changing_the_saved_preference() 
     assert_eq!(state.pending_steers[0].text, "change course");
     assert_eq!(state.draft_submit_mode, crate::app::DraftSubmitMode::Steer);
     state.release_orchestrator(&lease);
+}
+
+#[test]
+fn pending_prompt_actions_are_bound_to_the_snapshot_session_and_generation() {
+    let state = AppState::new();
+    let prompt = PendingPrompt {
+        session_id: state.active_session_id.clone(),
+        generation: 7,
+        kind: PendingPromptKind::Queue,
+        position: 0,
+        text: "follow up".to_owned(),
+    };
+
+    assert!(super::worker::pending_prompt_targets(7, &state, &prompt));
+    assert!(!super::worker::pending_prompt_targets(8, &state, &prompt));
+    let mut wrong_session = prompt;
+    wrong_session.session_id = "replacement-session".to_owned();
+    assert!(!super::worker::pending_prompt_targets(
+        7,
+        &state,
+        &wrong_session
+    ));
 }
 
 async fn read_provider_request(socket: &mut tokio::net::TcpStream) {

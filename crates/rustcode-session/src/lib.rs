@@ -483,7 +483,7 @@ impl SessionStore {
         Some(SessionMeta {
             title,
             when: messages
-                .first()
+                .last()
                 .map(|message| message.timestamp.to_string())
                 .unwrap_or_default(),
             message_count: messages.len(),

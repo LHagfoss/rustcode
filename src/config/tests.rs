@@ -1417,7 +1417,7 @@ fn test_load_session_meta_fast_path() {
 
     let meta = load_session_meta(&history_file).expect("should parse meta");
     assert_eq!(meta.title, "hello world");
-    assert_eq!(meta.when, "12:00");
+    assert_eq!(meta.when, "12:01");
     assert_eq!(meta.message_count, 2);
     assert_eq!(meta.path, history_file);
     assert_eq!(

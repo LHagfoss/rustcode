@@ -252,6 +252,7 @@ pub struct AppView {
     session_drafts: HashMap<String, String>,
     pending_draft_session: Option<String>,
     restore_composer_on_render: Option<String>,
+    draft_before_pending_edit: Option<(String, Vec<crate::image_attachment::ImageAttachment>)>,
     follow_up_mode: PromptSubmitMode,
     chat_state: ChatViewState,
     selected_question_options: Vec<String>,
@@ -402,6 +403,7 @@ impl AppView {
             session_drafts: HashMap::new(),
             pending_draft_session: None,
             restore_composer_on_render: None,
+            draft_before_pending_edit: None,
             follow_up_mode: PromptSubmitMode::Steer,
             chat_state: ChatViewState::default(),
             selected_question_options: Vec::new(),
@@ -513,6 +515,7 @@ impl AppView {
                     self.reset_search_input_on_render = true;
                     self.focus_composer_on_render = true;
                     self.starting_new_session = false;
+                    self.draft_before_pending_edit = None;
                     let draft_key = self
                         .pending_draft_session
                         .take()
@@ -552,6 +555,13 @@ impl AppView {
             }
             ControllerUpdate::Turn(_) => {}
             ControllerUpdate::PromptRestored(prompt) => {
+                let current = self.composer.read(cx).value().to_string();
+                if self.draft_before_pending_edit.is_none()
+                    && (!current.trim().is_empty() || !self.pending_images.is_empty())
+                {
+                    self.draft_before_pending_edit =
+                        Some((current, std::mem::take(&mut self.pending_images)));
+                }
                 self.restore_composer_on_render = Some(prompt);
                 self.focus_composer_on_render = true;
             }
@@ -795,8 +805,12 @@ impl AppView {
         else {
             return;
         };
-        self.session_drafts
-            .insert(session_id, self.composer.read(cx).value().to_string());
+        let draft = self
+            .draft_before_pending_edit
+            .as_ref()
+            .map(|(draft, _)| draft.clone())
+            .unwrap_or_else(|| self.composer.read(cx).value().to_string());
+        self.session_drafts.insert(session_id, draft);
     }
 
     fn resume_session(&mut self, session: SessionChoice, cx: &mut Context<Self>) {
@@ -927,10 +941,19 @@ impl AppView {
         if let Some(command) = command
             && self.send_command(command, cx)
         {
-            self.composer
-                .update(cx, |state, cx| state.set_value("", window, cx));
             if !is_answering_question {
-                self.pending_images.clear();
+                if let Some((draft, images)) = self.draft_before_pending_edit.take() {
+                    self.composer
+                        .update(cx, |state, cx| state.set_value(&draft, window, cx));
+                    self.pending_images = images;
+                } else {
+                    self.composer
+                        .update(cx, |state, cx| state.set_value("", window, cx));
+                    self.pending_images.clear();
+                }
+            } else {
+                self.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx));
             }
             cx.notify();
             return true;
@@ -2976,6 +2999,7 @@ impl Render for AppView {
                                     .compact()
                                     .xsmall()
                                     .label("Edit")
+                                    .disabled(self.draft_before_pending_edit.is_some())
                                     .accessibility_label("Edit queued prompt")
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
@@ -3550,6 +3574,8 @@ mod tests {
             can_steer,
             pending_prompts: turn_active
                 .then(|| PendingPrompt {
+                    session_id: "interactive-session".to_owned(),
+                    generation: 1,
                     kind: PendingPromptKind::Queue,
                     position: 0,
                     text: "run tests afterwards".to_owned(),
@@ -3694,6 +3720,42 @@ mod tests {
                     .update(cx, |state, cx| state.set_value("one message", window, cx));
                 assert!(view.submit_composer(window, cx));
                 assert_eq!(view.composer.read(cx).value().as_ref(), "");
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn editing_a_pending_prompt_restores_the_existing_draft_after_submit(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        let composer = handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                view.composer
+                    .update(cx, |state, cx| state.set_value("keep my draft", window, cx));
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::PromptRestored("edit queued prompt".to_owned()),
+                    },
+                    cx,
+                );
+                view.composer.clone()
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .expect("window remains open");
+        handle
+            .update(cx, |view, window, cx| {
+                assert_eq!(composer.read(cx).value().as_ref(), "edit queued prompt");
+                assert!(view.submit_composer(window, cx));
+                assert_eq!(composer.read(cx).value().as_ref(), "keep my draft");
             })
             .expect("view remains available");
     }
