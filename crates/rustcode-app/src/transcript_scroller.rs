@@ -18,7 +18,7 @@ use gpui_kit::{
 use crate::position_rail::{
     MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, MIN_MARKER_HIT_TARGET_HEIGHT,
     RAIL_CONTENT_INSET, RAIL_SCROLLBAR_INSET, active_marker_with_count, marker_count_for_height,
-    marker_to_row_with_count,
+    marker_row_span, marker_to_row_with_count,
 };
 
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
@@ -292,14 +292,14 @@ impl RenderOnce for TranscriptScroller {
                         active_marker_with_count(logical_top_row, row_count, markers);
                     let mut rail = div()
                         .id((rail_id.clone(), "position-rail"))
-                        // Keep the marker hit areas fully clear of the scrollbar strip.
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(RAIL_SCROLLBAR_INSET))
+                        // Right-aligned by flex order, not by absolute offsets:
+                        // offsets inside container-query content are unreliable,
+                        // normal flow always lands this strip on the right.
                         .w(px(MARKER_HIT_TARGET_WIDTH))
+                        .h_full()
                         .min_h_0()
                         .py_2()
+                        .mr(px(RAIL_SCROLLBAR_INSET))
                         .flex()
                         .flex_col()
                         .items_end();
@@ -339,12 +339,12 @@ impl RenderOnce for TranscriptScroller {
                                 .w(px(8. + 6. * emphasis))
                                 .h(px(3.))
                                 .rounded_full()
-                                .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
+                                .bg(hsla(0.9, 1.0, 0.6, 1.0)),
                         );
                         rail = rail.child(
                             div()
                                 .w_full()
-                                .flex_1()
+                                .flex_grow(marker_row_span(marker, row_count, markers) as f32)
                                 .min_h_0()
                                 .flex()
                                 .justify_end()
@@ -352,7 +352,12 @@ impl RenderOnce for TranscriptScroller {
                                 .child(dash),
                         );
                     }
-                    rail
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .child(rail)
                 })
                 .absolute()
                 .top_0()
