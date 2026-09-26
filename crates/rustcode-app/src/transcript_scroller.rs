@@ -236,14 +236,15 @@ impl RenderOnce for TranscriptScroller {
         let row_style = self.row_style;
         let mut renderer = self.renderer;
         let mut list_style = self.list_style;
-        let row_inset_left = list_style.padding.left.take();
-        // Keep the wider marker hit boxes in their own strip instead of over
-        // message text; explicit caller insets still take precedence.
-        let row_inset_right = list_style
+        // The rail hugs the transcript's left edge: keep its wider marker hit
+        // boxes in their own strip instead of over message text; explicit
+        // caller insets still take precedence.
+        let row_inset_left = list_style
             .padding
-            .right
+            .left
             .take()
             .or_else(|| rail_visible.then_some(px(RAIL_CONTENT_INSET).into()));
+        let row_inset_right = list_style.padding.right.take();
         let list = list(list_state.clone(), move |index, window, cx| {
             div()
                 .w_full()
@@ -292,14 +293,13 @@ impl RenderOnce for TranscriptScroller {
                         active_marker_with_count(logical_top_row, row_count, markers);
                     let mut rail = div()
                         .id((rail_id.clone(), "position-rail"))
-                        // Right-aligned by flex order, not by absolute offsets:
-                        // offsets inside container-query content are unreliable,
-                        // normal flow always lands this strip on the right.
+                        // Left-aligned by flex order: the rail hugs the
+                        // transcript's left edge.
                         .w(px(MARKER_HIT_TARGET_WIDTH))
                         .h_full()
                         .min_h_0()
                         .py_2()
-                        .mr(px(RAIL_SCROLLBAR_INSET))
+                        .ml(px(4.))
                         .flex()
                         .flex_col()
                         .items_end();
@@ -339,7 +339,7 @@ impl RenderOnce for TranscriptScroller {
                                 .w(px(8. + 6. * emphasis))
                                 .h(px(3.))
                                 .rounded_full()
-                                .bg(hsla(0.9, 1.0, 0.6, 1.0)),
+                                .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
                         );
                         rail = rail.child(
                             div()
@@ -356,7 +356,7 @@ impl RenderOnce for TranscriptScroller {
                         .size_full()
                         .flex()
                         .flex_row()
-                        .justify_end()
+                        .justify_start()
                         .child(rail)
                 })
                 .absolute()
