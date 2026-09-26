@@ -2573,8 +2573,11 @@ fn render_tool_detail(
         .into_any_element()
 }
 
-fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
-    !snapshot.is_some_and(|snapshot| snapshot.session_id.is_some())
+fn should_show_start_screen(
+    snapshot: Option<&ControllerSnapshot>,
+    starting_new_session: bool,
+) -> bool {
+    starting_new_session || !snapshot.is_some_and(|snapshot| snapshot.session_id.is_some())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2673,7 +2676,10 @@ impl Render for AppView {
         self.slash_selection = self
             .slash_selection
             .min(slash_suggestions.len().saturating_sub(1));
-        let has_session = !should_show_start_screen(self.navigation.chat_snapshot.as_ref());
+        let has_session = !should_show_start_screen(
+            self.navigation.chat_snapshot.as_ref(),
+            self.starting_new_session,
+        );
         let conversation_title = self.navigation.chat_snapshot.as_ref().and_then(|snapshot| {
             let id = snapshot.session_id.as_ref()?;
             self.recent_sessions
@@ -3622,9 +3628,13 @@ mod tests {
             ..listed.clone()
         };
 
-        assert!(should_show_start_screen(Some(&initial)));
-        assert!(should_show_start_screen(Some(&listed)));
-        assert!(!should_show_start_screen(Some(&active)));
+        assert!(should_show_start_screen(Some(&initial), false));
+        assert!(should_show_start_screen(Some(&listed), false));
+        assert!(!should_show_start_screen(Some(&active), false));
+        assert!(
+            should_show_start_screen(Some(&active), true),
+            "starting a replacement chat must hide the previous transcript"
+        );
     }
 
     #[test]
