@@ -12,7 +12,10 @@ use gpui_kit::{
         TitleBar,
         button::{Button, ButtonRounded, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
-        input::{Enter, Input, InputEvent, InputState, Position, Textarea, TextareaState},
+        input::{
+            Enter, Input, InputEvent, InputState, MoveDown, MoveUp, Position, Textarea,
+            TextareaState,
+        },
         menu::{DropdownMenu, PopupMenuItem},
         scroll::ScrollableElement,
         sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
@@ -1051,6 +1054,22 @@ impl AppView {
         true
     }
 
+    /// Move the slash-picker selection. Returns false when the menu is
+    /// closed so the keypress keeps its default (cursor movement) behavior.
+    /// Arrow keys arrive here as bubbled input actions because the focused
+    /// composer field consumes the raw keystrokes via its own keymap.
+    fn move_slash_selection(&mut self, down: bool, cx: &mut Context<Self>) -> bool {
+        let draft = self.composer.read(cx).value().to_string();
+        let suggestions = crate::slash::suggestions(&draft);
+        if self.slash_picker_dismissed || suggestions.is_empty() {
+            return false;
+        }
+        self.slash_selection =
+            crate::slash::move_selection(self.slash_selection, suggestions.len(), down);
+        cx.notify();
+        true
+    }
+
     fn send_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         self.chat_state.begin_user_action();
         if let Err(error) = self.backend.controller().send(command) {
@@ -1547,7 +1566,7 @@ impl AppView {
                     .justify_start()
                     .gap_1()
                     .child(Icon::new(settings_back_icon()).size_4())
-                    .child("Back to app"),
+                    .child(div().text_sm().child("Back to app")),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.navigation.open_chat();
@@ -1556,7 +1575,7 @@ impl AppView {
         let general = SidebarMenu::new().child(
             SidebarMenuItem::new("General")
                 .icon(Icon::new(IconName::Settings))
-                .gap_x_1()
+                .gap_x_0p5()
                 .active(true),
         );
 
@@ -1567,7 +1586,7 @@ impl AppView {
             .border_r_1()
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(false)
-            .header(div().w_full().child(back))
+            .header(div().w_full().pt(px(30.)).child(back))
             .child(general)
             .into_any_element()
     }
@@ -1612,7 +1631,7 @@ impl AppView {
                             .justify_start()
                             .gap_1()
                             .child(Icon::new(IconName::Plus).size_4())
-                            .child("New chat"),
+                            .child(div().text_sm().child("New chat")),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.start_new_chat(cx);
@@ -1629,7 +1648,7 @@ impl AppView {
             SidebarMenu::new().child(
                 SidebarMenuItem::new(project_name)
                     .icon(Icon::new(IconName::FolderOpen))
-                    .gap_x_1()
+                    .gap_x_0p5()
                     .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
                     .disable(navigation_disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1670,7 +1689,7 @@ impl AppView {
                 recent_menu = recent_menu.child(
                     SidebarMenuItem::new(project)
                         .icon(Icon::new(IconName::FolderOpen))
-                        .gap_x_1()
+                        .gap_x_0p5()
                         .disable(true),
                 );
                 for session in sessions {
@@ -1680,7 +1699,7 @@ impl AppView {
                     recent_menu = recent_menu.child(
                         SidebarMenuItem::new(session.title.clone())
                             .icon(Icon::new(IconName::FileText))
-                            .gap_x_1()
+                            .gap_x_0p5()
                             // The toolkit's label is a flex row whose text child
                             // clips before ellipsis. Give the suffix slot the
                             // remaining width and render a constrained text block.
@@ -1739,7 +1758,7 @@ impl AppView {
                     .justify_start()
                     .gap_1()
                     .child(Icon::new(IconName::Settings).size_4())
-                    .child("Settings"),
+                    .child(div().text_sm().child("Settings")),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.navigation.open_settings();
@@ -1750,7 +1769,7 @@ impl AppView {
             .w(px(SIDEBAR_WIDTH))
             .mx(px(-SIDEBAR_CONTENT_INSET + sidebar_footer_divider_inset()))
             .px_3()
-            .pt_1()
+            .pt_2()
             .border_t_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
             .child(footer_button);
@@ -3223,6 +3242,16 @@ impl Render for AppView {
                             }
                         }
                     }))
+                    .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                        if this.move_slash_selection(false, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                        if this.move_slash_selection(true, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(
                         Textarea::new(&self.composer)
                             .appearance(false)
@@ -3507,7 +3536,7 @@ impl Render for AppView {
                                     .bottom_full()
                                     .mb_2()
                                     .p_1()
-                                    .rounded_lg()
+                                    .rounded(px(20.))
                                     .border_1()
                                     .border_color(rgb(Palette::BORDER_STRONG))
                                     .bg(rgb(Palette::SURFACE_ELEVATED))
@@ -3765,6 +3794,30 @@ mod tests {
             );
         })
         .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn slash_arrow_actions_move_selection_only_while_menu_is_open(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                // Closed menu (plain text): no selection change.
+                view.composer
+                    .update(cx, |state, cx| state.set_value("ordinary text", window, cx));
+                assert!(!view.move_slash_selection(true, cx));
+                assert_eq!(view.slash_selection, 0);
+                // Open menu: arrows cycle the filtered suggestions.
+                view.composer
+                    .update(cx, |state, cx| state.set_value("/c", window, cx));
+                assert!(view.move_slash_selection(true, cx));
+                assert_eq!(view.slash_selection, 1);
+                assert!(view.move_slash_selection(false, cx));
+                assert_eq!(view.slash_selection, 0);
+                // Dismissed menu: arrows keep cursor behavior.
+                view.slash_picker_dismissed = true;
+                assert!(!view.move_slash_selection(true, cx));
+            })
+            .expect("view remains available");
     }
 
     #[gpui_kit::test]
