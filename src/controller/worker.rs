@@ -247,9 +247,11 @@ async fn controller_worker(
                     state.remove_pending_user_prompt(mode, prompt.position, &prompt.text);
                 drop(state);
                 if let Some(text) = removed {
+                    let mut restored = prompt;
+                    restored.text = text;
                     let _ = updates.send(ControllerEvent {
                         generation: session.generation,
-                        update: ControllerUpdate::PromptRestored(text),
+                        update: ControllerUpdate::PromptRestored(restored),
                     });
                 }
                 send_snapshot(&updates, session.generation, &session.state).await;

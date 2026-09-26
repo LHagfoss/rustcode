@@ -233,6 +233,12 @@ use crate::{
     },
 };
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ComposerDraft {
+    text: String,
+    images: Vec<crate::image_attachment::ImageAttachment>,
+}
+
 pub struct AppView {
     backend: NativeBackend,
     focus_handle: FocusHandle,
@@ -249,10 +255,10 @@ pub struct AppView {
     messages: gpui_kit::Entity<TranscriptScrollerState>,
     navigation: AppNavigation,
     recent_sessions: Vec<SessionChoice>,
-    session_drafts: HashMap<String, String>,
+    session_drafts: HashMap<String, ComposerDraft>,
     pending_draft_session: Option<String>,
     restore_composer_on_render: Option<String>,
-    draft_before_pending_edit: Option<(String, Vec<crate::image_attachment::ImageAttachment>)>,
+    draft_before_pending_edit: Option<ComposerDraft>,
     follow_up_mode: PromptSubmitMode,
     chat_state: ChatViewState,
     selected_question_options: Vec<String>,
@@ -520,9 +526,11 @@ impl AppView {
                         .pending_draft_session
                         .take()
                         .or_else(|| session_id.clone());
-                    self.restore_composer_on_render = draft_key
+                    let draft = draft_key
                         .and_then(|key| self.session_drafts.get(&key).cloned())
-                        .or_else(|| Some(String::new()));
+                        .unwrap_or_default();
+                    self.restore_composer_on_render = Some(draft.text);
+                    self.pending_images = draft.images;
                 }
                 if let Some(workspace) = self
                     .navigation
@@ -559,10 +567,16 @@ impl AppView {
                 if self.draft_before_pending_edit.is_none()
                     && (!current.trim().is_empty() || !self.pending_images.is_empty())
                 {
-                    self.draft_before_pending_edit =
-                        Some((current, std::mem::take(&mut self.pending_images)));
+                    self.draft_before_pending_edit = Some(ComposerDraft {
+                        text: current,
+                        images: std::mem::take(&mut self.pending_images),
+                    });
                 }
-                self.restore_composer_on_render = Some(prompt);
+                self.follow_up_mode = match prompt.kind {
+                    PendingPromptKind::Steer => PromptSubmitMode::Steer,
+                    PendingPromptKind::Queue => PromptSubmitMode::Queue,
+                };
+                self.restore_composer_on_render = Some(prompt.text);
                 self.focus_composer_on_render = true;
             }
             ControllerUpdate::Error(_) => {
@@ -807,9 +821,11 @@ impl AppView {
         };
         let draft = self
             .draft_before_pending_edit
-            .as_ref()
-            .map(|(draft, _)| draft.clone())
-            .unwrap_or_else(|| self.composer.read(cx).value().to_string());
+            .clone()
+            .unwrap_or_else(|| ComposerDraft {
+                text: self.composer.read(cx).value().to_string(),
+                images: self.pending_images.clone(),
+            });
         self.session_drafts.insert(session_id, draft);
     }
 
@@ -942,10 +958,10 @@ impl AppView {
             && self.send_command(command, cx)
         {
             if !is_answering_question {
-                if let Some((draft, images)) = self.draft_before_pending_edit.take() {
+                if let Some(draft) = self.draft_before_pending_edit.take() {
                     self.composer
-                        .update(cx, |state, cx| state.set_value(&draft, window, cx));
-                    self.pending_images = images;
+                        .update(cx, |state, cx| state.set_value(&draft.text, window, cx));
+                    self.pending_images = draft.images;
                 } else {
                     self.composer
                         .update(cx, |state, cx| state.set_value("", window, cx));
@@ -3539,7 +3555,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
     use rustcode::controller::{
         ControllerError, ControllerEvent, ControllerSnapshot, PendingPrompt, PendingPromptKind,
-        SessionChoice, TranscriptItem,
+        PromptSubmitMode, SessionChoice, TranscriptItem,
     };
 
     use super::{
@@ -3573,13 +3589,7 @@ mod tests {
             queued_count: usize::from(turn_active),
             can_steer,
             pending_prompts: turn_active
-                .then(|| PendingPrompt {
-                    session_id: "interactive-session".to_owned(),
-                    generation: 1,
-                    kind: PendingPromptKind::Queue,
-                    position: 0,
-                    text: "run tests afterwards".to_owned(),
-                })
+                .then(|| pending_prompt("run tests afterwards", PendingPromptKind::Queue))
                 .into_iter()
                 .collect(),
             turn_active,
@@ -3587,6 +3597,16 @@ mod tests {
             pending_question: None,
             pending_approval: None,
             pending_approval_batch: None,
+        }
+    }
+
+    fn pending_prompt(text: &str, kind: PendingPromptKind) -> PendingPrompt {
+        PendingPrompt {
+            session_id: "interactive-session".to_owned(),
+            generation: 1,
+            kind,
+            position: 0,
+            text: text.to_owned(),
         }
     }
 
@@ -3632,7 +3652,10 @@ mod tests {
                 view.apply_event(
                     ControllerEvent {
                         generation: 0,
-                        update: ControllerUpdate::PromptRestored("edit this".to_owned()),
+                        update: ControllerUpdate::PromptRestored(pending_prompt(
+                            "edit this",
+                            PendingPromptKind::Queue,
+                        )),
                     },
                     cx,
                 );
@@ -3670,6 +3693,10 @@ mod tests {
                 );
                 view.composer
                     .update(cx, |state, cx| state.set_value("draft for A", window, cx));
+                view.pending_images
+                    .push(crate::image_attachment::ImageAttachment {
+                        path: PathBuf::from("/tmp/draft-a.png"),
+                    });
                 view.save_current_draft(cx);
 
                 let mut second = interactive_snapshot(false, false);
@@ -3682,6 +3709,7 @@ mod tests {
                     },
                     cx,
                 );
+                assert!(view.pending_images.is_empty());
                 view.pending_draft_session = Some("session-a".to_owned());
                 let mut back = interactive_snapshot(false, false);
                 back.generation = 3;
@@ -3692,6 +3720,10 @@ mod tests {
                         update: ControllerUpdate::Snapshot(back),
                     },
                     cx,
+                );
+                assert_eq!(
+                    view.pending_images[0].path,
+                    PathBuf::from("/tmp/draft-a.png")
                 );
                 view.composer.clone()
             })
@@ -3741,10 +3773,14 @@ mod tests {
                 view.apply_event(
                     ControllerEvent {
                         generation: 1,
-                        update: ControllerUpdate::PromptRestored("edit queued prompt".to_owned()),
+                        update: ControllerUpdate::PromptRestored(pending_prompt(
+                            "edit queued prompt",
+                            PendingPromptKind::Queue,
+                        )),
                     },
                     cx,
                 );
+                assert_eq!(view.follow_up_mode, PromptSubmitMode::Queue);
                 view.composer.clone()
             })
             .expect("view remains available");

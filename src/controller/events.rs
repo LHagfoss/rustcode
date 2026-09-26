@@ -1,4 +1,4 @@
-use super::{ApprovalBatchPrompt, ApprovalPrompt, ControllerSnapshot};
+use super::{ApprovalBatchPrompt, ApprovalPrompt, ControllerSnapshot, PendingPrompt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalChoice {
@@ -44,7 +44,7 @@ pub enum TurnUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControllerUpdate {
     Snapshot(ControllerSnapshot),
-    PromptRestored(String),
+    PromptRestored(PendingPrompt),
     Turn(TurnUpdate),
     Error(ControllerError),
 }
