@@ -628,6 +628,9 @@ impl AppView {
     }
 
     fn start_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        if self.switching_session {
+            return;
+        }
         self.save_current_draft(cx);
         self.pending_draft_session = None;
         if let Some(command) = project_selection_command(Some(workspace)) {
@@ -644,7 +647,7 @@ impl AppView {
     }
 
     fn start_new_chat(&mut self, cx: &mut Context<Self>) {
-        if !start_new_chat_enabled(self.starting_new_session) {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
             return;
         }
         self.navigation.open_chat();
@@ -834,6 +837,9 @@ impl AppView {
     }
 
     fn resume_session(&mut self, session: SessionChoice, cx: &mut Context<Self>) {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
+            return;
+        }
         self.navigation.open_chat();
         self.save_current_draft(cx);
         self.pending_draft_session = Some(session.id.clone());
@@ -1543,6 +1549,7 @@ impl AppView {
             .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.session_id.as_deref());
+        let navigation_disabled = self.starting_new_session || self.switching_session;
 
         let header = div()
             .w_full()
@@ -1555,6 +1562,7 @@ impl AppView {
                     .ghost()
                     .w_full()
                     .justify_start()
+                    .disabled(navigation_disabled)
                     .accessibility_label("Start a new chat")
                     .child(
                         div()
@@ -1582,6 +1590,7 @@ impl AppView {
                 SidebarMenuItem::new(project_name)
                     .icon(Icon::new(IconName::FolderOpen))
                     .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
+                    .disable(navigation_disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.choose_project_and_start(cx);
                     })),
@@ -1661,6 +1670,7 @@ impl AppView {
                                     )
                             })
                             .active(selected_session == Some(session.id.as_str()))
+                            .disable(navigation_disabled)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.resume_session(session_choice.clone(), cx);
                             })),
@@ -2791,8 +2801,8 @@ fn start_screen_copy(
     }
 }
 
-fn start_new_chat_enabled(starting_new_session: bool) -> bool {
-    !starting_new_session
+fn start_new_chat_enabled(starting_new_session: bool, switching_session: bool) -> bool {
+    !starting_new_session && !switching_session
 }
 
 fn session_project_name(session: &SessionChoice) -> String {
@@ -3871,8 +3881,9 @@ mod tests {
 
     #[test]
     fn session_start_guard_rejects_duplicate_activation() {
-        assert!(start_new_chat_enabled(false));
-        assert!(!start_new_chat_enabled(true));
+        assert!(start_new_chat_enabled(false, false));
+        assert!(!start_new_chat_enabled(true, false));
+        assert!(!start_new_chat_enabled(false, true));
     }
 
     #[test]
