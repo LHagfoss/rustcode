@@ -54,10 +54,10 @@ const TITLE_BAR_LEFT_PADDING: f32 = 12.;
 const SIDEBAR_TOGGLE_SIZE: f32 = 24.;
 const TITLE_BAR_CHILD_GAP: f32 = 8.;
 const SETTINGS_CONTENT_WIDTH: f32 = 680.;
-const MESSAGE_COPY_CONTROL_HEIGHT: f32 = 36.;
+const MESSAGE_COPY_CONTROL_HEIGHT: f32 = 32.;
 const MESSAGE_COPY_CONTROL_BOTTOM_OFFSET: f32 = 0.;
-const MESSAGE_COPY_TARGET_SIZE: f32 = 36.;
-const MESSAGE_COPY_ICON_SIZE: f32 = 18.;
+const MESSAGE_COPY_TARGET_SIZE: f32 = 32.;
+const MESSAGE_COPY_ICON_SIZE: f32 = 16.;
 const SIDEBAR_TITLE_MARGIN: f32 = SIDEBAR_WIDTH + MAIN_PANE_INSET
     - TITLE_BAR_LEFT_PADDING
     - SIDEBAR_TOGGLE_SIZE
@@ -94,6 +94,67 @@ fn current_branch(project: &Path) -> Option<String> {
 
 fn copy_control_stays_in_hover_region(bottom_offset: f32, reserved_height: f32) -> bool {
     bottom_offset >= 0. && reserved_height >= MESSAGE_COPY_CONTROL_HEIGHT
+}
+
+/// Message copy button with transient "Copied" feedback. Always visible.
+fn copy_button(
+    id: String,
+    label: &'static str,
+    text: String,
+    copied_target: &Option<String>,
+    view: gpui_kit::WeakEntity<AppView>,
+) -> Button {
+    let copied = copied_target.as_deref() == Some(id.as_str());
+    Button::new(id.clone())
+        .ghost()
+        .with_size(px(MESSAGE_COPY_ICON_SIZE * 4. / 3.))
+        .size(px(MESSAGE_COPY_TARGET_SIZE))
+        .p_2()
+        .icon(if copied {
+            IconName::Check
+        } else {
+            IconName::Copy
+        })
+        .accessibility_label(label)
+        .tooltip(if copied { "Copied!" } else { label })
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(text.clone().into());
+            let _ = view.update(cx, |this, cx| this.flash_copied(id.clone(), cx));
+        })
+}
+
+/// Copy affordance rendered in the corner of every fenced code block.
+fn code_copy_actions(
+    view: gpui_kit::WeakEntity<AppView>,
+    copied_target: Option<String>,
+) -> impl Fn(&gpui_kit::base::text::CodeBlock, &mut Window, &mut gpui_kit::App) -> gpui_kit::AnyElement
+{
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    move |block, _, _| {
+        let view = view.clone();
+        let code = block.code().to_string();
+        let mut hasher = DefaultHasher::new();
+        code.hash(&mut hasher);
+        let id = format!("code-copy-{:x}", hasher.finish());
+        let copied = copied_target.as_deref() == Some(id.as_str());
+        Button::new(id.clone())
+            .ghost()
+            .xsmall()
+            .icon(if copied {
+                IconName::Check
+            } else {
+                IconName::Copy
+            })
+            .label(if copied { "Copied" } else { "Copy" })
+            .accessibility_label("Copy code block")
+            .tooltip(if copied { "Copied!" } else { "Copy code block" })
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(code.clone().into());
+                let _ = view.update(cx, |this, cx| this.flash_copied(id.clone(), cx));
+            })
+            .into_any_element()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,6 +348,8 @@ pub struct AppView {
     focus_composer_on_render: bool,
     approval_in_flight: Option<String>,
     expanded_approval_actions: HashSet<(String, usize)>,
+    copied_target: Option<String>,
+    preview_image: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -454,6 +517,8 @@ impl AppView {
             focus_composer_on_render: true,
             approval_in_flight: None,
             expanded_approval_actions: HashSet::new(),
+            copied_target: None,
+            preview_image: None,
         }
     }
 
@@ -1089,6 +1154,111 @@ impl AppView {
         true
     }
 
+    /// Record a copy action for transient "Copied" feedback on the matching
+    /// button. The indicator clears itself after a short delay.
+    fn flash_copied(&mut self, target: String, cx: &mut Context<Self>) {
+        self.copied_target = Some(target);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.copied_target = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn open_image_preview(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.preview_image = Some(path);
+        cx.notify();
+    }
+
+    fn close_image_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_image = None;
+        cx.notify();
+    }
+
+    /// Fullscreen lightbox for chat and composer images.
+    fn render_image_preview(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let path = self.preview_image.clone()?;
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Image".to_owned());
+        Some(
+            div()
+                .id("image-preview-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::rgba(0x000000b3))
+                .p_8()
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_image_preview(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_click(cx.listener(|this, _, _, cx| this.close_image_preview(cx)))
+                .child(
+                    div()
+                        .id("image-preview-card")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .max_w(px(920.))
+                        .rounded_xl()
+                        .border_1()
+                        .border_color(rgb(Palette::BORDER_STRONG))
+                        .bg(rgb(Palette::SURFACE_ELEVATED))
+                        .p_3()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                                        .text_ellipsis()
+                                        .child(file_name),
+                                )
+                                .child(
+                                    Button::new("close-image-preview")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .accessibility_label("Close image preview")
+                                        .tooltip("Close")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.close_image_preview(cx)
+                                        })),
+                                ),
+                        )
+                        .child(
+                            gpui_kit::img(path)
+                                .max_w(px(872.))
+                                .max_h(px(640.))
+                                .object_fit(gpui_kit::ObjectFit::Contain),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn send_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         self.chat_state.begin_user_action();
         if let Err(error) = self.backend.controller().send(command) {
@@ -1210,6 +1380,7 @@ impl AppView {
         });
         let view = cx.entity().downgrade();
         let turn_active = self.chat_state.turn_active();
+        let copied_target = self.copied_target.clone();
         TranscriptScroller::new("conversation", self.messages.clone(), move |index, _, _| {
             let element = match rendered_rows.get(index).cloned() {
                 Some(DisplayRow::Turn(parts)) => render_turn(
@@ -1220,8 +1391,11 @@ impl AppView {
                     mono_font.clone(),
                     view.clone(),
                     turn_active && index + 1 == rendered_rows.len(),
+                    copied_target.clone(),
                 ),
-                Some(DisplayRow::User(text)) => render_user_message(text, index),
+                Some(DisplayRow::User(text)) => {
+                    render_user_message(text, index, &copied_target, view.clone())
+                }
                 Some(DisplayRow::System(text)) => render_system_message(text, index),
                 None => div().child("Message unavailable").into_any_element(),
             };
@@ -2010,6 +2184,10 @@ impl AppView {
                                         format!("approval-full-details-{index}"),
                                         literal_tool_output_markdown(&full_details),
                                     )
+                                    .code_block_actions(code_copy_actions(
+                                        cx.entity().downgrade(),
+                                        self.copied_target.clone(),
+                                    ))
                                     .selectable(true),
                                 ),
                         )
@@ -2222,8 +2400,14 @@ fn tool_summary(tools: &[ProjectionRow]) -> String {
         .join(" · ")
 }
 
-fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
+fn render_user_message(
+    text: String,
+    index: usize,
+    copied_target: &Option<String>,
+    view: gpui_kit::WeakEntity<AppView>,
+) -> gpui_kit::AnyElement {
     let copy_text = text.clone();
+    let copy_view = view.clone();
     let parts = crate::image_attachment::user_parts(&text);
     let layout = user_message_layout_policy();
     let fill_group_width = layout.group_sizing == UserMessageGroupSizing::FillAvailable;
@@ -2257,6 +2441,10 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                                 crate::image_attachment::UserPart::Text(text) => {
                                     TextView::markdown(format!("user-{index}-{part_index}"), text)
                                         .style(markdown_style())
+                                        .code_block_actions(code_copy_actions(
+                                            view.clone(),
+                                            copied_target.clone(),
+                                        ))
                                         .text_size(px(15.))
                                         .line_height(px(22.))
                                         .text_color(rgb(Palette::TEXT_PRIMARY))
@@ -2265,10 +2453,25 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                                 }
                                 crate::image_attachment::UserPart::Image(path) => {
                                     if path.exists() {
+                                        let preview_path = path.clone();
+                                        let preview_view = view.clone();
                                         div()
+                                            .id(format!("preview-user-{index}-{part_index}"))
                                             .size(px(124.))
                                             .rounded_lg()
                                             .overflow_hidden()
+                                            .cursor_pointer()
+                                            .tooltip(|window, cx| {
+                                                Tooltip::new("Open image preview").build(window, cx)
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                let _ = preview_view.update(cx, |this, cx| {
+                                                    this.open_image_preview(
+                                                        preview_path.clone(),
+                                                        cx,
+                                                    )
+                                                });
+                                            })
                                             .child(
                                                 gpui_kit::img(path)
                                                     .size_full()
@@ -2301,21 +2504,13 @@ fn render_user_message(text: String, index: usize) -> gpui_kit::AnyElement {
                         .w_full()
                         .flex()
                         .justify_start()
-                        .invisible()
-                        .group_hover("user-message", |this| this.visible())
-                        .child(
-                            Button::new(format!("copy-user-message-{index}"))
-                                .ghost()
-                                .with_size(px(MESSAGE_COPY_ICON_SIZE * 4. / 3.))
-                                .size(px(MESSAGE_COPY_TARGET_SIZE))
-                                .p_2()
-                                .icon(IconName::Copy)
-                                .accessibility_label("Copy message")
-                                .tooltip("Copy message")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(copy_text.clone().into());
-                                }),
-                        ),
+                        .child(copy_button(
+                            format!("copy-user-message-{index}"),
+                            "Copy message",
+                            copy_text,
+                            copied_target,
+                            copy_view,
+                        )),
                 ),
         )
         .into_any_element()
@@ -2398,6 +2593,7 @@ fn render_turn(
     mono_font: gpui_kit::SharedString,
     view: gpui_kit::WeakEntity<AppView>,
     turn_active: bool,
+    copied_target: Option<String>,
 ) -> gpui_kit::AnyElement {
     let segments = turn_segments(parts);
     let last_segment = segments.len().saturating_sub(1);
@@ -2427,6 +2623,7 @@ fn render_turn(
                         mono_font.clone(),
                         view.clone(),
                         turn_active && segment_index == last_segment,
+                        copied_target.clone(),
                     )
                 }),
         )
@@ -2444,6 +2641,7 @@ fn render_turn_segment(
     mono_font: gpui_kit::SharedString,
     view: gpui_kit::WeakEntity<AppView>,
     turn_active: bool,
+    copied_target: Option<String>,
 ) -> gpui_kit::AnyElement {
     let mut answers = Vec::new();
     let mut thoughts = Vec::new();
@@ -2609,6 +2807,10 @@ fn render_turn_segment(
                                         thought,
                                     )
                                     .style(markdown_style())
+                                    .code_block_actions(code_copy_actions(
+                                        view.clone(),
+                                        copied_target.clone(),
+                                    ))
                                     .text_size(px(13.))
                                     .line_height(px(19.))
                                     .font_weight(gpui_kit::FontWeight::NORMAL)
@@ -2624,6 +2826,7 @@ fn render_turn_segment(
                                     expanded_tools.contains(&(index, tool_offset + tool_index)),
                                     mono_font.clone(),
                                     view.clone(),
+                                    copied_target.clone(),
                                 )
                             })),
                     )
@@ -2669,6 +2872,10 @@ fn render_turn_segment(
                                 answer,
                             )
                             .style(markdown_style())
+                            .code_block_actions(code_copy_actions(
+                                view.clone(),
+                                copied_target.clone(),
+                            ))
                             .text_size(px(15.))
                             .line_height(px(23.))
                             .font_weight(gpui_kit::FontWeight::NORMAL)
@@ -2689,25 +2896,15 @@ fn render_turn_segment(
                                 .w_full()
                                 .flex()
                                 .justify_start()
-                                .invisible()
-                                .group_hover("assistant-message", |this| this.visible())
-                                .child(
-                                    Button::new(format!(
+                                .child(copy_button(
+                                    format!(
                                         "copy-assistant-{index}-{segment_index}-{answer_index}"
-                                    ))
-                                    .ghost()
-                                    .with_size(px(MESSAGE_COPY_ICON_SIZE * 4. / 3.))
-                                    .size(px(MESSAGE_COPY_TARGET_SIZE))
-                                    .p_2()
-                                    .icon(IconName::Copy)
-                                    .accessibility_label("Copy reply")
-                                    .tooltip("Copy reply")
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            cx.write_to_clipboard(copy_text.clone().into());
-                                        },
                                     ),
-                                ),
+                                    "Copy reply",
+                                    copy_text,
+                                    &copied_target,
+                                    view.clone(),
+                                )),
                         )
                 }),
         )
@@ -2721,6 +2918,7 @@ fn render_tool_detail(
     expanded: bool,
     mono_font: gpui_kit::SharedString,
     view: gpui_kit::WeakEntity<AppView>,
+    copied_target: Option<String>,
 ) -> gpui_kit::AnyElement {
     let ProjectionRow::Tool {
         name,
@@ -2802,20 +3000,68 @@ fn render_tool_detail(
                 .when_some(elapsed_ms, |this, ms| {
                     this.child(div().text_xs().child(format_duration(ms)))
                 })
-                .on_click(move |_, _, cx| {
-                    let _ = view.update(cx, |this, cx| {
-                        let key = (turn_index, tool_index);
-                        if !this.expanded_tools.insert(key) {
-                            this.expanded_tools.remove(&key);
-                        }
-                        this.messages.update(cx, |state, cx| {
-                            state.remeasure_items(turn_index..turn_index + 1, cx)
+                .on_click({
+                    let view = view.clone();
+                    move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            let key = (turn_index, tool_index);
+                            if !this.expanded_tools.insert(key) {
+                                this.expanded_tools.remove(&key);
+                            }
+                            this.messages.update(cx, |state, cx| {
+                                state.remeasure_items(turn_index..turn_index + 1, cx)
+                            });
+                            cx.notify();
                         });
-                        cx.notify();
-                    });
+                    }
                 }),
         )
-        .when(expanded && presentation.output_expandable, |this| {
+        .when(expanded, |this| {
+            // Running tools have no final output yet: show live content when
+            // there is any, otherwise a placeholder so expanding never shows
+            // an empty card.
+            let body = if presentation.output_expandable {
+                match tool_output_state(&content) {
+                    ToolOutputState::NoOutput => div()
+                        .text_size(px(12.))
+                        .text_color(rgb(Palette::TEXT_MUTED))
+                        .font_family(mono_font.clone())
+                        .child("No output")
+                        .into_any_element(),
+                    ToolOutputState::Literal(output) => TextView::markdown(
+                        format!("tool-output-{turn_index}-{tool_index}"),
+                        literal_tool_output_markdown(output),
+                    )
+                    .code_block_actions(code_copy_actions(view.clone(), copied_target.clone()))
+                    .text_size(px(12.))
+                    .text_color(rgb(Palette::TEXT_MUTED))
+                    .font_family(mono_font)
+                    .selectable(true)
+                    .into_any_element(),
+                }
+            } else if !content.trim().is_empty() {
+                TextView::markdown(
+                    format!("tool-output-{turn_index}-{tool_index}"),
+                    literal_tool_output_markdown(&content),
+                )
+                .code_block_actions(code_copy_actions(view.clone(), copied_target.clone()))
+                .text_size(px(12.))
+                .text_color(rgb(Palette::TEXT_MUTED))
+                .font_family(mono_font)
+                .selectable(true)
+                .into_any_element()
+            } else {
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(Palette::TEXT_MUTED))
+                    .font_family(mono_font)
+                    .child(if status == ToolStatus::Pending {
+                        "Pending — output will appear here."
+                    } else {
+                        "Running — output will appear here."
+                    })
+                    .into_any_element()
+            };
             this.child(
                 div()
                     .ml_6()
@@ -2828,23 +3074,7 @@ fn render_tool_detail(
                     .bg(rgb(Palette::SURFACE_ELEVATED))
                     .px_3()
                     .py_2()
-                    .child(match tool_output_state(&content) {
-                        ToolOutputState::NoOutput => div()
-                            .text_size(px(12.))
-                            .text_color(rgb(Palette::TEXT_MUTED))
-                            .font_family(mono_font.clone())
-                            .child("No output")
-                            .into_any_element(),
-                        ToolOutputState::Literal(output) => TextView::markdown(
-                            format!("tool-output-{turn_index}-{tool_index}"),
-                            literal_tool_output_markdown(output),
-                        )
-                        .text_size(px(12.))
-                        .text_color(rgb(Palette::TEXT_MUTED))
-                        .font_family(mono_font)
-                        .selectable(true)
-                        .into_any_element(),
-                    }),
+                    .child(body),
             )
         })
         .into_any_element()
@@ -3187,6 +3417,8 @@ impl Render for AppView {
                             .enumerate()
                             .map(|(index, image)| {
                                 let view = cx.entity().downgrade();
+                                let preview_view = view.clone();
+                                let preview_path = image.path.clone();
                                 div()
                                     .relative()
                                     .size(px(68.))
@@ -3195,9 +3427,26 @@ impl Render for AppView {
                                     .border_1()
                                     .border_color(rgb(Palette::BORDER_STRONG))
                                     .child(
-                                        gpui_kit::img(image.path.clone())
+                                        div()
+                                            .id(format!("preview-composer-{index}"))
                                             .size_full()
-                                            .object_fit(gpui_kit::ObjectFit::Cover),
+                                            .cursor_pointer()
+                                            .tooltip(|window, cx| {
+                                                Tooltip::new("Open image preview").build(window, cx)
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                let _ = preview_view.update(cx, |this, cx| {
+                                                    this.open_image_preview(
+                                                        preview_path.clone(),
+                                                        cx,
+                                                    )
+                                                });
+                                            })
+                                            .child(
+                                                gpui_kit::img(image.path.clone())
+                                                    .size_full()
+                                                    .object_fit(gpui_kit::ObjectFit::Cover),
+                                            ),
                                     )
                                     .child(
                                         Button::new(format!("remove-image-{index}"))
@@ -3602,9 +3851,9 @@ impl Render for AppView {
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
-                                                .px_2()
+                                                .px_3()
                                                 .py(px(2.))
-                                                .rounded_md()
+                                                .rounded_lg()
                                                 .when(index == self.slash_selection, |this| {
                                                     this.bg(rgb(Palette::SURFACE_SELECTED))
                                                 })
@@ -3728,6 +3977,9 @@ impl Render for AppView {
             .child(div().size_full().flex().child(sidebar).child(main))
             .child(div().absolute().top_0().left_0().right_0().child(title_bar))
             .children(dialogs)
+            .when_some(self.render_image_preview(cx), |this, preview| {
+                this.child(preview)
+            })
     }
 }
 
@@ -4287,7 +4539,7 @@ mod tests {
         );
         assert!(layout.hit_width >= 32.);
         assert!(layout.hit_height >= 32.);
-        assert!(layout.icon_size > 16.);
+        assert!(layout.icon_size >= 16.);
         assert!(layout.hit_area_is_transparent);
     }
 
