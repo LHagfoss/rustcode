@@ -1257,3 +1257,51 @@ fn submit_plain_prompt_steers_only_when_the_active_turn_accepts_steering() {
     );
     assert_eq!(state.pending_queue, ["follow-up"]);
 }
+
+#[test]
+fn explicit_submit_mode_routes_followups_without_mutating_the_saved_draft_mode() {
+    use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
+
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.active_turn_steerable_session = Some(state.active_session_id.clone());
+
+    assert_eq!(
+        super::submit_plain_prompt_with_mode(
+            &mut state,
+            "run this afterwards".into(),
+            DraftSubmitMode::Queue,
+        ),
+        super::SubmitOutcome::Queued
+    );
+    assert_eq!(state.pending_queue, ["run this afterwards"]);
+    assert!(state.pending_steers.is_empty());
+
+    assert_eq!(
+        super::submit_plain_prompt_with_mode(
+            &mut state,
+            "change direction now".into(),
+            DraftSubmitMode::Steer,
+        ),
+        super::SubmitOutcome::Steered
+    );
+    assert_eq!(state.pending_steers[0].text, "change direction now");
+    assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
+}
+
+#[test]
+fn explicit_steer_falls_back_to_fifo_when_the_turn_cannot_accept_it() {
+    use crate::app::{AppState, state::DraftSubmitMode};
+
+    let mut state = AppState::new();
+    assert_eq!(
+        super::submit_plain_prompt_with_mode(
+            &mut state,
+            "safe follow-up".into(),
+            DraftSubmitMode::Steer,
+        ),
+        super::SubmitOutcome::Queued
+    );
+    assert_eq!(state.pending_queue, ["safe follow-up"]);
+    assert!(state.pending_steers.is_empty());
+}

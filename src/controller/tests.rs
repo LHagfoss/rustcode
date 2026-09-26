@@ -1,5 +1,6 @@
 use super::{
-    Command, ControllerSnapshot, ControllerUpdate, InteractiveController, accepts_generation,
+    Command, ControllerSnapshot, ControllerUpdate, InteractiveController, PromptSubmitMode,
+    accepts_generation,
 };
 use crate::app::{AppState, AppStatus, ChatMessage, PendingQuestion, ToolConfirmation};
 use std::time::Duration;
@@ -210,6 +211,15 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
         panic!("StartNew should return a snapshot");
     };
     let saved_id = started.session_id.expect("session ID");
+    assert_eq!(
+        crate::config::load_session_workspace(&saved_id).map(|record| record.cwd),
+        Some(
+            workspace
+                .path()
+                .canonicalize()
+                .expect("canonical workspace")
+        )
+    );
     handle
         .send(Command::Submit("saved prompt".to_owned()))
         .expect("save a conversation turn");
@@ -724,12 +734,17 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
     assert_eq!(snapshot.sessions[0].id, "session-7");
     assert_eq!(snapshot.sessions[0].title, "first");
     assert_eq!(
+        snapshot.sessions[0].workspace.as_deref(),
+        Some(nested_workspace.as_path())
+    );
+    assert_eq!(
         snapshot.sessions[1],
         super::SessionChoice {
             id: "session-8".to_owned(),
             title: "Saved session".to_owned(),
             when: "today".to_owned(),
             message_count: 4,
+            workspace: None,
         }
     );
     assert_eq!(
@@ -1205,6 +1220,40 @@ async fn cancel_resolves_pending_approval_and_question_before_followup_submit() 
         panic!("follow-up submit should claim a fresh orchestrator lease");
     };
     session.state.lock().await.release_orchestrator(&lease);
+}
+
+#[tokio::test]
+async fn explicit_follow_up_mode_routes_without_changing_the_saved_preference() {
+    let mut state = AppState::new();
+    let lease = state.claim_orchestrator().expect("active turn lease");
+    state.status = AppStatus::Streaming;
+    state.active_turn_steerable_session = Some(state.active_session_id.clone());
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+
+    assert!(matches!(
+        super::worker::queue_prompt_with_mode(
+            &state,
+            "queued later".to_owned(),
+            PromptSubmitMode::Queue,
+        )
+        .await,
+        super::worker::QueuePrompt::Queued
+    ));
+    assert!(matches!(
+        super::worker::queue_prompt_with_mode(
+            &state,
+            "change course".to_owned(),
+            PromptSubmitMode::Steer,
+        )
+        .await,
+        super::worker::QueuePrompt::Queued
+    ));
+
+    let mut state = state.lock().await;
+    assert_eq!(state.pending_queue, ["queued later"]);
+    assert_eq!(state.pending_steers[0].text, "change course");
+    assert_eq!(state.draft_submit_mode, crate::app::DraftSubmitMode::Steer);
+    state.release_orchestrator(&lease);
 }
 
 async fn read_provider_request(socket: &mut tokio::net::TcpStream) {

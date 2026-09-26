@@ -29,7 +29,8 @@ pub use events::{
 };
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
-    ControllerSnapshot, ModelChoice, QuestionPrompt, SessionChoice, TranscriptItem,
+    ControllerSnapshot, ModelChoice, PendingPrompt, PendingPromptKind, PromptSubmitMode,
+    QuestionPrompt, SessionChoice, TranscriptItem,
 };
 
 pub use worker::InteractiveController;

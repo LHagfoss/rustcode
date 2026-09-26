@@ -44,6 +44,7 @@ pub enum TurnUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControllerUpdate {
     Snapshot(ControllerSnapshot),
+    PromptRestored(String),
     Turn(TurnUpdate),
     Error(ControllerError),
 }
