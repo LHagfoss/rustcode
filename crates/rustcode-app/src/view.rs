@@ -15,9 +15,7 @@ use gpui_kit::{
         input::{Enter, Input, InputEvent, InputState, Position, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         scroll::ScrollableElement,
-        sidebar::{
-            Sidebar, SidebarCollapsible, SidebarGroup, SidebarItem, SidebarMenu, SidebarMenuItem,
-        },
+        sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
         text::{TextView, TextViewStyle},
         tooltip::Tooltip,
     },
@@ -253,6 +251,7 @@ pub struct AppView {
     status: Option<String>,
     pending_prompt: Option<String>,
     pending_model_selection: Option<String>,
+    controller_responded: bool,
     starting_new_session: bool,
     clear_composer_on_render: bool,
     slash_selection: usize,
@@ -324,6 +323,7 @@ impl AppView {
             .send(Command::ListSessions)
             .err()
             .map(|error| format!("Controller error: {error:?}"));
+        let controller_responded = status.is_some();
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Ask RustCode anything")
@@ -387,6 +387,7 @@ impl AppView {
             status,
             pending_prompt: None,
             pending_model_selection: None,
+            controller_responded,
             starting_new_session: false,
             clear_composer_on_render: false,
             slash_selection: 0,
@@ -396,7 +397,7 @@ impl AppView {
             conversation_search: ConversationSearch::default(),
             reset_search_input_on_render: false,
             focus_search_on_render: false,
-            focus_composer_on_render: false,
+            focus_composer_on_render: true,
             approval_in_flight: None,
             expanded_approval_actions: HashSet::new(),
         }
@@ -445,6 +446,7 @@ impl AppView {
         self.chat_state.apply_update(event.update.clone());
         match event.update {
             ControllerUpdate::Snapshot(snapshot) => {
+                self.controller_responded = true;
                 let pending_batch_id = snapshot
                     .pending_approval_batch
                     .as_ref()
@@ -455,9 +457,7 @@ impl AppView {
                     self.approval_in_flight.take(),
                     pending_batch_id,
                 );
-                if !snapshot.sessions.is_empty() {
-                    self.recent_sessions = snapshot.sessions.clone();
-                }
+                self.recent_sessions = snapshot.sessions.clone();
                 let prior_session_id = self
                     .navigation
                     .chat_snapshot
@@ -524,6 +524,7 @@ impl AppView {
             }
             ControllerUpdate::Turn(_) => {}
             ControllerUpdate::Error(_) => {
+                self.controller_responded = true;
                 self.status = None;
                 self.approval_in_flight = None;
                 if self.starting_new_session {
@@ -580,6 +581,9 @@ impl AppView {
     }
 
     fn start_new_chat(&mut self, cx: &mut Context<Self>) {
+        if !start_new_chat_enabled(self.starting_new_session) {
+            return;
+        }
         self.navigation.open_chat();
         let project = if self.selected_project.is_dir() {
             self.selected_project.clone()
@@ -1359,17 +1363,28 @@ impl AppView {
 
     fn render_settings_sidebar(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let back = SidebarMenu::new().child(
-            SidebarMenuItem::new("Back to app")
-                .icon(Icon::new(settings_back_icon()))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.navigation.open_chat();
-                    cx.notify();
-                })),
-        );
+        let back = Button::new("settings-back")
+            .ghost()
+            .w_full()
+            .justify_start()
+            .accessibility_label("Back to app")
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_start()
+                    .gap_2()
+                    .child(Icon::new(settings_back_icon()).size_4())
+                    .child("Back to app"),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.navigation.open_chat();
+                cx.notify();
+            }));
         let general = SidebarMenu::new().child(
             SidebarMenuItem::new("General")
                 .icon(Icon::new(IconName::Settings))
@@ -1383,16 +1398,12 @@ impl AppView {
             .border_r_1()
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(false)
-            .header(
-                div()
-                    .w_full()
-                    .child(back.render("settings-back-navigation", window, cx)),
-            )
+            .header(div().w_full().child(back))
             .child(general)
             .into_any_element()
     }
 
-    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn render_sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let collapsed = self.sidebar_collapsed;
         let project = self
             .navigation
@@ -1411,19 +1422,21 @@ impl AppView {
             .and_then(|snapshot| snapshot.session_id.as_deref());
 
         let header = div().w_full().flex().flex_col().gap_3().pt(px(30.)).child(
-            div()
-                .id("new-chat")
+            Button::new("new-chat")
+                .ghost()
                 .w_full()
-                .flex()
-                .items_center()
-                .gap_2()
-                .p_2()
-                .rounded_lg()
-                .text_sm()
-                .cursor_pointer()
-                .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
-                .child(Icon::new(IconName::Plus).size_4())
-                .child("New chat")
+                .justify_start()
+                .accessibility_label("Start a new chat")
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_start()
+                        .gap_2()
+                        .child(Icon::new(IconName::Plus).size_4())
+                        .child("New chat"),
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.start_new_chat(cx);
                 })),
@@ -1474,21 +1487,29 @@ impl AppView {
             }
         }
 
-        let footer_menu = SidebarMenu::new()
+        let footer_button = Button::new("open-settings")
+            .ghost()
+            .w_full()
+            .justify_start()
+            .selected(matches!(
+                self.navigation.destination,
+                AppDestination::Settings(_)
+            ))
+            .accessibility_label("Open settings")
             .child(
-                SidebarMenuItem::new("Settings")
-                    .icon(Icon::new(IconName::Settings))
-                    .active(matches!(
-                        self.navigation.destination,
-                        AppDestination::Settings(_)
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.navigation.open_settings();
-                        cx.notify();
-                    })),
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_start()
+                    .gap_2()
+                    .child(Icon::new(IconName::Settings).size_4())
+                    .child("Settings"),
             )
-            .render("sidebar-footer-navigation", window, cx)
-            .into_any_element();
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.navigation.open_settings();
+                cx.notify();
+            }));
 
         let footer = div()
             .w(px(SIDEBAR_WIDTH))
@@ -1497,7 +1518,7 @@ impl AppView {
             .pt_1()
             .border_t_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
-            .child(footer_menu);
+            .child(footer_button);
 
         Sidebar::new("session-sidebar")
             .w(px(SIDEBAR_WIDTH))
@@ -2552,8 +2573,44 @@ fn render_tool_detail(
         .into_any_element()
 }
 
-fn should_show_start_screen(snapshot: Option<&ControllerSnapshot>) -> bool {
-    !snapshot.is_some_and(|snapshot| snapshot.session_id.is_some())
+fn should_show_start_screen(
+    snapshot: Option<&ControllerSnapshot>,
+    starting_new_session: bool,
+) -> bool {
+    starting_new_session || !snapshot.is_some_and(|snapshot| snapshot.session_id.is_some())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StartScreenCopy {
+    heading: &'static str,
+    detail: String,
+}
+
+fn start_screen_copy(
+    controller_responded: bool,
+    starting_new_session: bool,
+    project_label: &str,
+) -> StartScreenCopy {
+    if starting_new_session {
+        StartScreenCopy {
+            heading: "Starting a new chat…",
+            detail: format!("Preparing {project_label}."),
+        }
+    } else if !controller_responded {
+        StartScreenCopy {
+            heading: "Getting RustCode ready…",
+            detail: "Loading sessions and model settings.".to_owned(),
+        }
+    } else {
+        StartScreenCopy {
+            heading: "What would you like to build?",
+            detail: "Choose a project, then ask RustCode to get started.".to_owned(),
+        }
+    }
+}
+
+fn start_new_chat_enabled(starting_new_session: bool) -> bool {
+    !starting_new_session
 }
 
 impl Render for AppView {
@@ -2619,7 +2676,10 @@ impl Render for AppView {
         self.slash_selection = self
             .slash_selection
             .min(slash_suggestions.len().saturating_sub(1));
-        let has_session = !should_show_start_screen(self.navigation.chat_snapshot.as_ref());
+        let has_session = !should_show_start_screen(
+            self.navigation.chat_snapshot.as_ref(),
+            self.starting_new_session,
+        );
         let conversation_title = self.navigation.chat_snapshot.as_ref().and_then(|snapshot| {
             let id = snapshot.session_id.as_ref()?;
             self.recent_sessions
@@ -2639,6 +2699,11 @@ impl Render for AppView {
             SidebarShell::Settings => self.render_settings_sidebar(window, cx),
         };
 
+        let start_screen = start_screen_copy(
+            self.controller_responded,
+            self.starting_new_session,
+            &project_label,
+        );
         let welcome = div()
             .flex_1()
             .flex()
@@ -2646,17 +2711,12 @@ impl Render for AppView {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(
-                div()
-                    .text_3xl()
-                    .font_medium()
-                    .child("What would you like to build?"),
-            )
+            .child(div().text_3xl().font_medium().child(start_screen.heading))
             .child(
                 div()
                     .text_base()
                     .text_color(rgb(Palette::TEXT_MUTED))
-                    .child("Choose a project, then ask RustCode to get started."),
+                    .child(start_screen.detail),
             );
 
         let center = if has_session {
@@ -2879,36 +2939,29 @@ impl Render for AppView {
                     .gap_2()
                     .child(
                         div().flex_1().flex().items_center().child(
-                            div()
-                                .id("auto-approve")
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_1()
-                                .py_1()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_xs()
-                                .hover(|this| this.bg(rgb(Palette::SURFACE_HOVER)))
-                                .child(
-                                    Icon::new(if auto_approve {
-                                        IconName::CircleCheck
-                                    } else {
-                                        IconName::CircleX
-                                    })
-                                    .size_4(),
-                                )
-                                .child(if auto_approve {
+                            Button::new("auto-approve")
+                                .ghost()
+                                .compact()
+                                .xsmall()
+                                .icon(if auto_approve {
+                                    IconName::CircleCheck
+                                } else {
+                                    IconName::CircleX
+                                })
+                                .label(if auto_approve {
                                     "Auto approve"
                                 } else {
                                     "Ask first"
                                 })
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(if auto_approve {
+                                .accessibility_label(if auto_approve {
+                                    "Switch to ask first"
+                                } else {
+                                    "Switch to auto approve"
+                                })
+                                .tooltip(if auto_approve {
                                     "Tool actions are approved automatically. Click to ask first."
                                 } else {
                                     "Tool actions ask for approval. Click to auto approve."
-                                }).build(window, cx)
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     let enabled = this
@@ -3160,16 +3213,154 @@ mod tests {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext};
     use rustcode::controller::{
-        ControllerError, ControllerSnapshot, SessionChoice, TranscriptItem,
+        ControllerError, ControllerEvent, ControllerSnapshot, SessionChoice, TranscriptItem,
     };
 
     use super::{
-        AppDestination, AppNavigation, ChatViewState, ControllerUpdate, DisplayRow, ProjectionRow,
-        SettingsSection, SidebarShell, ToolOutputState, ToolStatus, group_turn_rows,
+        AppDestination, AppNavigation, AppView, ChatViewState, ControllerUpdate, DisplayRow,
+        ProjectionRow, SettingsSection, SidebarShell, ToolOutputState, ToolStatus, group_turn_rows,
         literal_tool_output_markdown, should_show_start_screen, slash_menu_key_decision,
-        tool_output_state, turn_segments,
+        start_new_chat_enabled, start_screen_copy, tool_output_state, turn_segments,
     };
+
+    fn app_view(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<AppView> {
+        cx.update(gpui_kit::init);
+        cx.add_window(|window, cx| {
+            let launch_dir = std::env::current_dir().expect("current directory");
+            let backend = crate::backend::NativeBackend::new(launch_dir.clone())
+                .expect("native backend starts");
+            AppView::new(backend, launch_dir, window, cx)
+        })
+    }
+
+    #[test]
+    fn start_screen_copy_distinguishes_loading_ready_and_starting() {
+        let loading = start_screen_copy(false, false, "rustcode");
+        assert_eq!(loading.heading, "Getting RustCode ready…");
+        assert_eq!(loading.detail, "Loading sessions and model settings.");
+
+        let ready = start_screen_copy(true, false, "rustcode");
+        assert_eq!(ready.heading, "What would you like to build?");
+        assert_eq!(
+            ready.detail,
+            "Choose a project, then ask RustCode to get started."
+        );
+
+        let starting = start_screen_copy(true, true, "rustcode");
+        assert_eq!(starting.heading, "Starting a new chat…");
+        assert_eq!(starting.detail, "Preparing rustcode.");
+    }
+
+    #[test]
+    fn session_start_guard_rejects_duplicate_activation() {
+        assert!(start_new_chat_enabled(false));
+        assert!(!start_new_chat_enabled(true));
+    }
+
+    #[gpui_kit::test]
+    fn fresh_window_focuses_the_composer(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        let composer = handle
+            .update(cx, |view, _, _| view.composer.clone())
+            .expect("window remains open");
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+            let focused = composer
+                .read(cx)
+                .presentation()
+                .focus_handle()
+                .is_focused(window);
+            assert!(focused);
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn empty_snapshot_clears_cached_recent_sessions(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let snapshot = |sessions| ControllerSnapshot {
+                    generation: 1,
+                    workspace: Some(PathBuf::from("/workspace")),
+                    session_id: None,
+                    sessions,
+                    models: Vec::new(),
+                    selected_model: None,
+                    transcript: Vec::new(),
+                    live_response: String::new(),
+                    queued_count: 0,
+                    turn_active: false,
+                    auto_approve: false,
+                    pending_question: None,
+                    pending_approval: None,
+                    pending_approval_batch: None,
+                };
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot(vec![SessionChoice {
+                            id: "old-session".to_owned(),
+                            title: "Old session".to_owned(),
+                            when: "today".to_owned(),
+                            message_count: 2,
+                        }])),
+                    },
+                    cx,
+                );
+                assert_eq!(view.recent_sessions.len(), 1);
+
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot(Vec::new())),
+                    },
+                    cx,
+                );
+                assert!(view.recent_sessions.is_empty());
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn custom_pointer_controls_expose_native_button_semantics(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+
+            let new_chat = window.find("new-chat");
+            assert_eq!(new_chat.role(), Some(gpui_kit::Role::Button));
+            assert_eq!(new_chat.label(), Some("Start a new chat"));
+
+            let auto_approve = window.find("auto-approve");
+            assert_eq!(auto_approve.role(), Some(gpui_kit::Role::Button));
+            assert_eq!(auto_approve.label(), Some("Switch to ask first"));
+
+            let settings = window.find("open-settings");
+            assert_eq!(settings.role(), Some(gpui_kit::Role::Button));
+            assert_eq!(settings.label(), Some("Open settings"));
+        })
+        .expect("window remains open");
+
+        handle
+            .update(cx, |view, _, cx| {
+                view.navigation.open_settings();
+                cx.notify();
+            })
+            .expect("view remains available");
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let back = window.find("settings-back");
+            assert_eq!(back.role(), Some(gpui_kit::Role::Button));
+            assert_eq!(back.label(), Some("Back to app"));
+        })
+        .expect("window remains open");
+    }
 
     #[test]
     fn user_copy_footer_reserves_hit_height_inside_the_parent_hover_group() {
@@ -3437,9 +3628,13 @@ mod tests {
             ..listed.clone()
         };
 
-        assert!(should_show_start_screen(Some(&initial)));
-        assert!(should_show_start_screen(Some(&listed)));
-        assert!(!should_show_start_screen(Some(&active)));
+        assert!(should_show_start_screen(Some(&initial), false));
+        assert!(should_show_start_screen(Some(&listed), false));
+        assert!(!should_show_start_screen(Some(&active), false));
+        assert!(
+            should_show_start_screen(Some(&active), true),
+            "starting a replacement chat must hide the previous transcript"
+        );
     }
 
     #[test]
