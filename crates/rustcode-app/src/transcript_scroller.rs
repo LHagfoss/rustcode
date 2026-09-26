@@ -336,8 +336,8 @@ impl RenderOnce for TranscriptScroller {
                         .items_center()
                         .child(
                             div()
-                                .w(px(3. + 3. * emphasis))
-                                .h(px(2.))
+                                .w(px(8. + 6. * emphasis))
+                                .h(px(3.))
                                 .rounded_full()
                                 .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
                         );
