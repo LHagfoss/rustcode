@@ -11,10 +11,11 @@ impl NativePalette {
     pub const SIDEBAR_HOVER: u32 = 0x363636;
     pub const SIDEBAR_SELECTED: u32 = 0x424242;
     pub const INLINE_CODE_BACKGROUND: u32 = 0x383838;
-    // Dark enough that light primary/secondary text stays near-white inside a
-    // selection instead of washing out into one flat gray block. The toolkit
-    // paints selection as a background only, so contrast has to carry it.
-    pub const TEXT_SELECTION_BACKGROUND: u32 = 0x3d3d3d;
+    // Near-black so light primary text and dimmer secondary/syntax colors
+    // all stay readable inside a selection instead of washing out into one
+    // flat gray block. The toolkit paints selection as a background only,
+    // so contrast has to carry it.
+    pub const TEXT_SELECTION_BACKGROUND: u32 = 0x2b2b2b;
 
     pub const BORDER_SUBTLE: u32 = 0x34383d;
     pub const BORDER_STRONG: u32 = 0x484c54;

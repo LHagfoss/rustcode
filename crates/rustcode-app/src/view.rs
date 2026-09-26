@@ -124,19 +124,22 @@ fn copy_button(
 }
 
 /// Copy affordance rendered in the corner of every fenced code block.
+/// `prefix` scopes the button ids to the owning text view.
 fn code_copy_actions(
     view: gpui_kit::WeakEntity<AppView>,
     copied_target: Option<String>,
+    prefix: String,
 ) -> impl Fn(&gpui_kit::base::text::CodeBlock, &mut Window, &mut gpui_kit::App) -> gpui_kit::AnyElement
 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let counter = std::sync::Arc::new(AtomicUsize::new(0));
     move |block, _, _| {
         let view = view.clone();
         let code = block.code().to_string();
-        let mut hasher = DefaultHasher::new();
-        code.hash(&mut hasher);
-        let id = format!("code-copy-{:x}", hasher.finish());
+        let id = format!(
+            "{prefix}-code-copy-{}",
+            counter.fetch_add(1, Ordering::Relaxed)
+        );
         let copied = copied_target.as_deref() == Some(id.as_str());
         Button::new(id.clone())
             .ghost()
@@ -526,7 +529,34 @@ impl AppView {
         self.backend.take_updates()
     }
 
+    /// Merge a session list into the sidebar without ever shrinking it on
+    /// partial snapshots: snapshots can arrive with a partial list (or be
+    /// dropped as stale), which previously left the panel intermittently
+    /// empty. A genuinely empty list still resets it.
+    fn merge_recent_sessions(&mut self, sessions: &[SessionChoice]) {
+        if sessions.is_empty() {
+            self.recent_sessions.clear();
+            return;
+        }
+        for session in sessions {
+            if let Some(existing) = self
+                .recent_sessions
+                .iter_mut()
+                .find(|existing| existing.id == session.id)
+            {
+                *existing = session.clone();
+            } else {
+                self.recent_sessions.push(session.clone());
+            }
+        }
+    }
+
     pub fn apply_event(&mut self, event: ControllerEvent, cx: &mut Context<Self>) {
+        // Session lists are monotonic sidebar data: merge them even from
+        // stale generations so the panel never flashes empty.
+        if let ControllerUpdate::Snapshot(snapshot) = &event.update {
+            self.merge_recent_sessions(&snapshot.sessions);
+        }
         if self
             .navigation
             .chat_snapshot
@@ -576,7 +606,7 @@ impl AppView {
                     self.approval_in_flight.take(),
                     pending_batch_id,
                 );
-                self.recent_sessions = snapshot.sessions.clone();
+                self.merge_recent_sessions(&snapshot.sessions);
                 let prior_session_id = self
                     .navigation
                     .chat_snapshot
@@ -1001,7 +1031,13 @@ impl AppView {
         {
             return false;
         }
-        let draft = self.composer.read(cx).value().to_string();
+        let answering_now = self.chat_state.pending_question().is_some()
+            || self
+                .navigation
+                .chat_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.pending_question.is_some());
+        let mut draft = self.composer.read(cx).value().to_string();
         if let crate::slash::SlashInteraction::Complete {
             value,
             cursor_offset,
@@ -1011,8 +1047,16 @@ impl AppView {
             self.slash_picker_dismissed,
             "Enter",
         ) {
+            // Commands that take no arguments send immediately; ones with a
+            // trailing space (e.g. `/model `) only complete so arguments can
+            // be typed first. While answering a question the composer stays
+            // an answer field, so picking only completes there too.
+            let send_immediately = !value.ends_with(' ') && !answering_now;
             self.apply_slash_completion(value, cursor_offset, window, cx);
-            return true;
+            draft = self.composer.read(cx).value().to_string();
+            if !send_immediately {
+                return true;
+            }
         }
         let answering_question = self.chat_state.pending_question().or_else(|| {
             self.navigation
@@ -2187,6 +2231,7 @@ impl AppView {
                                     .code_block_actions(code_copy_actions(
                                         cx.entity().downgrade(),
                                         self.copied_target.clone(),
+                                        format!("approval-full-details-{index}"),
                                     ))
                                     .selectable(true),
                                 ),
@@ -2444,6 +2489,7 @@ fn render_user_message(
                                         .code_block_actions(code_copy_actions(
                                             view.clone(),
                                             copied_target.clone(),
+                                            format!("user-{index}-{part_index}"),
                                         ))
                                         .text_size(px(15.))
                                         .line_height(px(22.))
@@ -2577,7 +2623,7 @@ enum ToolOutputState<'a> {
 }
 
 fn tool_output_state(output: &str) -> ToolOutputState<'_> {
-    if output.is_empty() {
+    if output.trim().is_empty() {
         ToolOutputState::NoOutput
     } else {
         ToolOutputState::Literal(output)
@@ -2810,6 +2856,7 @@ fn render_turn_segment(
                                     .code_block_actions(code_copy_actions(
                                         view.clone(),
                                         copied_target.clone(),
+                                        format!("thought-{index}-{segment_index}-{thought_index}"),
                                     ))
                                     .text_size(px(13.))
                                     .line_height(px(19.))
@@ -2875,6 +2922,7 @@ fn render_turn_segment(
                             .code_block_actions(code_copy_actions(
                                 view.clone(),
                                 copied_target.clone(),
+                                format!("assistant-{index}-{segment_index}-{answer_index}"),
                             ))
                             .text_size(px(15.))
                             .line_height(px(23.))
@@ -3005,12 +3053,19 @@ fn render_tool_detail(
                     move |_, _, cx| {
                         let _ = view.update(cx, |this, cx| {
                             let key = (turn_index, tool_index);
-                            if !this.expanded_tools.insert(key) {
+                            if this.expanded_tools.insert(key) {
+                                // Scroll the opened card into view so its
+                                // output is actually visible.
+                                this.messages.update(cx, |state, cx| {
+                                    state.remeasure_items(turn_index..turn_index + 1, cx);
+                                    state.scroll_to_item(turn_index, cx);
+                                });
+                            } else {
                                 this.expanded_tools.remove(&key);
+                                this.messages.update(cx, |state, cx| {
+                                    state.remeasure_items(turn_index..turn_index + 1, cx)
+                                });
                             }
-                            this.messages.update(cx, |state, cx| {
-                                state.remeasure_items(turn_index..turn_index + 1, cx)
-                            });
                             cx.notify();
                         });
                     }
@@ -3029,10 +3084,14 @@ fn render_tool_detail(
                         .child("No output")
                         .into_any_element(),
                     ToolOutputState::Literal(output) => TextView::markdown(
-                        format!("tool-output-{turn_index}-{tool_index}"),
+                        format!("tool-output-text-{turn_index}-{tool_index}"),
                         literal_tool_output_markdown(output),
                     )
-                    .code_block_actions(code_copy_actions(view.clone(), copied_target.clone()))
+                    .code_block_actions(code_copy_actions(
+                        view.clone(),
+                        copied_target.clone(),
+                        format!("tool-output-text-{turn_index}-{tool_index}"),
+                    ))
                     .text_size(px(12.))
                     .text_color(rgb(Palette::TEXT_MUTED))
                     .font_family(mono_font)
@@ -3041,10 +3100,14 @@ fn render_tool_detail(
                 }
             } else if !content.trim().is_empty() {
                 TextView::markdown(
-                    format!("tool-output-{turn_index}-{tool_index}"),
+                    format!("tool-output-text-{turn_index}-{tool_index}"),
                     literal_tool_output_markdown(&content),
                 )
-                .code_block_actions(code_copy_actions(view.clone(), copied_target.clone()))
+                .code_block_actions(code_copy_actions(
+                    view.clone(),
+                    copied_target.clone(),
+                    format!("tool-output-text-{turn_index}-{tool_index}"),
+                ))
                 .text_size(px(12.))
                 .text_color(rgb(Palette::TEXT_MUTED))
                 .font_family(mono_font)
@@ -3064,6 +3127,7 @@ fn render_tool_detail(
             };
             this.child(
                 div()
+                    .id(format!("tool-output-{turn_index}-{tool_index}"))
                     .ml_6()
                     .max_h(px(180.))
                     .overflow_scrollbar()
@@ -3852,8 +3916,8 @@ impl Render for AppView {
                                                 .items_center()
                                                 .gap_2()
                                                 .px_3()
-                                                .py(px(2.))
-                                                .rounded_lg()
+                                                .py(px(3.))
+                                                .rounded_xl()
                                                 .when(index == self.slash_selection, |this| {
                                                     this.bg(rgb(Palette::SURFACE_SELECTED))
                                                 })
@@ -4117,6 +4181,110 @@ mod tests {
                 // Dismissed menu: arrows keep cursor behavior.
                 view.slash_picker_dismissed = true;
                 assert!(!view.move_slash_selection(true, cx));
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn expanded_completed_tool_renders_its_output_text(cx: &mut TestAppContext) {
+        use rustcode::controller::TranscriptItem;
+
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let mut snapshot = interactive_snapshot(false, false);
+                snapshot.transcript = vec![
+                    TranscriptItem {
+                        role: "assistant".to_owned(),
+                        content: "Latest commits:\n```sh\ngit log\n```".to_owned(),
+                        tool_name: None,
+                        tool_detail: None,
+                        tool_success: None,
+                        tool_pending: false,
+                        response_time_ms: None,
+                        thought_time_ms: None,
+                    },
+                    TranscriptItem {
+                        role: "tool".to_owned(),
+                        content: "run_command: [command status: completed=true]\nexit code: 0\nstdout:\n```sh\ngit log --oneline -15\n```\n4c286cb round6".to_owned(),
+                        tool_name: Some("run_command".to_owned()),
+                        tool_detail: Some("git log --oneline -15".to_owned()),
+                        tool_success: Some(true),
+                        tool_pending: false,
+                        response_time_ms: None,
+                        thought_time_ms: None,
+                    },
+                ];
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+                view.expanded_tools.insert((0, 0));
+                // The tool row carries the snapshot's stdout through to the
+                // transcript projection.
+                let has_output = view
+                    .display_rows()
+                    .into_iter()
+                    .flat_map(|row| match row {
+                        DisplayRow::Turn(parts) => parts,
+                        _ => Vec::new(),
+                    })
+                    .any(|part| match part {
+                        ProjectionRow::Tool { content, .. } => {
+                            content.contains("4c286cb round6")
+                        }
+                        _ => false,
+                    });
+                assert!(has_output);
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+            window.simulate_next_frame(cx);
+            // The assistant's fenced block exposes its copy button, proving
+            // fenced markdown renders with its actions in this harness.
+            assert_eq!(
+                window.find("assistant-0-0-0-code-copy-0").label(),
+                Some("Copy code block")
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn slash_enter_sends_argless_commands_but_only_completes_those_with_arguments(
+        cx: &mut TestAppContext,
+    ) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                // "/h" completes to arg-less "/help", which sends immediately.
+                view.slash_picker_dismissed = false;
+                view.slash_selection = 0;
+                view.composer
+                    .update(cx, |state, cx| state.set_value("/h", window, cx));
+                assert!(view.submit_composer(window, cx));
+                assert_eq!(view.composer.read(cx).value().as_ref(), "");
+                // "/m" completes to "/model " (trailing space for its
+                // argument), which only completes.
+                view.slash_picker_dismissed = false;
+                view.slash_selection = 0;
+                view.composer
+                    .update(cx, |state, cx| state.set_value("/m", window, cx));
+                assert!(view.submit_composer(window, cx));
+                assert_eq!(view.composer.read(cx).value().as_ref(), "/model ");
             })
             .expect("view remains available");
     }
@@ -4462,6 +4630,76 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn partial_session_snapshots_merge_instead_of_shrinking_the_list(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let snapshot = |generation, sessions| ControllerSnapshot {
+                    generation,
+                    workspace: Some(PathBuf::from("/workspace")),
+                    session_id: None,
+                    sessions,
+                    models: Vec::new(),
+                    selected_model: None,
+                    transcript: Vec::new(),
+                    live_response: String::new(),
+                    queued_count: 0,
+                    can_steer: false,
+                    pending_prompts: Vec::new(),
+                    turn_active: false,
+                    auto_approve: false,
+                    pending_question: None,
+                    pending_approval: None,
+                    pending_approval_batch: None,
+                };
+                let choice = |id: &str| SessionChoice {
+                    id: id.to_owned(),
+                    title: format!("Chat {id}"),
+                    when: "today".to_owned(),
+                    message_count: 1,
+                    workspace: None,
+                };
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot(1, vec![choice("a")])),
+                    },
+                    cx,
+                );
+                // A newer snapshot carrying only a partial list keeps the
+                // previously seen sessions instead of shrinking the panel.
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 2,
+                        update: ControllerUpdate::Snapshot(snapshot(2, vec![choice("b")])),
+                    },
+                    cx,
+                );
+                let ids: Vec<&str> = view
+                    .recent_sessions
+                    .iter()
+                    .map(|session| session.id.as_str())
+                    .collect();
+                assert_eq!(ids, vec!["a", "b"]);
+                // Stale generations still contribute their sessions.
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot(1, vec![choice("c")])),
+                    },
+                    cx,
+                );
+                let ids: Vec<&str> = view
+                    .recent_sessions
+                    .iter()
+                    .map(|session| session.id.as_str())
+                    .collect();
+                assert_eq!(ids, vec!["a", "b", "c"]);
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
     fn custom_pointer_controls_expose_native_button_semantics(cx: &mut TestAppContext) {
         let handle = app_view(cx);
         cx.update_window(handle.into(), |_, window, cx| {
@@ -4580,9 +4818,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_output_state_uses_no_output_only_for_an_empty_result() {
+    fn tool_output_state_uses_no_output_for_empty_or_blank_results() {
         assert_eq!(tool_output_state(""), ToolOutputState::NoOutput);
-        assert_eq!(tool_output_state(" \n "), ToolOutputState::Literal(" \n "));
+        assert_eq!(tool_output_state(" \n "), ToolOutputState::NoOutput);
         assert_eq!(
             tool_output_state("result"),
             ToolOutputState::Literal("result")

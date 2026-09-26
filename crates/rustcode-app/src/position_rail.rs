@@ -2,11 +2,13 @@ pub const MAX_MARKERS: usize = 14;
 pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
 pub const MARKER_HIT_TARGET_HEIGHT: f32 = 16.;
 pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 12.;
+pub const MARKER_GAP: f32 = 4.;
 pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
 pub const RAIL_VERTICAL_INSET: f32 = 8.;
 pub const RAIL_CONTENT_GAP: f32 = 3.;
 pub const RAIL_CONTENT_INSET: f32 =
     MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP;
+pub const RAIL_LEFT_CONTENT_INSET: f32 = MARKER_HIT_TARGET_WIDTH + MARKER_GAP;
 
 pub fn marker_slot_height(viewport_height: f32, markers: usize) -> f32 {
     if markers == 0 {
@@ -26,7 +28,10 @@ pub fn marker_count(row_count: usize) -> usize {
 
 pub fn marker_count_for_height(row_count: usize, viewport_height: f32) -> usize {
     let available_height = (viewport_height - 2. * RAIL_VERTICAL_INSET).max(0.);
-    let height_capacity = (available_height / MIN_MARKER_HIT_TARGET_HEIGHT).floor() as usize;
+    // Markers sit in a compact cluster with a fixed gap, so capacity counts
+    // the full pitch, not just the hit target.
+    let pitch = MIN_MARKER_HIT_TARGET_HEIGHT + MARKER_GAP;
+    let height_capacity = ((available_height + MARKER_GAP) / pitch).floor() as usize;
     if height_capacity < 2 {
         return 0;
     }
@@ -97,23 +102,6 @@ pub fn active_marker_with_count(
         row_count,
         markers,
     )
-}
-
-/// How many transcript rows a marker represents. Rail slots grow in
-/// proportion to this so dense stretches stay compact instead of spreading
-/// every marker evenly across the viewport. Zero-span markers collapse to
-/// their minimum hit-target height.
-pub fn marker_row_span(marker: usize, row_count: usize, markers: usize) -> usize {
-    if markers == 0 || marker >= markers || row_count == 0 {
-        return 0;
-    }
-    let start = marker_to_row_with_count(marker, row_count, markers).unwrap_or(0);
-    let end = if marker + 1 < markers {
-        marker_to_row_with_count(marker + 1, row_count, markers).unwrap_or(row_count)
-    } else {
-        row_count
-    };
-    end.saturating_sub(start)
 }
 
 fn scale_index(index: usize, source_count: usize, target_count: usize) -> usize {
@@ -226,7 +214,7 @@ mod tests {
 
     #[test]
     fn marker_count_adapts_to_measured_height_and_keeps_minimum_target() {
-        for (height, expected_markers) in [(120., 8), (180., 13), (300., 14)] {
+        for (height, expected_markers) in [(120., 6), (180., 10), (300., 14)] {
             let count = marker_count_for_height(100, height);
             assert_eq!(count, expected_markers);
             let slot = marker_slot_height_for_count(height, count);
@@ -239,17 +227,17 @@ mod tests {
     }
 
     #[test]
-    fn hides_rail_until_measured_height_fits_two_minimum_targets() {
-        for height in [31., 32., 39.] {
+    fn hides_rail_until_measured_height_fits_two_markers() {
+        for height in [31., 32., 39., 43.] {
             assert_eq!(marker_count_for_height(100, height), 0, "height={height}");
             assert_eq!(active_marker_with_count(50, 100, 0), None);
             assert_eq!(marker_to_row_with_count(0, 100, 0), None);
         }
 
-        assert_eq!(marker_count_for_height(100, 40.), 2);
+        assert_eq!(marker_count_for_height(100, 44.), 2);
         assert_eq!(
-            marker_slot_height_for_count(40., marker_count_for_height(100, 40.)),
-            MIN_MARKER_HIT_TARGET_HEIGHT
+            marker_slot_height_for_count(44., marker_count_for_height(100, 44.)),
+            14.
         );
     }
 
@@ -257,7 +245,7 @@ mod tests {
     fn height_adaptive_mapping_preserves_endpoints_and_click_targets() {
         let rows = 100;
         let markers = marker_count_for_height(rows, 120.);
-        assert_eq!(markers, 8);
+        assert_eq!(markers, 6);
         assert_eq!(row_to_marker_with_count(0, rows, markers), Some(0));
         assert_eq!(
             row_to_marker_with_count(rows - 1, rows, markers),
@@ -268,28 +256,15 @@ mod tests {
             marker_to_row_with_count(markers - 1, rows, markers),
             Some(rows - 1)
         );
-        assert_eq!(active_marker_with_count(50, rows, markers), Some(4));
+        assert_eq!(active_marker_with_count(50, rows, markers), Some(3));
     }
 
     #[test]
-    fn marker_row_spans_cover_every_row_exactly_once() {
-        // Spans tile [0, row_count) exactly for realistic counts, where the
-        // marker count never exceeds the row count.
-        for (rows, markers) in [(100, 6), (100, 14), (14, 14), (3, 2), (4, 4), (1, 1)] {
-            let spans: Vec<usize> = (0..markers)
-                .map(|marker| marker_row_span(marker, rows, markers))
-                .collect();
-            assert_eq!(spans.iter().sum::<usize>(), rows);
-        }
-        // Endpoint-preserving mapping: spans tile [0, row_count) exactly.
-        assert_eq!(
-            (0..4)
-                .map(|m| marker_row_span(m, 100, 4))
-                .collect::<Vec<_>>(),
-            vec![33, 33, 33, 1]
-        );
-        assert_eq!(marker_row_span(0, 0, 0), 0);
-        assert_eq!(marker_row_span(14, 100, 6), 0);
+    fn left_rail_geometry_keeps_a_small_content_gap() {
+        // The left-hugging strip reserves just its own width plus a couple
+        // of pixels before message text starts.
+        assert_eq!(RAIL_LEFT_CONTENT_INSET, 34.);
+        assert_eq!(MARKER_GAP, 4.);
     }
 
     #[test]
