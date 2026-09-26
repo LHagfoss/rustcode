@@ -10,7 +10,7 @@ use gpui_kit::{
     component::{
         Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
         TitleBar,
-        button::{Button, ButtonVariants},
+        button::{Button, ButtonRounded, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{Enter, Input, InputEvent, InputState, Position, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
@@ -356,6 +356,7 @@ impl AppView {
             TextareaState::new(window, cx)
                 .placeholder("Or type your answer")
                 .auto_grow(1, 3)
+                .submit_on_enter(true)
         });
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search conversation"));
@@ -1018,6 +1019,38 @@ impl AppView {
         cx.notify();
     }
 
+    /// Submit the answer currently staged in the question dialog (selected
+    /// options for multi-select prompts, otherwise the freeform field).
+    /// Shared by the dialog's Answer button and the Enter-to-confirm handler.
+    fn answer_question_from_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let prompt = self.chat_state.pending_question().cloned().or_else(|| {
+            self.navigation
+                .chat_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.pending_question.clone())
+        });
+        let Some(prompt) = prompt else {
+            return false;
+        };
+        let answer = if prompt.multiple && !self.selected_question_options.is_empty() {
+            self.selected_question_options.join(", ")
+        } else {
+            self.question_answer.read(cx).value().to_string()
+        };
+        if !can_submit(&answer) {
+            return false;
+        }
+        let _ = self
+            .backend
+            .controller()
+            .send(Command::AnswerQuestion(answer));
+        self.chat_state.begin_user_action();
+        self.question_answer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+        true
+    }
+
     fn send_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         self.chat_state.begin_user_action();
         if let Err(error) = self.backend.controller().send(command) {
@@ -1369,7 +1402,7 @@ impl AppView {
             .items_center()
             .justify_between()
             .gap_5()
-            .py_4()
+            .py_3()
             .child(
                 div()
                     .flex_1()
@@ -1379,12 +1412,13 @@ impl AppView {
                     .gap_1()
                     .child(
                         div()
+                            .text_sm()
                             .font_medium()
                             .child("Choose the model for this session"),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_xs()
                             .text_color(rgb(Palette::TEXT_SECONDARY))
                             .child(model_support),
                     ),
@@ -1396,7 +1430,7 @@ impl AppView {
             .items_center()
             .justify_between()
             .gap_5()
-            .py_4()
+            .py_3()
             .child(
                 div()
                     .flex_1()
@@ -1404,10 +1438,15 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().font_medium().child("Choose when tools need approval"))
                     .child(
                         div()
                             .text_sm()
+                            .font_medium()
+                            .child("Choose when tools need approval"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
                             .text_color(rgb(Palette::TEXT_SECONDARY))
                             .child(approval_support),
                     ),
@@ -1419,12 +1458,12 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_base().font_semibold().child("Model"))
+            .child(div().text_sm().font_semibold().child("Model"))
             .child(
                 div()
                     .w_full()
-                    .px_4()
-                    .py_1()
+                    .px_5()
+                    .py_2()
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -1436,12 +1475,12 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_base().font_semibold().child("Permissions"))
+            .child(div().text_sm().font_semibold().child("Permissions"))
             .child(
                 div()
                     .w_full()
-                    .px_4()
-                    .py_1()
+                    .px_5()
+                    .py_2()
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -1456,7 +1495,7 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_6()
-            .child(div().text_2xl().font_semibold().child("General"))
+            .child(div().text_xl().font_semibold().child("General"))
             .child(model_section)
             .child(permissions_section);
 
@@ -1467,7 +1506,7 @@ impl AppView {
             .flex()
             .justify_center()
             .px_8()
-            .pt(TITLE_BAR_HEIGHT + px(48.))
+            .pt(TITLE_BAR_HEIGHT + px(64.))
             .pb_8()
             .child(
                 div()
@@ -1506,7 +1545,7 @@ impl AppView {
                     .flex()
                     .items_center()
                     .justify_start()
-                    .gap_2()
+                    .gap_1()
                     .child(Icon::new(settings_back_icon()).size_4())
                     .child("Back to app"),
             )
@@ -1517,6 +1556,7 @@ impl AppView {
         let general = SidebarMenu::new().child(
             SidebarMenuItem::new("General")
                 .icon(Icon::new(IconName::Settings))
+                .gap_x_1()
                 .active(true),
         );
 
@@ -1570,7 +1610,7 @@ impl AppView {
                             .flex()
                             .items_center()
                             .justify_start()
-                            .gap_2()
+                            .gap_1()
                             .child(Icon::new(IconName::Plus).size_4())
                             .child("New chat"),
                     )
@@ -1589,6 +1629,7 @@ impl AppView {
             SidebarMenu::new().child(
                 SidebarMenuItem::new(project_name)
                     .icon(Icon::new(IconName::FolderOpen))
+                    .gap_x_1()
                     .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
                     .disable(navigation_disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1629,6 +1670,7 @@ impl AppView {
                 recent_menu = recent_menu.child(
                     SidebarMenuItem::new(project)
                         .icon(Icon::new(IconName::FolderOpen))
+                        .gap_x_1()
                         .disable(true),
                 );
                 for session in sessions {
@@ -1638,6 +1680,7 @@ impl AppView {
                     recent_menu = recent_menu.child(
                         SidebarMenuItem::new(session.title.clone())
                             .icon(Icon::new(IconName::FileText))
+                            .gap_x_1()
                             // The toolkit's label is a flex row whose text child
                             // clips before ellipsis. Give the suffix slot the
                             // remaining width and render a constrained text block.
@@ -1694,7 +1737,7 @@ impl AppView {
                     .flex()
                     .items_center()
                     .justify_start()
-                    .gap_2()
+                    .gap_1()
                     .child(Icon::new(IconName::Settings).size_4())
                     .child("Settings"),
             )
@@ -1741,102 +1784,103 @@ impl AppView {
         let options = prompt.options.clone();
         let descriptions = prompt.descriptions.clone();
         let multiple = prompt.multiple;
+        let dialog = AlertDialog::new(cx)
+            .rounded(px(20.))
+            .width(px(560.))
+            .title(if prompt.header.trim().is_empty() {
+                "The agent has a question".to_owned()
+            } else {
+                prompt.header.clone()
+            })
+            .description(prompt.text)
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("Answer")
+                    .cancel_text("Stop turn")
+                    .show_cancel(true),
+            )
+            .child(Textarea::new(&self.question_answer).h(px(52.)))
+            .children(options.into_iter().enumerate().map(|(index, option)| {
+                let answer = option.clone();
+                let controller = controller.clone();
+                let composer = composer.clone();
+                let view = view.clone();
+                let selected = self.selected_question_options.contains(&option);
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        Button::new(format!("question-option-{index}"))
+                            .w_full()
+                            .rounded(ButtonRounded::Large)
+                            .label(option)
+                            .selected(selected)
+                            .on_click(move |_, window, cx| {
+                                if multiple {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.chat_state.begin_user_action();
+                                        toggle_option(&mut this.selected_question_options, &answer);
+                                        cx.notify();
+                                    });
+                                } else {
+                                    let _ =
+                                        controller.send(Command::AnswerQuestion(answer.clone()));
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.chat_state.begin_user_action();
+                                        cx.notify();
+                                    });
+                                    composer
+                                        .update(cx, |state, cx| state.set_value("", window, cx));
+                                }
+                            }),
+                    )
+                    .when_some(
+                        descriptions
+                            .get(index)
+                            .filter(|text| !text.trim().is_empty()),
+                        |this, description| {
+                            this.child(
+                                div()
+                                    .pl_3()
+                                    .text_xs()
+                                    .text_color(rgb(Palette::TEXT_SECONDARY))
+                                    .child(description.clone()),
+                            )
+                        },
+                    )
+            }))
+            .on_ok(move |_, window, app| {
+                view.upgrade()
+                    .map(|view| {
+                        view.update(app, |this, cx| this.answer_question_from_dialog(window, cx))
+                    })
+                    .unwrap_or(false)
+            })
+            .on_cancel(move |_, _, cx| {
+                let _ = cancel_controller.send(Command::Cancel);
+                let _ = cancel_view.update(cx, |this, cx| {
+                    this.chat_state.begin_user_action();
+                    cx.notify();
+                });
+                true
+            });
+        // Enter inside the dialog confirms the staged answer; Shift+Enter
+        // still inserts a newline in the freeform field.
         Some(
-            AlertDialog::new(cx)
-                .title(if prompt.header.trim().is_empty() {
-                    "The agent has a question".to_owned()
-                } else {
-                    prompt.header.clone()
-                })
-                .description(prompt.text)
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Answer")
-                        .cancel_text("Stop turn")
-                        .show_cancel(true),
-                )
-                .child(Textarea::new(&self.question_answer).h(px(52.)))
-                .children(options.into_iter().enumerate().map(|(index, option)| {
-                    let answer = option.clone();
-                    let controller = controller.clone();
-                    let composer = composer.clone();
-                    let view = view.clone();
-                    let selected = self.selected_question_options.contains(&option);
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            Button::new(format!("question-option-{index}"))
-                                .label(option)
-                                .selected(selected)
-                                .on_click(move |_, window, cx| {
-                                    if multiple {
-                                        let _ = view.update(cx, |this, cx| {
-                                            this.chat_state.begin_user_action();
-                                            toggle_option(
-                                                &mut this.selected_question_options,
-                                                &answer,
-                                            );
-                                            cx.notify();
-                                        });
-                                    } else {
-                                        let _ = controller
-                                            .send(Command::AnswerQuestion(answer.clone()));
-                                        let _ = view.update(cx, |this, cx| {
-                                            this.chat_state.begin_user_action();
-                                            cx.notify();
-                                        });
-                                        composer.update(cx, |state, cx| {
-                                            state.set_value("", window, cx)
-                                        });
-                                    }
-                                }),
-                        )
-                        .when_some(
-                            descriptions
-                                .get(index)
-                                .filter(|text| !text.trim().is_empty()),
-                            |this, description| {
-                                this.child(
-                                    div()
-                                        .pl_2()
-                                        .text_xs()
-                                        .text_color(rgb(Palette::TEXT_SECONDARY))
-                                        .child(description.clone()),
-                                )
-                            },
-                        )
-                }))
-                .on_ok(move |_, window, app| {
-                    let selected = view
-                        .upgrade()
-                        .map(|view| view.read(app).selected_question_options.clone())
-                        .unwrap_or_default();
-                    let answer = if multiple && !selected.is_empty() {
-                        selected.join(", ")
-                    } else {
-                        composer.read(app).value().to_string()
-                    };
-                    if !can_submit(&answer) {
-                        return false;
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .on_action(cx.listener(|this, action: &Enter, window, cx| {
+                    if !action.shift
+                        && !action.secondary
+                        && this.answer_question_from_dialog(window, cx)
+                    {
+                        cx.stop_propagation();
                     }
-                    let _ = controller.send(Command::AnswerQuestion(answer));
-                    let _ = view.update(app, |this, cx| {
-                        this.chat_state.begin_user_action();
-                        cx.notify();
-                    });
-                    composer.update(app, |state, cx| state.set_value("", window, cx));
-                    true
-                })
-                .on_cancel(move |_, _, cx| {
-                    let _ = cancel_controller.send(Command::Cancel);
-                    let _ = cancel_view.update(cx, |this, cx| {
-                        this.chat_state.begin_user_action();
-                        cx.notify();
-                    });
-                    true
-                }),
+                }))
+                .child(dialog),
         )
     }
 
@@ -1875,7 +1919,7 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .rounded_md()
+                    .rounded_lg()
                     .bg(rgb(Palette::APP_BACKGROUND))
                     .p_2()
                     .child(div().text_sm().font_semibold().child(format!(
@@ -1920,7 +1964,7 @@ impl AppView {
                                 .max_h(px(180.))
                                 .min_h(px(0.))
                                 .overflow_scrollbar()
-                                .rounded_md()
+                                .rounded_lg()
                                 .bg(rgb(Palette::APP_BACKGROUND))
                                 .p_2()
                                 .child(
@@ -1937,7 +1981,7 @@ impl AppView {
             div()
                 .w_full()
                 .max_w(px(760.))
-                .rounded_lg()
+                .rounded_xl()
                 .border_1()
                 .border_color(rgb(Palette::BORDER_SUBTLE))
                 .bg(rgb(Palette::SURFACE_ELEVATED))
@@ -1947,12 +1991,13 @@ impl AppView {
                 .gap_2()
                 .child(
                     div()
+                        .text_sm()
                         .font_semibold()
                         .child(format!("Permission required · {action_count} actions")),
                 )
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .text_color(rgb(Palette::TEXT_MUTED))
                         .child("This decision applies to every action in the list."),
                 )
@@ -1963,6 +2008,7 @@ impl AppView {
                         .gap_2()
                         .child(
                             Button::new("approval-deny")
+                                .small()
                                 .label(if in_flight { "Denying…" } else { "Deny" })
                                 .disabled(in_flight)
                                 .on_click(move |_, _, cx| {
@@ -1995,6 +2041,7 @@ impl AppView {
                         .child(
                             Button::new("approval-approve")
                                 .primary()
+                                .small()
                                 .label(if in_flight { "Approving…" } else { "Approve" })
                                 .disabled(in_flight)
                                 .on_click(move |_, _, cx| {
@@ -2900,6 +2947,12 @@ impl Render for AppView {
             && !self.switching_session
             && (can_submit(&self.composer.read(cx).value())
                 || (!pending_question && !self.pending_images.is_empty()));
+        // While a turn is running the action slot shows Stop until the user
+        // starts typing, at which point it swaps back to Send/Steer/Queue.
+        let has_composer_draft =
+            can_submit(&self.composer.read(cx).value()) || !self.pending_images.is_empty();
+        let stop_visible = turn_active && !has_composer_draft;
+        let send_visible = !stop_visible || pending_question;
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
         self.slash_selection = self
             .slash_selection
@@ -3131,12 +3184,17 @@ impl Render for AppView {
                             .presentation()
                             .focus_handle()
                             .is_focused(window);
+                        // Key events captured here bubble up from the composer
+                        // field itself, so an open slash menu can rely on that
+                        // even when the toolkit focus check lags behind.
+                        let menu_open = !crate::slash::suggestions(&draft).is_empty()
+                            && !this.slash_picker_dismissed;
                         match slash_menu_key_decision(
                             &draft,
                             this.slash_selection,
                             this.slash_picker_dismissed,
                             &event.keystroke.key,
-                            composer_focused,
+                            composer_focused || menu_open,
                         ) {
                             crate::slash::SlashInteraction::Move(index) => {
                                 this.slash_selection = index;
@@ -3148,8 +3206,14 @@ impl Render for AppView {
                                 cx.stop_propagation();
                                 cx.notify();
                             }
-                            crate::slash::SlashInteraction::Complete { .. }
-                            | crate::slash::SlashInteraction::Ignore => {}
+                            crate::slash::SlashInteraction::Complete {
+                                value,
+                                cursor_offset,
+                            } => {
+                                this.apply_slash_completion(value, cursor_offset, window, cx);
+                                cx.stop_propagation();
+                            }
+                            crate::slash::SlashInteraction::Ignore => {}
                         }
                     }))
                     .on_action(cx.listener(|this, action: &Enter, window, cx| {
@@ -3333,7 +3397,7 @@ impl Render for AppView {
                         )
                     })
                     .child(self.render_model_picker(cx))
-                    .when(turn_active, |this| {
+                    .when(stop_visible, |this| {
                         this.child(
                             Button::new("stop-turn")
                                 .ghost()
@@ -3352,41 +3416,43 @@ impl Render for AppView {
                                 })),
                         )
                     })
-                    .child(
-                        Button::new("composer-action")
-                            .primary()
-                            .rounded(px(999.))
-                            .size(px(32.))
-                            .icon(IconName::ArrowUp)
-                            .accessibility_label(if pending_question {
-                                "Answer"
-                            } else if turn_active
-                                && can_steer
-                                && self.follow_up_mode == PromptSubmitMode::Steer
-                            {
-                                "Steer active turn"
-                            } else if turn_active {
-                                "Queue message"
-                            } else {
-                                "Send message"
-                            })
-                            .tooltip(if pending_question {
-                                "Answer"
-                            } else if turn_active
-                                && can_steer
-                                && self.follow_up_mode == PromptSubmitMode::Steer
-                            {
-                                "Steer active turn"
-                            } else if turn_active {
-                                "Queue message"
-                            } else {
-                                "Send message"
-                            })
-                            .disabled(!send_enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.submit_composer(window, cx);
-                            })),
-                    ),
+                    .when(send_visible, |this| {
+                        this.child(
+                            Button::new("composer-action")
+                                .primary()
+                                .rounded(px(999.))
+                                .size(px(32.))
+                                .icon(IconName::ArrowUp)
+                                .accessibility_label(if pending_question {
+                                    "Answer"
+                                } else if turn_active
+                                    && can_steer
+                                    && self.follow_up_mode == PromptSubmitMode::Steer
+                                {
+                                    "Steer active turn"
+                                } else if turn_active {
+                                    "Queue message"
+                                } else {
+                                    "Send message"
+                                })
+                                .tooltip(if pending_question {
+                                    "Answer"
+                                } else if turn_active
+                                    && can_steer
+                                    && self.follow_up_mode == PromptSubmitMode::Steer
+                                {
+                                    "Steer active turn"
+                                } else if turn_active {
+                                    "Queue message"
+                                } else {
+                                    "Send message"
+                                })
+                                .disabled(!send_enabled)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.submit_composer(window, cx);
+                                })),
+                        )
+                    }),
             );
 
         let chat_main = div()
@@ -3440,8 +3506,8 @@ impl Render for AppView {
                                     .left_0()
                                     .bottom_full()
                                     .mb_2()
-                                    .p_2()
-                                    .rounded(px(23.))
+                                    .p_1()
+                                    .rounded_lg()
                                     .border_1()
                                     .border_color(rgb(Palette::BORDER_STRONG))
                                     .bg(rgb(Palette::SURFACE_ELEVATED))
@@ -3457,10 +3523,10 @@ impl Render for AppView {
                                                 .w_full()
                                                 .flex()
                                                 .items_center()
-                                                .gap_3()
+                                                .gap_2()
                                                 .px_2()
-                                                .py_1()
-                                                .rounded_lg()
+                                                .py(px(2.))
+                                                .rounded_md()
                                                 .when(index == self.slash_selection, |this| {
                                                     this.bg(rgb(Palette::SURFACE_SELECTED))
                                                 })
@@ -3478,6 +3544,7 @@ impl Render for AppView {
                                                 .child(
                                                     div()
                                                         .min_w(px(112.))
+                                                        .text_sm()
                                                         .font_medium()
                                                         .child(suggestion.name),
                                                 )
@@ -3651,7 +3718,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn active_turn_keeps_send_stop_and_pending_prompt_controls_visible(cx: &mut TestAppContext) {
+    fn active_turn_swaps_stop_for_send_until_a_draft_is_typed(cx: &mut TestAppContext) {
         let handle = app_view(cx);
         handle
             .update(cx, |view, _, cx| {
@@ -3665,13 +3732,11 @@ mod tests {
             })
             .expect("view remains available");
 
+        // While working with an empty composer only Stop is shown.
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(window.find("stop-turn").label(), Some("Stop turn"));
-            assert_eq!(
-                window.find("composer-action").label(),
-                Some("Steer active turn")
-            );
+            assert!(window.try_find("composer-action").is_none());
             assert_eq!(
                 window.find("restore-pending-Queue-0").label(),
                 Some("Edit queued prompt")
@@ -3682,6 +3747,69 @@ mod tests {
             );
         })
         .expect("window remains open");
+
+        // Typing swaps the slot back to the send action.
+        handle
+            .update(cx, |view, window, cx| {
+                view.composer
+                    .update(cx, |state, cx| state.set_value("steer this", window, cx));
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("stop-turn").is_none());
+            assert_eq!(
+                window.find("composer-action").label(),
+                Some("Steer active turn")
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn question_dialog_answer_submits_the_freeform_field(cx: &mut TestAppContext) {
+        use rustcode::controller::{QuestionPrompt, TurnUpdate};
+
+        // Note: the dialog overlay itself needs a Root host to render, so
+        // this exercises the shared answer path instead of a full frame.
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Turn(TurnUpdate::QuestionRequested(
+                            QuestionPrompt {
+                                header: "Untrack scope".to_owned(),
+                                text: "How should I handle ignored paths?".to_owned(),
+                                options: vec!["Untrack both".to_owned()],
+                                descriptions: vec![String::new()],
+                                multiple: false,
+                            },
+                        )),
+                    },
+                    cx,
+                );
+                assert!(view.chat_state.pending_question().is_some());
+                assert!(!view.answer_question_from_dialog(window, cx));
+                view.question_answer
+                    .update(cx, |state, cx| state.set_value("my answer", window, cx));
+                assert!(view.answer_question_from_dialog(window, cx));
+                assert_eq!(view.question_answer.read(cx).value().as_ref(), "");
+                // Clear the pending question again: dialog overlays need a
+                // Root host to render, which these unit tests don't provide.
+                let mut cleared = interactive_snapshot(false, false);
+                cleared.generation = 2;
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 2,
+                        update: ControllerUpdate::Snapshot(cleared),
+                    },
+                    cx,
+                );
+            })
+            .expect("view remains available");
     }
 
     #[gpui_kit::test]
