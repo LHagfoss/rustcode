@@ -17,6 +17,10 @@ docs/*
 docs/superpowers/
 !/docs/
 !/docs/*.md
+
+# impeccable local state
+.impeccable/
+
 /bench/
 /benchmarks/
 /tests/
