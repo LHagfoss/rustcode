@@ -90,6 +90,8 @@ mod tests {
             transcript: Vec::new(),
             live_response: String::new(),
             queued_count: 0,
+            can_steer: false,
+            pending_prompts: Vec::new(),
             turn_active: false,
             auto_approve: false,
             pending_question: None,

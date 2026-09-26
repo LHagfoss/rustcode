@@ -14,6 +14,12 @@ pub enum Command {
         workspace: PathBuf,
     },
     Submit(String),
+    SubmitWithMode {
+        prompt: String,
+        mode: PromptSubmitMode,
+    },
+    RestorePendingPrompt(PendingPrompt),
+    RemovePendingPrompt(PendingPrompt),
     Cancel,
     SetAutoApprove(bool),
     SelectModel(String),
@@ -59,6 +65,44 @@ pub struct SessionChoice {
     pub title: String,
     pub when: String,
     pub message_count: usize,
+    pub workspace: Option<PathBuf>,
+}
+
+impl SessionChoice {
+    pub(crate) fn from_meta(session: &crate::config::SessionMeta) -> Self {
+        let id = crate::config::session_id_from_path(&session.path).unwrap_or_default();
+        let workspace = crate::config::load_session_workspace(&id).map(|record| record.cwd);
+        Self {
+            id,
+            title: session.title.clone(),
+            when: session.when.clone(),
+            message_count: session.message_count,
+            workspace,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptSubmitMode {
+    Steer,
+    Queue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPromptKind {
+    Steer,
+    Queue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPrompt {
+    pub session_id: String,
+    pub generation: u64,
+    pub kind: PendingPromptKind,
+    /// Index in the controller's source collection. This intentionally keeps
+    /// duplicate prompts independently addressable.
+    pub position: usize,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +246,8 @@ pub struct ControllerSnapshot {
     pub transcript: Vec<TranscriptItem>,
     pub live_response: String,
     pub queued_count: usize,
+    pub can_steer: bool,
+    pub pending_prompts: Vec<PendingPrompt>,
     pub turn_active: bool,
     pub auto_approve: bool,
     pub pending_question: Option<QuestionPrompt>,
@@ -247,6 +293,32 @@ impl ControllerSnapshot {
                 tool_name: action.tool_name.clone(),
                 description: action.description.clone(),
             });
+        let pending_prompts: Vec<PendingPrompt> = state
+            .pending_steers
+            .iter()
+            .enumerate()
+            .map(|(position, prompt)| PendingPrompt {
+                session_id: state.active_session_id.clone(),
+                generation,
+                kind: PendingPromptKind::Steer,
+                position,
+                text: prompt.text.clone(),
+            })
+            .chain(
+                state
+                    .pending_queue
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, prompt)| !prompt.starts_with("__task_wakeup__:"))
+                    .map(|(position, prompt)| PendingPrompt {
+                        session_id: state.active_session_id.clone(),
+                        generation,
+                        kind: PendingPromptKind::Queue,
+                        position,
+                        text: prompt.clone(),
+                    }),
+            )
+            .collect();
         let mut details = std::collections::HashMap::new();
         let transcript = state
             .history
@@ -315,12 +387,7 @@ impl ControllerSnapshot {
         let mut sessions = state
             .history_picker_sessions
             .iter()
-            .map(|session| SessionChoice {
-                id: crate::config::session_id_from_path(&session.path).unwrap_or_default(),
-                title: session.title.clone(),
-                when: session.when.clone(),
-                message_count: session.message_count,
-            })
+            .map(SessionChoice::from_meta)
             .collect::<Vec<_>>();
         if crate::config::session_has_content(&state.history) {
             sessions.retain(|choice| choice.id != state.active_session_id);
@@ -332,10 +399,14 @@ impl ControllerSnapshot {
                         .unwrap_or_else(|| crate::config::session_title(&state.history)),
                     when: state
                         .history
-                        .first()
+                        .last()
                         .map(|message| message.timestamp.clone())
                         .unwrap_or_default(),
                     message_count: state.history.len(),
+                    workspace: state
+                        .task_working_directory
+                        .clone()
+                        .or_else(|| state.effective_workspace_root()),
                 },
             );
         }
@@ -369,7 +440,9 @@ impl ControllerSnapshot {
             ),
             transcript,
             live_response: state.current_response.as_ref().clone(),
-            queued_count: state.pending_queue.len() + state.pending_steers.len(),
+            queued_count: pending_prompts.len(),
+            can_steer: state.can_accept_steer(),
+            pending_prompts,
             turn_active: matches!(
                 state.status,
                 AppStatus::Streaming
@@ -396,8 +469,51 @@ impl ControllerSnapshot {
 
 #[cfg(test)]
 mod detail_tests {
-    use super::ControllerSnapshot;
-    use crate::app::{AppState, ChatMessage, ToolCallRef, ToolResultRecord};
+    use super::{ControllerSnapshot, PendingPrompt, PendingPromptKind};
+    use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
+
+    #[test]
+    fn snapshot_exposes_user_pending_prompts_and_steer_capability() {
+        let mut state = AppState::new();
+        state.pending_queue = vec![
+            "first follow-up".to_owned(),
+            "__task_wakeup__:background-task".to_owned(),
+            "second follow-up".to_owned(),
+        ];
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(state.queue_steer("correct the approach".to_owned()));
+
+        let snapshot = ControllerSnapshot::from_state(1, &state);
+
+        assert!(snapshot.can_steer);
+        assert_eq!(
+            snapshot.pending_prompts,
+            vec![
+                PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
+                    kind: PendingPromptKind::Steer,
+                    position: 0,
+                    text: "correct the approach".to_owned(),
+                },
+                PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
+                    kind: PendingPromptKind::Queue,
+                    position: 0,
+                    text: "first follow-up".to_owned(),
+                },
+                PendingPrompt {
+                    session_id: state.active_session_id.clone(),
+                    generation: 1,
+                    kind: PendingPromptKind::Queue,
+                    position: 2,
+                    text: "second follow-up".to_owned(),
+                },
+            ]
+        );
+    }
 
     #[test]
     fn snapshot_workspace_falls_back_to_the_session_source_boundary() {

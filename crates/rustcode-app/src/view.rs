@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
@@ -24,7 +24,8 @@ use gpui_kit::{
     px, rgb,
 };
 use rustcode::controller::{
-    ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate, SessionChoice,
+    ApprovalChoice, Command, ControllerEvent, ControllerSnapshot, ControllerUpdate,
+    PendingPromptKind, PromptSubmitMode, SessionChoice,
 };
 
 use super::{CloseWindow, MinimizeWindow};
@@ -227,10 +228,16 @@ use crate::{
         NativeBackend, project_selection_command, resolve_resume_workspace, resume_session_command,
     },
     projection::{
-        ChatViewState, ComposerAction, ProjectionRow, ToolStatus, can_submit, project_rows,
-        toggle_option, tool_row_presentation,
+        ChatViewState, ProjectionRow, ToolStatus, can_submit, project_rows, toggle_option,
+        tool_row_presentation,
     },
 };
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ComposerDraft {
+    text: String,
+    images: Vec<crate::image_attachment::ImageAttachment>,
+}
 
 pub struct AppView {
     backend: NativeBackend,
@@ -243,9 +250,16 @@ pub struct AppView {
     question_answer: gpui_kit::Entity<TextareaState>,
     search_input: gpui_kit::Entity<InputState>,
     _search_subscription: gpui_kit::Subscription,
+    session_search_input: gpui_kit::Entity<InputState>,
+    _session_search_subscription: gpui_kit::Subscription,
     messages: gpui_kit::Entity<TranscriptScrollerState>,
     navigation: AppNavigation,
     recent_sessions: Vec<SessionChoice>,
+    session_drafts: HashMap<String, ComposerDraft>,
+    pending_draft_session: Option<String>,
+    restore_composer_on_render: Option<String>,
+    draft_before_pending_edit: Option<ComposerDraft>,
+    follow_up_mode: PromptSubmitMode,
     chat_state: ChatViewState,
     selected_question_options: Vec<String>,
     status: Option<String>,
@@ -253,6 +267,7 @@ pub struct AppView {
     pending_model_selection: Option<String>,
     controller_responded: bool,
     starting_new_session: bool,
+    switching_session: bool,
     clear_composer_on_render: bool,
     slash_selection: usize,
     slash_picker_dismissed: bool,
@@ -361,6 +376,14 @@ impl AppView {
                     });
                 }
             });
+        let session_search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search chats"));
+        let session_search_subscription =
+            cx.subscribe(&session_search_input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
         let messages = cx.new(|cx| TranscriptScrollerState::new(0, cx));
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
@@ -379,9 +402,16 @@ impl AppView {
             question_answer,
             search_input,
             _search_subscription: search_subscription,
+            session_search_input,
+            _session_search_subscription: session_search_subscription,
             messages,
             navigation: AppNavigation::default(),
             recent_sessions: Vec::new(),
+            session_drafts: HashMap::new(),
+            pending_draft_session: None,
+            restore_composer_on_render: None,
+            draft_before_pending_edit: None,
+            follow_up_mode: PromptSubmitMode::Steer,
             chat_state: ChatViewState::default(),
             selected_question_options: Vec::new(),
             status,
@@ -389,6 +419,7 @@ impl AppView {
             pending_model_selection: None,
             controller_responded,
             starting_new_session: false,
+            switching_session: false,
             clear_composer_on_render: false,
             slash_selection: 0,
             slash_picker_dismissed: false,
@@ -492,6 +523,17 @@ impl AppView {
                     self.reset_search_input_on_render = true;
                     self.focus_composer_on_render = true;
                     self.starting_new_session = false;
+                    self.switching_session = false;
+                    self.draft_before_pending_edit = None;
+                    let draft_key = self
+                        .pending_draft_session
+                        .take()
+                        .or_else(|| session_id.clone());
+                    let draft = draft_key
+                        .and_then(|key| self.session_drafts.get(&key).cloned())
+                        .unwrap_or_default();
+                    self.restore_composer_on_render = Some(draft.text);
+                    self.pending_images = draft.images;
                 }
                 if let Some(workspace) = self
                     .navigation
@@ -523,10 +565,29 @@ impl AppView {
                 }
             }
             ControllerUpdate::Turn(_) => {}
+            ControllerUpdate::PromptRestored(prompt) => {
+                let current = self.composer.read(cx).value().to_string();
+                if self.draft_before_pending_edit.is_none()
+                    && (!current.trim().is_empty() || !self.pending_images.is_empty())
+                {
+                    self.draft_before_pending_edit = Some(ComposerDraft {
+                        text: current,
+                        images: std::mem::take(&mut self.pending_images),
+                    });
+                }
+                self.follow_up_mode = match prompt.kind {
+                    PendingPromptKind::Steer => PromptSubmitMode::Steer,
+                    PendingPromptKind::Queue => PromptSubmitMode::Queue,
+                };
+                self.restore_composer_on_render = Some(prompt.text);
+                self.focus_composer_on_render = true;
+            }
             ControllerUpdate::Error(_) => {
                 self.controller_responded = true;
                 self.status = None;
                 self.approval_in_flight = None;
+                self.pending_draft_session = None;
+                self.switching_session = false;
                 if self.starting_new_session {
                     self.starting_new_session = false;
                     self.pending_prompt = None;
@@ -567,6 +628,11 @@ impl AppView {
     }
 
     fn start_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
+            return;
+        }
+        self.save_current_draft(cx);
+        self.pending_draft_session = None;
         if let Some(command) = project_selection_command(Some(workspace)) {
             if let Command::StartNew(path) = &command {
                 self.selected_project = path.clone();
@@ -581,7 +647,7 @@ impl AppView {
     }
 
     fn start_new_chat(&mut self, cx: &mut Context<Self>) {
-        if !start_new_chat_enabled(self.starting_new_session) {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
             return;
         }
         self.navigation.open_chat();
@@ -751,19 +817,49 @@ impl AppView {
         .detach();
     }
 
-    fn resume_session(&mut self, session_id: String, cx: &mut Context<Self>) {
-        self.navigation.open_chat();
-        // Never resume in a stale directory: prefer the selected project,
-        // fall back to the launch directory, and offer the folder picker
-        // when neither is valid (issue #1377).
-        let Some(workspace) = resolve_resume_workspace(&self.selected_project, &self.launch_dir)
+    fn save_current_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(session_id) = self
+            .navigation
+            .chat_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_id.clone())
         else {
-            self.choose_project_and_resume(session_id, cx);
             return;
         };
-        let command = resume_session_command(session_id, workspace.clone());
+        let draft = self
+            .draft_before_pending_edit
+            .clone()
+            .unwrap_or_else(|| ComposerDraft {
+                text: self.composer.read(cx).value().to_string(),
+                images: self.pending_images.clone(),
+            });
+        self.session_drafts.insert(session_id, draft);
+    }
+
+    fn resume_session(&mut self, session: SessionChoice, cx: &mut Context<Self>) {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
+            return;
+        }
+        self.navigation.open_chat();
+        self.save_current_draft(cx);
+        self.pending_draft_session = Some(session.id.clone());
+        self.switching_session = true;
+        // Prefer the workspace recorded with this session. Older sessions
+        // fall back to the selected/launch project and retain the picker path.
+        let Some(workspace) = session
+            .workspace
+            .filter(|path| path.is_dir())
+            .or_else(|| resolve_resume_workspace(&self.selected_project, &self.launch_dir))
+        else {
+            self.choose_project_and_resume(session.id, cx);
+            return;
+        };
+        let command = resume_session_command(session.id, workspace.clone());
         self.selected_project = workspace;
-        self.send_command(command, cx);
+        if !self.send_command(command, cx) {
+            self.switching_session = false;
+            self.pending_draft_session = None;
+        }
     }
 
     fn choose_project_and_resume(&mut self, session_id: String, cx: &mut Context<Self>) {
@@ -779,18 +875,28 @@ impl AppView {
                 Ok(Ok(Some(paths))) => {
                     if let Some(workspace) = paths.into_iter().next() {
                         this.selected_project = workspace.clone();
-                        this.send_command(
-                            resume_session_command(session_id.clone(), workspace),
-                            cx,
-                        );
+                        if !this
+                            .send_command(resume_session_command(session_id.clone(), workspace), cx)
+                        {
+                            this.switching_session = false;
+                            this.pending_draft_session = None;
+                        }
                     }
                 }
-                Ok(Ok(None)) => {}
+                Ok(Ok(None)) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
+                    cx.notify();
+                }
                 Ok(Err(error)) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
                     this.status = Some(format!("Folder picker error: {error}"));
                     cx.notify();
                 }
                 Err(error) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
                     this.status = Some(format!("Folder picker error: {error}"));
                     cx.notify();
                 }
@@ -802,6 +908,7 @@ impl AppView {
     fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.pending_prompt.is_some()
             || self.starting_new_session
+            || self.switching_session
             || !self.chat_state.composer_enabled()
         {
             return false;
@@ -844,7 +951,19 @@ impl AppView {
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.session_id.is_some())
             {
-                Some(Command::Submit(text))
+                let snapshot = self.navigation.chat_snapshot.as_ref();
+                if snapshot.is_some_and(|snapshot| snapshot.turn_active) {
+                    let mode = if self.follow_up_mode == PromptSubmitMode::Steer
+                        && snapshot.is_some_and(|snapshot| snapshot.can_steer)
+                    {
+                        PromptSubmitMode::Steer
+                    } else {
+                        PromptSubmitMode::Queue
+                    };
+                    Some(Command::SubmitWithMode { prompt: text, mode })
+                } else {
+                    Some(Command::Submit(text))
+                }
             } else {
                 if self.selected_project.is_dir() {
                     self.pending_prompt = Some(text);
@@ -857,18 +976,28 @@ impl AppView {
                     self.pending_prompt = Some(text);
                     self.choose_project_and_start(cx);
                 }
-                None
+                return true;
             }
         };
         if let Some(command) = command
             && self.send_command(command, cx)
         {
-            self.composer
-                .update(cx, |state, cx| state.set_value("", window, cx));
             if !is_answering_question {
-                self.pending_images.clear();
+                if let Some(draft) = self.draft_before_pending_edit.take() {
+                    self.composer
+                        .update(cx, |state, cx| state.set_value(&draft.text, window, cx));
+                    self.pending_images = draft.images;
+                } else {
+                    self.composer
+                        .update(cx, |state, cx| state.set_value("", window, cx));
+                    self.pending_images.clear();
+                }
+            } else {
+                self.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx));
             }
             cx.notify();
+            return true;
         }
         false
     }
@@ -1420,70 +1549,133 @@ impl AppView {
             .chat_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.session_id.as_deref());
+        let navigation_disabled = self.starting_new_session || self.switching_session;
 
-        let header = div().w_full().flex().flex_col().gap_3().pt(px(30.)).child(
-            Button::new("new-chat")
-                .ghost()
-                .w_full()
-                .justify_start()
-                .accessibility_label("Start a new chat")
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_start()
-                        .gap_2()
-                        .child(Icon::new(IconName::Plus).size_4())
-                        .child("New chat"),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.start_new_chat(cx);
-                })),
-        );
+        let header = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pt(px(30.))
+            .child(
+                Button::new("new-chat")
+                    .ghost()
+                    .w_full()
+                    .justify_start()
+                    .disabled(navigation_disabled)
+                    .accessibility_label("Start a new chat")
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_start()
+                            .gap_2()
+                            .child(Icon::new(IconName::Plus).size_4())
+                            .child("New chat"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.start_new_chat(cx);
+                    })),
+            )
+            .child(
+                Input::new(&self.session_search_input)
+                    .id("session-search-input")
+                    .bordered(true)
+                    .w_full(),
+            );
 
         let projects = SidebarGroup::new("Projects").child(
             SidebarMenu::new().child(
                 SidebarMenuItem::new(project_name)
                     .icon(Icon::new(IconName::FolderOpen))
                     .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
+                    .disable(navigation_disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.choose_project_and_start(cx);
                     })),
             ),
         );
+        let query = self
+            .session_search_input
+            .read(cx)
+            .value()
+            .to_string()
+            .to_lowercase();
+        let sidebar_id = format!("session-sidebar-{query}");
+        let filtered = self
+            .recent_sessions
+            .iter()
+            .filter(|session| session_matches_query(session, &query))
+            .collect::<Vec<_>>();
+        let mut grouped = Vec::<(Option<PathBuf>, String, Vec<&SessionChoice>)>::new();
+        for session in filtered {
+            let project = session_project_name(session);
+            let workspace = session.workspace.clone();
+            if let Some((_, _, sessions)) =
+                grouped.iter_mut().find(|(path, _, _)| path == &workspace)
+            {
+                sessions.push(session);
+            } else {
+                grouped.push((workspace, project, vec![session]));
+            }
+        }
         let mut recent_menu = SidebarMenu::new();
-        if self.recent_sessions.is_empty() {
+        if grouped.is_empty() {
             recent_menu =
-                recent_menu.child(SidebarMenuItem::new("No recent sessions").disable(true));
+                recent_menu.child(SidebarMenuItem::new("No matching chats").disable(true));
         } else {
-            for session in &self.recent_sessions {
-                let session_id = session.id.clone();
-                let title = session.title.clone();
+            for (_, project, sessions) in grouped {
                 recent_menu = recent_menu.child(
-                    SidebarMenuItem::new(session.title.clone())
-                        .icon(Icon::new(IconName::FileText))
-                        // The toolkit's label is a flex row whose text child
-                        // clips before ellipsis. Give the suffix slot the
-                        // remaining width and render a constrained text block.
-                        .label_style(gpui_kit::StyleRefinement::default().flex_none().w_0())
-                        .suffix(move |_, _| {
-                            let tooltip_title = title.clone();
-                            div()
-                                .id("session-title")
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
-                                })
-                                .child(title.clone())
-                        })
-                        .active(selected_session == Some(session.id.as_str()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.resume_session(session_id.clone(), cx);
-                        })),
+                    SidebarMenuItem::new(project)
+                        .icon(Icon::new(IconName::FolderOpen))
+                        .disable(true),
                 );
+                for session in sessions {
+                    let session_choice = session.clone();
+                    let title = session.title.clone();
+                    let metadata = format!("{} · {} msg", session.when, session.message_count);
+                    recent_menu = recent_menu.child(
+                        SidebarMenuItem::new(session.title.clone())
+                            .icon(Icon::new(IconName::FileText))
+                            // The toolkit's label is a flex row whose text child
+                            // clips before ellipsis. Give the suffix slot the
+                            // remaining width and render a constrained text block.
+                            .label_style(gpui_kit::StyleRefinement::default().flex_none().w_0())
+                            .suffix(move |_, _| {
+                                let tooltip_title = title.clone();
+                                div()
+                                    .id("session-title")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_ellipsis()
+                                            .child(title.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(rgb(Palette::TEXT_SECONDARY))
+                                            .child(metadata.clone()),
+                                    )
+                            })
+                            .active(selected_session == Some(session.id.as_str()))
+                            .disable(navigation_disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.resume_session(session_choice.clone(), cx);
+                            })),
+                    );
+                }
             }
         }
 
@@ -1520,7 +1712,7 @@ impl AppView {
             .border_color(rgb(Palette::BORDER_SUBTLE))
             .child(footer_button);
 
-        Sidebar::new("session-sidebar")
+        Sidebar::new(sidebar_id)
             .w(px(SIDEBAR_WIDTH))
             .bg(rgb(Palette::SIDEBAR))
             .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -1529,7 +1721,7 @@ impl AppView {
             .collapsed(collapsed)
             .header(header)
             .child(projects)
-            .child(SidebarGroup::new("Recents").child(recent_menu))
+            .child(SidebarGroup::new("Chats").child(recent_menu))
             .footer(footer)
             .into_any_element()
     }
@@ -2609,8 +2801,28 @@ fn start_screen_copy(
     }
 }
 
-fn start_new_chat_enabled(starting_new_session: bool) -> bool {
-    !starting_new_session
+fn start_new_chat_enabled(starting_new_session: bool, switching_session: bool) -> bool {
+    !starting_new_session && !switching_session
+}
+
+fn session_project_name(session: &SessionChoice) -> String {
+    session
+        .workspace
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Unknown project".to_owned())
+}
+
+fn session_matches_query(session: &SessionChoice, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || session.title.to_lowercase().contains(&query)
+        || session.when.to_lowercase().contains(&query)
+        || session
+            .workspace
+            .as_ref()
+            .is_some_and(|path| path.display().to_string().to_lowercase().contains(&query))
 }
 
 impl Render for AppView {
@@ -2620,6 +2832,10 @@ impl Render for AppView {
             self.search_input
                 .update(cx, |state, cx| state.set_value("", window, cx));
             self.reset_search_input_on_render = false;
+        }
+        if let Some(draft) = self.restore_composer_on_render.take() {
+            self.composer
+                .update(cx, |state, cx| state.set_value(&draft, window, cx));
         }
         if self.focus_search_on_render {
             let focus_handle = self.search_input.read(cx).focus_handle(cx);
@@ -2654,13 +2870,24 @@ impl Render for AppView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Choose project".to_owned());
         let status = self.status.clone();
-        let composer_action = self.chat_state.composer_action();
+        let turn_active = self.chat_state.turn_active();
+        let can_steer = self
+            .navigation
+            .chat_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.can_steer);
+        let pending_prompts = self
+            .navigation
+            .chat_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.pending_prompts.clone())
+            .unwrap_or_default();
         let auto_approve = self
             .navigation
             .chat_snapshot
             .as_ref()
             .is_none_or(|snapshot| snapshot.auto_approve);
-        let composer_enabled = self.chat_state.composer_enabled();
+        let composer_enabled = self.chat_state.composer_enabled() && !self.switching_session;
         let pending_question = self.chat_state.pending_question().is_some()
             || self
                 .navigation
@@ -2670,6 +2897,7 @@ impl Render for AppView {
         let send_enabled = composer_enabled
             && self.pending_prompt.is_none()
             && !self.starting_new_session
+            && !self.switching_session
             && (can_submit(&self.composer.read(cx).value())
                 || (!pending_question && !self.pending_images.is_empty()));
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
@@ -2753,6 +2981,7 @@ impl Render for AppView {
                     .ghost()
                     .compact()
                     .xsmall()
+                    .disabled(self.starting_new_session || self.switching_session)
                     .icon(IconName::FolderOpen)
                     .label(project_label)
                     .tooltip(workspace)
@@ -2777,6 +3006,80 @@ impl Render for AppView {
             .border_1()
             .border_color(rgb(Palette::BORDER_SUBTLE))
             .rounded(px(23.))
+            .when(!pending_prompts.is_empty(), |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .pb_2()
+                        .border_b_1()
+                        .border_color(rgb(Palette::BORDER_SUBTLE))
+                        .children(pending_prompts.into_iter().map(|prompt| {
+                            let restore = prompt.clone();
+                            let remove = prompt.clone();
+                            let label = match prompt.kind {
+                                PendingPromptKind::Steer => "Steer",
+                                PendingPromptKind::Queue => "Queued",
+                            };
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_xs()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(rgb(Palette::SURFACE_ELEVATED))
+                                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                                        .child(label),
+                                )
+                                .child(div().flex_1().min_w_0().text_ellipsis().child(prompt.text))
+                                .child(
+                                    Button::new(format!(
+                                        "restore-pending-{:?}-{}",
+                                        restore.kind, restore.position
+                                    ))
+                                    .ghost()
+                                    .compact()
+                                    .xsmall()
+                                    .label("Edit")
+                                    .disabled(self.draft_before_pending_edit.is_some())
+                                    .accessibility_label("Edit queued prompt")
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.send_command(
+                                                Command::RestorePendingPrompt(restore.clone()),
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "remove-pending-{:?}-{}",
+                                        remove.kind, remove.position
+                                    ))
+                                    .ghost()
+                                    .compact()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .accessibility_label("Remove queued prompt")
+                                    .tooltip("Remove")
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.send_command(
+                                                Command::RemovePendingPrompt(remove.clone()),
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                        })),
+                )
+            })
             .when(!self.pending_images.is_empty(), |this| {
                 this.child(
                     div().flex().flex_wrap().gap_2().children(
@@ -2931,6 +3234,15 @@ impl Render for AppView {
                         .child(label),
                 )
             })
+            .when(self.switching_session, |this| {
+                this.child(
+                    div()
+                        .px_1()
+                        .text_xs()
+                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                        .child("Switching chat…"),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -2973,40 +3285,106 @@ impl Render for AppView {
                                 })),
                         ),
                     )
+                    .when(turn_active && !pending_question, |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    Button::new("follow-up-steer")
+                                        .ghost()
+                                        .compact()
+                                        .xsmall()
+                                        .label("Steer")
+                                        .selected(
+                                            self.follow_up_mode == PromptSubmitMode::Steer
+                                                && can_steer,
+                                        )
+                                        .disabled(!can_steer)
+                                        .accessibility_label("Apply prompt to the active turn")
+                                        .tooltip(if can_steer {
+                                            "Steer the active turn"
+                                        } else {
+                                            "Steering is unavailable; prompts will queue"
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.follow_up_mode = PromptSubmitMode::Steer;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("follow-up-queue")
+                                        .ghost()
+                                        .compact()
+                                        .xsmall()
+                                        .label("Queue")
+                                        .selected(
+                                            self.follow_up_mode == PromptSubmitMode::Queue
+                                                || !can_steer,
+                                        )
+                                        .accessibility_label("Run prompt after the active turn")
+                                        .tooltip("Queue after the active turn")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.follow_up_mode = PromptSubmitMode::Queue;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                    })
                     .child(self.render_model_picker(cx))
+                    .when(turn_active, |this| {
+                        this.child(
+                            Button::new("stop-turn")
+                                .ghost()
+                                .rounded(px(999.))
+                                .size(px(32.))
+                                .child(
+                                    div()
+                                        .size(px(10.))
+                                        .rounded(px(2.))
+                                        .bg(rgb(Palette::TEXT_PRIMARY)),
+                                )
+                                .accessibility_label("Stop turn")
+                                .tooltip("Stop turn")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.send_command(Command::Cancel, cx);
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("composer-action")
                             .primary()
                             .rounded(px(999.))
                             .size(px(32.))
-                            .when(composer_action == ComposerAction::Stop, |this| {
-                                this.child(
-                                    div()
-                                        .size(px(10.))
-                                        .rounded(px(2.))
-                                        .bg(Theme::global(cx).button_primary_foreground),
-                                )
+                            .icon(IconName::ArrowUp)
+                            .accessibility_label(if pending_question {
+                                "Answer"
+                            } else if turn_active
+                                && can_steer
+                                && self.follow_up_mode == PromptSubmitMode::Steer
+                            {
+                                "Steer active turn"
+                            } else if turn_active {
+                                "Queue message"
+                            } else {
+                                "Send message"
                             })
-                            .when(composer_action == ComposerAction::Send, |this| {
-                                this.icon(IconName::ArrowUp)
+                            .tooltip(if pending_question {
+                                "Answer"
+                            } else if turn_active
+                                && can_steer
+                                && self.follow_up_mode == PromptSubmitMode::Steer
+                            {
+                                "Steer active turn"
+                            } else if turn_active {
+                                "Queue message"
+                            } else {
+                                "Send message"
                             })
-                            .accessibility_label(match composer_action {
-                                ComposerAction::Stop => "Stop turn",
-                                ComposerAction::Send if pending_question => "Answer",
-                                ComposerAction::Send => "Send message",
-                            })
-                            .tooltip(match composer_action {
-                                ComposerAction::Stop => "Stop turn",
-                                ComposerAction::Send if pending_question => "Answer",
-                                ComposerAction::Send => "Send message",
-                            })
-                            .disabled(composer_action == ComposerAction::Send && !send_enabled)
+                            .disabled(!send_enabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                if composer_action == ComposerAction::Stop {
-                                    this.send_command(Command::Cancel, cx);
-                                } else {
-                                    this.submit_composer(window, cx);
-                                }
+                                this.submit_composer(window, cx);
                             })),
                     ),
             );
@@ -3216,14 +3594,16 @@ mod tests {
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext};
     use rustcode::controller::{
-        ControllerError, ControllerEvent, ControllerSnapshot, SessionChoice, TranscriptItem,
+        ControllerError, ControllerEvent, ControllerSnapshot, PendingPrompt, PendingPromptKind,
+        PromptSubmitMode, SessionChoice, TranscriptItem,
     };
 
     use super::{
         AppDestination, AppNavigation, AppView, ChatViewState, ControllerUpdate, DisplayRow,
         ProjectionRow, SettingsSection, SidebarShell, ToolOutputState, ToolStatus, group_turn_rows,
-        literal_tool_output_markdown, should_show_start_screen, slash_menu_key_decision,
-        start_new_chat_enabled, start_screen_copy, tool_output_state, turn_segments,
+        literal_tool_output_markdown, session_matches_query, session_project_name,
+        should_show_start_screen, slash_menu_key_decision, start_new_chat_enabled,
+        start_screen_copy, tool_output_state, turn_segments,
     };
 
     fn app_view(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<AppView> {
@@ -3234,6 +3614,252 @@ mod tests {
                 .expect("native backend starts");
             AppView::new(backend, launch_dir, window, cx)
         })
+    }
+
+    fn interactive_snapshot(turn_active: bool, can_steer: bool) -> ControllerSnapshot {
+        ControllerSnapshot {
+            generation: 1,
+            workspace: std::env::current_dir().ok(),
+            session_id: Some("interactive-session".to_owned()),
+            sessions: Vec::new(),
+            models: Vec::new(),
+            selected_model: None,
+            transcript: Vec::new(),
+            live_response: String::new(),
+            queued_count: usize::from(turn_active),
+            can_steer,
+            pending_prompts: turn_active
+                .then(|| pending_prompt("run tests afterwards", PendingPromptKind::Queue))
+                .into_iter()
+                .collect(),
+            turn_active,
+            auto_approve: true,
+            pending_question: None,
+            pending_approval: None,
+            pending_approval_batch: None,
+        }
+    }
+
+    fn pending_prompt(text: &str, kind: PendingPromptKind) -> PendingPrompt {
+        PendingPrompt {
+            session_id: "interactive-session".to_owned(),
+            generation: 1,
+            kind,
+            position: 0,
+            text: text.to_owned(),
+        }
+    }
+
+    #[gpui_kit::test]
+    fn active_turn_keeps_send_stop_and_pending_prompt_controls_visible(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(true, true)),
+                    },
+                    cx,
+                );
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("stop-turn").label(), Some("Stop turn"));
+            assert_eq!(
+                window.find("composer-action").label(),
+                Some("Steer active turn")
+            );
+            assert_eq!(
+                window.find("restore-pending-Queue-0").label(),
+                Some("Edit queued prompt")
+            );
+            assert_eq!(
+                window.find("remove-pending-Queue-0").label(),
+                Some("Remove queued prompt")
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn restored_prompt_repopulates_and_focuses_the_composer(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        let composer = handle
+            .update(cx, |view, _, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 0,
+                        update: ControllerUpdate::PromptRestored(pending_prompt(
+                            "edit this",
+                            PendingPromptKind::Queue,
+                        )),
+                    },
+                    cx,
+                );
+                view.composer.clone()
+            })
+            .expect("view remains available");
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+            assert_eq!(composer.read(cx).value().as_ref(), "edit this");
+            assert!(
+                composer
+                    .read(cx)
+                    .presentation()
+                    .focus_handle()
+                    .is_focused(window)
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn switching_sessions_restores_each_sessions_unsent_draft(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        let composer = handle
+            .update(cx, |view, window, cx| {
+                let mut first = interactive_snapshot(false, false);
+                first.session_id = Some("session-a".to_owned());
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(first),
+                    },
+                    cx,
+                );
+                view.composer
+                    .update(cx, |state, cx| state.set_value("draft for A", window, cx));
+                view.pending_images
+                    .push(crate::image_attachment::ImageAttachment {
+                        path: PathBuf::from("/tmp/draft-a.png"),
+                    });
+                view.save_current_draft(cx);
+
+                let mut second = interactive_snapshot(false, false);
+                second.generation = 2;
+                second.session_id = Some("session-b".to_owned());
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 2,
+                        update: ControllerUpdate::Snapshot(second),
+                    },
+                    cx,
+                );
+                assert!(view.pending_images.is_empty());
+                view.pending_draft_session = Some("session-a".to_owned());
+                let mut back = interactive_snapshot(false, false);
+                back.generation = 3;
+                back.session_id = Some("session-a".to_owned());
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 3,
+                        update: ControllerUpdate::Snapshot(back),
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    view.pending_images[0].path,
+                    PathBuf::from("/tmp/draft-a.png")
+                );
+                view.composer.clone()
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(composer.read(cx).value().as_ref(), "draft for A");
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn successful_enter_submission_reports_handled_and_clears_once(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                view.composer
+                    .update(cx, |state, cx| state.set_value("one message", window, cx));
+                assert!(view.submit_composer(window, cx));
+                assert_eq!(view.composer.read(cx).value().as_ref(), "");
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn resume_transition_blocks_submission_from_the_previous_chat(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                view.composer.update(cx, |state, cx| {
+                    state.set_value("belongs to previous chat", window, cx)
+                });
+                view.switching_session = true;
+
+                assert!(!view.submit_composer(window, cx));
+                assert_eq!(
+                    view.composer.read(cx).value().as_ref(),
+                    "belongs to previous chat"
+                );
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn editing_a_pending_prompt_restores_the_existing_draft_after_submit(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        let composer = handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                view.composer
+                    .update(cx, |state, cx| state.set_value("keep my draft", window, cx));
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::PromptRestored(pending_prompt(
+                            "edit queued prompt",
+                            PendingPromptKind::Queue,
+                        )),
+                    },
+                    cx,
+                );
+                assert_eq!(view.follow_up_mode, PromptSubmitMode::Queue);
+                view.composer.clone()
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .expect("window remains open");
+        handle
+            .update(cx, |view, window, cx| {
+                assert_eq!(composer.read(cx).value().as_ref(), "edit queued prompt");
+                assert!(view.submit_composer(window, cx));
+                assert_eq!(composer.read(cx).value().as_ref(), "keep my draft");
+            })
+            .expect("view remains available");
     }
 
     #[test]
@@ -3256,8 +3882,31 @@ mod tests {
 
     #[test]
     fn session_start_guard_rejects_duplicate_activation() {
-        assert!(start_new_chat_enabled(false));
-        assert!(!start_new_chat_enabled(true));
+        assert!(start_new_chat_enabled(false, false));
+        assert!(!start_new_chat_enabled(true, false));
+        assert!(!start_new_chat_enabled(false, true));
+    }
+
+    #[test]
+    fn session_navigation_matches_title_workspace_and_legacy_fallback() {
+        let session = SessionChoice {
+            id: "one".to_owned(),
+            title: "Fix queue behavior".to_owned(),
+            when: "Yesterday".to_owned(),
+            message_count: 12,
+            workspace: Some(PathBuf::from("/work/rustcode")),
+        };
+        assert_eq!(session_project_name(&session), "rustcode");
+        assert!(session_matches_query(&session, "QUEUE"));
+        assert!(session_matches_query(&session, "rustcode"));
+        assert!(session_matches_query(&session, "yesterday"));
+        assert!(!session_matches_query(&session, "unrelated"));
+
+        let legacy = SessionChoice {
+            workspace: None,
+            ..session
+        };
+        assert_eq!(session_project_name(&legacy), "Unknown project");
     }
 
     #[gpui_kit::test]
@@ -3295,6 +3944,8 @@ mod tests {
                     transcript: Vec::new(),
                     live_response: String::new(),
                     queued_count: 0,
+                    can_steer: false,
+                    pending_prompts: Vec::new(),
                     turn_active: false,
                     auto_approve: false,
                     pending_question: None,
@@ -3309,6 +3960,7 @@ mod tests {
                             title: "Old session".to_owned(),
                             when: "today".to_owned(),
                             message_count: 2,
+                            workspace: None,
                         }])),
                     },
                     cx,
@@ -3522,6 +4174,8 @@ mod tests {
             }],
             live_response: String::new(),
             queued_count: 0,
+            can_steer: false,
+            pending_prompts: Vec::new(),
             turn_active: false,
             auto_approve: false,
             pending_question: None,
@@ -3608,6 +4262,8 @@ mod tests {
             transcript: Vec::new(),
             live_response: String::new(),
             queued_count: 0,
+            can_steer: false,
+            pending_prompts: Vec::new(),
             turn_active: false,
             auto_approve: true,
             pending_question: None,
@@ -3620,6 +4276,7 @@ mod tests {
                 title: "Saved session".to_owned(),
                 when: "today".to_owned(),
                 message_count: 2,
+                workspace: None,
             }],
             ..initial.clone()
         };
