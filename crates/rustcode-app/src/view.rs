@@ -628,7 +628,7 @@ impl AppView {
     }
 
     fn start_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
-        if self.switching_session {
+        if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
             return;
         }
         self.save_current_draft(cx);
@@ -2981,6 +2981,7 @@ impl Render for AppView {
                     .ghost()
                     .compact()
                     .xsmall()
+                    .disabled(self.starting_new_session || self.switching_session)
                     .icon(IconName::FolderOpen)
                     .label(project_label)
                     .tooltip(workspace)
