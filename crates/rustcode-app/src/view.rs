@@ -267,6 +267,7 @@ pub struct AppView {
     pending_model_selection: Option<String>,
     controller_responded: bool,
     starting_new_session: bool,
+    switching_session: bool,
     clear_composer_on_render: bool,
     slash_selection: usize,
     slash_picker_dismissed: bool,
@@ -418,6 +419,7 @@ impl AppView {
             pending_model_selection: None,
             controller_responded,
             starting_new_session: false,
+            switching_session: false,
             clear_composer_on_render: false,
             slash_selection: 0,
             slash_picker_dismissed: false,
@@ -521,6 +523,7 @@ impl AppView {
                     self.reset_search_input_on_render = true;
                     self.focus_composer_on_render = true;
                     self.starting_new_session = false;
+                    self.switching_session = false;
                     self.draft_before_pending_edit = None;
                     let draft_key = self
                         .pending_draft_session
@@ -584,6 +587,7 @@ impl AppView {
                 self.status = None;
                 self.approval_in_flight = None;
                 self.pending_draft_session = None;
+                self.switching_session = false;
                 if self.starting_new_session {
                     self.starting_new_session = false;
                     self.pending_prompt = None;
@@ -833,6 +837,7 @@ impl AppView {
         self.navigation.open_chat();
         self.save_current_draft(cx);
         self.pending_draft_session = Some(session.id.clone());
+        self.switching_session = true;
         // Prefer the workspace recorded with this session. Older sessions
         // fall back to the selected/launch project and retain the picker path.
         let Some(workspace) = session
@@ -845,7 +850,10 @@ impl AppView {
         };
         let command = resume_session_command(session.id, workspace.clone());
         self.selected_project = workspace;
-        self.send_command(command, cx);
+        if !self.send_command(command, cx) {
+            self.switching_session = false;
+            self.pending_draft_session = None;
+        }
     }
 
     fn choose_project_and_resume(&mut self, session_id: String, cx: &mut Context<Self>) {
@@ -861,18 +869,28 @@ impl AppView {
                 Ok(Ok(Some(paths))) => {
                     if let Some(workspace) = paths.into_iter().next() {
                         this.selected_project = workspace.clone();
-                        this.send_command(
-                            resume_session_command(session_id.clone(), workspace),
-                            cx,
-                        );
+                        if !this
+                            .send_command(resume_session_command(session_id.clone(), workspace), cx)
+                        {
+                            this.switching_session = false;
+                            this.pending_draft_session = None;
+                        }
                     }
                 }
-                Ok(Ok(None)) => {}
+                Ok(Ok(None)) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
+                    cx.notify();
+                }
                 Ok(Err(error)) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
                     this.status = Some(format!("Folder picker error: {error}"));
                     cx.notify();
                 }
                 Err(error) => {
+                    this.switching_session = false;
+                    this.pending_draft_session = None;
                     this.status = Some(format!("Folder picker error: {error}"));
                     cx.notify();
                 }
@@ -884,6 +902,7 @@ impl AppView {
     fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.pending_prompt.is_some()
             || self.starting_new_session
+            || self.switching_session
             || !self.chat_state.composer_enabled()
         {
             return false;
@@ -2858,7 +2877,7 @@ impl Render for AppView {
             .chat_snapshot
             .as_ref()
             .is_none_or(|snapshot| snapshot.auto_approve);
-        let composer_enabled = self.chat_state.composer_enabled();
+        let composer_enabled = self.chat_state.composer_enabled() && !self.switching_session;
         let pending_question = self.chat_state.pending_question().is_some()
             || self
                 .navigation
@@ -2868,6 +2887,7 @@ impl Render for AppView {
         let send_enabled = composer_enabled
             && self.pending_prompt.is_none()
             && !self.starting_new_session
+            && !self.switching_session
             && (can_submit(&self.composer.read(cx).value())
                 || (!pending_question && !self.pending_images.is_empty()));
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
@@ -3201,6 +3221,15 @@ impl Render for AppView {
                         .text_xs()
                         .text_color(rgb(Palette::TEXT_SECONDARY))
                         .child(label),
+                )
+            })
+            .when(self.switching_session, |this| {
+                this.child(
+                    div()
+                        .px_1()
+                        .text_xs()
+                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                        .child("Switching chat…"),
                 )
             })
             .child(
@@ -3752,6 +3781,32 @@ mod tests {
                     .update(cx, |state, cx| state.set_value("one message", window, cx));
                 assert!(view.submit_composer(window, cx));
                 assert_eq!(view.composer.read(cx).value().as_ref(), "");
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn resume_transition_blocks_submission_from_the_previous_chat(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(interactive_snapshot(false, false)),
+                    },
+                    cx,
+                );
+                view.composer.update(cx, |state, cx| {
+                    state.set_value("belongs to previous chat", window, cx)
+                });
+                view.switching_session = true;
+
+                assert!(!view.submit_composer(window, cx));
+                assert_eq!(
+                    view.composer.read(cx).value().as_ref(),
+                    "belongs to previous chat"
+                );
             })
             .expect("view remains available");
     }
