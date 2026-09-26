@@ -17,8 +17,8 @@ use gpui_kit::{
 
 use crate::position_rail::{
     MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, MIN_MARKER_HIT_TARGET_HEIGHT,
-    RAIL_CONTENT_INSET, RAIL_SCROLLBAR_INSET, active_marker_with_count, marker_count_for_height,
-    marker_row_span, marker_to_row_with_count,
+    RAIL_LEFT_CONTENT_INSET, RAIL_SCROLLBAR_INSET, active_marker_with_count,
+    marker_count_for_height, marker_to_row_with_count,
 };
 
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
@@ -243,7 +243,7 @@ impl RenderOnce for TranscriptScroller {
             .padding
             .left
             .take()
-            .or_else(|| rail_visible.then_some(px(RAIL_CONTENT_INSET).into()));
+            .or_else(|| rail_visible.then_some(px(RAIL_LEFT_CONTENT_INSET).into()));
         let row_inset_right = list_style.padding.right.take();
         let list = list(list_state.clone(), move |index, window, cx| {
             div()
@@ -293,8 +293,9 @@ impl RenderOnce for TranscriptScroller {
                         active_marker_with_count(logical_top_row, row_count, markers);
                     let mut rail = div()
                         .id((rail_id.clone(), "position-rail"))
-                        // Left-aligned by flex order: the rail hugs the
-                        // transcript's left edge.
+                        // Compact cluster hugging the left edge: fixed-pitch
+                        // markers centered in the strip instead of spread
+                        // across the full height.
                         .w(px(MARKER_HIT_TARGET_WIDTH))
                         .h_full()
                         .min_h_0()
@@ -302,6 +303,8 @@ impl RenderOnce for TranscriptScroller {
                         .ml(px(4.))
                         .flex()
                         .flex_col()
+                        .justify_center()
+                        .gap_1()
                         .items_end();
                     for marker in 0..markers {
                         let active = current_marker == Some(marker);
@@ -326,10 +329,7 @@ impl RenderOnce for TranscriptScroller {
                             });
                         })
                         .w(px(MARKER_HIT_TARGET_WIDTH))
-                        .h_full()
-                        .max_h(px(MARKER_HIT_TARGET_HEIGHT))
-                        .min_h(px(MIN_MARKER_HIT_TARGET_HEIGHT))
-                        .flex_shrink_1()
+                        .h(px(MIN_MARKER_HIT_TARGET_HEIGHT))
                         .px_1()
                         .flex()
                         .justify_end()
@@ -341,16 +341,7 @@ impl RenderOnce for TranscriptScroller {
                                 .rounded_full()
                                 .bg(hsla(0., 0., 0.38 + 0.46 * emphasis, 0.5 + 0.5 * emphasis)),
                         );
-                        rail = rail.child(
-                            div()
-                                .w_full()
-                                .flex_grow(marker_row_span(marker, row_count, markers) as f32)
-                                .min_h_0()
-                                .flex()
-                                .justify_end()
-                                .items_center()
-                                .child(dash),
-                        );
+                        rail = rail.child(dash);
                     }
                     div()
                         .size_full()
