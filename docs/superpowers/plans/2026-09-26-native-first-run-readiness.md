@@ -42,7 +42,7 @@
 - [x] Run `cargo test -p rustcode-app view::tests::start_screen` and confirm the new tests fail because readiness policy is absent.
 - [x] Add the minimal readiness state/helper, initialize composer focus intent, and guard repeated new-session activation.
 - [x] Run the focused tests and confirm they pass.
-- [ ] Commit the focused state/focus change.
+- [x] Commit the focused state/focus change.
 
 ### Task 2: Make session snapshots authoritative
 
@@ -74,7 +74,7 @@
 - [x] Put role, label, and click ownership on each custom interactive element without changing layout.
 - [x] Run focused and package tests.
 - [x] Build the packaged app and confirm the controls appear as native buttons in macOS accessibility state.
-- [ ] Commit the accessibility change.
+- [x] Commit the accessibility change.
 
 ### Task 4: Integrate and verify
 
@@ -88,5 +88,5 @@
 - [x] Build and launch the disposable-config packaged app; type before clicking and confirm the draft appears.
 - [x] Inspect the initial and settings states; cover loading and empty-session behavior with focused tests.
 - [x] Run the Impeccable detector once against `crates/rustcode-app/src/view.rs` and fix only confirmed findings.
-- [ ] Run `cargo fmt --check`, `cargo check --tests`, `cargo test`, and `cargo test -p rustcode-app`.
+- [x] Run `cargo fmt --check`, `cargo check --tests`, `cargo test`, and `cargo test -p rustcode-app`.
 - [ ] Review the branch diff against issue #1417 and this spec, then push, open a PR to `main`, and merge it.
