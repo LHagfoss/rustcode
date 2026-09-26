@@ -99,6 +99,23 @@ pub fn active_marker_with_count(
     )
 }
 
+/// How many transcript rows a marker represents. Rail slots grow in
+/// proportion to this so dense stretches stay compact instead of spreading
+/// every marker evenly across the viewport. Zero-span markers collapse to
+/// their minimum hit-target height.
+pub fn marker_row_span(marker: usize, row_count: usize, markers: usize) -> usize {
+    if markers == 0 || marker >= markers || row_count == 0 {
+        return 0;
+    }
+    let start = marker_to_row_with_count(marker, row_count, markers).unwrap_or(0);
+    let end = if marker + 1 < markers {
+        marker_to_row_with_count(marker + 1, row_count, markers).unwrap_or(row_count)
+    } else {
+        row_count
+    };
+    end.saturating_sub(start)
+}
+
 fn scale_index(index: usize, source_count: usize, target_count: usize) -> usize {
     if source_count <= 1 || target_count <= 1 {
         return 0;
@@ -252,6 +269,27 @@ mod tests {
             Some(rows - 1)
         );
         assert_eq!(active_marker_with_count(50, rows, markers), Some(4));
+    }
+
+    #[test]
+    fn marker_row_spans_cover_every_row_exactly_once() {
+        // Spans tile [0, row_count) exactly for realistic counts, where the
+        // marker count never exceeds the row count.
+        for (rows, markers) in [(100, 6), (100, 14), (14, 14), (3, 2), (4, 4), (1, 1)] {
+            let spans: Vec<usize> = (0..markers)
+                .map(|marker| marker_row_span(marker, rows, markers))
+                .collect();
+            assert_eq!(spans.iter().sum::<usize>(), rows);
+        }
+        // Endpoint-preserving mapping: spans tile [0, row_count) exactly.
+        assert_eq!(
+            (0..4)
+                .map(|m| marker_row_span(m, 100, 4))
+                .collect::<Vec<_>>(),
+            vec![33, 33, 33, 1]
+        );
+        assert_eq!(marker_row_span(0, 0, 0), 0);
+        assert_eq!(marker_row_span(14, 100, 6), 0);
     }
 
     #[test]

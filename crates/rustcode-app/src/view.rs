@@ -333,8 +333,19 @@ impl AppView {
 
     pub fn focus_session_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_collapsed = false;
-        self.session_search_input
-            .update(cx, |state, cx| state.focus(window, cx));
+        let search_focused = self
+            .session_search_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        if search_focused {
+            // Toggle back to the composer.
+            self.composer
+                .update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.session_search_input
+                .update(cx, |state, cx| state.focus(window, cx));
+        }
         cx.notify();
     }
 
@@ -2981,6 +2992,14 @@ impl Render for AppView {
         let stop_visible = turn_active && !has_composer_draft;
         let send_visible = !stop_visible || pending_question;
         let slash_suggestions = crate::slash::suggestions(&self.composer.read(cx).value());
+        // The picker is a composer affordance: only show it while the normal
+        // chat input itself is focused.
+        let composer_focused = self
+            .composer
+            .read(cx)
+            .presentation()
+            .focus_handle()
+            .is_focused(window);
         self.slash_selection = self
             .slash_selection
             .min(slash_suggestions.len().saturating_sub(1));
@@ -3553,7 +3572,9 @@ impl Render for AppView {
                     .child(context_row)
                     .child(composer)
                     .when(
-                        !slash_suggestions.is_empty() && !self.slash_picker_dismissed,
+                        composer_focused
+                            && !slash_suggestions.is_empty()
+                            && !self.slash_picker_dismissed,
                         |this| {
                             this.child(
                                 div()
