@@ -13,7 +13,7 @@ use gpui_kit::{
         button::{Button, ButtonRounded, ButtonVariants},
         dialog::{AlertDialog, DialogButtonProps},
         input::{
-            Enter, Input, InputEvent, InputState, MoveDown, MoveUp, Position, Textarea,
+            Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp, Position, Textarea,
             TextareaState,
         },
         menu::{DropdownMenu, PopupMenuItem},
@@ -39,7 +39,8 @@ actions!(
         ToggleSidebar,
         OpenSettings,
         ToggleChatSearch,
-        CloseChatSearch
+        CloseChatSearch,
+        FocusSessionSearch
     ]
 );
 
@@ -327,6 +328,13 @@ impl AppNavigation {
 impl AppView {
     pub fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.navigation.open_settings();
+        cx.notify();
+    }
+
+    pub fn focus_session_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = false;
+        self.session_search_input
+            .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
 
@@ -3250,6 +3258,26 @@ impl Render for AppView {
                     .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
                         if this.move_slash_selection(true, cx) {
                             cx.stop_propagation();
+                        }
+                    }))
+                    .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                        if this.move_slash_selection(false, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .capture_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                        if this.move_slash_selection(true, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .capture_action(cx.listener(|this, _: &Escape, _, cx| {
+                        let draft = this.composer.read(cx).value().to_string();
+                        if !this.slash_picker_dismissed
+                            && !crate::slash::suggestions(&draft).is_empty()
+                        {
+                            this.slash_picker_dismissed = true;
+                            cx.stop_propagation();
+                            cx.notify();
                         }
                     }))
                     .child(

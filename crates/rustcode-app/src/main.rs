@@ -20,7 +20,9 @@ use gpui_kit::{
 };
 
 use backend::NativeBackend;
-use view::{AppView, CloseChatSearch, OpenSettings, ToggleChatSearch, ToggleSidebar};
+use view::{
+    AppView, CloseChatSearch, FocusSessionSearch, OpenSettings, ToggleChatSearch, ToggleSidebar,
+};
 
 gpui_kit::actions!([Quit, CloseWindow, MinimizeWindow]);
 
@@ -44,6 +46,7 @@ fn main() {
                 KeyBinding::new("cmd-b", ToggleSidebar, None),
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", ToggleChatSearch, None),
+                KeyBinding::new("cmd-k", FocusSessionSearch, None),
                 KeyBinding::new("escape", CloseChatSearch, None),
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-w", CloseWindow, None),
@@ -138,6 +141,17 @@ fn main() {
                         let close_view = view.downgrade();
                         cx.on_action(move |_: &CloseChatSearch, cx| {
                             let _ = close_view.update(cx, |view, cx| view.close_chat_search(cx));
+                        });
+                        let search_view = view.downgrade();
+                        cx.on_action(move |_: &FocusSessionSearch, cx| {
+                            let search_view = search_view.clone();
+                            cx.defer(move |cx| {
+                                let _ = cx.update_window(settings_window, |_, window, cx| {
+                                    let _ = search_view.update(cx, |view, cx| {
+                                        view.focus_session_search(window, cx);
+                                    });
+                                });
+                            });
                         });
                         let updates = view.update(cx, |view, _| view.take_updates());
                         let update_view = view.downgrade();

@@ -1,7 +1,7 @@
 pub const MAX_MARKERS: usize = 14;
 pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
-pub const MARKER_HIT_TARGET_HEIGHT: f32 = 20.;
-pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 16.;
+pub const MARKER_HIT_TARGET_HEIGHT: f32 = 16.;
+pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 12.;
 pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
 pub const RAIL_VERTICAL_INSET: f32 = 8.;
 pub const RAIL_CONTENT_GAP: f32 = 3.;
@@ -160,12 +160,13 @@ mod tests {
         assert_eq!(marker_count(14), 14);
         assert_eq!(marker_count(15), 14);
         assert_eq!(MARKER_HIT_TARGET_WIDTH, 30.);
-        assert_eq!(MARKER_HIT_TARGET_HEIGHT, 20.);
+        assert_eq!(MARKER_HIT_TARGET_HEIGHT, 16.);
+        assert_eq!(MIN_MARKER_HIT_TARGET_HEIGHT, 12.);
         assert_eq!(
             RAIL_CONTENT_INSET,
             MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP
         );
-        // Fourteen 20px targets plus the rail's 8px top/bottom inset fit in
+        // Fourteen 16px targets plus the rail's 8px top/bottom inset fit in
         // a compact 300px transcript viewport without vertical overlap.
         assert!(MAX_MARKERS as f32 * MARKER_HIT_TARGET_HEIGHT + 2. * RAIL_VERTICAL_INSET <= 300.);
     }
@@ -208,7 +209,7 @@ mod tests {
 
     #[test]
     fn marker_count_adapts_to_measured_height_and_keeps_minimum_target() {
-        for (height, expected_markers) in [(120., 6), (180., 10), (300., 14)] {
+        for (height, expected_markers) in [(120., 8), (180., 13), (300., 14)] {
             let count = marker_count_for_height(100, height);
             assert_eq!(count, expected_markers);
             let slot = marker_slot_height_for_count(height, count);
@@ -222,15 +223,15 @@ mod tests {
 
     #[test]
     fn hides_rail_until_measured_height_fits_two_minimum_targets() {
-        for height in [31., 32., 47.] {
+        for height in [31., 32., 39.] {
             assert_eq!(marker_count_for_height(100, height), 0, "height={height}");
             assert_eq!(active_marker_with_count(50, 100, 0), None);
             assert_eq!(marker_to_row_with_count(0, 100, 0), None);
         }
 
-        assert_eq!(marker_count_for_height(100, 48.), 2);
+        assert_eq!(marker_count_for_height(100, 40.), 2);
         assert_eq!(
-            marker_slot_height_for_count(48., marker_count_for_height(100, 48.)),
+            marker_slot_height_for_count(40., marker_count_for_height(100, 40.)),
             MIN_MARKER_HIT_TARGET_HEIGHT
         );
     }
@@ -239,7 +240,7 @@ mod tests {
     fn height_adaptive_mapping_preserves_endpoints_and_click_targets() {
         let rows = 100;
         let markers = marker_count_for_height(rows, 120.);
-        assert_eq!(markers, 6);
+        assert_eq!(markers, 8);
         assert_eq!(row_to_marker_with_count(0, rows, markers), Some(0));
         assert_eq!(
             row_to_marker_with_count(rows - 1, rows, markers),
@@ -250,7 +251,7 @@ mod tests {
             marker_to_row_with_count(markers - 1, rows, markers),
             Some(rows - 1)
         );
-        assert_eq!(active_marker_with_count(50, rows, markers), Some(3));
+        assert_eq!(active_marker_with_count(50, rows, markers), Some(4));
     }
 
     #[test]
