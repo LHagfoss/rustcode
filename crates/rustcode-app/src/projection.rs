@@ -122,10 +122,12 @@ pub fn can_submit(input: &str) -> bool {
     !input.trim().is_empty()
 }
 
+#[cfg(test)]
 pub fn stop_available(turn_active: bool) -> bool {
     turn_active
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComposerAction {
     Send,
@@ -170,6 +172,7 @@ impl ChatViewState {
     pub fn apply_update(&mut self, update: ControllerUpdate) {
         match update {
             ControllerUpdate::Snapshot(snapshot) => self.apply_snapshot(snapshot),
+            ControllerUpdate::PromptRestored(_) => {}
             ControllerUpdate::Turn(update) => self.apply_turn_update(update),
             ControllerUpdate::Error(error) => {
                 self.set_error(format!("Controller error: {error:?}"));
@@ -321,6 +324,7 @@ impl ChatViewState {
         self.turn_active
     }
 
+    #[cfg(test)]
     pub fn composer_action(&self) -> ComposerAction {
         if self.turn_active {
             ComposerAction::Stop
@@ -726,6 +730,8 @@ mod tests {
             transcript: Vec::new(),
             live_response: String::new(),
             queued_count: 0,
+            can_steer: false,
+            pending_prompts: Vec::new(),
             turn_active,
             auto_approve: true,
             pending_question: None,
