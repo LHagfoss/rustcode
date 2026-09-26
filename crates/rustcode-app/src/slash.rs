@@ -96,14 +96,14 @@ pub fn slash_interaction(
         return SlashInteraction::Ignore;
     }
 
-    match key {
-        "up" | "ArrowUp" | "arrowup" => {
+    match key.to_ascii_lowercase().as_str() {
+        "up" | "arrowup" => {
             SlashInteraction::Move(move_selection(selected, suggestions.len(), false))
         }
-        "down" | "ArrowDown" | "arrowdown" => {
+        "down" | "arrowdown" => {
             SlashInteraction::Move(move_selection(selected, suggestions.len(), true))
         }
-        "enter" | "Enter" => suggestions
+        "enter" => suggestions
             .get(selected)
             .map(|suggestion| {
                 let value = complete(suggestion.name);
@@ -113,15 +113,15 @@ pub fn slash_interaction(
                 }
             })
             .unwrap_or(SlashInteraction::Ignore),
-        "escape" | "Escape" => SlashInteraction::Dismiss,
+        "escape" => SlashInteraction::Dismiss,
         _ => SlashInteraction::Ignore,
     }
 }
 
-/// The textarea currently applies styles to the whole value, so only style a
-/// recognized command when no non-whitespace argument text has been entered.
+/// The textarea applies styles to the whole value, so keep the command styled
+/// (bold) while arguments are typed after a recognized command token.
 pub fn is_recognized_command(draft: &str) -> bool {
-    let token = draft.trim();
+    let token = draft.split_whitespace().next().unwrap_or_default();
     COMMANDS
         .iter()
         .any(|command| command.name.eq_ignore_ascii_case(token))
@@ -226,12 +226,38 @@ mod tests {
     }
 
     #[test]
-    fn recognized_command_styling_excludes_arguments_and_unknown_commands() {
+    fn recognized_command_styling_covers_arguments_but_not_unknown_commands() {
         assert!(is_recognized_command("/model"));
         assert!(is_recognized_command("/MODEL"));
         assert!(is_recognized_command("/model "));
-        assert!(!is_recognized_command("/model deepseek"));
+        assert!(is_recognized_command("/model deepseek"));
+        assert!(is_recognized_command("/help test"));
         assert!(!is_recognized_command("/not-a-command"));
+        assert!(!is_recognized_command("/not-a-command args"));
         assert!(!is_recognized_command("plain text"));
+        assert!(!is_recognized_command(""));
+    }
+
+    #[test]
+    fn key_names_match_case_insensitively() {
+        assert_eq!(
+            slash_interaction("/", 0, false, "Up"),
+            SlashInteraction::Move(6)
+        );
+        assert_eq!(
+            slash_interaction("/", 0, false, "DOWN"),
+            SlashInteraction::Move(1)
+        );
+        assert_eq!(
+            slash_interaction("/m", 0, false, "ENTER"),
+            SlashInteraction::Complete {
+                value: "/model ".to_owned(),
+                cursor_offset: 7,
+            }
+        );
+        assert_eq!(
+            slash_interaction("/m", 0, false, "ESCAPE"),
+            SlashInteraction::Dismiss
+        );
     }
 }
