@@ -218,6 +218,11 @@ jobs:
             - name: Build native app
               run: cargo build --locked -p rustcode-app
 
+            - name: Bundle macOS app
+              # Validates the release bundler (Icon Composer, Info.plist)
+              # on every PR so tagged builds do not discover it broken.
+              run: scripts/build-native-app.sh
+
     portability:
         name: ${{ matrix.name }} portability coverage
         needs: changes

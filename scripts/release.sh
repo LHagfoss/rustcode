@@ -1026,6 +1026,7 @@ phase_verify_release() {
     local expected_assets=(
         "rustcode-linux-x86_64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
+        "rustcode-macos-aarch64-app.tar.gz"
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )

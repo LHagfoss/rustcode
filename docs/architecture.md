@@ -31,7 +31,9 @@ The engine exposes two feature sets. `tui` (on by default) builds the
 terminal frontend — ratatui, crossterm, syntect, pulldown-cmark. Frontends
 that never draw a frame build with `default-features = false`; CI checks
 `cargo check --no-default-features` so that path cannot rot. Nothing under
-`rustcode/core` may reference ratatui or crossterm.
+`rustcode/core` may reference ratatui or crossterm. See `docs/frontends.md`
+for the frontend contract and `docs/mobile.md` for the remote-only mobile
+decision.
 
 ## Workspace crates
 
