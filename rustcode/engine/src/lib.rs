@@ -549,18 +549,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         match check {
-            crate::update::UpdateCheck::UpToDate { current, latest } => {
+            rustcode_core::update::UpdateCheck::UpToDate { current, latest } => {
                 println!(
                     "No new release. rustcode v{} is up to date (latest: v{}).",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
+                    rustcode_core::update::format_version(current),
+                    rustcode_core::update::format_version(latest)
                 );
             }
-            crate::update::UpdateCheck::Available { current, latest } => {
+            rustcode_core::update::UpdateCheck::Available { current, latest } => {
                 println!(
                     "Found new release: v{} → v{}, updating now...",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
+                    rustcode_core::update::format_version(current),
+                    rustcode_core::update::format_version(latest)
                 );
                 match crate::update::run_update(&client, latest).await {
                     Ok(()) => {
@@ -687,7 +687,7 @@ async fn run_interactive(
         .build()?;
     {
         let mut state = app_state.lock().await;
-        state.update_check = crate::update::UpdateState::Checking;
+        state.update_check = rustcode_core::update::UpdateState::Checking;
     }
     let update_state = Arc::clone(&app_state);
     let update_client = client.clone();
@@ -695,17 +695,17 @@ async fn run_interactive(
         let result = crate::update::check_for_update(&update_client).await;
         let mut state = update_state.lock().await;
         state.update_check = match result {
-            Ok(crate::update::UpdateCheck::UpToDate { latest, .. }) => {
-                crate::update::UpdateState::UpToDate(latest)
+            Ok(rustcode_core::update::UpdateCheck::UpToDate { latest, .. }) => {
+                rustcode_core::update::UpdateState::UpToDate(latest)
             }
-            Ok(crate::update::UpdateCheck::Available { latest, .. }) => {
+            Ok(rustcode_core::update::UpdateCheck::Available { latest, .. }) => {
                 if state.dismissed_update_version != Some(latest) {
                     state.show_update_prompt = true;
                     state.update_prompt_index = 0;
                 }
-                crate::update::UpdateState::Available(latest)
+                rustcode_core::update::UpdateState::Available(latest)
             }
-            Err(_) => crate::update::UpdateState::Failed,
+            Err(_) => rustcode_core::update::UpdateState::Failed,
         };
         state.request_redraw();
     });

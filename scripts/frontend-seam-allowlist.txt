@@ -45,8 +45,7 @@ crate::config
 crate::config::save_entire_config
 crate::config::get_config_dir
 # Leaf utilities (likely permanent; revisit last):
-crate::update
-crate::update::format_version
+# current_version stays: env!("CARGO_PKG_VERSION") must resolve to the
+# shipping binary, not the core library.
 crate::update::current_version
-crate::update::is_brew_install
 crate::skills::discover_skills

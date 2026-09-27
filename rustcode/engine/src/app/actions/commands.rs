@@ -676,25 +676,25 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
         let check = crate::update::check_for_update(&client_clone).await;
         let mut s = state_clone.lock().await;
         match check {
-            Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
-                s.update_check = crate::update::UpdateState::UpToDate(latest);
+            Ok(rustcode_core::update::UpdateCheck::UpToDate { current, latest }) => {
+                s.update_check = rustcode_core::update::UpdateState::UpToDate(latest);
                 s.set_notice(format!(
                     "✨ RustCode v{} is up to date (latest: v{}).",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
+                    rustcode_core::update::format_version(current),
+                    rustcode_core::update::format_version(latest)
                 ));
             }
-            Ok(crate::update::UpdateCheck::Available { current, latest }) => {
-                s.update_check = crate::update::UpdateState::Available(latest);
+            Ok(rustcode_core::update::UpdateCheck::Available { current, latest }) => {
+                s.update_check = rustcode_core::update::UpdateState::Available(latest);
                 s.set_notice(format!(
                     "Found new release: v{} → v{}, updating...",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
+                    rustcode_core::update::format_version(current),
+                    rustcode_core::update::format_version(latest)
                 ));
                 s.update_requested = true;
             }
             Err(error) => {
-                s.update_check = crate::update::UpdateState::Failed;
+                s.update_check = rustcode_core::update::UpdateState::Failed;
                 s.set_warning_notice(format!("Update check failed: {error}"));
             }
         }

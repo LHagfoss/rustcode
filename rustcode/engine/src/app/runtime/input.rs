@@ -53,7 +53,7 @@ pub(super) async fn handle_app_event(
             let update_version = {
                 let mut state = app_state.lock().await;
                 let latest = match state.update_check {
-                    crate::update::UpdateState::Available(latest) => Some(latest),
+                    rustcode_core::update::UpdateState::Available(latest) => Some(latest),
                     _ => None,
                 };
                 latest.filter(|_| apply_update_decision(&mut state, decision))
@@ -1214,7 +1214,8 @@ pub(super) async fn handle_app_event(
                                         crate::app::actions::trigger_sync(&app_state, None, None);
                                     }
                                     "/update" => {
-                                        s.update_check = crate::update::UpdateState::Checking;
+                                        s.update_check =
+                                            rustcode_core::update::UpdateState::Checking;
                                         s.set_notice("🔍 Checking for a RustCode update...");
                                         crate::app::actions::trigger_update(&app_state, &client);
                                     }

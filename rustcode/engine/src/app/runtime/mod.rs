@@ -365,7 +365,7 @@ mod tests {
     fn update_prompt_decisions_close_prompt_and_remember_version() {
         let mut state = AppState::new();
         state.show_update_prompt = true;
-        state.update_check = crate::update::UpdateState::Available((0, 30, 0));
+        state.update_check = rustcode_core::update::UpdateState::Available((0, 30, 0));
 
         assert!(!apply_update_decision(&mut state, UpdateDecision::Skip));
         assert!(!state.show_update_prompt);
