@@ -61,7 +61,7 @@ pub(crate) fn desired_height_snapshot(
         crate::app::suggestion::filtered_commands(&state.input_buffer())
     };
     let (_, at_query) =
-        crate::app::get_at_word_query(&state.input_buffer(), state.cursor_position())
+        rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
             .unwrap_or((0, String::new()));
     let at_files = if !completion_dismissed
         && (!at_query.is_empty()
@@ -169,7 +169,7 @@ pub(crate) fn render_with_transcript_snapshot(
     let queue_block_height = queue_preview_height(state);
 
     let (_, at_query) =
-        crate::app::get_at_word_query(&state.input_buffer(), state.cursor_position())
+        rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
             .unwrap_or((0, String::new()));
     let at_files = if !completion_dismissed
         && (!at_query.is_empty()

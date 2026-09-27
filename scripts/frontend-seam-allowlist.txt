@@ -18,12 +18,11 @@ crate::controller
 # Shared state access (route through controller snapshots):
 crate::app
 crate::app::state
+# Live activity tracking (classify_*, ActivityKind) moves with the tui crate.
 crate::app::activity
 crate::app::actions
 crate::app::suggestion
-crate::app::status
 crate::app::get_completion_len
-crate::app::get_at_word_query
 crate::app::list_project_file_paths
 crate::app::sanitize_recap_content
 crate::app::build_help_text
