@@ -93,7 +93,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
 }
 
 pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
-    let clean_text = crate::paste::expand(text);
+    let clean_text = rustcode_core::paste::expand(text);
 
     if !clean_text.contains("![image](file://") {
         return serde_json::Value::String(clean_text);

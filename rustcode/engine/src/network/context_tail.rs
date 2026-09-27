@@ -218,7 +218,7 @@ fn build_dynamic_context_tail_internal(
 
 fn compact_objective(text: &str) -> String {
     const MAX_OBJECTIVE_CHARS: usize = 180;
-    let compacted = crate::paste::compact_for_context(text)
+    let compacted = rustcode_core::paste::compact_for_context(text)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
