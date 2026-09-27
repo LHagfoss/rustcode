@@ -155,6 +155,15 @@ jobs:
               # that path compiling so the rendering stack stays out of the core.
               run: cargo check --locked --no-default-features
 
+            - name: Check the TUI stays behind the frontend seam
+              # The render layer may only reach core through
+              # rustcode::controller, plus the convergence allow-list in
+              # scripts/frontend-seam-allowlist.txt (issue #1431).
+              run: bash scripts/check-frontend-seam.sh
+
+            - name: Test the frontend-seam guard
+              run: bash scripts/test-check-frontend-seam.sh
+
     macos-seatbelt:
         needs: changes
         if: needs.changes.outputs.code == 'true'
