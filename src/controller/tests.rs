@@ -1347,6 +1347,39 @@ async fn worker_starts_without_a_session_and_rejects_submit_until_selection() {
 }
 
 #[tokio::test]
+async fn toggling_ask_mode_without_a_session_keeps_models_and_sessions() {
+    let runtime = tokio::runtime::Handle::current();
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(&runtime, workspace.path().into());
+
+    let _initial = updates.recv().await.expect("initial snapshot");
+
+    handle
+        .send(Command::ListSessions)
+        .expect("command channel is open");
+    let listed = updates.recv().await.expect("session listing");
+    let ControllerUpdate::Snapshot(listed) = listed.update else {
+        panic!("expected session listing snapshot");
+    };
+    assert!(listed.workspace.is_some());
+
+    handle
+        .send(Command::SetAutoApprove(false))
+        .expect("command channel is open");
+    let toggled = updates.recv().await.expect("ask mode snapshot");
+    let ControllerUpdate::Snapshot(toggled) = toggled.update else {
+        panic!("expected ask mode snapshot");
+    };
+
+    assert!(!toggled.auto_approve);
+    assert!(toggled.session_id.is_none());
+    assert_eq!(toggled.workspace, listed.workspace);
+    assert_eq!(toggled.models, listed.models);
+    assert_eq!(toggled.sessions, listed.sessions);
+    assert_eq!(toggled.selected_model, listed.selected_model);
+}
+
+#[tokio::test]
 async fn starting_workspace_and_submitting_forwards_ordered_turn_and_persists_history() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
