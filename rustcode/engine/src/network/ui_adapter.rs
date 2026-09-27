@@ -3,7 +3,7 @@ use super::events::{AgentEvent, FinishReason};
 use super::events::{ToolResult, ToolResultMetadata};
 use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
-use crate::tools::resolve_tool_calls;
+use rustcode_tool_protocol::resolve_tool_calls;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
@@ -651,7 +651,7 @@ mod tests {
     use super::{AgentUiEvent, AgentUiEventSender, map_agent_event, publish_snapshot};
     use crate::app::{AppState, ChatMessage};
     use crate::network::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
-    use crate::tools::ToolCall;
+    use rustcode_tool_protocol::ToolCall;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;

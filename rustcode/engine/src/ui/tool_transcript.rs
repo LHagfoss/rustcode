@@ -768,7 +768,8 @@ pub(super) fn tool_call_arguments(
         if assistant.role != "assistant" {
             continue;
         }
-        let calls = crate::tools::resolve_tool_calls(assistant, state.active_tool_protocol());
+        let calls =
+            rustcode_tool_protocol::resolve_tool_calls(assistant, state.active_tool_protocol());
         if !calls.iter().any(|call| call.name == tool_name) {
             continue;
         }
