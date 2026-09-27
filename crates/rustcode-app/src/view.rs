@@ -6,7 +6,7 @@ use std::{
 
 use gpui_kit::{
     Anchor, Animation, AnimationExt, Context, FocusHandle, Focusable, KeyDownEvent,
-    PathPromptOptions, Render, Window, actions,
+    PathPromptOptions, Render, TestSupportExt, Window, actions,
     component::{
         Disableable, Icon, IconName, Root, Selectable, Sizable, StyledExt, TITLE_BAR_HEIGHT, Theme,
         TitleBar,
@@ -836,6 +836,7 @@ impl AppView {
         div()
             .w_full()
             .max_w(px(760.))
+            .mx_auto()
             .flex()
             .items_center()
             .gap_2()
@@ -1478,6 +1479,13 @@ impl AppView {
         // Row gaps come from the row style (the default pb_8 is far too airy).
         .with_position_rail(rows.len())
         .with_content_style(gpui_kit::StyleRefinement::default().px_0().pb_1())
+        // The scroller spans the pane now (the rail lives in its leading edge),
+        // so the chat width moves onto the column inside it.
+        .with_column_style(
+            gpui_kit::StyleRefinement::default()
+                .max_w(px(760.))
+                .mx_auto(),
+        )
         .with_list_style(gpui_kit::StyleRefinement::default().py_2())
         .with_row_style(gpui_kit::StyleRefinement::default().pb_5())
         .size_full()
@@ -1889,6 +1897,7 @@ impl AppView {
                     .child(
                         Input::new(&self.session_search_input)
                             .id("session-search-input")
+                            .appearance(false)
                             .bordered(false)
                             .w_full(),
                     ),
@@ -2176,7 +2185,6 @@ impl AppView {
         let detail_view = cx.entity().downgrade();
         let action_list = div()
             .max_h(px(240.))
-            .min_h(px(0.))
             .overflow_scrollbar()
             .flex()
             .flex_col()
@@ -2235,7 +2243,6 @@ impl AppView {
                         this.child(
                             div()
                                 .max_h(px(180.))
-                                .min_h(px(0.))
                                 .overflow_scrollbar()
                                 .rounded_lg()
                                 .bg(rgb(Palette::APP_BACKGROUND))
@@ -3150,7 +3157,6 @@ fn render_tool_detail(
                     .ml_6()
                     .max_h(px(180.))
                     .overflow_scrollbar()
-                    .min_h(px(0.))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(Palette::BORDER_SUBTLE))
@@ -3441,6 +3447,8 @@ impl Render for AppView {
             });
         let paste_view = cx.entity().downgrade();
         let composer = div()
+            .id("composer")
+            .test_support()
             .w_full()
             .max_w(px(760.))
             .flex()
@@ -3911,7 +3919,6 @@ impl Render for AppView {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(760.))
                     .flex_1()
                     .min_h_0()
                     .flex()
@@ -4106,7 +4113,7 @@ mod tests {
     use std::path::PathBuf;
 
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{AppContext as _, TestAppContext, px};
     use rustcode::controller::{
         ControllerError, ControllerEvent, ControllerSnapshot, PendingPrompt, PendingPromptKind,
         PromptSubmitMode, SessionChoice, TranscriptItem,
@@ -4304,6 +4311,233 @@ mod tests {
             assert_eq!(
                 window.find("assistant-0-0-0-code-copy-0").label(),
                 Some("Copy code block")
+            );
+        })
+        .expect("window remains open");
+    }
+
+    fn transcript_with_completed_tool() -> Vec<TranscriptItem> {
+        // Long enough to prove the expanded panel stays capped rather than
+        // growing with the output.
+        let output = (0..60)
+            .map(|i| format!("{i:04x} line {i} of a very long command output"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool_content = format!(
+            "run_command: [command status: completed=true]\nexit code: 0\nstdout:\n```sh\ngit log --oneline -15\n```\n{output}"
+        );
+        vec![
+            TranscriptItem {
+                role: "user".to_owned(),
+                content: "Check the log".to_owned(),
+                tool_name: None,
+                tool_detail: None,
+                tool_success: None,
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            },
+            TranscriptItem {
+                role: "assistant".to_owned(),
+                content: "Running git log.".to_owned(),
+                tool_name: None,
+                tool_detail: None,
+                tool_success: None,
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            },
+            TranscriptItem {
+                role: "tool".to_owned(),
+                content: tool_content,
+                tool_name: Some("run_command".to_owned()),
+                tool_detail: Some("git log --oneline -15".to_owned()),
+                tool_success: Some(true),
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            },
+            TranscriptItem {
+                role: "user".to_owned(),
+                content: "Thanks".to_owned(),
+                tool_name: None,
+                tool_detail: None,
+                tool_success: None,
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            },
+            TranscriptItem {
+                role: "assistant".to_owned(),
+                content: "Done.".to_owned(),
+                tool_name: None,
+                tool_detail: None,
+                tool_success: None,
+                tool_pending: false,
+                response_time_ms: None,
+                thought_time_ms: None,
+            },
+        ]
+    }
+
+    #[gpui_kit::test]
+    fn expanded_tool_output_is_not_clipped_out_of_its_panel(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let mut snapshot = interactive_snapshot(false, false);
+                snapshot.transcript = transcript_with_completed_tool();
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+            })
+            .expect("view remains available");
+
+        // Pin the list to the top so row positions only move with row heights.
+        let collapsed_below = {
+            handle
+                .update(cx, |view, _, cx| {
+                    view.messages
+                        .update(cx, |state, cx| state.scroll_to_item(0, cx));
+                })
+                .expect("view remains available");
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.render_frame(cx);
+                window.simulate_next_frame(cx);
+                window.find("copy-user-message-2").bounds().origin.y
+            })
+            .expect("window remains open")
+        };
+
+        handle
+            .update(cx, |view, _, cx| {
+                // Tools only render once their activity segment is open, and
+                // this tool sits in the turn's second segment.
+                view.expanded_thoughts.insert((1, 1));
+                view.expanded_tools.insert((1, 0));
+                view.messages
+                    .update(cx, |state, cx| state.scroll_to_item(0, cx));
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+
+            let output = window.find("tool-output-text-1-0-code-copy-0");
+            assert!(
+                output.visible(),
+                "tool output is clipped out of its panel: {:?}",
+                output.bounds()
+            );
+
+            // Expanding must add the full capped card (~180px) rather than a
+            // collapsed sliver, and must not grow past the max height.
+            let expanded_below = window.find("copy-user-message-2").bounds().origin.y;
+            let added = expanded_below - collapsed_below;
+            assert!(
+                added >= px(150.) && added <= px(320.),
+                "expanded tool card grew the turn by {added:?}, expected a capped ~180px panel"
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn expanded_approval_details_show_their_output(cx: &mut TestAppContext) {
+        use rustcode::controller::{ApprovalAction, ApprovalBatchPrompt};
+
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let mut snapshot = interactive_snapshot(false, false);
+                snapshot.pending_approval_batch = Some(
+                    ApprovalBatchPrompt::new(vec![ApprovalAction::new(
+                        "req-1".to_owned(),
+                        "run_command".to_owned(),
+                        "Run a command".to_owned(),
+                        "Writes to the workspace".to_owned(),
+                        "cat notes.txt".to_owned(),
+                    )])
+                    .with_batch_id("batch-1".to_owned()),
+                );
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+                view.expanded_approval_actions
+                    .insert(("batch-1".to_owned(), 0));
+            })
+            .expect("view remains available");
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+            let details = window.find("approval-full-details-0-code-copy-0");
+            assert!(
+                details.visible(),
+                "approval details are clipped out of their panel: {:?}",
+                details.bounds()
+            );
+            assert!(
+                details.bounds().origin.y < window.find("composer").bounds().origin.y,
+                "approval details must stay inside the card above the composer, got {:?}",
+                details.bounds()
+            );
+        })
+        .expect("window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn position_rail_sits_outside_the_centered_chat_column(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let mut snapshot = interactive_snapshot(false, false);
+                snapshot.transcript = transcript_with_completed_tool();
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+            })
+            .expect("view remains available");
+
+        cx.simulate_window_resize(handle.into(), gpui_kit::size(px(1440.), px(900.)));
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.simulate_next_frame(cx);
+
+            let rail = window
+                .find((
+                    gpui_kit::ElementId::from("conversation"),
+                    "position-marker-button-0",
+                ))
+                .bounds();
+            let column = window
+                .find((gpui_kit::ElementId::from("conversation"), "viewport"))
+                .bounds();
+            let composer = window.find("composer").bounds();
+
+            assert_eq!(column.size.width, px(760.));
+            assert_eq!(
+                column.origin.x, composer.origin.x,
+                "message column and composer must share the same left edge"
+            );
+            assert!(
+                column.origin.x - (rail.origin.x + rail.size.width) >= px(8.),
+                "rail must sit outside the chat column, rail {:?} column {:?}",
+                rail,
+                column
             );
         })
         .expect("window remains open");

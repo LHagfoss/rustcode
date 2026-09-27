@@ -291,7 +291,9 @@ async fn controller_worker(
                 } else {
                     let _ = updates.send(ControllerEvent {
                         generation,
-                        update: ControllerUpdate::Snapshot(empty_snapshot(generation, enabled)),
+                        update: ControllerUpdate::Snapshot(sessionless_snapshot(
+                            generation, auto_approve, &launch_dir,
+                        )),
                     });
                 }
             }
@@ -374,13 +376,7 @@ async fn controller_worker(
                         update: ControllerUpdate::Snapshot(snapshot),
                     });
                 } else {
-                    let mut state = AppState::new_with_workspace_session(&launch_dir, Some(""));
-                    state.auto_confirm = auto_approve;
-                    state.workspace_root = Some(launch_dir.clone());
-                    state.task_working_directory = Some(launch_dir.clone());
-                    state.history_picker_sessions = crate::app::actions::build_session_list(&state);
-                    let mut snapshot = ControllerSnapshot::from_state(generation, &state);
-                    snapshot.session_id = None;
+                    let snapshot = sessionless_snapshot(generation, auto_approve, &launch_dir);
                     let _ = updates.send(ControllerEvent {
                         generation,
                         update: ControllerUpdate::Snapshot(snapshot),
@@ -735,6 +731,24 @@ fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
         pending_approval: None,
         pending_approval_batch: None,
     }
+}
+
+/// Snapshot for the no-active-session path: keeps the configured models and
+/// the saved sessions so a background reply (toggling ask mode, listing
+/// chats) never wipes state the view already shows.
+fn sessionless_snapshot(
+    generation: u64,
+    auto_approve: bool,
+    launch_dir: &std::path::Path,
+) -> ControllerSnapshot {
+    let mut state = AppState::new_with_workspace_session(launch_dir, Some(""));
+    state.auto_confirm = auto_approve;
+    state.workspace_root = Some(launch_dir.to_path_buf());
+    state.task_working_directory = Some(launch_dir.to_path_buf());
+    state.history_picker_sessions = crate::app::actions::build_session_list(&state);
+    let mut snapshot = ControllerSnapshot::from_state(generation, &state);
+    snapshot.session_id = None;
+    snapshot
 }
 
 async fn send_snapshot(
