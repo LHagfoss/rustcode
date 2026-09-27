@@ -55,7 +55,7 @@ pub(crate) struct WorkspaceLocationCache {
 }
 
 impl WorkspaceLocationCache {
-    pub(crate) fn new(cwd: &Path, now: Instant) -> Self {
+    pub fn new(cwd: &Path, now: Instant) -> Self {
         Self {
             location: WorkspaceLocation::detect(cwd),
             next_refresh_at: now + LOCATION_REFRESH_INTERVAL,

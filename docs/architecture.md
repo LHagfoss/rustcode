@@ -17,23 +17,22 @@ rustcode/
 │   ├── rustcode-lifecycle/    turn lifecycle and stop-state types
 │   ├── rustcode-tasks/        background task state and event delivery
 │   └── rustcode-loop-detect/  semantic loop and progress guards
-├── engine/     Sources of the root `rustcode` crate: agent loop, tools,
-│               config, session state, ACP, daemon, and the terminal
-│               frontend (behind the `tui` feature).
+├── engine/     Sources of the root `rustcode` crate (library only): agent
+│               loop, tools, config, session state, ACP, daemon, controller.
+├── tui/        `rustcode-tui`, the terminal frontend. Owns the `rustcode`
+│               binary (TUI + headless/ACP/daemon CLI modes); depends on the
+│               root library, never the reverse.
 └── desktop/    `rustcode-app`, the native GPUI shell.
 ```
 
 The root `Cargo.toml` is both the workspace manifest and the `rustcode`
 package manifest; the engine lives in `rustcode/engine/src` and is declared
-with `[lib] path` / `[[bin]] path`.
-
-The engine exposes two feature sets. `tui` (on by default) builds the
-terminal frontend — ratatui, crossterm, syntect, pulldown-cmark. Frontends
-that never draw a frame build with `default-features = false`; CI checks
-`cargo check --no-default-features` so that path cannot rot. Nothing under
-`rustcode/core` may reference ratatui or crossterm. See `docs/frontends.md`
-for the frontend contract and `docs/mobile.md` for the remote-only mobile
-decision.
+with `[lib] path`. There are no Cargo features left: the terminal stack
+(ratatui, crossterm, syntect, pulldown-cmark) lives only in `rustcode/tui`.
+Nothing under `rustcode/core`, `rustcode/engine`, or `rustcode/desktop`
+may reference it; `cargo tree -p rustcode-app -i ratatui` must match
+nothing. See `docs/frontends.md` for the frontend contract and
+`docs/mobile.md` for the remote-only mobile decision.
 
 ## Workspace crates
 

@@ -79,7 +79,9 @@ jobs:
                   # ThinLTO makes the Windows MSVC release link disproportionately slow.
                   # Keep the optimized release profile, but skip LTO for this platform.
                   CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
-              run: cargo build --locked --release --target ${{ matrix.target }}
+              # The `rustcode` binary is built by the rustcode-tui package;
+              # the root package is a library since the TUI extraction.
+              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-tui
 
             - name: Show compiler cache stats
               if: always()

@@ -136,7 +136,7 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
 /// This is intentionally request-scoped: a child request must not infer its
 /// capabilities from the parent session's mutable delegation state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ToolSchemaPolicy {
+pub struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
     pub(crate) include_session_title_tool: bool,
@@ -366,7 +366,7 @@ fn mcp_display_name_from_canonical(name: &str) -> Option<String> {
 /// Resolve an MCP provider-facing name to the server-qualified label shown in
 /// the transcript. Unique raw names need the live registry to recover their
 /// server; canonical names remain displayable after a server disconnects.
-pub(crate) fn mcp_tool_display_name(name: &str) -> Option<String> {
+pub fn mcp_tool_display_name(name: &str) -> Option<String> {
     if let Ok(registry) = crate::mcp::get_mcp_registry().lock() {
         let mut clients = registry.values().cloned().collect::<Vec<_>>();
         clients.sort_by(|a, b| a.name.cmp(&b.name));

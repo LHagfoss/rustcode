@@ -3,7 +3,7 @@ use crate::tools::{self, ToolCall};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub(crate) trait TurnPolicy: Send + Sync {
+pub trait TurnPolicy: Send + Sync {
     fn should_approve(
         &self,
         state: &Arc<Mutex<AppState>>,
@@ -508,7 +508,7 @@ mod tests {
 
         let mut cancel_token = tokio_util::sync::CancellationToken::new();
         assert!(
-            crate::app::runtime::apply_approval_decision_for_batch(
+            crate::controller::apply_approval_decision_for_batch(
                 &state,
                 &mut cancel_token,
                 &stable_batch_id,

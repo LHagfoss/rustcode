@@ -1,9 +1,9 @@
 use super::RenderSnapshot;
 use super::keymap::{KeyAction, KeyMap};
-use crate::app::{AppState, ChatMessage};
 use crate::inline_terminal::Frame;
 use crossterm::event::KeyEvent;
 use ratatui::layout::{Margin, Rect};
+use rustcode::app::{AppState, ChatMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ComposerAction {
@@ -33,7 +33,7 @@ impl Composer {
                 if c == '?' && state.input_buffer.is_empty() {
                     state
                         .history
-                        .push(ChatMessage::new("system", crate::app::build_help_text()));
+                        .push(ChatMessage::new("system", rustcode::app::build_help_text()));
                     state.request_redraw();
                 } else {
                     state.insert_char(c);
@@ -105,15 +105,15 @@ impl Composer {
             KeyAction::Complete => {
                 if state.can_accept_steer()
                     && !state.input_buffer.trim().is_empty()
-                    && crate::app::get_completion_len(&state.input_buffer, state.cursor_position)
+                    && rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position)
                         == 0
                 {
                     state.draft_submit_mode = match state.draft_submit_mode {
-                        crate::app::state::DraftSubmitMode::Steer => {
-                            crate::app::state::DraftSubmitMode::Queue
+                        rustcode::app::state::DraftSubmitMode::Steer => {
+                            rustcode::app::state::DraftSubmitMode::Queue
                         }
-                        crate::app::state::DraftSubmitMode::Queue => {
-                            crate::app::state::DraftSubmitMode::Steer
+                        rustcode::app::state::DraftSubmitMode::Queue => {
+                            rustcode::app::state::DraftSubmitMode::Steer
                         }
                     };
                     state.request_redraw();
@@ -164,7 +164,7 @@ impl Composer {
 
     pub(crate) fn recall_previous(&self, state: &mut AppState) {
         let completion_len =
-            crate::app::get_completion_len(&state.input_buffer, state.cursor_position);
+            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
         if let Some(current) = state.active_suggestion_index
             && completion_len > 0
         {
@@ -188,7 +188,7 @@ impl Composer {
 
     pub(crate) fn recall_next(&self, state: &mut AppState) {
         let completion_len =
-            crate::app::get_completion_len(&state.input_buffer, state.cursor_position);
+            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
         if let Some(current) = state.active_suggestion_index
             && completion_len > 0
         {
@@ -218,7 +218,7 @@ impl Composer {
 
     fn cycle_suggestion(&self, state: &mut AppState, next: bool) -> bool {
         let completion_len =
-            crate::app::get_completion_len(&state.input_buffer, state.cursor_position);
+            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
         if state.active_suggestion_index.is_some() && completion_len > 0 {
             let current = state.active_suggestion_index.unwrap_or(0);
             state.active_suggestion_index = Some(if next {
@@ -244,32 +244,32 @@ impl Composer {
             rustcode_core::input::get_at_word_query(&state.input_buffer, state.cursor_position)
                 .is_some();
         if state.active_suggestion_index.is_some() || has_at {
-            crate::app::apply_autocomplete(state);
-        } else if crate::app::suggestion::command_token(&state.input_buffer).is_some() {
+            rustcode::app::apply_autocomplete(state);
+        } else if rustcode::app::suggestion::command_token(&state.input_buffer).is_some() {
             state.cycle_suggestion();
         }
     }
 
     fn toggle_agent_mode(&self, state: &mut AppState) {
         state.agent_mode = match state.agent_mode {
-            crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
-            crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
+            rustcode::config::AgentMode::Build => rustcode::config::AgentMode::Plan,
+            rustcode::config::AgentMode::Plan => rustcode::config::AgentMode::Build,
         };
         state.config.agent_mode = state.agent_mode;
-        crate::config::save_entire_config(&state.config);
+        rustcode::config::save_entire_config(&state.config);
         let notice = match state.agent_mode {
-            crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
-            crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
+            rustcode::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
+            rustcode::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
         };
-        crate::app::actions::push_ephemeral_status(state, notice.to_string());
+        rustcode::app::actions::push_ephemeral_status(state, notice.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Composer, ComposerAction};
-    use crate::app::AppState;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rustcode::app::AppState;
 
     #[test]
     fn unicode_and_multiline_editing_stay_on_character_boundaries() {
@@ -332,7 +332,7 @@ mod tests {
     fn shift_tab_toggles_agent_mode_without_changing_auto_confirm() {
         let composer = Composer::default();
         let mut state = AppState::new();
-        state.agent_mode = crate::config::AgentMode::Build;
+        state.agent_mode = rustcode::config::AgentMode::Build;
         state.auto_confirm = false;
         state.input_buffer = "cargo test".to_owned();
         state.cursor_position = state.input_buffer.chars().count();
@@ -345,11 +345,11 @@ mod tests {
             ),
             ComposerAction::Handled
         );
-        assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
+        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Plan);
         assert!(!state.auto_confirm);
 
         composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
-        assert_eq!(state.agent_mode, crate::config::AgentMode::Build);
+        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Build);
         assert!(!state.auto_confirm);
     }
 
@@ -357,7 +357,7 @@ mod tests {
     fn plain_tab_does_not_toggle_agent_mode_without_completion() {
         let composer = Composer::default();
         let mut state = AppState::new();
-        state.agent_mode = crate::config::AgentMode::Plan;
+        state.agent_mode = rustcode::config::AgentMode::Plan;
         state.input_buffer = "/context".to_owned();
         state.cursor_position = state.input_buffer.chars().count();
         state.active_suggestion_index = Some(0);
@@ -366,12 +366,12 @@ mod tests {
             composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),),
             ComposerAction::Handled
         );
-        assert_eq!(state.agent_mode, crate::config::AgentMode::Plan);
+        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Plan);
     }
 
     #[test]
     fn tab_toggles_draft_mode_without_an_available_completion() {
-        use crate::app::{AppStatus, state::DraftSubmitMode};
+        use rustcode::app::{AppStatus, state::DraftSubmitMode};
 
         let composer = Composer::default();
         let mut state = AppState::new();
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn tab_does_not_toggle_draft_mode_for_empty_or_unsteerable_drafts() {
-        use crate::app::{AppStatus, state::DraftSubmitMode};
+        use rustcode::app::{AppStatus, state::DraftSubmitMode};
 
         let composer = Composer::default();
         let mut empty = AppState::new();
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn tab_keeps_completion_acceptance_ahead_of_draft_mode_toggle() {
-        use crate::app::{AppStatus, state::DraftSubmitMode};
+        use rustcode::app::{AppStatus, state::DraftSubmitMode};
 
         let composer = Composer::default();
         let mut state = AppState::new();
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn tab_keeps_command_completion_ahead_of_draft_mode_toggle() {
-        use crate::app::{AppStatus, state::DraftSubmitMode};
+        use rustcode::app::{AppStatus, state::DraftSubmitMode};
 
         let composer = Composer::default();
         let mut state = AppState::new();

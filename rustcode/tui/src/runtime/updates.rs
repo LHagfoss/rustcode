@@ -1,5 +1,5 @@
-use crate::app::{AppState, UpdateDecision};
 use crate::ui::TerminalRuntime;
+use rustcode::app::{AppState, UpdateDecision};
 
 pub(super) fn apply_update_decision(state: &mut AppState, decision: UpdateDecision) -> bool {
     let latest = match state.update_check {
@@ -27,5 +27,5 @@ pub(super) async fn run_update_command(
         .terminal()
         .clear()
         .map_err(|error| format!("failed to clear the TUI before updating: {error}"))?;
-    crate::update::run_update(client, expected_version).await
+    rustcode::update::run_update(client, expected_version).await
 }

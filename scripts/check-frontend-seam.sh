@@ -3,7 +3,9 @@
 #
 # Usage: scripts/check-frontend-seam.sh [--allowlist FILE] [PATH...]
 # Defaults to scripts/frontend-seam-allowlist.txt and the TUI render layer
-# (rustcode/engine/src/ui + rustcode/engine/src/inline_terminal.rs).
+# (rustcode/tui/src/ui + rustcode/tui/src/inline_terminal.rs). The event loop
+# under rustcode/tui/src/runtime is intentionally out of scope: it moves with
+# the frontend and drives turns directly by design.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd -P)"
@@ -32,7 +34,7 @@ while (($# > 0)); do
     esac
 done
 if ((${#paths[@]} == 0)); then
-    paths=("$repo_root/rustcode/engine/src/ui" "$repo_root/rustcode/engine/src/inline_terminal.rs")
+    paths=("$repo_root/rustcode/tui/src/ui" "$repo_root/rustcode/tui/src/inline_terminal.rs")
 fi
 [[ -f "$allowlist" ]] || { echo "check-frontend-seam: allow-list not found: $allowlist" >&2; exit 2; }
 # Plain grep, not ripgrep: the guard must run on bare CI images with no
@@ -48,8 +50,8 @@ search_stderr="$(mktemp)"
 trap 'rm -f -- "$observed" "$allowed" "$search_stderr"' EXIT INT TERM
 
 set +e
-grep -R -h -o -E --include='*.rs' 'crate::[A-Za-z_:]+' "${paths[@]}" 2>"$search_stderr" \
-    | sed -E -e 's/^crate::ui(::[A-Za-z_0-9]+)+$/crate::ui/' -e 's/^((crate::[a-z_]+)(::[a-z_]+)?).*/\1/' \
+grep -R -h -o -E --include='*.rs' 'crate::[A-Za-z_:]+|rustcode::[a-z_]+(::[a-z_]+)?|rustcode_[a-z_]+::[a-z_]+' "${paths[@]}" 2>"$search_stderr" \
+    | sed -E -e 's/^(crate::(ui|runtime|inline_terminal|run|cli))::.*/\1/' -e 's/^((crate::[a-z_]+|rustcode::[a-z_]+|rustcode_[a-z_]+)(::[a-z_]+)?).*/\1/' \
     | sort -u >"$observed"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e

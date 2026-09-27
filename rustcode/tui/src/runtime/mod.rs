@@ -6,87 +6,61 @@
 //! and background-task completions — is used by the controller, ACP and the
 //! daemon too, so it stays available without the `tui` feature.
 
-#[cfg(feature = "tui")]
-use crate::app::{AppEvent, AppEventSender, ChatMessage, UpdateDecision, Verbosity};
-use crate::app::{AppState, AppStatus};
-use crate::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
-#[cfg(feature = "tui")]
+use crate::runtime::events::{AppEvent, AppEventSender};
 use crate::ui;
-#[cfg(feature = "tui")]
 use crate::ui::{
     FrameRequester, FrameStream, TerminalRuntime, TranscriptState, TuiEvent, TuiEventStream,
 };
-#[cfg(feature = "tui")]
 use crossterm::{
     event::{self, KeyCode, KeyModifiers},
     execute,
 };
-#[cfg(feature = "tui")]
 use ratatui::layout::Size;
-#[cfg(feature = "tui")]
+use rustcode::app::{AppState, AppStatus};
+use rustcode::app::{ChatMessage, UpdateDecision, Verbosity};
+use rustcode::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 use std::collections::HashMap;
-#[cfg(feature = "tui")]
 use std::error::Error;
-#[cfg(feature = "tui")]
 use std::fmt;
 use std::sync::Arc;
-#[cfg(feature = "tui")]
 use std::time::Duration;
 use tokio::sync::Mutex;
-#[cfg(all(test, feature = "tui"))]
+#[cfg(test)]
 use tokio::sync::MutexGuard;
-#[cfg(feature = "tui")]
 use tokio::sync::mpsc;
-#[cfg(feature = "tui")]
 use tokio_util::sync::CancellationToken;
 
-mod events;
-#[cfg(feature = "tui")]
+pub(crate) mod events;
 mod input;
 mod orchestration;
-#[cfg(feature = "tui")]
 mod render;
-#[cfg(feature = "tui")]
 mod sessions;
-#[cfg(feature = "tui")]
 mod terminal;
-#[cfg(feature = "tui")]
 mod transcript;
-#[cfg(feature = "tui")]
 mod updates;
 
-pub(crate) use orchestration::{apply_background_task_event, spawn_observed_orchestrator};
+pub(crate) use rustcode::controller::{apply_background_task_event, spawn_observed_orchestrator};
 
-pub(crate) use events::{
-    apply_approval_decision, apply_approval_decision_for_batch, apply_question_answer,
-};
-#[cfg(feature = "tui")]
 use input::{InputContext, InputFlow, handle_app_event};
-#[cfg(all(test, feature = "tui"))]
+#[cfg(test)]
 use render::session_title_for_render;
-#[cfg(feature = "tui")]
 use render::{RenderFrameContext, render_frame};
-#[cfg(feature = "tui")]
+pub(crate) use rustcode::controller::{apply_approval_decision, apply_question_answer};
 use sessions::{apply_session_event, apply_subagent_selection, open_overlay};
-#[cfg(feature = "tui")]
 use terminal::{handle_terminal_resize, notify_response_finished, restore_terminal};
-#[cfg(all(test, feature = "tui"))]
+#[cfg(test)]
 use transcript::render_finalized_assistant_scrollback;
-#[cfg(feature = "tui")]
 use updates::{apply_update_decision, run_update_command};
 
-#[cfg(feature = "tui")]
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 // Keep streaming frames at the same cadence as the event loop so a provider
 // chunk cannot sit in the live response buffer for a perceptible interval.
-#[cfg(feature = "tui")]
 const STREAM_FRAME_INTERVAL: Duration = EVENT_POLL_INTERVAL;
 
-#[cfg(feature = "tui")]
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
-    discord_rpc: crate::discord_rpc::DiscordRpcWorker,
+    discord_rpc: rustcode::discord_rpc::DiscordRpcWorker,
     client: reqwest::Client,
     current_cancel_token: CancellationToken,
     needs_redraw: bool,
@@ -107,28 +81,23 @@ pub(crate) struct AppRuntime {
     task_subscriptions: HashMap<String, rustcode_tasks::TaskSubscription>,
 }
 
-#[cfg(feature = "tui")]
 #[derive(Debug)]
 pub(crate) struct AppError(String);
 
-#[cfg(feature = "tui")]
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-#[cfg(feature = "tui")]
 impl Error for AppError {}
 
-#[cfg(feature = "tui")]
 #[allow(dead_code)]
 pub(crate) enum AppRunControl {
     Continue,
-    Exit(crate::ExitSummary),
+    Exit(crate::run::ExitSummary),
 }
 
-#[cfg(feature = "tui")]
 impl AppRuntime {
     pub(crate) fn new(
         mut terminal_runtime: TerminalRuntime,
@@ -147,7 +116,7 @@ impl AppRuntime {
         Ok(Self {
             terminal_runtime: Some(terminal_runtime),
             app_state,
-            discord_rpc: crate::discord_rpc::DiscordRpcWorker::new(discord_rpc_enabled),
+            discord_rpc: rustcode::discord_rpc::DiscordRpcWorker::new(discord_rpc_enabled),
             client,
             current_cancel_token: CancellationToken::new(),
             needs_redraw: true,
@@ -177,7 +146,7 @@ impl AppRuntime {
         Self {
             terminal_runtime: None,
             app_state: Arc::new(Mutex::new(app_state)),
-            discord_rpc: crate::discord_rpc::DiscordRpcWorker::new(false),
+            discord_rpc: rustcode::discord_rpc::DiscordRpcWorker::new(false),
             client: reqwest::Client::new(),
             current_cancel_token: CancellationToken::new(),
             needs_redraw: false,
@@ -205,15 +174,17 @@ impl AppRuntime {
     }
 }
 
-#[cfg(all(test, feature = "tui"))]
+#[cfg(test)]
 mod tests {
     use super::{
         AppRunControl, AppRuntime, EVENT_POLL_INTERVAL, STREAM_FRAME_INTERVAL,
         apply_update_decision,
     };
-    use crate::app::{
-        AppEvent, AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer,
-        SessionAction, UpdateDecision,
+    use crate::runtime::events::AppEvent;
+    use crate::ui::render_snapshot::render_snapshot;
+    use rustcode::app::{
+        AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer, SessionAction,
+        UpdateDecision,
     };
 
     #[test]
@@ -267,21 +238,30 @@ mod tests {
         let (revision, input_area) = {
             let state = runtime.app_state().await;
             (
-                state.render_snapshot().revision(),
+                render_snapshot(&state).revision(),
                 ratatui::layout::Rect::new(1, 2, 30, 4),
             )
         };
 
         let mut state = runtime.app_state().await;
         state.conversation_content_height = 7;
-        state.input_text_area = Some(ratatui::layout::Rect::new(3, 4, 20, 2).into());
+        state.input_text_area = Some(rustcode::app::UiRect::new(3, 4, 20, 2));
         state.request_redraw();
 
-        assert!(!state.publish_render_metrics(revision, 99, input_area.into()));
+        assert!(!state.publish_render_metrics(
+            revision,
+            99,
+            rustcode::app::UiRect::new(
+                input_area.x,
+                input_area.y,
+                input_area.width,
+                input_area.height
+            )
+        ));
         assert_eq!(state.conversation_content_height, 7);
         assert_eq!(
             state.input_text_area,
-            Some(ratatui::layout::Rect::new(3, 4, 20, 2).into())
+            Some(rustcode::app::UiRect::new(3, 4, 20, 2))
         );
     }
 
@@ -326,15 +306,15 @@ mod tests {
         let mut state = AppState::new();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "hello"));
+            .push(rustcode::app::ChatMessage::new("user", "hello"));
         state.status = AppStatus::Streaming;
         state.replace_current_response("final answer");
         state
             .history
-            .push(crate::app::ChatMessage::new("assistant", "final answer"));
+            .push(rustcode::app::ChatMessage::new("assistant", "final answer"));
         state.clear_current_response();
         state.enter_idle();
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
         let mut cursor = crate::ui::scrollback::TranscriptCursor::default();
 
         let lines = super::render_finalized_assistant_scrollback(
@@ -388,7 +368,7 @@ mod tests {
         let old_session = state.active_session_id.clone();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "old"));
+            .push(rustcode::app::ChatMessage::new("user", "old"));
         let mut runtime = AppRuntime::for_test(state);
 
         runtime
@@ -426,8 +406,8 @@ mod tests {
         let mut state = AppState::new();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "parent"));
-        let id = crate::app::SubagentController.spawn(
+            .push(rustcode::app::ChatMessage::new("user", "parent"));
+        let id = rustcode::app::SubagentController.spawn(
             &mut state,
             "child",
             None,
@@ -476,7 +456,7 @@ mod tests {
 
         assert_eq!(
             rx.await.expect("approval response"),
-            crate::app::ToolConfirmationResponse::Approve
+            rustcode::app::ToolConfirmationResponse::Approve
         );
         let state = runtime.app_state().await;
         assert!(state.auto_confirm);
@@ -500,7 +480,7 @@ mod tests {
 
         assert_eq!(
             rx.await.expect("approval response"),
-            crate::app::ToolConfirmationResponse::Deny
+            rustcode::app::ToolConfirmationResponse::Deny
         );
         assert!(previous_token.is_cancelled());
     }
@@ -563,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn chained_questions_advance_then_submit_all_answers() {
-        use super::events::apply_question_answer;
+        use rustcode::controller::apply_question_answer;
 
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let mut state = AppState::new();

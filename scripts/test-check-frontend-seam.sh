@@ -27,17 +27,19 @@ else
     fail "seam guard has valid shell syntax"
 fi
 
-# A tree that only touches the seam and its own modules passes.
+# A tree that only touches the seam, shared leaves, and its own modules passes.
 mkdir -p "$tmp_root/clean/ui"
 cat >"$tmp_root/clean/allow.txt" <<'EOF'
 crate::ui
-crate::controller
+rustcode::controller
+rustcode_core::paste
 EOF
 cat >"$tmp_root/clean/ui/render.rs" <<'EOF'
 use crate::ui::theme;
-use rustcode_real::controller::ControllerHandle;
-fn draw(handle: &crate::controller::ControllerHandle) {
+use rustcode::controller::ControllerHandle;
+fn draw(handle: &rustcode::controller::ControllerHandle, text: &str) {
     let _ = crate::ui::theme::current();
+    let _ = rustcode_core::paste::expand(text);
     let _ = handle;
 }
 EOF

@@ -3,7 +3,7 @@ use rustcode_core::{CommandResultMetadata, InspectionResultMetadata, ToolResultC
 
 /// Structured result produced by a tool execution.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ToolResult {
+pub struct ToolResult {
     pub tool_name: String,
     pub content: String,
     pub diff: Option<String>,
@@ -44,7 +44,7 @@ impl ToolResult {
 
 /// Machine-readable execution facts kept alongside human-readable output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ToolResultMetadata {
+pub struct ToolResultMetadata {
     pub call_id: Option<String>,
     pub arguments_hash: String,
     pub success: bool,
@@ -312,7 +312,7 @@ pub(crate) fn classify_response(
 /// this type is the migration seam for the event-driven loop.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
-pub(crate) enum AgentEvent {
+pub enum AgentEvent {
     TextDelta(String),
     ToolCall(ToolCall),
     ToolResult(ToolResult),
@@ -334,12 +334,12 @@ pub(crate) enum TurnAction {
 /// Typed lifecycle for one model/tool turn. The orchestrator owns side
 /// effects, while this state machine owns hand-off and terminal decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TurnMachine {
+pub struct TurnMachine {
     state: TurnState,
 }
 
 impl TurnMachine {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: TurnState::AwaitingModel,
         }

@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum AgentUiEvent {
+pub enum AgentUiEvent {
     PromptStarted {
         prompt: String,
     },
@@ -59,11 +59,11 @@ pub(crate) enum AgentUiEvent {
 }
 
 #[derive(Clone)]
-pub(crate) struct AgentUiEventSender {
+pub struct AgentUiEventSender {
     sender: mpsc::UnboundedSender<AgentUiEvent>,
 }
 
-pub(crate) type AgentUiEventReceiver = mpsc::UnboundedReceiver<AgentUiEvent>;
+pub type AgentUiEventReceiver = mpsc::UnboundedReceiver<AgentUiEvent>;
 
 #[derive(Default)]
 struct ResponseDeltaTracker {
@@ -79,12 +79,12 @@ struct ResponseDeltaTracker {
 }
 
 impl AgentUiEventSender {
-    pub(crate) fn channel() -> (Self, AgentUiEventReceiver) {
+    pub fn channel() -> (Self, AgentUiEventReceiver) {
         let (sender, receiver) = mpsc::unbounded_channel();
         (Self { sender }, receiver)
     }
 
-    pub(crate) fn send(&self, event: AgentUiEvent) {
+    pub fn send(&self, event: AgentUiEvent) {
         let _ = self.sender.send(event);
     }
 }
@@ -95,7 +95,7 @@ pub(crate) fn tool_display_detail(name: &str, arguments: &serde_json::Value) -> 
 }
 
 #[cfg(test)]
-pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
+pub fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
     match event {
         AgentEvent::TextDelta(text) => Some(AgentUiEvent::TextDelta { text }),
         AgentEvent::ToolCall(call) => Some(AgentUiEvent::ToolStarted {

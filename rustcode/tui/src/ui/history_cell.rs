@@ -5,11 +5,11 @@
 //! gives the TUI the same lifecycle shape without serializing terminal state or
 //! making provider code depend on ratatui.
 
-use crate::app::{History, LiveToolCall, Verbosity};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
 };
+use rustcode::app::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -66,7 +66,10 @@ impl TranscriptState {
         self.model.replace_live_text(live_text);
     }
 
-    pub(crate) fn apply_agent_event(&mut self, event: &crate::network::ui_adapter::AgentUiEvent) {
+    pub(crate) fn apply_agent_event(
+        &mut self,
+        event: &rustcode::network::ui_adapter::AgentUiEvent,
+    ) {
         self.model.apply_agent_event(event);
     }
 
@@ -183,7 +186,7 @@ impl TranscriptState {
 
 pub(super) struct AssistantMarkdownCell {
     pub(super) source: String,
-    token_usage: Option<crate::app::TokenUsage>,
+    token_usage: Option<rustcode::app::TokenUsage>,
     pub(super) response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
@@ -206,7 +209,7 @@ impl HistoryCell for LiveToolCell {
 impl AssistantMarkdownCell {
     pub(super) fn committed(
         source: &str,
-        token_usage: Option<crate::app::TokenUsage>,
+        token_usage: Option<rustcode::app::TokenUsage>,
         response_time_ms: Option<u64>,
         thought_time_ms: Option<u64>,
         thought_tokens: Option<u32>,
@@ -587,7 +590,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 #[cfg(test)]
 mod tests {
     use super::TranscriptState;
-    use crate::app::state::{ChatMessage, History};
+    use rustcode::app::state::{ChatMessage, History};
 
     #[test]
     fn transcript_sync_tracks_history_revision_and_reuses_unchanged_projection() {

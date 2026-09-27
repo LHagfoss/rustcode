@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::ui::render_snapshot::render_snapshot;
 
 pub(super) fn render_live_conversation(
     f: &mut Frame,
@@ -16,11 +18,20 @@ pub(super) fn render_live_conversation(
 #[cfg(test)]
 pub fn render(f: &mut Frame, state: &mut AppState) {
     let mut transcript = TranscriptState::default();
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     let revision = snapshot.revision();
     let (content_height, input_area) =
         render_with_transcript_snapshot(f, &snapshot, &mut transcript);
-    state.publish_render_metrics(revision, content_height, input_area.into());
+    state.publish_render_metrics(
+        revision,
+        content_height,
+        rustcode::app::UiRect::new(
+            input_area.x,
+            input_area.y,
+            input_area.width,
+            input_area.height,
+        ),
+    );
 }
 
 pub(super) fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
@@ -58,7 +69,7 @@ pub(crate) fn desired_height_snapshot(
     let filtered_cmds = if completion_dismissed {
         Vec::new()
     } else {
-        crate::app::suggestion::filtered_commands(&state.input_buffer())
+        rustcode::app::suggestion::filtered_commands(&state.input_buffer())
     };
     let (_, at_query) =
         rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
@@ -69,7 +80,7 @@ pub(crate) fn desired_height_snapshot(
                 [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
-        crate::app::list_project_file_paths(&at_query)
+        rustcode::app::list_project_file_paths(&at_query)
     } else {
         Vec::new()
     };
@@ -132,7 +143,7 @@ pub(crate) fn desired_height(
     width: u16,
     terminal_height: u16,
 ) -> u16 {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     desired_height_snapshot(&snapshot, transcript, width, terminal_height)
 }
 
@@ -151,7 +162,7 @@ pub(crate) fn render_with_transcript_snapshot(
     let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
         Vec::new()
     } else {
-        crate::app::suggestion::filtered_commands(&state.input_buffer())
+        rustcode::app::suggestion::filtered_commands(&state.input_buffer())
     };
 
     let inner_width = f.area().width.max(1);
@@ -177,7 +188,7 @@ pub(crate) fn render_with_transcript_snapshot(
                 [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
-        crate::app::list_project_file_paths(&at_query)
+        rustcode::app::list_project_file_paths(&at_query)
     } else {
         Vec::new()
     };
@@ -361,8 +372,17 @@ pub fn render_with_transcript(
     state: &mut AppState,
     transcript: &mut TranscriptState,
 ) {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     let revision = snapshot.revision();
     let (content_height, input_area) = render_with_transcript_snapshot(f, &snapshot, transcript);
-    state.publish_render_metrics(revision, content_height, input_area.into());
+    state.publish_render_metrics(
+        revision,
+        content_height,
+        rustcode::app::UiRect::new(
+            input_area.x,
+            input_area.y,
+            input_area.width,
+            input_area.height,
+        ),
+    );
 }

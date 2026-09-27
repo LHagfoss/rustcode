@@ -1,4 +1,5 @@
-use crate::app::AppState;
+use crate::ui::render_snapshot::render_snapshot;
+use rustcode::app::AppState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -21,7 +22,7 @@ pub(super) async fn session_title_for_render(
         return (session_id, title);
     }
 
-    let title = crate::config::load_session_title(&session_id);
+    let title = rustcode::config::load_session_title(&session_id);
     let mut guard = state.lock().await;
     if guard.install_session_title_cache(&session_id, generation, title.clone()) {
         return (session_id, title);
@@ -34,7 +35,7 @@ pub(super) async fn session_title_for_render(
 pub(super) struct RenderFrameContext<'a> {
     pub terminal_runtime: &'a mut TerminalRuntime,
     pub app_state: &'a Arc<Mutex<AppState>>,
-    pub discord_rpc: &'a crate::discord_rpc::DiscordRpcWorker,
+    pub discord_rpc: &'a rustcode::discord_rpc::DiscordRpcWorker,
     pub transcript_cursor: &'a mut crate::ui::scrollback::TranscriptCursor,
     pub transcript_state: &'a mut TranscriptState,
     pub stream_commits: &'a mut crate::ui::scrollback::StreamCommitQueue,
@@ -90,10 +91,10 @@ pub(super) async fn render_frame(
             .history
             .iter()
             .find(|m| m.role == "user" && !m.content.starts_with('/'))
-            .map(|_| crate::config::session_title(&guard.history));
-        let snapshot = guard.render_snapshot();
+            .map(|_| rustcode::config::session_title(&guard.history));
+        let snapshot = render_snapshot(&guard);
         let activity =
-            crate::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
+            rustcode::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
         let animation_frame = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -115,9 +116,9 @@ pub(super) async fn render_frame(
                     .or(guard.task_working_directory.as_deref())
                     .map(std::path::Path::to_path_buf)
                     .or_else(|| std::env::current_dir().ok());
-                crate::discord_rpc::workspace_basename(workspace.as_deref())
+                rustcode::discord_rpc::workspace_basename(workspace.as_deref())
             });
-        let title_display = crate::app::activity::format_terminal_title(
+        let title_display = rustcode::app::activity::format_terminal_title(
             activity.kind,
             session_name,
             animation_frame,
@@ -127,16 +128,16 @@ pub(super) async fn render_frame(
             guard.current_terminal_title = Some(title_display.clone());
         }
 
-        let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
+        let progress = rustcode::app::activity::terminal_progress_for_activity(activity.kind);
         discord_rpc.update(
-            crate::discord_rpc::DiscordPresence::from_activity_with_usage(
+            rustcode::discord_rpc::DiscordPresence::from_activity_with_usage(
                 &activity,
                 &presence_title,
                 snapshot.current_token_usage(),
             ),
         );
         let should_send_progress = guard.current_terminal_progress != Some(progress)
-            || (progress != crate::app::activity::TerminalProgress::Hidden
+            || (progress != rustcode::app::activity::TerminalProgress::Hidden
                 && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));
         if should_send_progress {
             guard.current_terminal_progress = Some(progress);
@@ -214,7 +215,12 @@ pub(super) async fn render_frame(
     app_state.lock().await.publish_render_metrics(
         snapshot.revision(),
         content_height,
-        input_area.into(),
+        rustcode::app::UiRect::new(
+            input_area.x,
+            input_area.y,
+            input_area.width,
+            input_area.height,
+        ),
     );
     Ok(())
 }

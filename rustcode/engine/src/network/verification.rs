@@ -30,7 +30,7 @@ pub(crate) struct VerificationEvidence {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct VerificationLedger {
+pub struct VerificationLedger {
     generation: u64,
     last: Option<VerificationEvidence>,
     explicit_last: Option<VerificationEvidence>,

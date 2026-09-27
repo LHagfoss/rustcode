@@ -1,4 +1,4 @@
-use crate::app::{
+use rustcode::app::{
     AppStatus, ChatMessage, History, LiveToolCall, McpEditState, PendingQuestion, StreamTracker,
     SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
 };
@@ -21,13 +21,13 @@ pub(crate) struct RenderSnapshot {
     model_quota_remaining: Option<f32>,
     pending_queue: Vec<String>,
     pending_steers: Vec<String>,
-    draft_submit_mode: crate::app::state::DraftSubmitMode,
+    draft_submit_mode: rustcode::app::state::DraftSubmitMode,
     steering_interruptible: bool,
     steering_escape_will_interrupt: bool,
     status: AppStatus,
     active_suggestion_index: Option<usize>,
     dismissed_completion: Option<String>,
-    config: crate::config::AppConfig,
+    config: rustcode::config::AppConfig,
     model_name: String,
     api_base_url: String,
     active_session_id: String,
@@ -43,7 +43,7 @@ pub(crate) struct RenderSnapshot {
     pending_question_chain_position: usize,
     pending_question_chain_answered: usize,
     running_tools: Vec<String>,
-    background_tasks: Vec<crate::tools::BackgroundTaskSnapshot>,
+    background_tasks: Vec<rustcode::tools::BackgroundTaskSnapshot>,
     waiting_for_background_terminal: bool,
     live_tool_calls: Arc<Vec<LiveToolCall>>,
     stream_tracker: Option<StreamTracker>,
@@ -53,24 +53,22 @@ pub(crate) struct RenderSnapshot {
     modal_open: bool,
     last_copy_text: Option<(String, std::time::Instant)>,
     expanded_thoughts: std::collections::HashSet<usize>,
-    agent_mode: crate::config::AgentMode,
+    agent_mode: rustcode::config::AgentMode,
     subagents: Vec<SubAgentSnapshot>,
     selected_subagent_id: Option<u32>,
     active_context_window: u32,
-    active_model_profile: Option<crate::config::ModelProfile>,
-    active_tool_protocol: crate::config::ToolProtocol,
+    active_model_profile: Option<rustcode::config::ModelProfile>,
+    active_tool_protocol: rustcode::config::ToolProtocol,
     command_suggestion: Option<String>,
     selected_subagent: Option<SelectedSubagentSnapshot>,
 }
 
-impl crate::app::AppState {
-    /// Capture the immutable view the renderer needs for this frame.
-    ///
-    /// The method lives here rather than on the state module so shared state
-    /// never names a rendering type.
-    pub(crate) fn render_snapshot(&self) -> RenderSnapshot {
-        RenderSnapshot::new(self)
-    }
+/// Capture the immutable view the renderer needs for this frame.
+///
+/// Free function (not a method): `AppState` lives in the core library, which
+/// cannot name the rendering types this returns.
+pub(crate) fn render_snapshot(state: &rustcode::app::AppState) -> RenderSnapshot {
+    RenderSnapshot::new(state)
 }
 
 /// Data used exclusively by modal overlays. Large collections and editable
@@ -88,7 +86,7 @@ struct OverlaySnapshot {
     command_picker_search: String,
     show_history_picker: bool,
     history_picker_index: usize,
-    history_picker_sessions: Vec<crate::config::SessionMeta>,
+    history_picker_sessions: Vec<rustcode::config::SessionMeta>,
     history_picker_truncated: bool,
     pending_delete_session_idx: Option<usize>,
     show_subagent_picker: bool,
@@ -105,7 +103,7 @@ struct OverlaySnapshot {
 }
 
 impl OverlaySnapshot {
-    fn new(state: &crate::app::AppState) -> Self {
+    fn new(state: &rustcode::app::AppState) -> Self {
         Self {
             show_model_picker: state.show_model_picker,
             model_picker_index: state.model_picker_index,
@@ -154,7 +152,7 @@ impl OverlaySnapshot {
 
 #[allow(dead_code)]
 impl RenderSnapshot {
-    pub(crate) fn new(state: &crate::app::AppState) -> Self {
+    pub(crate) fn new(state: &rustcode::app::AppState) -> Self {
         let capture_subagents = state.show_context_modal || state.show_subagent_picker;
         let subagents = capture_subagents
             .then(|| {
@@ -221,7 +219,7 @@ impl RenderSnapshot {
             pending_question_chain_position: state.question_chain_position(),
             pending_question_chain_answered: state.question_chain_answered(),
             running_tools: state.running_tools.clone(),
-            background_tasks: crate::tools::background_task_snapshots(&state.active_session_id),
+            background_tasks: rustcode::tools::background_task_snapshots(&state.active_session_id),
             waiting_for_background_terminal: state.background_turn_context.is_some(),
             live_tool_calls: Arc::clone(&state.live_tool_calls),
             stream_tracker: state.stream_tracker.clone(),
@@ -297,7 +295,7 @@ impl RenderSnapshot {
     pub(crate) fn pending_steers(&self) -> &[String] {
         &self.pending_steers
     }
-    pub(crate) fn draft_submit_mode(&self) -> crate::app::state::DraftSubmitMode {
+    pub(crate) fn draft_submit_mode(&self) -> rustcode::app::state::DraftSubmitMode {
         self.draft_submit_mode
     }
     pub(crate) fn steering_interruptible(&self) -> bool {
@@ -309,7 +307,7 @@ impl RenderSnapshot {
     pub(crate) fn show_steer_mode_hint(&self) -> bool {
         self.steering_interruptible
             && !self.input_buffer.trim().is_empty()
-            && crate::app::get_completion_len(&self.input_buffer, self.cursor_position) == 0
+            && rustcode::app::get_completion_len(&self.input_buffer, self.cursor_position) == 0
     }
     pub(crate) fn status(&self) -> &AppStatus {
         &self.status
@@ -320,7 +318,7 @@ impl RenderSnapshot {
     pub(crate) fn dismissed_completion(&self) -> Option<&str> {
         self.dismissed_completion.as_deref()
     }
-    pub(crate) fn config(&self) -> &crate::config::AppConfig {
+    pub(crate) fn config(&self) -> &rustcode::config::AppConfig {
         &self.config
     }
     pub(crate) fn model_name(&self) -> &str {
@@ -341,7 +339,7 @@ impl RenderSnapshot {
     pub(crate) fn running_tools(&self) -> &[String] {
         &self.running_tools
     }
-    pub(crate) fn background_tasks(&self) -> &[crate::tools::BackgroundTaskSnapshot] {
+    pub(crate) fn background_tasks(&self) -> &[rustcode::tools::BackgroundTaskSnapshot] {
         &self.background_tasks
     }
     pub(crate) fn waiting_for_background_terminal(&self) -> bool {
@@ -401,7 +399,7 @@ impl RenderSnapshot {
     pub(crate) fn history_picker_index(&self) -> usize {
         self.overlay.history_picker_index
     }
-    pub(crate) fn history_picker_sessions(&self) -> &[crate::config::SessionMeta] {
+    pub(crate) fn history_picker_sessions(&self) -> &[rustcode::config::SessionMeta] {
         &self.overlay.history_picker_sessions
     }
     pub(crate) fn history_picker_truncated(&self) -> bool {
@@ -470,7 +468,7 @@ impl RenderSnapshot {
     pub(crate) fn expanded_thoughts(&self) -> &std::collections::HashSet<usize> {
         &self.expanded_thoughts
     }
-    pub(crate) fn agent_mode(&self) -> crate::config::AgentMode {
+    pub(crate) fn agent_mode(&self) -> rustcode::config::AgentMode {
         self.agent_mode
     }
     pub(crate) fn subagents(&self) -> &[SubAgentSnapshot] {
@@ -482,17 +480,17 @@ impl RenderSnapshot {
     pub(crate) fn active_context_window(&self) -> u32 {
         self.active_context_window
     }
-    pub(crate) fn active_model_profile(&self) -> Option<&crate::config::ModelProfile> {
+    pub(crate) fn active_model_profile(&self) -> Option<&rustcode::config::ModelProfile> {
         self.active_model_profile.as_ref()
     }
-    pub(crate) fn active_tool_protocol(&self) -> crate::config::ToolProtocol {
+    pub(crate) fn active_tool_protocol(&self) -> rustcode::config::ToolProtocol {
         self.active_tool_protocol
     }
     pub(crate) fn auto_confirm_status_text(&self) -> &'static str {
         if self.auto_confirm { "ON" } else { "OFF" }
     }
     pub(crate) fn completion_identity(&self) -> Option<String> {
-        if let Some(command) = crate::app::suggestion::command_token(&self.input_buffer) {
+        if let Some(command) = rustcode::app::suggestion::command_token(&self.input_buffer) {
             return Some(format!("command:{command}"));
         }
         rustcode_core::input::get_at_word_query(&self.input_buffer, self.cursor_position)
@@ -532,7 +530,7 @@ impl SubAgentSnapshot {
         let history_tokens = agent
             .history
             .iter()
-            .map(crate::network::compaction::estimate_message_tokens)
+            .map(rustcode::network::compaction::estimate_message_tokens)
             .sum();
         Self {
             id: agent.id,
@@ -590,7 +588,8 @@ impl SelectedSubagentSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
+    use super::render_snapshot;
+    use rustcode::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
     use std::sync::Arc;
 
     #[test]
@@ -620,7 +619,7 @@ mod tests {
         });
         state.selected_subagent_id = Some(7);
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(snapshot.input_buffer(), "draft input");
         assert_eq!(snapshot.cursor_position(), "draft input".len());
@@ -643,7 +642,7 @@ mod tests {
     #[test]
     fn render_metrics_reject_stale_revision() {
         let mut state = AppState::new();
-        let revision = state.render_snapshot().revision();
+        let revision = render_snapshot(&state).revision();
         let input_area = UiRect::new(2, 3, 40, 4);
 
         assert!(state.publish_render_metrics(revision, 12, input_area));
@@ -661,7 +660,7 @@ mod tests {
         let mut state = AppState::new();
         state.append_current_response("initial response");
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
         assert!(std::ptr::eq(
             snapshot.current_response().as_ptr(),
             state.current_response.as_str().as_ptr()
@@ -680,12 +679,12 @@ mod tests {
     fn response_mutations_invalidate_render_metrics() {
         let mut state = AppState::new();
 
-        let append_revision = state.render_snapshot().revision();
+        let append_revision = render_snapshot(&state).revision();
         state.append_current_response("streamed output");
         assert_eq!(state.current_response.as_str(), "streamed output");
         assert!(!state.publish_render_metrics(append_revision, 12, UiRect::default()));
 
-        let clear_revision = state.render_snapshot().revision();
+        let clear_revision = render_snapshot(&state).revision();
         state.clear_current_response();
         assert!(state.current_response.is_empty());
         assert!(!state.publish_render_metrics(clear_revision, 12, UiRect::default()));
@@ -698,28 +697,24 @@ mod tests {
         state.status = AppStatus::Streaming;
         state.active_turn_steerable_session = Some(state.active_session_id.clone());
         state.pending_steers = vec![
-            crate::app::state::PendingSteer {
+            rustcode::app::state::PendingSteer {
                 session_id: state.active_session_id.clone(),
                 text: "first steer".to_owned(),
             },
-            crate::app::state::PendingSteer {
+            rustcode::app::state::PendingSteer {
                 session_id: state.active_session_id.clone(),
                 text: "second steer".to_owned(),
             },
         ];
-        state.draft_submit_mode = crate::app::state::DraftSubmitMode::Queue;
+        state.draft_submit_mode = rustcode::app::state::DraftSubmitMode::Queue;
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
-        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
-            "live",
-            None,
-            "run_command",
-            "Ran",
-            "cargo test",
-        ));
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
+            rustcode::app::LiveToolCall::new("live", None, "run_command", "Ran", "cargo test"),
+        );
         state.current_thought_time_ms = 42;
         state.current_thought_tokens = 7;
-        state.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+        state.pending_tool_confirmation = Some(vec![rustcode::app::ToolConfirmation {
             request_id: None,
             tool_name: "run_command".to_owned(),
             path: "cargo test".to_owned(),
@@ -728,19 +723,19 @@ mod tests {
             rememberable_prefix: None,
             forbidden_prefix: None,
         }]);
-        state.pending_question = Some(crate::app::PendingQuestion::new(
+        state.pending_question = Some(rustcode::app::PendingQuestion::new(
             "Proceed?".to_owned(),
             vec!["yes".to_owned()],
             false,
         ));
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(snapshot.pending_queue(), ["queued prompt"]);
         assert_eq!(snapshot.pending_steers(), ["first steer", "second steer"]);
         assert_eq!(
             snapshot.draft_submit_mode(),
-            crate::app::state::DraftSubmitMode::Queue
+            rustcode::app::state::DraftSubmitMode::Queue
         );
         assert!(!snapshot.steering_interruptible());
         assert_eq!(snapshot.dismissed_completion(), Some("command:/help"));
@@ -761,7 +756,7 @@ mod tests {
         state.status = AppStatus::Streaming;
         state.active_turn_steerable_session = Some(state.active_session_id.clone());
 
-        assert!(state.render_snapshot().steering_interruptible());
+        assert!(render_snapshot(&state).steering_interruptible());
     }
 
     #[test]
@@ -783,15 +778,11 @@ mod tests {
             review_manifest: None,
         });
         state.selected_subagent_id = Some(7);
-        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
-            "live",
-            None,
-            "run_command",
-            "Ran",
-            "cargo test",
-        ));
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
+            rustcode::app::LiveToolCall::new("live", None, "run_command", "Ran", "cargo test"),
+        );
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
         let selected = snapshot.selected_subagent().expect("selected subagent");
 
         assert_eq!(selected.history()[0].content, "subagent response");
@@ -853,7 +844,7 @@ mod tests {
         });
         state.selected_subagent_id = Some(2);
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(snapshot.subagents()[0].last_message(), "background result");
         assert!(snapshot.subagents()[0].history_tokens() > 0);
@@ -881,7 +872,7 @@ mod tests {
             review_manifest: None,
         });
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert!(snapshot.subagents().is_empty());
     }
@@ -891,13 +882,13 @@ mod tests {
         let mut state = AppState::new();
         state
             .history_picker_sessions
-            .push(crate::config::SessionMeta {
+            .push(rustcode::config::SessionMeta {
                 path: std::path::PathBuf::from("session.json"),
                 title: "A session title".to_owned(),
                 message_count: 3,
                 when: "now".to_owned(),
             });
-        state.mcp_edit_state = Some(crate::app::McpEditState {
+        state.mcp_edit_state = Some(rustcode::app::McpEditState {
             is_add: true,
             edit_index: None,
             name_input: "server".to_owned(),
@@ -907,7 +898,7 @@ mod tests {
             cursor_pos: 0,
         });
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert!(snapshot.history_picker_sessions().is_empty());
         assert!(snapshot.mcp_edit_state().is_none());
@@ -920,13 +911,13 @@ mod tests {
         state.show_mcp_config = true;
         state
             .history_picker_sessions
-            .push(crate::config::SessionMeta {
+            .push(rustcode::config::SessionMeta {
                 path: std::path::PathBuf::from("session.json"),
                 title: "A session title".to_owned(),
                 message_count: 3,
                 when: "now".to_owned(),
             });
-        state.mcp_edit_state = Some(crate::app::McpEditState {
+        state.mcp_edit_state = Some(rustcode::app::McpEditState {
             is_add: true,
             edit_index: None,
             name_input: "server".to_owned(),
@@ -936,7 +927,7 @@ mod tests {
             cursor_pos: 0,
         });
 
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(
             snapshot.history_picker_sessions()[0].title,
@@ -953,22 +944,22 @@ mod tests {
     #[test]
     fn input_and_cursor_mutations_invalidate_render_metrics() {
         let mut state = AppState::new();
-        let input_revision = state.render_snapshot().revision();
+        let input_revision = render_snapshot(&state).revision();
         state.insert_char('x');
         assert!(!state.publish_render_metrics(input_revision, 1, UiRect::default()));
 
-        let cursor_revision = state.render_snapshot().revision();
+        let cursor_revision = render_snapshot(&state).revision();
         state.move_cursor_to_start();
         assert!(!state.publish_render_metrics(cursor_revision, 1, UiRect::default()));
 
         state.pending_queue.push("queued".to_owned());
-        let recall_revision = state.render_snapshot().revision();
+        let recall_revision = render_snapshot(&state).revision();
         state.composer().pop_queued_prompt();
         assert!(!state.publish_render_metrics(recall_revision, 1, UiRect::default()));
 
         state.input_buffer = "/he".to_owned();
-        let autocomplete_revision = state.render_snapshot().revision();
-        crate::app::actions::apply_autocomplete(&mut state);
+        let autocomplete_revision = render_snapshot(&state).revision();
+        rustcode::app::actions::apply_autocomplete(&mut state);
         assert!(!state.publish_render_metrics(autocomplete_revision, 1, UiRect::default()));
     }
 }

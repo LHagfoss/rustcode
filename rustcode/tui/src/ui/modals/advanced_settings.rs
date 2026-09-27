@@ -300,17 +300,17 @@ pub(in crate::ui) fn render_protocol_picker_modal(
     let choices = [
         (
             "ApiNative",
-            crate::config::ToolProtocol::ApiNative,
+            rustcode::config::ToolProtocol::ApiNative,
             "Structured API schema (`tools` field + `tool_calls` output)",
         ),
         (
             "Json",
-            crate::config::ToolProtocol::Json,
+            rustcode::config::ToolProtocol::Json,
             "Standard JSON markdown (```tool)",
         ),
         (
             "Native",
-            crate::config::ToolProtocol::Native,
+            rustcode::config::ToolProtocol::Native,
             "Bracketed format ([TOOL_CALLS])",
         ),
     ];
@@ -424,11 +424,11 @@ pub(in crate::ui) fn render_update_prompt_modal(
 
     let latest = match state.update_check() {
         rustcode_core::update::UpdateState::Available(latest) => latest,
-        _ => crate::update::current_version(),
+        _ => rustcode::update::current_version(),
     };
     let versions = format!(
         "v{} → v{}",
-        rustcode_core::update::format_version(crate::update::current_version()),
+        rustcode_core::update::format_version(rustcode::update::current_version()),
         rustcode_core::update::format_version(latest)
     );
     f.render_widget(

@@ -7,10 +7,8 @@
 
 use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
-#[cfg(test)]
-use crate::app::AppState;
-use crate::app::{AppEvent, ApprovalDecision, PendingQuestion, QuestionAnswer};
 use crate::inline_terminal::Frame;
+use crate::runtime::events::AppEvent;
 #[cfg(test)]
 use crossterm::event::KeyModifiers;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -20,6 +18,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
+#[cfg(test)]
+use rustcode::app::AppState;
+use rustcode::app::{ApprovalDecision, PendingQuestion, QuestionAnswer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod advanced_settings;

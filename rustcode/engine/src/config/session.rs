@@ -97,7 +97,7 @@ pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
     SessionStore::session_is_resumable(history)
 }
 
-pub(crate) fn session_title(history: &[ChatMessage]) -> String {
+pub fn session_title(history: &[ChatMessage]) -> String {
     SessionStore::session_title(history)
 }
 

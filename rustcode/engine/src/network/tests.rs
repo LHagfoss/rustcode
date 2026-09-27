@@ -2684,7 +2684,7 @@ async fn test_confirm_and_execute_bypassed() {
 async fn question_prompt_transitions_invalidate_render_metrics_once() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let cancel_token = tokio_util::sync::CancellationToken::new();
-    let initial_revision = state.lock().await.render_snapshot().revision();
+    let initial_revision = state.lock().await.render_revision;
     let state_for_task = Arc::clone(&state);
     let cancel_for_task = cancel_token.clone();
     let task = tokio::spawn(async move {
@@ -2703,7 +2703,7 @@ async fn question_prompt_transitions_invalidate_render_metrics_once() {
         loop {
             let s = state.lock().await;
             if s.pending_question.is_some() {
-                break s.render_snapshot().revision();
+                break s.render_revision;
             }
             drop(s);
             tokio::task::yield_now().await;
@@ -2732,7 +2732,7 @@ async fn question_prompt_transitions_invalidate_render_metrics_once() {
     assert!(s.pending_question.is_none());
     assert_eq!(s.status, AppStatus::Streaming);
     assert_eq!(
-        s.render_snapshot().revision(),
+        s.render_revision,
         awaiting_revision.wrapping_add(1),
         "clearing a question should invalidate one additional render revision"
     );
@@ -2745,7 +2745,7 @@ async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
     let state = Arc::new(Mutex::new(app));
     let cancel_token = tokio_util::sync::CancellationToken::new();
     let client = reqwest::Client::new();
-    let initial_revision = state.lock().await.render_snapshot().revision();
+    let initial_revision = state.lock().await.render_revision;
     let state_for_task = Arc::clone(&state);
     let cancel_for_task = cancel_token.clone();
     let task = tokio::spawn(async move {
@@ -2770,7 +2770,7 @@ async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
         loop {
             let s = state.lock().await;
             if s.pending_tool_confirmation.is_some() {
-                break s.render_snapshot().revision();
+                break s.render_revision;
             }
             drop(s);
             tokio::task::yield_now().await;
@@ -2799,7 +2799,7 @@ async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
     assert!(s.pending_tool_confirmation.is_none());
     assert_eq!(s.status, AppStatus::Streaming);
     assert_eq!(
-        s.render_snapshot().revision(),
+        s.render_revision,
         awaiting_revision.wrapping_add(1),
         "clearing a tool confirmation should invalidate one additional render revision"
     );
@@ -2812,7 +2812,7 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
     let mut app = AppState::new();
     app.agent_mode = crate::config::AgentMode::Build;
     let state = Arc::new(Mutex::new(app));
-    let initial_revision = state.lock().await.render_snapshot().revision();
+    let initial_revision = state.lock().await.render_revision;
     let calls = vec![crate::tools::ToolCall {
         name: "write_to_file".to_owned(),
         arguments: serde_json::json!({
@@ -2832,7 +2832,7 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
         loop {
             let s = state.lock().await;
             if s.pending_tool_confirmation.is_some() {
-                break s.render_snapshot().revision();
+                break s.render_revision;
             }
             drop(s);
             tokio::task::yield_now().await;
