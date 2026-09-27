@@ -241,7 +241,8 @@ impl Composer {
     fn complete(&self, state: &mut AppState) {
         state.dismissed_completion = None;
         let has_at =
-            crate::app::get_at_word_query(&state.input_buffer, state.cursor_position).is_some();
+            rustcode_core::input::get_at_word_query(&state.input_buffer, state.cursor_position)
+                .is_some();
         if state.active_suggestion_index.is_some() || has_at {
             crate::app::apply_autocomplete(state);
         } else if crate::app::suggestion::command_token(&state.input_buffer).is_some() {

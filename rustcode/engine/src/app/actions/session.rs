@@ -58,7 +58,7 @@ pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
         return get_filtered_cmds_len(input_buffer);
     }
 
-    crate::app::get_at_word_query(input_buffer, cursor_position)
+    rustcode_core::input::get_at_word_query(input_buffer, cursor_position)
         .map(|(_, query)| crate::app::list_project_file_paths(&query).len())
         .unwrap_or(0)
 }
@@ -79,7 +79,7 @@ pub fn apply_autocomplete(s: &mut AppState) {
         }
         s.active_suggestion_index = None;
     } else if let Some((at_idx, at_query)) =
-        crate::app::get_at_word_query(&s.input_buffer, s.cursor_position)
+        rustcode_core::input::get_at_word_query(&s.input_buffer, s.cursor_position)
     {
         let files = crate::app::list_project_file_paths(&at_query);
         if !files.is_empty() {

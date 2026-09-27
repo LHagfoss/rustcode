@@ -28,7 +28,7 @@ async fn handle_enter_inner(
     s.history_index = None;
 
     let selected_file_completion = s.active_suggestion_index.is_some()
-        && crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
+        && rustcode_core::input::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
     if s.active_suggestion_index.is_some() {
         apply_autocomplete(&mut s);
     }

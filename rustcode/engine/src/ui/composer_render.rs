@@ -314,7 +314,7 @@ pub(super) fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>
 }
 
 pub(super) fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
-    crate::app::status::format_elapsed_compact(elapsed_secs)
+    rustcode_core::status::format_elapsed_compact(elapsed_secs)
 }
 
 fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
@@ -708,7 +708,7 @@ pub(super) fn render_composer_footer(
 
     let used = super::context_usage::context_usage(state).used_tokens;
     let window = state.active_context_window().max(1);
-    let remaining = crate::app::status::context_remaining_percent(used, window);
+    let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
     let (left_content, left_style) = if state.ctrl_c_exit_armed() {
         (
