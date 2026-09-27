@@ -3,7 +3,7 @@ use crate::ui::TerminalRuntime;
 
 pub(super) fn apply_update_decision(state: &mut AppState, decision: UpdateDecision) -> bool {
     let latest = match state.update_check {
-        crate::update::UpdateState::Available(latest) => Some(latest),
+        rustcode_core::update::UpdateState::Available(latest) => Some(latest),
         _ => None,
     };
     state.show_update_prompt = false;
@@ -18,7 +18,7 @@ pub(super) fn apply_update_decision(state: &mut AppState, decision: UpdateDecisi
 pub(super) async fn run_update_command(
     terminal_runtime: &mut TerminalRuntime,
     client: &reqwest::Client,
-    expected_version: crate::update::Version,
+    expected_version: rustcode_core::update::Version,
 ) -> Result<(), String> {
     terminal_runtime
         .restore()

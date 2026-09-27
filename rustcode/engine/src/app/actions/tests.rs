@@ -1204,7 +1204,7 @@ async fn update_command_initiates_check_and_sets_notice() {
         let s = state.lock().await;
         assert!(s.input_buffer.is_empty());
         assert_eq!(s.cursor_position, 0);
-        assert_eq!(s.update_check, crate::update::UpdateState::Checking);
+        assert_eq!(s.update_check, rustcode_core::update::UpdateState::Checking);
         assert!(
             s.history
                 .last()

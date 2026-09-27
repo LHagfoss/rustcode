@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod paste;
+pub mod update;
 
 fn current_timestamp() -> String {
     chrono::Local::now().format("%H:%M").to_string()

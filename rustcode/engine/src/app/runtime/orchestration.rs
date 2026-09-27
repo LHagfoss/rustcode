@@ -289,7 +289,7 @@ impl AppRuntime {
                 if state.update_requested {
                     state.update_requested = false;
                     match state.update_check {
-                        crate::update::UpdateState::Available(latest) => Some(Some(latest)),
+                        rustcode_core::update::UpdateState::Available(latest) => Some(Some(latest)),
                         _ => Some(None),
                     }
                 } else {
@@ -300,21 +300,24 @@ impl AppRuntime {
                 let target_version = match target {
                     Some(v) => Some(v),
                     None => match crate::update::check_for_update(&client).await {
-                        Ok(crate::update::UpdateCheck::Available { latest, .. }) => Some(latest),
-                        Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
+                        Ok(rustcode_core::update::UpdateCheck::Available { latest, .. }) => {
+                            Some(latest)
+                        }
+                        Ok(rustcode_core::update::UpdateCheck::UpToDate { current, latest }) => {
                             let mut state = app_state.lock().await;
-                            state.update_check = crate::update::UpdateState::UpToDate(latest);
+                            state.update_check =
+                                rustcode_core::update::UpdateState::UpToDate(latest);
                             state.set_notice(format!(
                                 "✨ RustCode v{} is up to date (latest: v{}).",
-                                crate::update::format_version(current),
-                                crate::update::format_version(latest)
+                                rustcode_core::update::format_version(current),
+                                rustcode_core::update::format_version(latest)
                             ));
                             needs_redraw = true;
                             None
                         }
                         Err(error) => {
                             let mut state = app_state.lock().await;
-                            state.update_check = crate::update::UpdateState::Failed;
+                            state.update_check = rustcode_core::update::UpdateState::Failed;
                             state.set_warning_notice(format!("Update check failed: {error}"));
                             needs_redraw = true;
                             None

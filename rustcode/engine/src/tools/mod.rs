@@ -23,8 +23,8 @@ mod video;
 #[allow(unused_imports)]
 pub use dispatch::{execute, needs_confirmation};
 pub use parser::{
-    diagnose_failed_tool_call, has_incomplete_actionable_tool_call, is_code_editing_tool,
-    is_tool_call_start, parse_tool_call, parse_tool_calls,
+    diagnose_failed_tool_call, has_incomplete_actionable_tool_call, parse_tool_call,
+    parse_tool_calls,
 };
 #[cfg(test)]
 pub use schema::native_tools_schema;
@@ -35,7 +35,6 @@ pub(crate) use dispatch::{
     execute_video_with_progress, execute_with_metadata, execute_with_metadata_cancellable,
     execute_with_metadata_cancellable_for_call,
 };
-pub(crate) use parser::find_closing_tool_fence;
 #[cfg(test)]
 pub(crate) use schema::native_tools_schema_for_context;
 #[cfg(test)]

@@ -1421,17 +1421,21 @@ fn test_repair_json_escapes_multiline_string_literals() {
 
 #[test]
 fn test_is_tool_call_start_detects_json_and_embedded_tool_syntax() {
-    assert!(is_tool_call_start("```tool\n{\"name\": \"run_command\"}"));
-    assert!(is_tool_call_start("```json\n{\"name\": \"run_command\"}"));
-    assert!(is_tool_call_start("[TOOL_CALLS]"));
-    assert!(is_tool_call_start("<tool_call>"));
-    assert!(is_tool_call_start(
+    assert!(rustcode_tool_protocol::is_tool_call_start(
+        "```tool\n{\"name\": \"run_command\"}"
+    ));
+    assert!(rustcode_tool_protocol::is_tool_call_start(
+        "```json\n{\"name\": \"run_command\"}"
+    ));
+    assert!(rustcode_tool_protocol::is_tool_call_start("[TOOL_CALLS]"));
+    assert!(rustcode_tool_protocol::is_tool_call_start("<tool_call>"));
+    assert!(rustcode_tool_protocol::is_tool_call_start(
         "Let me execute this:\n{\"action\": \"manage_task\", \"task_id\": \"task-123\"}"
     ));
-    assert!(!is_tool_call_start(
+    assert!(!rustcode_tool_protocol::is_tool_call_start(
         "Here is a regular markdown code block:\n```rust\nfn main() {}\n```"
     ));
-    assert!(!is_tool_call_start(
+    assert!(!rustcode_tool_protocol::is_tool_call_start(
         "Here is a plain json block:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"
     ));
 }

@@ -146,10 +146,10 @@ pub struct AppState {
     /// default navigation scope; `workspace_root` remains the hard boundary.
     pub task_working_directory: Option<std::path::PathBuf>,
 
-    pub update_check: crate::update::UpdateState,
+    pub update_check: rustcode_core::update::UpdateState,
     pub show_update_prompt: bool,
     pub update_prompt_index: usize,
-    pub dismissed_update_version: Option<crate::update::Version>,
+    pub dismissed_update_version: Option<rustcode_core::update::Version>,
     pub update_requested: bool,
 
     pub active_suggestion_index: Option<usize>,
@@ -1061,7 +1061,7 @@ impl AppState {
             workspace_root: None,
             source_session_workspace_root: Some(workspace.to_path_buf()),
             task_working_directory: None,
-            update_check: crate::update::UpdateState::Unknown,
+            update_check: rustcode_core::update::UpdateState::Unknown,
             show_update_prompt: false,
             update_prompt_index: 0,
             dismissed_update_version: None,
