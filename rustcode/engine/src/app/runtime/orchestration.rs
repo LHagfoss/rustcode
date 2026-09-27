@@ -1,7 +1,9 @@
 use super::*;
 use rustcode_tasks::TaskEvent;
+#[cfg(feature = "tui")]
 use std::sync::mpsc::TryRecvError;
 
+#[cfg(feature = "tui")]
 const IDLE_SUMMARY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 pub(crate) async fn spawn_observed_orchestrator(
@@ -102,6 +104,7 @@ pub(crate) async fn apply_background_task_event(
     }
 }
 
+#[cfg(feature = "tui")]
 impl AppRuntime {
     pub(crate) async fn run(self) -> Result<crate::ExitSummary, Box<dyn Error>> {
         let AppRuntime {

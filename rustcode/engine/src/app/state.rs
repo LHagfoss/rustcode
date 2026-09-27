@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use super::geometry::UiRect;
+
 #[path = "state/models.rs"]
 mod models;
 use models::MAX_LIVE_TOOL_OUTPUT_BYTES;
@@ -261,11 +263,11 @@ pub struct AppState {
     #[allow(dead_code)]
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
-    pub chat_area: Option<ratatui::layout::Rect>,
+    pub chat_area: Option<UiRect>,
     /// Screen rect of the bottom input box. Kept so shutdown can erase the
     /// transient composer without disturbing the transcript above it.
-    pub input_text_area: Option<ratatui::layout::Rect>,
-    pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
+    pub input_text_area: Option<UiRect>,
+    pub scroll_to_bottom_btn: Option<UiRect>,
     /// Clickable element the pointer is over, refreshed on every mouse move.
     #[allow(dead_code)]
     pub hover: HoverTarget,
@@ -689,10 +691,6 @@ impl AppState {
         self.request_redraw();
     }
 
-    pub(crate) fn render_snapshot(&self) -> crate::ui::render_snapshot::RenderSnapshot {
-        crate::ui::render_snapshot::RenderSnapshot::new(self)
-    }
-
     /// Refresh the cached footer location when its debounce window expires.
     /// Git discovery happens here, before rendering, so a frame only reads
     /// the already-resolved display string.
@@ -713,7 +711,7 @@ impl AppState {
         &mut self,
         revision: u64,
         height: u16,
-        input_area: ratatui::layout::Rect,
+        input_area: UiRect,
     ) -> bool {
         if revision != self.render_revision {
             return false;
@@ -1015,10 +1013,6 @@ impl AppState {
             std::time::Instant::now(),
         );
         let cwd_and_branch = workspace_location.display();
-        if session.is_none() {
-            crate::ui::theme::ensure_themes_dir();
-            crate::ui::theme::set_active_theme(&config.theme);
-        }
 
         let app = Self {
             input_buffer: String::new(),
@@ -1744,7 +1738,7 @@ impl AppState {
     #[cfg(test)]
     pub fn hover_target_at(&self, column: u16, row: u16) -> HoverTarget {
         if let Some(rect) = self.scroll_to_bottom_btn
-            && rect.contains(ratatui::layout::Position::new(column, row))
+            && rect.contains(column, row)
         {
             return HoverTarget::ScrollPill;
         }

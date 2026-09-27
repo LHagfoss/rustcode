@@ -44,7 +44,7 @@ if [[ "$TARGET_DIR" != /* ]]; then
 fi
 APP_DIR="$TARGET_DIR/$PROFILE/RustCode.app"
 ICON_SOURCE="$REPO_ROOT/images/AppIcon.icon"
-VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO_ROOT/crates/rustcode-app/Cargo.toml" | head -n 1)"
+VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO_ROOT/rustcode/desktop/Cargo.toml" | head -n 1)"
 if [[ ! -d "$ICON_SOURCE" ]]; then
     echo "Icon Composer source missing: $ICON_SOURCE" >&2
     exit 1

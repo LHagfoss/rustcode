@@ -5,6 +5,7 @@ pub(crate) use events::{
 pub mod actions;
 pub mod activity;
 pub mod composer;
+pub mod geometry;
 pub mod overlays;
 pub mod runtime;
 pub mod session_controller;
@@ -17,6 +18,7 @@ pub use state::Verbosity;
 pub mod suggestion;
 
 pub use actions::*;
+pub use geometry::UiRect;
 pub use state::*;
 pub(crate) use subagent_controller::{
     SubagentCompletion, SubagentController, SubagentError, SubagentId, SubagentSupervisor,

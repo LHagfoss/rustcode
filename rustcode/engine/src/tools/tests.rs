@@ -2938,7 +2938,7 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
 
 #[test]
 fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checkout() {
-    let repository_policy = include_str!("../../AGENTS.md");
+    let repository_policy = include_str!("../../../../AGENTS.md");
     let run_command_spec = TOOLS
         .iter()
         .find(|tool| tool.name == "run_command")
