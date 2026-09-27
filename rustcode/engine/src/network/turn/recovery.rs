@@ -201,13 +201,13 @@ pub(super) fn completed_inspection_synthesis(
         || ctx.progress.failed_mutations > 0
         || ctx.progress.complete_inspection_results == 0
         || ctx.progress.incomplete_inspection_results > 0
-        || crate::network::text::has_intended_tool_call(content)
+        || rustcode_tool_protocol::text::has_intended_tool_call(content)
     {
         return None;
     }
 
-    let candidate = crate::network::text::strip_tool_call_syntax(
-        &crate::network::text::strip_think_blocks(content),
+    let candidate = rustcode_tool_protocol::text::strip_tool_call_syntax(
+        &rustcode_tool_protocol::text::strip_think_blocks(content),
     );
     let candidate = candidate.trim();
     (!candidate.is_empty()).then(|| candidate.to_string())
@@ -236,12 +236,12 @@ pub(super) async fn handle_response_recovery(
 ) -> ResponseRecoveryOutcome {
     use super::super::lifecycle;
     use super::super::loop_detect;
-    use super::super::text::{self, strip_tool_call_syntax};
     use super::super::{
         EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, log_recovery_decision,
         push_or_replace_recovery_notice, reasoning_loop_recovery_action,
     };
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
+    use rustcode_tool_protocol::text::{self, strip_tool_call_syntax};
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
         if ctx.recovery.empty_response_recovery_attempts < 1 {
             ctx.recovery.empty_response_recovery_attempts += 1;
