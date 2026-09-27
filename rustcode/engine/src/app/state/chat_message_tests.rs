@@ -1,6 +1,6 @@
 use super::{ChatMessage, ToolCallRef};
 use crate::config::ToolProtocol;
-use crate::tools::resolve_tool_calls;
+use rustcode_tool_protocol::resolve_tool_calls;
 
 #[test]
 fn resolved_tool_calls_prefers_structured_tool_calls() {

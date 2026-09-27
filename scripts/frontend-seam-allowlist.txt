@@ -34,16 +34,11 @@ crate::network::ui_adapter
 crate::network::compaction
 # Background-task observation:
 crate::tools
-crate::tools::parse_tool_call
 crate::tools::background_command_label
 crate::tools::stop_background_tasks
 crate::tools::spawn_background_task_for_test
 crate::tools::tool_system_prompt
-crate::tools::resolve_tool_calls
 crate::tools::mcp_tool_display_name
-crate::tools::is_tool_call_start
-crate::tools::is_code_editing_tool
-crate::tools::find_closing_tool_fence
 crate::tools::background_task_snapshots
 # Config mutation:
 crate::config

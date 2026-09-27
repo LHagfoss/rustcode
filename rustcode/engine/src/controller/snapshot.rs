@@ -325,9 +325,10 @@ impl ControllerSnapshot {
             .iter()
             .map(|message| {
                 if message.role == "assistant" {
-                    for call in
-                        crate::tools::resolve_tool_calls(message, state.active_tool_protocol())
-                    {
+                    for call in rustcode_tool_protocol::resolve_tool_calls(
+                        message,
+                        state.active_tool_protocol(),
+                    ) {
                         let id = call.call_id.clone().unwrap_or_else(|| {
                             format!(
                                 "local_{}",

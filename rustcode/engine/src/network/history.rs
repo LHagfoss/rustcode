@@ -1,5 +1,5 @@
 use crate::app::{ChatMessage, ToolResultRecord};
-use crate::tools::{ToolCall, resolve_tool_calls};
+use rustcode_tool_protocol::{ToolCall, resolve_tool_calls};
 
 pub const MAX_CONTEXT_FRAGMENT_CHARS: usize = 16 * 1024;
 pub const MAX_CONTEXT_TAIL_CHARS: usize = 48 * 1024;
