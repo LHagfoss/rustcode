@@ -18,7 +18,6 @@ mod mcp;
 mod memory;
 mod network;
 mod notifications;
-mod paste;
 mod platform;
 mod raw_cli;
 mod shell_env;

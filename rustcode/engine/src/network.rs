@@ -1451,7 +1451,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         .iter()
         .rev()
         .find(|message| message.role == "user")
-        .map(|message| crate::paste::compact_for_context(&message.content))
+        .map(|message| rustcode_core::paste::compact_for_context(&message.content))
         .unwrap_or_default();
     let project_memory = crate::memory::render_relevant_async(
         task_working_directory.clone(),
