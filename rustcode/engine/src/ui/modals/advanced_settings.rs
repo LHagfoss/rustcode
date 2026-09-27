@@ -423,13 +423,13 @@ pub(in crate::ui) fn render_update_prompt_modal(
     );
 
     let latest = match state.update_check() {
-        crate::update::UpdateState::Available(latest) => latest,
+        rustcode_core::update::UpdateState::Available(latest) => latest,
         _ => crate::update::current_version(),
     };
     let versions = format!(
         "v{} → v{}",
-        crate::update::format_version(crate::update::current_version()),
-        crate::update::format_version(latest)
+        rustcode_core::update::format_version(crate::update::current_version()),
+        rustcode_core::update::format_version(latest)
     );
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -440,19 +440,20 @@ pub(in crate::ui) fn render_update_prompt_modal(
         modal_chunks[1],
     );
 
-    let (command_label, command_text, update_action_desc) = if crate::update::is_brew_install() {
-        (
-            "Method: ",
-            crate::update::BREW_UPGRADE_COMMAND,
-            "run Homebrew and restart rustcode",
-        )
-    } else {
-        (
-            "Method: ",
-            "GitHub Releases (in-place update)",
-            "download update and restart rustcode",
-        )
-    };
+    let (command_label, command_text, update_action_desc) =
+        if rustcode_core::update::is_brew_install() {
+            (
+                "Method: ",
+                rustcode_core::update::BREW_UPGRADE_COMMAND,
+                "run Homebrew and restart rustcode",
+            )
+        } else {
+            (
+                "Method: ",
+                "GitHub Releases (in-place update)",
+                "download update and restart rustcode",
+            )
+        };
 
     f.render_widget(
         Paragraph::new(Line::from(vec![

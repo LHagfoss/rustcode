@@ -198,7 +198,7 @@ async fn handle_enter_inner(
             "/update" | "/upgrade" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
-                s.update_check = crate::update::UpdateState::Checking;
+                s.update_check = rustcode_core::update::UpdateState::Checking;
                 s.set_notice("🔍 Checking for a RustCode update...");
                 s.request_redraw();
                 drop(s);
