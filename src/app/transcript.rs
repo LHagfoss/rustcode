@@ -1,7 +1,7 @@
+use crate::app::UiRect;
 #[cfg(test)]
 use crate::app::state::AppState;
 use crate::app::state::{History, TokenUsage};
-use ratatui::layout::Rect;
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -15,7 +15,7 @@ pub(crate) struct TranscriptState<'a> {
     last_max_scroll: &'a mut u16,
     conversation_content_height: &'a mut u16,
     viewport_height: &'a mut u16,
-    chat_area: &'a mut Option<Rect>,
+    chat_area: &'a mut Option<UiRect>,
     redraw_requested: &'a mut bool,
     render_revision: &'a mut u64,
 }

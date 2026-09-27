@@ -211,9 +211,10 @@ pub(super) async fn render_frame(
         })?;
     let (content_height, input_area) =
         frame_metrics.expect("render_with_transcript_snapshot must run once");
-    app_state
-        .lock()
-        .await
-        .publish_render_metrics(snapshot.revision(), content_height, input_area);
+    app_state.lock().await.publish_render_metrics(
+        snapshot.revision(),
+        content_height,
+        input_area.into(),
+    );
     Ok(())
 }

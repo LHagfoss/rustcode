@@ -3,11 +3,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 use super::{AppError, AppRunControl, AppRuntime};
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 use crate::app::AppEvent;
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 use crate::ui::TuiEvent;
 
 pub(crate) async fn apply_approval_decision(
@@ -158,7 +158,7 @@ pub(crate) async fn apply_question_answer(
     state.request_redraw();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 impl AppRuntime {
     pub(crate) async fn handle_event(
         &mut self,
