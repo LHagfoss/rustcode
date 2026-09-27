@@ -23,8 +23,9 @@ for controlling and observing a session: `InteractiveController`,
 is the reference implementation.
 
 The terminal UI predates the contract and still drives internals directly
-(`app::runtime`, `network::ui_adapter`). Converging it onto `controller` is
-the prerequisite for extracting it into its own crate — see issue #1430.
+(`app::runtime`, `network::ui_adapter`). Converging it onto `controller`
+(issue #1431) is the prerequisite for extracting it into its own crate
+(issue #1430).
 Until then, treat `controller` as the stable seam and the TUI's direct
 internals use as legacy.
 
