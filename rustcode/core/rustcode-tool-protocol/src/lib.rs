@@ -1,5 +1,5 @@
 use regex::Regex;
-use rustcode_core::ToolProtocol;
+use rustcode_core::{ChatMessage, ToolProtocol};
 use serde_json::Value;
 use std::sync::LazyLock;
 
@@ -633,6 +633,30 @@ pub fn parse_tool_calls(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
         }
     }
     unique_calls
+}
+
+/// Resolve structured calls recorded in history, falling back to the
+/// text-protocol parser. Lives with the parser rather than the tools
+/// dispatcher: controller snapshots, transcript builders, and history
+/// compaction all need the same interpretation of a stored message, and the
+/// core message type stays independent of it either way.
+pub fn resolve_tool_calls(message: &ChatMessage, protocol: ToolProtocol) -> Vec<ToolCall> {
+    if message.unexecuted_tool_call_checkpoint {
+        return Vec::new();
+    }
+    if !message.tool_calls.is_empty() {
+        message
+            .tool_calls
+            .iter()
+            .map(|call| ToolCall {
+                name: call.name.clone(),
+                arguments: serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null),
+                call_id: Some(call.id.clone()),
+            })
+            .collect()
+    } else {
+        parse_tool_calls(&message.content, protocol)
+    }
 }
 
 pub fn is_code_editing_tool(name: &str) -> bool {

@@ -264,14 +264,15 @@ pub(super) fn strip_rendered_tool_blocks(content: &str) -> String {
             let start = search_from + relative_start;
             let block_start = start + fence.len();
             let after_tag = &output[block_start..];
-            let (rel_end, next_rel) = crate::tools::find_closing_tool_fence(after_tag);
+            let (rel_end, next_rel) = rustcode_tool_protocol::find_closing_tool_fence(after_tag);
             if rel_end == after_tag.len() && !after_tag.is_empty() {
                 break;
             }
             let end = block_start + next_rel;
             let block = &after_tag[..rel_end];
             let is_tool_call =
-                crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json).is_some();
+                rustcode_tool_protocol::parse_tool_call(block, crate::config::ToolProtocol::Json)
+                    .is_some();
 
             if is_tool_call {
                 output.replace_range(start..end, "");

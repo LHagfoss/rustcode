@@ -36,7 +36,8 @@ fn is_tool_only_assistant(
         return false;
     }
     let has_tool_calls = !message.tool_calls.is_empty()
-        || !crate::tools::resolve_tool_calls(message, snapshot.active_tool_protocol()).is_empty();
+        || !rustcode_tool_protocol::resolve_tool_calls(message, snapshot.active_tool_protocol())
+            .is_empty();
     has_tool_calls
         && crate::ui::render_committed_history_block_snapshot(snapshot, message_index, width)
             .is_empty()
