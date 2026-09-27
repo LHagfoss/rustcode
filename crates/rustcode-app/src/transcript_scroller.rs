@@ -16,8 +16,7 @@ use gpui_kit::{
 };
 
 use crate::position_rail::{
-    MARKER_HIT_TARGET_HEIGHT, MARKER_HIT_TARGET_WIDTH, MIN_MARKER_HIT_TARGET_HEIGHT,
-    RAIL_LEFT_CONTENT_INSET, RAIL_SCROLLBAR_INSET, active_marker_with_count,
+    MARKER_HIT_TARGET_WIDTH, MIN_MARKER_HIT_TARGET_HEIGHT, active_marker_with_count,
     marker_count_for_height, marker_to_row_with_count,
 };
 
@@ -236,14 +235,7 @@ impl RenderOnce for TranscriptScroller {
         let row_style = self.row_style;
         let mut renderer = self.renderer;
         let mut list_style = self.list_style;
-        // The rail hugs the transcript's left edge: keep its wider marker hit
-        // boxes in their own strip instead of over message text; explicit
-        // caller insets still take precedence.
-        let row_inset_left = list_style
-            .padding
-            .left
-            .take()
-            .or_else(|| rail_visible.then_some(px(RAIL_LEFT_CONTENT_INSET).into()));
+        let row_inset_left = list_style.padding.left.take();
         let row_inset_right = list_style.padding.right.take();
         let list = list(list_state.clone(), move |index, window, cx| {
             div()
@@ -278,13 +270,16 @@ impl RenderOnce for TranscriptScroller {
             .size_full()
             .min_h_0()
             .overflow_hidden()
-            .child(viewport)
-            .child(ScrollableMask::new(Axis::Vertical, &list_state).id(root_id.clone()));
+            .flex()
+            .flex_row();
 
         if rail_visible {
             let state = self.state.clone();
             let row_count = self.position_rail_rows;
             let rail_id = root_id.clone();
+            // The strip is a real flex child outside the message viewport, so
+            // its hit targets can never cover message controls. The cluster
+            // stays compact and centered instead of spread across the height.
             root = root.child(
                 container_query(move |size, window, cx| {
                     let viewport_height = size.height / px(1.);
@@ -293,14 +288,9 @@ impl RenderOnce for TranscriptScroller {
                         active_marker_with_count(logical_top_row, row_count, markers);
                     let mut rail = div()
                         .id((rail_id.clone(), "position-rail"))
-                        // Compact cluster hugging the left edge: fixed-pitch
-                        // markers centered in the strip instead of spread
-                        // across the full height.
                         .w(px(MARKER_HIT_TARGET_WIDTH))
                         .h_full()
-                        .min_h_0()
                         .py_2()
-                        .ml(px(4.))
                         .flex()
                         .flex_col()
                         .justify_center()
@@ -343,24 +333,24 @@ impl RenderOnce for TranscriptScroller {
                         );
                         rail = rail.child(dash);
                     }
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_row()
-                        .justify_start()
-                        .child(rail)
+                    rail
                 })
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .right_0(),
+                .w(px(MARKER_HIT_TARGET_WIDTH))
+                .flex_shrink_0(),
             );
         }
 
+        let mut content = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(viewport)
+            .child(ScrollableMask::new(Axis::Vertical, &list_state).id(root_id.clone()));
+
         if self.jump_button && jump_visibility > 0. {
             let state = self.state.clone();
-            root = root.child(
+            content = content.child(
                 div()
                     .absolute()
                     .left_0()
@@ -386,6 +376,7 @@ impl RenderOnce for TranscriptScroller {
                     ),
             );
         }
+        root = root.child(content);
 
         root.refine_style(&self.style)
     }
@@ -394,7 +385,7 @@ impl RenderOnce for TranscriptScroller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::position_rail::{MAX_MARKERS, RAIL_VERTICAL_INSET};
+    use crate::position_rail::MAX_MARKERS;
     use gpui_kit::{AppContext as _, Render};
 
     struct RailHarness {
@@ -478,11 +469,13 @@ mod tests {
             assert!(marker_count <= MAX_MARKERS);
             for bounds in &marker_bounds {
                 assert_eq!(bounds.size.width, px(MARKER_HIT_TARGET_WIDTH));
-                assert!(bounds.size.height >= px(MIN_MARKER_HIT_TARGET_HEIGHT));
-                assert!(bounds.size.height <= px(MARKER_HIT_TARGET_HEIGHT));
-                assert!(bounds.origin.y >= px(RAIL_VERTICAL_INSET));
-                assert!(bounds.origin.y + bounds.size.height <= px(height - RAIL_VERTICAL_INSET));
-                assert!(bounds.origin.x + bounds.size.width <= px(600. - RAIL_SCROLLBAR_INSET));
+                assert_eq!(bounds.size.height, px(MIN_MARKER_HIT_TARGET_HEIGHT));
+                // Left-column strip outside the message viewport: markers hug
+                // the left edge and stay inside the window vertically.
+                assert!(bounds.origin.x >= px(0.));
+                assert!(bounds.origin.x + bounds.size.width <= px(MARKER_HIT_TARGET_WIDTH + 1.));
+                assert!(bounds.origin.y >= px(0.));
+                assert!(bounds.origin.y + bounds.size.height <= px(height));
             }
             for pair in marker_bounds.windows(2) {
                 assert!(pair[0].origin.y + pair[0].size.height <= pair[1].origin.y);
