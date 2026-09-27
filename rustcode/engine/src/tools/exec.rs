@@ -92,7 +92,7 @@ pub(crate) fn abort_background_starts(session_id: &str) {
     }
 }
 
-pub(crate) fn background_task_manager() -> &'static TaskManager {
+pub fn background_task_manager() -> &'static TaskManager {
     BACKGROUND_TASK_MANAGER.get_or_init(|| TaskManager::new(Arc::new(RootProcessTerminator)))
 }
 
@@ -1099,13 +1099,13 @@ fn terminate_background_pid(pid: u32) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BackgroundStopResult {
+pub struct BackgroundStopResult {
     pub stopped: usize,
     pub requested: usize,
     pub failed: usize,
 }
 
-pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
+pub fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
     let summary = background_task_manager().cancel_session(session_id);
     BackgroundStopResult {
         stopped: summary.cancelled,

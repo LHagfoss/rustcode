@@ -2,6 +2,8 @@
 pub mod client;
 #[cfg(unix)]
 pub(crate) mod command;
+#[cfg(unix)]
+pub use command::{CommandError, create_job, format_response};
 pub mod executor;
 #[cfg(unix)]
 pub mod lifecycle;

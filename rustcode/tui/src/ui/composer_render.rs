@@ -208,7 +208,7 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
         .unwrap_or_else(|| "0s".to_string());
     let mut parts = vec![format!("{count} running ({elapsed})")];
     parts.extend(tasks.iter().take(MAX_VISIBLE_COMMANDS).map(|task| {
-        let label = crate::tools::background_command_label(&task.command, COMMAND_LABEL_CHARS);
+        let label = rustcode::tools::background_command_label(&task.command, COMMAND_LABEL_CHARS);
         if label.is_empty() {
             format!("task {}", task.id)
         } else {
@@ -230,7 +230,7 @@ pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'stat
         .iter()
         .take(MAX_VISIBLE_COMMANDS)
         .map(|task| {
-            let command = crate::tools::background_command_label(&task.command, 240);
+            let command = rustcode::tools::background_command_label(&task.command, 240);
             Line::from(Span::styled(format!("  └ {command}"), style))
         })
         .collect::<Vec<_>>();
@@ -438,8 +438,8 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
 
     if state.show_steer_mode_hint() {
         let hint = match state.draft_submit_mode() {
-            crate::app::state::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
-            crate::app::state::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
+            rustcode::app::state::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
+            rustcode::app::state::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
         };
         spans.push(Span::styled(
             hint,

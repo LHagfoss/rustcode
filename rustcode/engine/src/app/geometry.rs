@@ -1,12 +1,9 @@
-#[cfg(feature = "tui")]
-use ratatui::layout::Rect;
-
 /// A screen rectangle recorded on shared state.
 ///
 /// Shared state must not name a rendering crate's types: everything that is
 /// not the terminal UI (headless runs, ACP, the daemon, native frontends)
-/// links this state too. Rendering code converts to its own rect at the edge
-/// with the `From` impls below.
+/// links this state too. Rendering code builds this from its own rect at the
+/// edge (see `UiRect::new`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UiRect {
     pub x: u16,
@@ -34,24 +31,5 @@ impl UiRect {
             && column < self.x.saturating_add(self.width)
             && row >= self.y
             && row < self.y.saturating_add(self.height)
-    }
-}
-
-#[cfg(feature = "tui")]
-impl From<Rect> for UiRect {
-    fn from(rect: Rect) -> Self {
-        Self {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-        }
-    }
-}
-
-#[cfg(feature = "tui")]
-impl From<UiRect> for Rect {
-    fn from(rect: UiRect) -> Self {
-        Self::new(rect.x, rect.y, rect.width, rect.height)
     }
 }

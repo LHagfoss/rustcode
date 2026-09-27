@@ -1,10 +1,13 @@
 use super::*;
-use crate::app::ToolConfirmation;
 use crate::inline_terminal::InlineTerminal as Terminal;
+use crate::ui::render_snapshot::render_snapshot;
+use crate::ui::tests::THEME_TEST_LOCK;
 use ratatui::{backend::TestBackend, layout::Rect};
+use rustcode::app::ToolConfirmation;
 
 #[test]
 fn single_command_confirmation_uses_codex_command_prompt() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
     let mut state = AppState::new();
     state.config.theme = "default".to_owned();
@@ -22,7 +25,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
 
     let input_area = Rect::new(0, 2, 100, 10);
     terminal
-        .draw(|frame| render_tool_confirmation_modal(frame, &state.render_snapshot(), input_area))
+        .draw(|frame| render_tool_confirmation_modal(frame, &render_snapshot(&state), input_area))
         .unwrap();
 
     let rendered = (0..14)
@@ -66,6 +69,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
     );
     assert!((0..100).all(|x| buffer[(x, 2)].bg == panel));
     assert!((0..100).all(|x| buffer[(x, 11)].bg == panel));
+    crate::ui::theme::set_active_theme("default");
 }
 
 #[test]
@@ -87,7 +91,7 @@ fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
 
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 72, 14))
+            render_tool_confirmation_modal(frame, &render_snapshot(&state), Rect::new(0, 1, 72, 14))
         })
         .unwrap();
 
@@ -141,7 +145,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
     }]);
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 2, 80, 5))
+            render_tool_confirmation_modal(frame, &render_snapshot(&state), Rect::new(0, 2, 80, 5))
         })
         .unwrap();
     let rendered = terminal
@@ -172,7 +176,7 @@ fn approval_selection_visibly_moves_to_deny() {
     }]);
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 80, 14))
+            render_tool_confirmation_modal(frame, &render_snapshot(&state), Rect::new(0, 1, 80, 14))
         })
         .unwrap();
     let rendered = terminal
@@ -209,7 +213,7 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
     }]);
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 90, 10))
+            render_tool_confirmation_modal(frame, &render_snapshot(&state), Rect::new(0, 1, 90, 10))
         })
         .unwrap();
     let rendered = terminal
@@ -241,7 +245,7 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
     }]);
     terminal
         .draw(|frame| {
-            render_tool_confirmation_modal(frame, &state.render_snapshot(), Rect::new(0, 1, 90, 10))
+            render_tool_confirmation_modal(frame, &render_snapshot(&state), Rect::new(0, 1, 90, 10))
         })
         .unwrap();
     let rendered = terminal
@@ -319,7 +323,7 @@ fn batch_approval_lists_each_tool_in_the_bottom_pane() {
         .draw(|frame| {
             render_tool_confirmation_modal(
                 frame,
-                &state.render_snapshot(),
+                &render_snapshot(&state),
                 Rect::new(0, 2, 100, 12),
             )
         })
@@ -473,7 +477,7 @@ fn chained_question_modal_shows_position_descriptions_and_nav_hint() {
     ]);
     terminal
         .draw(|frame| {
-            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 100, 20))
+            render_question_modal(frame, &render_snapshot(&state), Rect::new(0, 0, 100, 20))
         })
         .unwrap();
     let rendered = terminal
@@ -515,7 +519,7 @@ fn question_modal_wraps_long_option_and_description_and_keeps_navigation_visible
 
     terminal
         .draw(|frame| {
-            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 44, 10))
+            render_question_modal(frame, &render_snapshot(&state), Rect::new(0, 0, 44, 10))
         })
         .unwrap();
 
@@ -562,7 +566,7 @@ fn question_height_accounts_for_wrapped_options() {
 
     // Header (1), question (1), gap (1), each wrapped option (3), custom option
     // (1), gap (1), compact footer (1), panel padding (2), and trailing space (1).
-    assert_eq!(question_height(&state.render_snapshot(), 30, 20), 15);
+    assert_eq!(question_height(&render_snapshot(&state), 30, 20), 15);
 }
 
 #[test]
@@ -580,7 +584,7 @@ fn question_modal_keeps_selected_option_and_footer_on_narrow_terminal() {
 
     terminal
         .draw(|frame| {
-            render_question_modal(frame, &state.render_snapshot(), Rect::new(0, 0, 24, 11))
+            render_question_modal(frame, &render_snapshot(&state), Rect::new(0, 0, 24, 11))
         })
         .unwrap();
 
@@ -611,7 +615,7 @@ fn settings_picker_uses_unified_modal_picker_style() {
     state.modal_picker_index = 1;
     terminal
         .draw(|frame| {
-            render_verbosity_picker_modal(frame, &state.render_snapshot(), Rect::new(0, 12, 100, 3))
+            render_verbosity_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 12, 100, 3))
         })
         .unwrap();
     let rendered = terminal
@@ -634,7 +638,7 @@ fn yolo_picker_renders_options() {
     state.modal_picker_index = 0;
     terminal
         .draw(|frame| {
-            render_yolo_picker_modal(frame, &state.render_snapshot(), Rect::new(0, 12, 100, 3))
+            render_yolo_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 12, 100, 3))
         })
         .unwrap();
     let rendered = terminal
@@ -658,7 +662,7 @@ fn effort_picker_renders_options() {
     state.modal_picker_index = 0;
     terminal
         .draw(|frame| {
-            render_effort_picker_modal(frame, &state.render_snapshot(), Rect::new(0, 12, 100, 3))
+            render_effort_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 12, 100, 3))
         })
         .unwrap();
     let rendered = terminal
@@ -681,7 +685,7 @@ fn history_picker_renders_borderless_full_width_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = AppState::new();
     state.show_history_picker = true;
-    state.history_picker_sessions = vec![crate::config::SessionMeta {
+    state.history_picker_sessions = vec![rustcode::config::SessionMeta {
         path: std::path::PathBuf::from("/tmp/test-1.json"),
         title: "Build a polished browser tower-defense game with canvas".to_string(),
         message_count: 6,
@@ -690,7 +694,7 @@ fn history_picker_renders_borderless_full_width_options() {
     state.history_picker_index = 0;
     terminal
         .draw(|frame| {
-            render_history_picker_modal(frame, &state.render_snapshot(), Rect::new(0, 12, 100, 3))
+            render_history_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 12, 100, 3))
         })
         .unwrap();
     let rendered = terminal

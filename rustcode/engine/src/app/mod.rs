@@ -1,13 +1,10 @@
 pub mod events;
-pub(crate) use events::{
-    AppEvent, AppEventSender, ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision,
-};
+pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision};
 pub mod actions;
 pub mod activity;
 pub mod composer;
 pub mod geometry;
 pub mod overlays;
-pub mod runtime;
 pub mod session_controller;
 pub mod state;
 pub mod status;
@@ -20,7 +17,7 @@ pub mod suggestion;
 pub use actions::*;
 pub use geometry::UiRect;
 pub use state::*;
-pub(crate) use subagent_controller::{
+pub use subagent_controller::{
     SubagentCompletion, SubagentController, SubagentError, SubagentId, SubagentSupervisor,
 };
 pub use suggestion::list_project_file_paths;

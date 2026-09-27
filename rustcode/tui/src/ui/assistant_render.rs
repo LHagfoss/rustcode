@@ -105,7 +105,7 @@ pub(super) fn model_label(state: &RenderSnapshot) -> String {
 }
 
 pub(super) struct AssistantRenderOptions {
-    pub(super) token_usage: Option<crate::app::TokenUsage>,
+    pub(super) token_usage: Option<rustcode::app::TokenUsage>,
     pub(super) response_time_ms: Option<u64>,
     pub(super) thought_time_ms: Option<u64>,
     pub(super) thought_tokens: Option<u32>,
@@ -270,9 +270,11 @@ pub(super) fn strip_rendered_tool_blocks(content: &str) -> String {
             }
             let end = block_start + next_rel;
             let block = &after_tag[..rel_end];
-            let is_tool_call =
-                rustcode_tool_protocol::parse_tool_call(block, crate::config::ToolProtocol::Json)
-                    .is_some();
+            let is_tool_call = rustcode_tool_protocol::parse_tool_call(
+                block,
+                rustcode::config::ToolProtocol::Json,
+            )
+            .is_some();
 
             if is_tool_call {
                 output.replace_range(start..end, "");

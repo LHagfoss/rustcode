@@ -398,7 +398,7 @@ pub(crate) async fn start_owned_server(
 pub(crate) struct ScheduledServers(pub(crate) McpRegistry);
 
 impl ScheduledServers {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self(Arc::new(StdMutex::new(HashMap::new())))
     }
 

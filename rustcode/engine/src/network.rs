@@ -38,7 +38,7 @@ pub(crate) fn context_preflight_checkpoint_notice(
 }
 
 #[path = "network/context/mod.rs"]
-pub(crate) mod compaction;
+pub mod compaction;
 
 #[path = "network/retry.rs"]
 pub(crate) mod retry;
@@ -82,8 +82,8 @@ pub(crate) mod events;
 pub(crate) use events::{ToolResult, ToolResultMetadata};
 
 #[path = "network/ui_adapter.rs"]
-pub(crate) mod ui_adapter;
-pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
+pub mod ui_adapter;
+pub use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;

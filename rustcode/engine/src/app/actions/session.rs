@@ -402,7 +402,7 @@ pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
 
 /// Queue an explicitly requested continuation of a restored productive
 /// segment. Opening or resuming a session must not call this implicitly.
-pub(crate) fn queue_restored_segment(s: &mut AppState) -> bool {
+pub fn queue_restored_segment(s: &mut AppState) -> bool {
     if s.background_turn_context.is_none() {
         restore_segment_checkpoint(s);
     }

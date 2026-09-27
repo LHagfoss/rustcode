@@ -590,7 +590,14 @@ mod enter_event_tests {
         let client = reqwest::Client::new();
         let mut cancellation = tokio_util::sync::CancellationToken::new();
 
-        crate::app::handle_enter_with_ui_events(&state, &client, &mut cancellation, sender).await;
+        crate::app::handle_enter_with_ui_events(
+            &state,
+            &client,
+            &mut cancellation,
+            sender,
+            &|| Vec::new(),
+        )
+        .await;
         assert!(
             state.lock().await.orchestrator_running,
             "Enter should claim the queue lease"

@@ -1,112 +1,10 @@
 use super::*;
-use rustcode_tasks::TaskEvent;
-#[cfg(feature = "tui")]
 use std::sync::mpsc::TryRecvError;
 
-#[cfg(feature = "tui")]
 const IDLE_SUMMARY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
-pub(crate) async fn spawn_observed_orchestrator(
-    client: reqwest::Client,
-    state: Arc<Mutex<AppState>>,
-    cancel_token: tokio_util::sync::CancellationToken,
-    ui_events: AgentUiEventSender,
-) -> bool {
-    let lease = {
-        let mut state = state.lock().await;
-        if state.summary_in_flight || state.pending_queue.is_empty() {
-            return false;
-        }
-        let Some(lease) = state.claim_orchestrator() else {
-            return false;
-        };
-        state.status = AppStatus::Queued;
-        lease
-    };
-
-    let handle = tokio::spawn(async move {
-        crate::network::process_queue_orchestrator_with_ui_events(
-            client,
-            state,
-            cancel_token,
-            Arc::new(crate::network::policy::InteractivePolicy),
-            ui_events,
-            lease,
-        )
-        .await;
-    });
-    tokio::spawn(async move {
-        match handle.await {
-            Ok(()) => {}
-            Err(error) if error.is_cancelled() => {
-                crate::dbg_log!("Orchestrator task cancelled");
-            }
-            Err(error) => {
-                crate::dbg_log!("Orchestrator task died: {error}");
-                crate::logger::operational_event(
-                    "orchestrator.task_died",
-                    serde_json::json!({ "error": error.to_string() }),
-                );
-            }
-        }
-    });
-    true
-}
-
-fn record_active_background_task(
-    state: &mut crate::app::AppState,
-    task_id: &str,
-    output: crate::tools::ToolExecutionOutput,
-) -> bool {
-    if state.background_wakeup_ids.contains(task_id) {
-        return false;
-    }
-    if state.orchestrator_running {
-        // A turn is in flight: withhold the output so it joins history at
-        // the next turn boundary instead of derailing the current turn's
-        // context mid-stream. The wakeup is still queued now.
-        state
-            .pending_background_outputs
-            .push(crate::PendingBackgroundOutput {
-                task_id: task_id.to_owned(),
-                output,
-            });
-        crate::queue_background_wakeup(state, task_id);
-        return true;
-    }
-    state
-        .history
-        .push(crate::background_task_history_message(task_id, output));
-    crate::queue_background_wakeup(state, task_id);
-    true
-}
-
-pub(crate) async fn apply_background_task_event(
-    app_state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
-    event: TaskEvent,
-) -> bool {
-    let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
-        return false;
-    };
-    let mut state = app_state.lock().await;
-    if state.active_session_id == session_id {
-        if record_active_background_task(&mut state, &task_id, output) {
-            crate::config::save_session_history(&session_id, &state.history);
-            true
-        } else {
-            false
-        }
-    } else {
-        let mut history = crate::config::load_session_history_direct(&session_id);
-        history.push(crate::background_task_history_message(&task_id, output));
-        crate::config::save_session_history(&session_id, &history);
-        false
-    }
-}
-
-#[cfg(feature = "tui")]
 impl AppRuntime {
-    pub(crate) async fn run(self) -> Result<crate::ExitSummary, Box<dyn Error>> {
+    pub(crate) async fn run(self) -> Result<crate::run::ExitSummary, Box<dyn Error>> {
         let AppRuntime {
             terminal_runtime,
             app_state,
@@ -154,7 +52,7 @@ impl AppRuntime {
             task_subscriptions
                 .entry(active_session_id.clone())
                 .or_insert_with(|| {
-                    crate::tools::background_task_manager()
+                    rustcode::tools::background_task_manager()
                         .subscribe_session(active_session_id.clone())
                 });
             let mut task_events = Vec::new();
@@ -175,7 +73,7 @@ impl AppRuntime {
                 apply_background_task_event(&app_state, event).await;
                 needs_redraw = true;
             }
-            let manager = crate::tools::background_task_manager();
+            let manager = rustcode::tools::background_task_manager();
             // A task removes its record immediately before publishing the
             // terminal event. `has_running` is synchronized with that
             // publication, but drain once more before pruning an inactive
@@ -206,7 +104,7 @@ impl AppRuntime {
             let idle_summary_due = {
                 let mut state = app_state.lock().await;
                 let background_tasks_active =
-                    crate::tools::has_background_tasks(&state.active_session_id);
+                    rustcode::tools::has_background_tasks(&state.active_session_id);
                 let due = state.should_start_idle_summary(
                     std::time::Instant::now(),
                     background_tasks_active,
@@ -218,7 +116,7 @@ impl AppRuntime {
                 let state_clone = std::sync::Arc::clone(&app_state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    crate::app::summarize_session_after_idle(&state_clone, &client_clone).await;
+                    rustcode::app::summarize_session_after_idle(&state_clone, &client_clone).await;
                 });
             }
 
@@ -230,7 +128,7 @@ impl AppRuntime {
             let stall_recovered = {
                 let mut state = app_state.lock().await;
                 let background_tasks_active =
-                    crate::tools::has_background_tasks(&state.active_session_id);
+                    rustcode::tools::has_background_tasks(&state.active_session_id);
                 match state.check_stall_watchdog(background_tasks_active, std::time::Instant::now())
                 {
                     None => None,
@@ -245,9 +143,9 @@ impl AppRuntime {
                         };
                         state
                             .history
-                            .push(crate::app::ChatMessage::new("system", notice));
+                            .push(rustcode::app::ChatMessage::new("system", notice));
                         let session_id = state.active_session_id.clone();
-                        crate::config::save_session_history(&session_id, &state.history);
+                        rustcode::config::save_session_history(&session_id, &state.history);
                         state.clear_active_turn_projection();
                         state.enter_idle();
                         state.request_redraw();
@@ -256,7 +154,7 @@ impl AppRuntime {
                 }
             };
             if let Some(queue_preserved) = stall_recovered {
-                crate::logger::operational_event(
+                rustcode::logger::operational_event(
                     "turn.stall_recovered",
                     serde_json::json!({ "queue_preserved": queue_preserved }),
                 );
@@ -299,7 +197,7 @@ impl AppRuntime {
             if let Some(target) = update_version {
                 let target_version = match target {
                     Some(v) => Some(v),
-                    None => match crate::update::check_for_update(&client).await {
+                    None => match rustcode::update::check_for_update(&client).await {
                         Ok(rustcode_core::update::UpdateCheck::Available { latest, .. }) => {
                             Some(latest)
                         }
@@ -354,7 +252,7 @@ impl AppRuntime {
 
             let (response_active, background_redraw) = {
                 let mut s = app_state.lock().await;
-                let background_active = crate::tools::has_background_tasks(&s.active_session_id);
+                let background_active = rustcode::tools::has_background_tasks(&s.active_session_id);
                 (
                     s.status_state().is_active() || background_active,
                     s.take_redraw_request(),
@@ -364,7 +262,7 @@ impl AppRuntime {
             while let Ok(agent_event) = agent_ui_event_receiver.try_recv() {
                 if matches!(&agent_event, AgentUiEvent::ApprovalRequested { .. }) {
                     let _ = app_event_sender.send(AppEvent::OpenOverlay(
-                        crate::app::events::Overlay::ToolConfirmation,
+                        rustcode::app::events::Overlay::ToolConfirmation,
                     ));
                 }
                 transcript_state.apply_agent_event(&agent_event);
@@ -394,7 +292,7 @@ impl AppRuntime {
             }
 
             let response_just_finished = was_responding && !response_active;
-            if crate::app::status::should_notify_response_finished(
+            if rustcode::app::status::should_notify_response_finished(
                 response_just_finished,
                 terminal_focused,
             ) {
@@ -461,114 +359,14 @@ impl AppRuntime {
         let mut exit_summary = {
             let s = app_state.lock().await;
             s.subagent_supervisor.shutdown();
-            crate::ExitSummary::from_state(&s)
+            crate::run::ExitSummary::from_state(&s)
         };
         if update_exit {
             exit_summary.print_handoff = false;
         }
-        crate::config::flush_history();
+        rustcode::config::flush_history();
         restore_terminal(&mut terminal_runtime, exit_summary.composer_y)?;
         discord_rpc.shutdown();
         Ok(exit_summary)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::record_active_background_task;
-    use crate::app::AppState;
-    use crate::tools::ToolExecutionOutput;
-
-    #[test]
-    fn active_completion_is_recorded_and_queued_once() {
-        let mut state = AppState::new();
-        state.active_session_id = "active-completion-session".to_owned();
-        let output = ToolExecutionOutput::success("cargo test passed".to_owned());
-
-        assert!(record_active_background_task(
-            &mut state,
-            "task-completed-once",
-            output.clone()
-        ));
-        assert!(!record_active_background_task(
-            &mut state,
-            "task-completed-once",
-            output
-        ));
-        assert_eq!(state.history.len(), 1);
-        assert_eq!(
-            state.pending_queue,
-            vec!["__task_wakeup__:task-completed-once".to_owned()]
-        );
-        assert!(state.background_wakeup_ids.contains("task-completed-once"));
-    }
-
-    #[test]
-    fn completion_during_active_turn_is_withheld_until_boundary() {
-        let mut state = AppState::new();
-        state.active_session_id = "withheld-session".to_owned();
-        state.orchestrator_running = true;
-        let output = ToolExecutionOutput::success("done".to_owned());
-
-        assert!(record_active_background_task(
-            &mut state,
-            "task-withheld",
-            output.clone()
-        ));
-        assert!(!record_active_background_task(
-            &mut state,
-            "task-withheld",
-            output
-        ));
-        assert_eq!(state.history.len(), 0);
-        assert_eq!(state.pending_background_outputs.len(), 1);
-        assert_eq!(
-            state.pending_queue,
-            vec!["__task_wakeup__:task-withheld".to_owned()]
-        );
-
-        state.orchestrator_running = false;
-        assert_eq!(crate::flush_pending_background_outputs(&mut state), 1);
-        assert_eq!(state.history.len(), 1);
-        assert!(state.history[0].content.contains("done"));
-        assert!(state.pending_background_outputs.is_empty());
-        assert_eq!(crate::flush_pending_background_outputs(&mut state), 0);
-    }
-
-    #[test]
-    fn session_subscription_retains_inactive_completion_until_consumed() {
-        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
-        let subscription = manager.subscribe_session("inactive-session");
-        let task = manager
-            .spawn_with_id(
-                "inactive-completion-task",
-                rustcode_tasks::TaskSpec::new(
-                    "inactive-session",
-                    rustcode_command::CommandRequest {
-                        command: if cfg!(target_os = "windows") {
-                            "echo retained".to_owned()
-                        } else {
-                            "printf retained".to_owned()
-                        },
-                        status_command: None,
-                        sandboxed_shell: false,
-                        cwd: None,
-                        env: Vec::new(),
-                        timeout: std::time::Duration::from_secs(5),
-                        process_group: true,
-                        inherited_fds: Vec::new(),
-                    },
-                ),
-            )
-            .expect("spawn inactive task");
-
-        let mut saw_finished = false;
-        while let Ok(event) = subscription.recv() {
-            if event.task_id() == task.id() && event.is_terminal() {
-                saw_finished = true;
-                break;
-            }
-        }
-        assert!(saw_finished, "inactive session completion was retained");
     }
 }

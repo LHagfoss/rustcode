@@ -59,10 +59,6 @@ use modals::{
 };
 use tool_result::render_tool_result;
 
-#[cfg(test)]
-use crate::app::AppState;
-use crate::app::activity::{ActivityKind, classify_activity, classify_live_tools};
-use crate::app::{AppStatus, ChatMessage};
 use crate::inline_terminal::Frame;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
@@ -71,6 +67,10 @@ use ratatui::{
     widgets::{Clear, Paragraph, Wrap},
 };
 use render_snapshot::RenderSnapshot;
+#[cfg(test)]
+use rustcode::app::AppState;
+use rustcode::app::activity::{ActivityKind, classify_activity, classify_live_tools};
+use rustcode::app::{AppStatus, ChatMessage};
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::OnceLock;
@@ -182,7 +182,7 @@ pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
 }
 
-pub use crate::app::suggestion::CommandInfo;
+pub use rustcode::app::suggestion::CommandInfo;
 
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool) -> Style {
     Style::default().fg(fg).bg(bg).add_modifier(modifier)

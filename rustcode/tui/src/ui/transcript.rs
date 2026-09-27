@@ -1,7 +1,7 @@
-use crate::app::{ChatMessage, TokenUsage};
 #[cfg(test)]
 use crate::ui::scrollback::TranscriptCursor;
 use ratatui::text::Line;
+use rustcode::app::{ChatMessage, TokenUsage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HistoryCell {
@@ -126,29 +126,29 @@ impl TranscriptModel {
         }
     }
 
-    pub(crate) fn apply_agent_event(&mut self, event: &crate::network::ui_adapter::AgentUiEvent) {
+    pub(crate) fn apply_agent_event(
+        &mut self,
+        event: &rustcode::network::ui_adapter::AgentUiEvent,
+    ) {
         match event {
-            crate::network::ui_adapter::AgentUiEvent::PromptStarted { .. } => {
+            rustcode::network::ui_adapter::AgentUiEvent::PromptStarted { .. } => {
                 self.live = None;
             }
-            crate::network::ui_adapter::AgentUiEvent::SubagentUpdated { .. } => {}
-            crate::network::ui_adapter::AgentUiEvent::TextDelta { text } => {
+            rustcode::network::ui_adapter::AgentUiEvent::SubagentUpdated { .. } => {}
+            rustcode::network::ui_adapter::AgentUiEvent::TextDelta { text } => {
                 self.apply_text_delta(text);
             }
-            crate::network::ui_adapter::AgentUiEvent::TurnFinished { content, .. } => {
+            rustcode::network::ui_adapter::AgentUiEvent::TurnFinished { content, .. } => {
                 if !content.is_empty() {
                     self.replace_live_text(content);
                 }
                 self.commit_live();
             }
-            crate::network::ui_adapter::AgentUiEvent::Cancelled { .. }
-            | crate::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
-            | crate::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
-            | crate::network::ui_adapter::AgentUiEvent::QuestionRequested { .. }
-            | crate::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
-            #[cfg(test)]
-            crate::network::ui_adapter::AgentUiEvent::Error { .. }
-            | crate::network::ui_adapter::AgentUiEvent::TurnRecovered { .. } => {}
+            rustcode::network::ui_adapter::AgentUiEvent::Cancelled { .. }
+            | rustcode::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
+            | rustcode::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
+            | rustcode::network::ui_adapter::AgentUiEvent::QuestionRequested { .. }
+            | rustcode::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
         }
     }
 
@@ -207,7 +207,7 @@ impl TranscriptModel {
 #[cfg(test)]
 mod tests {
     use super::{HistoryCell, TranscriptEvent, TranscriptModel};
-    use crate::app::ChatMessage;
+    use rustcode::app::ChatMessage;
 
     #[test]
     fn history_converts_to_owned_cells_and_keeps_roles() {
@@ -259,10 +259,10 @@ mod tests {
     #[test]
     fn agent_ui_events_update_one_live_cell_and_commit_it() {
         let mut model = TranscriptModel::default();
-        model.apply_agent_event(&crate::network::ui_adapter::AgentUiEvent::TextDelta {
+        model.apply_agent_event(&rustcode::network::ui_adapter::AgentUiEvent::TextDelta {
             text: "answer".to_owned(),
         });
-        model.apply_agent_event(&crate::network::ui_adapter::AgentUiEvent::TurnFinished {
+        model.apply_agent_event(&rustcode::network::ui_adapter::AgentUiEvent::TurnFinished {
             content: "answer".to_owned(),
             completed: true,
         });

@@ -107,7 +107,7 @@ pub(super) async fn handle_app_event(
             *needs_redraw = true;
         }
         AppEvent::CancelActiveTurn => {
-            crate::app::handle_escape(&app_state, current_cancel_token).await;
+            rustcode::app::handle_escape(&app_state, current_cancel_token).await;
             *needs_redraw = true;
         }
         AppEvent::Tui(ev) => match ev {
@@ -118,7 +118,7 @@ pub(super) async fn handle_app_event(
                 let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
                 if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
-                    if crate::app::handle_ctrl_c(&app_state).await {
+                    if rustcode::app::handle_ctrl_c(&app_state).await {
                         return Ok(InputFlow::Exit { update: false });
                     }
                     return Ok(InputFlow::ContinueIteration);
@@ -251,7 +251,8 @@ pub(super) async fn handle_app_event(
                                         || key.modifiers.contains(event::KeyModifiers::SUPER)
                                         || key.modifiers.contains(event::KeyModifiers::META) =>
                                 {
-                                    if let Some(text) = crate::clipboard::read_text_from_clipboard()
+                                    if let Some(text) =
+                                        rustcode::clipboard::read_text_from_clipboard()
                                     {
                                         let normalized =
                                             text.replace("\r\n", "\n").replace('\r', "\n");
@@ -500,7 +501,7 @@ pub(super) async fn handle_app_event(
                                 };
                                 s.verbosity = new_verbosity.clone();
                                 s.config.verbosity = new_verbosity;
-                                crate::config::save_entire_config(&s.config);
+                                rustcode::config::save_entire_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -537,7 +538,7 @@ pub(super) async fn handle_app_event(
                                 {
                                     profile.enable_thinking = value;
                                 }
-                                crate::config::save_entire_config(&s.config);
+                                rustcode::config::save_entire_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -575,7 +576,7 @@ pub(super) async fn handle_app_event(
                                 {
                                     profile.reasoning_effort = value;
                                 }
-                                crate::config::save_entire_config(&s.config);
+                                rustcode::config::save_entire_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -602,13 +603,13 @@ pub(super) async fn handle_app_event(
                             KeyCode::Enter => {
                                 let mut s = app_state.lock().await;
                                 let (protocol, label) = match s.modal_picker_index {
-                                    0 => (crate::config::ToolProtocol::Json, "JSON (```tool)"),
+                                    0 => (rustcode::config::ToolProtocol::Json, "JSON (```tool)"),
                                     1 => (
-                                        crate::config::ToolProtocol::Native,
+                                        rustcode::config::ToolProtocol::Native,
                                         "Native ([TOOL_CALLS])",
                                     ),
                                     _ => (
-                                        crate::config::ToolProtocol::ApiNative,
+                                        rustcode::config::ToolProtocol::ApiNative,
                                         "ApiNative (schema in request `tools`, structured `tool_calls` back)",
                                     ),
                                 };
@@ -623,7 +624,7 @@ pub(super) async fn handle_app_event(
                                 } else {
                                     s.config.tool_protocol = protocol;
                                 }
-                                crate::config::save_entire_config(&s.config);
+                                rustcode::config::save_entire_config(&s.config);
                                 let active_model = s.model_name.clone();
                                 s.history.push(ChatMessage::new(
                                     "system",
@@ -743,8 +744,10 @@ pub(super) async fn handle_app_event(
                                 let action = s
                                     .history_picker_sessions
                                     .get(del_idx)
-                                    .and_then(crate::app::session_controller::session_id_from_meta)
-                                    .map(crate::app::events::SessionAction::Id);
+                                    .and_then(
+                                        rustcode::app::session_controller::session_id_from_meta,
+                                    )
+                                    .map(rustcode::app::events::SessionAction::Id);
                                 s.pending_delete_session_idx = None;
                                 if let Some(action) = action {
                                     let _ = app_event_sender.send(AppEvent::DeleteSession(action));
@@ -790,8 +793,8 @@ pub(super) async fn handle_app_event(
                             if let Some(action) = s
                                 .history_picker_sessions
                                 .get(idx)
-                                .and_then(crate::app::session_controller::session_id_from_meta)
-                                .map(crate::app::events::SessionAction::Id)
+                                .and_then(rustcode::app::session_controller::session_id_from_meta)
+                                .map(rustcode::app::events::SessionAction::Id)
                             {
                                 let _ = app_event_sender.send(AppEvent::ResumeSession(action));
                             }
@@ -882,7 +885,7 @@ pub(super) async fn handle_app_event(
                                     .collect::<Vec<_>>();
 
                                 if !name.is_empty() && !command.is_empty() {
-                                    let new_srv = crate::config::McpServerConfig {
+                                    let new_srv = rustcode::config::McpServerConfig {
                                         name: name.clone(),
                                         command,
                                         args,
@@ -899,15 +902,16 @@ pub(super) async fn handle_app_event(
                                         let old_name = s.config.mcp_servers[idx].name.clone();
                                         s.config.mcp_servers[idx] = new_srv;
                                         if old_name != name {
-                                            crate::mcp::shutdown_server(&old_name).await;
+                                            rustcode::mcp::shutdown_server(&old_name).await;
                                         }
                                     }
 
-                                    crate::config::save_entire_config(&s.config);
+                                    rustcode::config::save_entire_config(&s.config);
 
                                     let name_clone = name.clone();
                                     tokio::spawn(async move {
-                                        let _ = crate::mcp::start_server_by_name(&name_clone).await;
+                                        let _ =
+                                            rustcode::mcp::start_server_by_name(&name_clone).await;
                                     });
 
                                     s.mcp_edit_state = None;
@@ -941,7 +945,7 @@ pub(super) async fn handle_app_event(
                                 }
                             }
                             KeyCode::Char('a') | KeyCode::Char('A') => {
-                                s.mcp_edit_state = Some(crate::app::McpEditState {
+                                s.mcp_edit_state = Some(rustcode::app::McpEditState {
                                     is_add: true,
                                     edit_index: None,
                                     name_input: String::new(),
@@ -954,7 +958,7 @@ pub(super) async fn handle_app_event(
                             KeyCode::Char('e') | KeyCode::Char('E') => {
                                 let idx = s.mcp_picker_index;
                                 if let Some(srv) = s.config.mcp_servers.get(idx) {
-                                    s.mcp_edit_state = Some(crate::app::McpEditState {
+                                    s.mcp_edit_state = Some(rustcode::app::McpEditState {
                                         is_add: false,
                                         edit_index: Some(idx),
                                         name_input: srv.name.clone(),
@@ -969,10 +973,10 @@ pub(super) async fn handle_app_event(
                                 let idx = s.mcp_picker_index;
                                 if idx < s.config.mcp_servers.len() {
                                     let removed = s.config.mcp_servers.remove(idx);
-                                    crate::config::save_entire_config(&s.config);
+                                    rustcode::config::save_entire_config(&s.config);
                                     let name_clone = removed.name.clone();
                                     tokio::spawn(async move {
-                                        crate::mcp::shutdown_server(&name_clone).await;
+                                        rustcode::mcp::shutdown_server(&name_clone).await;
                                     });
                                     if s.mcp_picker_index >= s.config.mcp_servers.len()
                                         && s.mcp_picker_index > 0
@@ -987,13 +991,14 @@ pub(super) async fn handle_app_event(
                                     srv.enabled = !srv.enabled;
                                     let name_clone = srv.name.clone();
                                     let enabled = srv.enabled;
-                                    crate::config::save_entire_config(&s.config);
+                                    rustcode::config::save_entire_config(&s.config);
                                     tokio::spawn(async move {
                                         if enabled {
                                             let _ =
-                                                crate::mcp::start_server_by_name(&name_clone).await;
+                                                rustcode::mcp::start_server_by_name(&name_clone)
+                                                    .await;
                                         } else {
-                                            crate::mcp::shutdown_server(&name_clone).await;
+                                            rustcode::mcp::shutdown_server(&name_clone).await;
                                         }
                                     });
                                 }
@@ -1011,7 +1016,7 @@ pub(super) async fn handle_app_event(
                             s.show_model_picker = false;
                         }
                         KeyCode::Up => {
-                            let len = crate::app::get_picker_items_count(&s);
+                            let len = rustcode::app::get_picker_items_count(&s);
                             if len > 0 {
                                 s.model_picker_index = if s.model_picker_index == 0 {
                                     len - 1
@@ -1021,7 +1026,7 @@ pub(super) async fn handle_app_event(
                             }
                         }
                         KeyCode::Down => {
-                            let len = crate::app::get_picker_items_count(&s);
+                            let len = rustcode::app::get_picker_items_count(&s);
                             if len > 0 {
                                 s.model_picker_index = if s.model_picker_index + 1 >= len {
                                     0
@@ -1031,9 +1036,9 @@ pub(super) async fn handle_app_event(
                             }
                         }
                         KeyCode::Enter => {
-                            crate::app::select_picker_model(&mut s);
+                            rustcode::app::select_picker_model(&mut s);
                             s.show_model_picker = false;
-                            crate::app::spawn_context_window_detection(
+                            rustcode::app::spawn_context_window_detection(
                                 Arc::clone(&app_state),
                                 client.clone(),
                             );
@@ -1089,7 +1094,7 @@ pub(super) async fn handle_app_event(
                                 .clone();
                             s.config.theme = selected.clone();
                             s.show_theme_picker = false;
-                            crate::config::save_entire_config(&s.config);
+                            rustcode::config::save_entire_config(&s.config);
                             s.set_notice(format!("Theme set to '{}'", selected));
                         }
                         _ => {}
@@ -1151,14 +1156,14 @@ pub(super) async fn handle_app_event(
                                         current_cancel_token.cancel();
                                         *current_cancel_token =
                                             tokio_util::sync::CancellationToken::new();
-                                        crate::app::start_new_session(&mut s);
+                                        rustcode::app::start_new_session(&mut s);
                                     }
                                     "/resume" => {
-                                        crate::app::resume_latest_session(&mut s);
+                                        rustcode::app::resume_latest_session(&mut s);
                                     }
                                     "/continue" => {
                                         let queued =
-                                            crate::app::actions::queue_restored_segment(&mut s);
+                                            rustcode::app::actions::queue_restored_segment(&mut s);
                                         let message = if queued {
                                             "Queued the pending session work."
                                         } else {
@@ -1171,7 +1176,7 @@ pub(super) async fn handle_app_event(
                                         s.subagent_picker_index = 0;
                                     }
                                     "/skills" => {
-                                        let skills = crate::skills::discover_skills();
+                                        let skills = rustcode::skills::discover_skills();
                                         if skills.is_empty() {
                                             s.history.push(ChatMessage::new(
                                         "system",
@@ -1197,33 +1202,35 @@ pub(super) async fn handle_app_event(
                                         }
                                     }
                                     "/info" | "/about" => {
-                                        let info = crate::app::actions::build_info_text();
+                                        let info = rustcode::app::actions::build_info_text();
                                         s.history.push(ChatMessage::new("system", info));
                                     }
                                     "/changelog" => {
                                         let log_text =
-                                            crate::app::actions::build_latest_changelog();
+                                            rustcode::app::actions::build_latest_changelog();
                                         s.history.push(ChatMessage::new("assistant", log_text));
                                     }
                                     "/quota" => {
-                                        crate::app::actions::trigger_quota_fetch(
+                                        rustcode::app::actions::trigger_quota_fetch(
                                             &s, &app_state, &client,
                                         );
                                     }
                                     "/sync" => {
-                                        crate::app::actions::trigger_sync(&app_state, None, None);
+                                        rustcode::app::actions::trigger_sync(
+                                            &app_state, None, None,
+                                        );
                                     }
                                     "/update" => {
                                         s.update_check =
                                             rustcode_core::update::UpdateState::Checking;
                                         s.set_notice("🔍 Checking for a RustCode update...");
-                                        crate::app::actions::trigger_update(&app_state, &client);
+                                        rustcode::app::actions::trigger_update(&app_state, &client);
                                     }
                                     "/copy" => {
-                                        crate::app::copy_last_reply(&mut s);
+                                        rustcode::app::copy_last_reply(&mut s);
                                     }
                                     "/help" => {
-                                        let help = crate::app::build_help_text();
+                                        let help = rustcode::app::build_help_text();
                                         s.history.push(ChatMessage::new("system", help));
                                     }
                                     "/context" => {
@@ -1274,7 +1281,7 @@ pub(super) async fn handle_app_event(
                                     }
                                     "/yolo" => {
                                         s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
-                                        s.status = crate::app::AppStatus::YoloPicker;
+                                        s.status = rustcode::app::AppStatus::YoloPicker;
                                     }
                                     "/stats" | "/usage" | "/status" => {
                                         s.history.push(ChatMessage::new(
@@ -1283,11 +1290,11 @@ pub(super) async fn handle_app_event(
                                         ));
                                     }
                                     "/memory" => {
-                                        crate::app::check_memory_usage(&mut s);
+                                        rustcode::app::check_memory_usage(&mut s);
                                     }
                                     "/tools" => {
                                         let mut text = String::from("Available tools:");
-                                        for t in crate::tools::TOOLS {
+                                        for t in rustcode::tools::TOOLS {
                                             text.push_str(&format!("\n  {}", t.name));
                                         }
                                         s.history.push(ChatMessage::new("system", text));
@@ -1327,11 +1334,17 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                     ui::ComposerAction::Submit => {
-                        if crate::app::handle_enter_with_ui_events(
+                        if rustcode::app::handle_enter_with_ui_events(
                             &app_state,
                             &client,
                             current_cancel_token,
                             agent_ui_event_sender.clone(),
+                            &|| {
+                                crate::ui::theme::load_available_themes()
+                                    .into_iter()
+                                    .map(|t| t.name)
+                                    .collect()
+                            },
                         )
                         .await
                         {
@@ -1345,10 +1358,12 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                     ui::ComposerAction::Paste => {
-                        if let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard() {
+                        if let Some(img_markdown) =
+                            rustcode::clipboard::paste_image_from_clipboard()
+                        {
                             let mut state = app_state.lock().await;
                             composer.handle_paste(&mut state, &img_markdown);
-                        } else if let Some(text) = crate::clipboard::read_text_from_clipboard() {
+                        } else if let Some(text) = rustcode::clipboard::read_text_from_clipboard() {
                             let mut state = app_state.lock().await;
                             composer.handle_paste(&mut state, &text);
                         }
@@ -1374,14 +1389,14 @@ pub(super) async fn handle_app_event(
                             s.cursor_position = 0;
                         } else {
                             drop(s);
-                            crate::app::handle_escape(&app_state, current_cancel_token).await;
+                            rustcode::app::handle_escape(&app_state, current_cancel_token).await;
                         }
                         *needs_redraw = true;
                     }
                     KeyCode::Up => {
                         let mut s = app_state.lock().await;
                         let completion_len =
-                            crate::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if current == 0 {
@@ -1412,7 +1427,7 @@ pub(super) async fn handle_app_event(
                     KeyCode::Down => {
                         let mut s = app_state.lock().await;
                         let completion_len =
-                            crate::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if current + 1 >= completion_len {
@@ -1468,11 +1483,17 @@ pub(super) async fn handle_app_event(
                             s.insert_char('\n');
                             s.reset_suggestion_cycle();
                         } else {
-                            if crate::app::handle_enter_with_ui_events(
+                            if rustcode::app::handle_enter_with_ui_events(
                                 &app_state,
                                 &client,
                                 current_cancel_token,
                                 agent_ui_event_sender.clone(),
+                                &|| {
+                                    crate::ui::theme::load_available_themes()
+                                        .into_iter()
+                                        .map(|t| t.name)
+                                        .collect()
+                                },
                             )
                             .await
                             {
@@ -1485,13 +1506,15 @@ pub(super) async fn handle_app_event(
                             || key.modifiers.contains(event::KeyModifiers::SUPER)
                             || key.modifiers.contains(event::KeyModifiers::META) =>
                     {
-                        if let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard() {
+                        if let Some(img_markdown) =
+                            rustcode::clipboard::paste_image_from_clipboard()
+                        {
                             let mut s = app_state.lock().await;
                             for c in img_markdown.chars() {
                                 s.insert_char(c);
                             }
                             s.reset_suggestion_cycle();
-                        } else if let Some(text) = crate::clipboard::read_text_from_clipboard() {
+                        } else if let Some(text) = rustcode::clipboard::read_text_from_clipboard() {
                             let mut s = app_state.lock().await;
                             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                             const PASTE_THRESHOLD: usize = 300;
@@ -1515,7 +1538,7 @@ pub(super) async fn handle_app_event(
                     {
                         let mut s = app_state.lock().await;
                         let completion_len =
-                            crate::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if key.code == KeyCode::Char('p') {
@@ -1578,7 +1601,7 @@ pub(super) async fn handle_app_event(
                             s.reset_suggestion_cycle();
                         } else if c == '?' && !ctrl && !alt && !cmd && s.input_buffer.is_empty() {
                             s.history
-                                .push(ChatMessage::new("system", crate::app::build_help_text()));
+                                .push(ChatMessage::new("system", rustcode::app::build_help_text()));
                             s.request_redraw();
                         } else if !ctrl && !alt && !c.is_control() {
                             s.insert_char(c);
@@ -1633,7 +1656,7 @@ pub(super) async fn handle_app_event(
                 // is empty — fall back to grabbing the image so it still turns
                 // into an `![image](file://…)` marker that renders as [Image #N].
                 if text.trim().is_empty()
-                    && let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard()
+                    && let Some(img_markdown) = rustcode::clipboard::paste_image_from_clipboard()
                 {
                     let mut s = app_state.lock().await;
                     if !s.show_mcp_config && s.status != AppStatus::AwaitingQuestion {

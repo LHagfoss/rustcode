@@ -1,5 +1,6 @@
 use super::AppError;
-use crate::app::{AppEvent, AppState};
+use crate::runtime::events::AppEvent;
+use rustcode::app::AppState;
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn apply_session_event(
@@ -7,7 +8,7 @@ pub(super) fn apply_session_event(
     cancel_token: &mut CancellationToken,
     event: AppEvent,
 ) -> Result<(), AppError> {
-    let controller = crate::app::session_controller::SessionController::default();
+    let controller = rustcode::app::session_controller::SessionController::default();
     let archive_only = matches!(&event, AppEvent::ArchiveSession);
     if !archive_only {
         cancel_token.cancel();
@@ -36,9 +37,9 @@ pub(super) fn apply_session_event(
 }
 
 fn format_session_transition(
-    transition: &crate::app::session_controller::SessionTransition,
+    transition: &rustcode::app::session_controller::SessionTransition,
 ) -> String {
-    use crate::app::session_controller::SessionTransition;
+    use rustcode::app::session_controller::SessionTransition;
     match transition {
         SessionTransition::Started { .. } => "Started a new session".to_owned(),
         SessionTransition::Resumed { .. } => "Resumed session".to_owned(),
@@ -49,14 +50,15 @@ fn format_session_transition(
     }
 }
 
-pub(super) fn open_overlay(state: &mut AppState, overlay: crate::app::events::Overlay) {
-    if matches!(overlay, crate::app::events::Overlay::History) {
-        let (sessions, truncated) = crate::app::actions::build_session_list_with_truncation(state);
+pub(super) fn open_overlay(state: &mut AppState, overlay: rustcode::app::events::Overlay) {
+    if matches!(overlay, rustcode::app::events::Overlay::History) {
+        let (sessions, truncated) =
+            rustcode::app::actions::build_session_list_with_truncation(state);
         state.history_picker_sessions = sessions;
         state.history_picker_index = 0;
         state.history_picker_truncated = truncated;
     }
-    if matches!(overlay, crate::app::events::Overlay::Subagents) {
+    if matches!(overlay, rustcode::app::events::Overlay::Subagents) {
         state.subagent_picker_index = 0;
     }
     state.overlays().open(overlay);
@@ -64,10 +66,10 @@ pub(super) fn open_overlay(state: &mut AppState, overlay: crate::app::events::Ov
 
 pub(super) fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppError> {
     if id == 0 {
-        crate::app::SubagentController.select_root(state);
+        rustcode::app::SubagentController.select_root(state);
     } else {
-        crate::app::SubagentController
-            .select(state, crate::app::SubagentId::from_raw(id))
+        rustcode::app::SubagentController
+            .select(state, rustcode::app::SubagentId::from_raw(id))
             .map_err(|error| AppError(error.to_string()))?;
     }
     state.show_subagent_picker = false;

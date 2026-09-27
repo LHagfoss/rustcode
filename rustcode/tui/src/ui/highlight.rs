@@ -892,6 +892,7 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::tests::THEME_TEST_LOCK;
 
     fn row_width(line: &Line) -> usize {
         line.spans.iter().map(|s| s.content.width()).sum()
@@ -899,6 +900,7 @@ mod tests {
 
     #[test]
     fn shell_highlighting_preserves_text_and_applies_token_styles() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let cmd = "cd /Users/lagos/code/lcli && git status --short --branch; echo \"===\"; wc -l src/commands/ls.rs src/main.rs src/cli.rs; echo \"===\"; cargo check 2>&1 | head -40";
         let test_lines = highlight_shell_command(cmd, COLOR_BG(), false);
         let rendered = test_lines
@@ -936,6 +938,7 @@ mod tests {
 
     #[test]
     fn shell_highlighting_keeps_multiline_commands_and_bounds_long_lines() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let multiline = "printf '%s\\n' one\nprintf '%s\\n' two";
         let lines = highlight_shell_command(multiline, COLOR_BG(), false);
         assert_eq!(lines.len(), 2);
@@ -951,7 +954,7 @@ mod tests {
 
     #[test]
     fn wraps_and_pads_every_row_to_width() {
-        // A single long span must split across rows, each padded to full width.
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock"); // A single long span must split across rows, each padded to full width.
         let spans = vec![Span::raw("abcdefghijklmnop")];
         let rows = wrap_code_spans(spans, 6, COLOR_ELEMENT(), false);
         assert_eq!(rows.len(), 3); // 16 chars / 6 = 3 rows
@@ -962,6 +965,7 @@ mod tests {
 
     #[test]
     fn pads_empty_input_to_one_full_row() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let rows = wrap_code_spans(Vec::new(), 8, COLOR_ELEMENT(), false);
         assert_eq!(rows.len(), 1);
         assert_eq!(row_width(&rows[0]), 8);
@@ -969,7 +973,7 @@ mod tests {
 
     #[test]
     fn side_by_side_diff_fills_full_width() {
-        // A `\0`-separated row renders old|new columns spanning the whole width.
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock"); // A `\0`-separated row renders old|new columns spanning the whole width.
         let line = highlight_diff_line("-let x = 1;\0+let x = 2;", 40, false);
         assert_eq!(row_width(&line), 40);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -978,6 +982,7 @@ mod tests {
 
     #[test]
     fn unified_diff_row_without_nul_still_single_column() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let line = highlight_diff_line("+added line", 40, false);
         assert_eq!(row_width(&line), 40);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -989,6 +994,7 @@ mod tests {
 
     #[test]
     fn highlights_non_rust_fenced_languages() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let spans = highlight_code_line("def greet(name):", "python", false);
         let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
         assert_eq!(text, "def greet(name):");
@@ -997,6 +1003,7 @@ mod tests {
 
     #[test]
     fn unknown_language_falls_back_without_guessing_rust() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let spans = highlight_code_line("for value in words", "made-up-language", false);
         let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
         assert_eq!(text, "for value in words");
@@ -1004,6 +1011,7 @@ mod tests {
 
     #[test]
     fn unified_diff_adds_hunk_aware_line_numbers() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         let lines = render_unified_diff("@@ -4,2 +7,2 @@\n-old\n+new\n context", 60, false);
         assert_eq!(lines.len(), 4);
         let text: String = lines[1]

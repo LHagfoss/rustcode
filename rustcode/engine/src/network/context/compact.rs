@@ -535,7 +535,7 @@ fn compaction_boundary(summary: &str, retained_tail: &[ChatMessage]) -> Compacti
 
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.
-pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
+pub const SUMMARY_MARKER: &str = "[Session History Summary]";
 pub(super) const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
 pub(super) const PRESERVED_USER_REQUEST_MARKER: &str = "[Preserved user request]";
 

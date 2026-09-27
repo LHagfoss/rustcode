@@ -7,7 +7,7 @@ mod models;
 use models::MAX_LIVE_TOOL_OUTPUT_BYTES;
 pub use models::*;
 
-pub(crate) struct StallRecovery {
+pub struct StallRecovery {
     pub reset_orchestrator: bool,
     /// The queue still holds prompts: recovery must preserve them (the spawn
     /// loop restarts them) instead of telling the user to reissue.
@@ -15,7 +15,7 @@ pub(crate) struct StallRecovery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ToolConfirmationResponse {
+pub enum ToolConfirmationResponse {
     Approve,
     ApproveAndRemember(String),
     ForbidAndRemember(String),
@@ -26,8 +26,8 @@ pub(crate) enum ToolConfirmationResponse {
 /// generation are both part of the claim so a task that is unwinding after a
 /// cancellation or session switch cannot release a newer orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OrchestratorLease {
-    pub(crate) session_id: String,
+pub struct OrchestratorLease {
+    pub session_id: String,
     pub(crate) generation: u64,
 }
 
@@ -37,13 +37,13 @@ pub(crate) struct OrchestratorLease {
 pub(crate) const STALL_WATCHDOG_TIMEOUT_SECS: u64 = 5 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingSteer {
-    pub(crate) session_id: String,
-    pub(crate) text: String,
+pub struct PendingSteer {
+    pub session_id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum DraftSubmitMode {
+pub enum DraftSubmitMode {
     #[default]
     Steer,
     Queue,
@@ -70,14 +70,14 @@ pub struct AppState {
     pub pending_queue: Vec<String>,
     /// User instructions submitted during an explicitly steerable active turn.
     /// These remain separate from ordinary follow-up prompts until applied.
-    pub(crate) pending_steers: Vec<PendingSteer>,
+    pub pending_steers: Vec<PendingSteer>,
     /// Number of promoted steering prompts at the head of `pending_queue`.
     /// This prefix survives FIFO edits so its segment wakeup can retain context.
     pub(crate) promoted_steer_prefix_count: usize,
     /// Session ID of the regular interactive turn currently allowed to accept
     /// steering input. Other kinds of active work leave this unset.
-    pub(crate) active_turn_steerable_session: Option<String>,
-    pub(crate) draft_submit_mode: DraftSubmitMode,
+    pub active_turn_steerable_session: Option<String>,
+    pub draft_submit_mode: DraftSubmitMode,
     /// Background task IDs whose terminal completion has already been queued.
     /// This makes completion notifications idempotent across callback races.
     pub background_wakeup_ids: std::collections::BTreeSet<String>,
@@ -89,7 +89,7 @@ pub struct AppState {
     /// is intentionally kept outside serialized history so an orchestrator
     /// restart can resume the same in-memory task without creating a second
     /// planning or verification ledger.
-    pub(crate) background_turn_context: Option<Box<crate::network::TurnContext>>,
+    pub background_turn_context: Option<Box<crate::network::TurnContext>>,
     pub status: AppStatus,
     /// Single-flight guard for the agent loop. `status` transiently reads Idle
     /// in windows where an orchestrator is still alive, so gating spawns on it
@@ -107,7 +107,7 @@ pub struct AppState {
     /// automatic presentation recap.
     pub(crate) last_turn_had_model_final_response: bool,
     /// Prevents manual and automatic summaries from running concurrently.
-    pub(crate) summary_in_flight: bool,
+    pub summary_in_flight: bool,
     /// Count of conversational messages at which the last summary completed.
     /// A changed conversation is required before the idle timer can summarize again.
     pub(crate) last_summary_history_len: Option<usize>,
@@ -226,7 +226,7 @@ pub struct AppState {
 
     pub auto_confirm: bool,
 
-    pub(crate) subagent_supervisor: crate::app::SubagentSupervisor,
+    pub subagent_supervisor: crate::app::SubagentSupervisor,
     pub subagents: Vec<SubAgent>,
     /// Selected conversation context for the subagent picker. `None` keeps
     /// the root conversation active without changing its stored history.
@@ -304,7 +304,7 @@ pub struct AppState {
     pub redraw_requested: bool,
     /// Monotonic version of render-visible state. A render may publish its
     /// layout metrics only while this remains unchanged.
-    pub(crate) render_revision: u64,
+    pub render_revision: u64,
     /// Requests the terminal loop to clear the entire screen and reset the inline viewport.
     pub clear_screen_requested: bool,
 
@@ -332,7 +332,7 @@ impl AppState {
 
     /// Return the cached custom title for the active session without touching
     /// the filesystem. `Some(None)` means the cache contains a miss.
-    pub(crate) fn cached_session_title(&self) -> Option<Option<String>> {
+    pub fn cached_session_title(&self) -> Option<Option<String>> {
         self.session_title_cache
             .as_ref()
             .filter(|(cached_id, _)| *cached_id == self.active_session_id)
@@ -341,7 +341,7 @@ impl AppState {
 
     /// Install a title loaded for `session_id` only if that session is still
     /// active. Returns whether the cache was installed.
-    pub(crate) fn install_session_title_cache(
+    pub fn install_session_title_cache(
         &mut self,
         session_id: &str,
         generation: u64,
@@ -370,7 +370,7 @@ impl AppState {
         self.render_revision = self.render_revision.wrapping_add(1);
     }
 
-    pub(crate) fn mark_user_activity(&mut self) {
+    pub fn mark_user_activity(&mut self) {
         let now = std::time::Instant::now();
         if self.status == AppStatus::Idle {
             self.idle_since = now;
@@ -380,7 +380,7 @@ impl AppState {
     /// Claim the queue orchestrator for the current session.  The returned
     /// lease must be supplied when the task finishes; this makes release
     /// conditional on the task that originally claimed the slot.
-    pub(crate) fn claim_orchestrator(&mut self) -> Option<OrchestratorLease> {
+    pub fn claim_orchestrator(&mut self) -> Option<OrchestratorLease> {
         if self.orchestrator_running {
             return None;
         }
@@ -410,13 +410,13 @@ impl AppState {
     /// Invalidate the current owner before cancelling or switching sessions.
     /// A stale task may still unwind, but its release can no longer affect a
     /// later claim.
-    pub(crate) fn invalidate_orchestrator(&mut self) {
+    pub fn invalidate_orchestrator(&mut self) {
         self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
     }
 
-    pub(crate) fn enter_idle(&mut self) {
+    pub fn enter_idle(&mut self) {
         self.status = AppStatus::Idle;
         self.idle_since = std::time::Instant::now();
     }
@@ -424,7 +424,7 @@ impl AppState {
     /// Start a chained question flow: the first question becomes active, the
     /// rest wait in the queue. Single-question callers pass an empty queue,
     /// which behaves exactly like the legacy flow.
-    pub(crate) fn begin_question_chain(&mut self, mut questions: Vec<PendingQuestion>) {
+    pub fn begin_question_chain(&mut self, mut questions: Vec<PendingQuestion>) {
         self.pending_question_done.clear();
         self.pending_question_queue.clear();
         self.pending_question = if questions.is_empty() {
@@ -443,19 +443,19 @@ impl AppState {
     }
 
     /// Total questions in the active chain (answered + active + queued).
-    pub(crate) fn question_chain_len(&self) -> usize {
+    pub fn question_chain_len(&self) -> usize {
         self.pending_question_done.len()
             + usize::from(self.pending_question.is_some())
             + self.pending_question_queue.len()
     }
 
     /// 1-based position of the active question within its chain.
-    pub(crate) fn question_chain_position(&self) -> usize {
+    pub fn question_chain_position(&self) -> usize {
         self.pending_question_done.len() + usize::from(self.pending_question.is_some())
     }
 
     /// Chain questions with a recorded answer (accepted via Enter).
-    pub(crate) fn question_chain_answered(&self) -> usize {
+    pub fn question_chain_answered(&self) -> usize {
         self.pending_question_done
             .iter()
             .filter(|question| question.is_answered())
@@ -487,7 +487,7 @@ impl AppState {
     /// Move focus between chain questions without answering (Tab /
     /// Shift+Tab). Highlight, ticks, and recorded answers travel with each
     /// question, so coming back restores exactly what the user left.
-    pub(crate) fn focus_question(&mut self, delta: isize) {
+    pub fn focus_question(&mut self, delta: isize) {
         let Some(active) = self.pending_question.take() else {
             return;
         };
@@ -544,7 +544,7 @@ impl AppState {
     /// (invalidated while prompts remained, or a spawn that never happened):
     /// the prompts are preserved and the spawn loop restarts them. Returns
     /// recovery instructions; the caller logs the event and resets state.
-    pub(crate) fn check_stall_watchdog(
+    pub fn check_stall_watchdog(
         &self,
         background_active: bool,
         now: std::time::Instant,
@@ -592,7 +592,7 @@ impl AppState {
         None
     }
 
-    pub(crate) fn should_start_idle_summary(
+    pub fn should_start_idle_summary(
         &self,
         now: std::time::Instant,
         background_tasks_active: bool,
@@ -618,7 +618,7 @@ impl AppState {
             .count()
     }
 
-    pub(crate) fn claim_summary(&mut self) -> bool {
+    pub fn claim_summary(&mut self) -> bool {
         if self.summary_in_flight {
             return false;
         }
@@ -655,13 +655,13 @@ impl AppState {
         }
     }
 
-    pub(crate) fn ctrl_c_exit_armed(&self) -> bool {
+    pub fn ctrl_c_exit_armed(&self) -> bool {
         self.ctrl_c_exit_deadline
             .is_some_and(|deadline| deadline > std::time::Instant::now())
     }
 
     /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
-    pub(crate) fn clear_current_response(&mut self) {
+    pub fn clear_current_response(&mut self) {
         let changed = !self.current_response.is_empty();
         Arc::make_mut(&mut self.current_response).clear();
         if changed {
@@ -672,7 +672,7 @@ impl AppState {
     }
 
     /// Append streamed render-visible response text and invalidate in-flight layout metrics.
-    pub(crate) fn append_current_response(&mut self, chunk: &str) {
+    pub fn append_current_response(&mut self, chunk: &str) {
         Arc::make_mut(&mut self.current_response).push_str(chunk);
         if !chunk.is_empty() {
             self.current_response_revision = self.current_response_revision.wrapping_add(1);
@@ -681,7 +681,7 @@ impl AppState {
     }
 
     /// Replace the render-visible response buffer and invalidate in-flight layout metrics.
-    pub(crate) fn replace_current_response(&mut self, response: impl Into<String>) {
+    pub fn replace_current_response(&mut self, response: impl Into<String>) {
         let response = response.into();
         if self.current_response.as_str() != response {
             self.current_response = Arc::new(response);
@@ -694,7 +694,7 @@ impl AppState {
     /// Refresh the cached footer location when its debounce window expires.
     /// Git discovery happens here, before rendering, so a frame only reads
     /// the already-resolved display string.
-    pub(crate) fn refresh_workspace_location(&mut self, now: std::time::Instant) -> bool {
+    pub fn refresh_workspace_location(&mut self, now: std::time::Instant) -> bool {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         if self.workspace_location.refresh_if_due(&cwd, now) {
             self.cwd_and_branch = self.workspace_location.display();
@@ -707,7 +707,7 @@ impl AppState {
 
     /// Publish layout information only if the state rendered to obtain it is
     /// still current. Returns false when a newer redraw invalidated it.
-    pub(crate) fn publish_render_metrics(
+    pub fn publish_render_metrics(
         &mut self,
         revision: u64,
         height: u16,
@@ -936,7 +936,7 @@ impl AppState {
     }
 
     /// Clear all render-only state left by a cancelled or interrupted turn.
-    pub(crate) fn clear_active_turn_projection(&mut self) {
+    pub fn clear_active_turn_projection(&mut self) {
         self.clear_current_response();
         self.clear_live_tool_calls();
         self.running_tools.clear();
@@ -946,7 +946,6 @@ impl AppState {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
         let max = self
             .pending_tool_confirmation
@@ -1564,7 +1563,7 @@ impl AppState {
     /// Whether the current streaming turn is the regular interactive turn
     /// explicitly marked as accepting steering, with no blocking interaction
     /// awaiting the user's decision.
-    pub(crate) fn can_accept_steer(&self) -> bool {
+    pub fn can_accept_steer(&self) -> bool {
         self.active_turn_steerable_session.as_deref() == Some(self.active_session_id.as_str())
             && self.status == AppStatus::Streaming
             && self.pending_tool_confirmation.is_none()

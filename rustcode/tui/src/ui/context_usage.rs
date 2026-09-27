@@ -1,5 +1,5 @@
-use crate::app::TokenUsage;
 use crate::ui::render_snapshot::RenderSnapshot;
+use rustcode::app::TokenUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContextUsageSource {
@@ -45,13 +45,14 @@ fn provider_prompt_usage(usage: &TokenUsage) -> ContextUsage {
 #[cfg(test)]
 mod tests {
     use super::{ContextUsage, ContextUsageSource, context_usage};
-    use crate::app::{AppState, ChatMessage, TokenUsage};
+    use crate::ui::render_snapshot::render_snapshot;
+    use rustcode::app::{AppState, ChatMessage, TokenUsage};
 
     #[test]
     fn cleared_current_usage_does_not_reuse_a_previous_provider_prompt() {
         let mut state = AppState::new();
         assert_eq!(
-            context_usage(&state.render_snapshot()),
+            context_usage(&render_snapshot(&state)),
             ContextUsage {
                 used_tokens: 0,
                 source: ContextUsageSource::HistoryEstimate,
@@ -60,7 +61,7 @@ mod tests {
 
         state.history.push(ChatMessage::new("user", "abcd"));
         assert_eq!(
-            context_usage(&state.render_snapshot()),
+            context_usage(&render_snapshot(&state)),
             ContextUsage {
                 used_tokens: 1,
                 source: ContextUsageSource::HistoryEstimate,
@@ -78,7 +79,7 @@ mod tests {
         state.history.push(ChatMessage::new("user", "new"));
 
         assert_eq!(
-            context_usage(&state.render_snapshot()),
+            context_usage(&render_snapshot(&state)),
             ContextUsage {
                 used_tokens: 3,
                 source: ContextUsageSource::HistoryEstimate,
@@ -102,13 +103,13 @@ mod tests {
             total_tokens: 7,
             ..Default::default()
         });
-        state.subagents.push(crate::app::SubAgent {
+        state.subagents.push(rustcode::app::SubAgent {
             id: 7,
             name: "reviewer".to_owned(),
             task: "review".to_owned(),
             model: None,
             history: std::sync::Arc::new(vec![child_message]),
-            status: crate::app::SubAgentStatus::Completed,
+            status: rustcode::app::SubAgentStatus::Completed,
             active_turn: false,
             parent_id: None,
             write_access: false,
@@ -120,7 +121,7 @@ mod tests {
         state.selected_subagent_id = Some(7);
 
         assert_eq!(
-            context_usage(&state.render_snapshot()),
+            context_usage(&render_snapshot(&state)),
             ContextUsage {
                 used_tokens: 2,
                 source: ContextUsageSource::HistoryEstimate,

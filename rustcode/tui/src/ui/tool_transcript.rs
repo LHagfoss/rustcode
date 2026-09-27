@@ -66,7 +66,7 @@ pub(super) fn format_pi_tool_action(
         "remember" => "Remember".to_string(),
         "recall_memory" | "recallmemory" => "Recall".to_string(),
         "forget_memory" | "forgetmemory" => "Forget".to_string(),
-        _ => crate::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_case(name)),
+        _ => rustcode::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_case(name)),
     };
 
     if let Some(target) =
@@ -371,7 +371,7 @@ pub(super) fn tool_result_cache_key(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &crate::app::Verbosity,
+    verbosity: &rustcode::app::Verbosity,
     show_picker: bool,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -388,7 +388,7 @@ pub(super) fn cached_tool_result(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &crate::app::Verbosity,
+    verbosity: &rustcode::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let key = tool_result_cache_key(tool_name, result, width, verbosity, show_picker);
@@ -579,10 +579,10 @@ pub(super) fn tool_result_status(
 pub(super) fn indent_tool_result_body(
     lines: Vec<Line<'static>>,
     tool_name: &str,
-    verbosity: &crate::app::Verbosity,
+    verbosity: &rustcode::app::Verbosity,
     width: u16,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, crate::app::Verbosity::High) {
+    if matches!(verbosity, rustcode::app::Verbosity::High) {
         return Vec::new();
     }
 
@@ -1100,11 +1100,11 @@ pub(super) fn command_summary_lines(
 
 pub(super) fn indent_generic_tool_body(
     lines: Vec<Line<'static>>,
-    verbosity: &crate::app::Verbosity,
+    verbosity: &rustcode::app::Verbosity,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, crate::app::Verbosity::High) {
+    if matches!(verbosity, rustcode::app::Verbosity::High) {
         return Vec::new();
     }
 
@@ -1201,7 +1201,7 @@ fn render_tool_result_group_snapshot(
         let homogeneous = whole_batch.iter().all(|entry| entry.kind == kind);
         let group_end = if homogeneous
             && kind == ToolTranscriptKind::Command
-            && matches!(state.verbosity(), crate::app::Verbosity::Low)
+            && matches!(state.verbosity(), rustcode::app::Verbosity::Low)
         {
             index + 1
         } else {
@@ -1214,7 +1214,7 @@ fn render_tool_result_group_snapshot(
             lines.push(Line::from(""));
         }
         if include_header && homogeneous && kind == ToolTranscriptKind::Command {
-            if matches!(state.verbosity(), crate::app::Verbosity::High) {
+            if matches!(state.verbosity(), rustcode::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
                     lines.extend(command_child_lines(
@@ -1265,7 +1265,7 @@ fn render_tool_result_group_snapshot(
                     let show_hint = expandable
                         && !entry.body.is_empty()
                         && !is_expanded
-                        && matches!(state.verbosity(), crate::app::Verbosity::Low);
+                        && matches!(state.verbosity(), rustcode::app::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Command {
                         let mut child = command_child_lines(entry, first_child, width, show_picker);
                         if show_hint {
@@ -1294,7 +1294,7 @@ fn render_tool_result_group_snapshot(
                     first_child = false;
                     if expandable
                         && is_expanded
-                        && matches!(state.verbosity(), crate::app::Verbosity::Low)
+                        && matches!(state.verbosity(), rustcode::app::Verbosity::Low)
                     {
                         if entry.kind == ToolTranscriptKind::Command {
                             lines.extend(indent_tool_result_body(
@@ -1468,7 +1468,7 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("tool calls in that response were dropped")
         || content.contains("Oversized response:")
         || is_deferred_tool_batch_notice(content)
-        || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
+        || content.starts_with(rustcode::network::compaction::SUMMARY_MARKER)
         || content.starts_with("[harness: stopped after ")
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
@@ -1573,16 +1573,18 @@ mod tests {
         assert!(!super::is_hidden_system_notice(detailed));
     }
 
-    fn tool_message_with_record(record: crate::app::ToolResultRecord) -> crate::app::ChatMessage {
+    fn tool_message_with_record(
+        record: rustcode::app::ToolResultRecord,
+    ) -> rustcode::app::ChatMessage {
         let mut message =
-            crate::app::ChatMessage::new("tool", "run_command: Task started in background.");
+            rustcode::app::ChatMessage::new("tool", "run_command: Task started in background.");
         message.tool_result = Some(record);
         message
     }
 
     #[test]
     fn pending_background_launch_renders_running_not_failed() {
-        let message = tool_message_with_record(crate::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
             tool_name: "run_command".to_owned(),
             success: false,
             pending: true,
@@ -1596,7 +1598,7 @@ mod tests {
 
     #[test]
     fn cancelled_background_task_renders_cancelled_not_failed() {
-        let message = tool_message_with_record(crate::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
             tool_name: "background_task".to_owned(),
             success: false,
             error_kind: Some("Cancelled".to_owned()),
@@ -1610,7 +1612,7 @@ mod tests {
 
     #[test]
     fn completed_exit_zero_still_renders_exit_status() {
-        let message = tool_message_with_record(crate::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),

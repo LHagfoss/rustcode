@@ -49,12 +49,12 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
     let choices = [
         (
             "Low",
-            crate::app::state::Verbosity::Low,
+            rustcode::app::state::Verbosity::Low,
             "Compact tool outputs & clean diff summaries",
         ),
         (
             "High",
-            crate::app::state::Verbosity::High,
+            rustcode::app::state::Verbosity::High,
             "Pure model text output (hides tool outputs & diffs)",
         ),
     ];

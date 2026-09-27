@@ -112,10 +112,14 @@ pub(super) fn commit_transcript(
     let history_range = transcript_cursor.pending_history_range(snapshot.history().len());
     let stable_lines = stream_commits.take_ready(!history_range.is_empty() || !response_active);
     if !stable_lines.is_empty() {
-        crate::insert_scrollback_lines(terminal_runtime.terminal(), stable_lines, terminal_width)?;
+        crate::run::insert_scrollback_lines(
+            terminal_runtime.terminal(),
+            stable_lines,
+            terminal_width,
+        )?;
     }
     let mut blocks = Vec::new();
-    if crate::should_clear_mutable_viewport_before_history(
+    if crate::run::should_clear_mutable_viewport_before_history(
         response_just_finished,
         transcript_cursor.is_at_start(),
         !history_range.is_empty(),
@@ -206,7 +210,7 @@ pub(super) fn commit_transcript(
         index += 1;
     }
     for lines in blocks {
-        crate::insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
+        crate::run::insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
     }
 
     transcript_cursor.commit_history_through(history_range.end);
@@ -227,7 +231,7 @@ pub(super) fn commit_transcript(
         }
         let stable_lines = stream_commits.take_ready(true);
         if !stable_lines.is_empty() {
-            crate::insert_scrollback_lines(
+            crate::run::insert_scrollback_lines(
                 terminal_runtime.terminal(),
                 stable_lines,
                 terminal_width,
@@ -241,7 +245,8 @@ pub(super) fn commit_transcript(
 #[cfg(test)]
 mod tests {
     use super::tool_result_group;
-    use crate::app::{AppState, ChatMessage, ToolCallRef};
+    use crate::ui::render_snapshot::render_snapshot;
+    use rustcode::app::{AppState, ChatMessage, ToolCallRef};
 
     fn tool_turn(id: &str) -> ChatMessage {
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -264,7 +269,7 @@ mod tests {
             tool_turn("call-2"),
             result("call-2"),
         ]);
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1, 3], 4));
     }
@@ -284,7 +289,7 @@ mod tests {
             ),
             result("call-2"),
         ]);
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
     }
@@ -303,7 +308,7 @@ mod tests {
                 }]),
             result("call-2"),
         ]);
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
     }
@@ -318,7 +323,7 @@ mod tests {
             ChatMessage::new("system", "a recovery boundary"),
             result("call-2"),
         ]);
-        let snapshot = state.render_snapshot();
+        let snapshot = render_snapshot(&state);
 
         assert_eq!(tool_result_group(&snapshot, 1, 5, 80), (vec![1], 2));
     }

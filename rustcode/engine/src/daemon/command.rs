@@ -9,7 +9,7 @@ const MAX_HUMAN_ROWS: usize = 100;
 const MAX_HUMAN_OUTPUT_BYTES: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CommandError {
+pub struct CommandError {
     pub code: String,
     pub message: String,
 }
@@ -29,7 +29,7 @@ fn invalid(message: impl Into<String>) -> CommandError {
     }
 }
 
-pub(crate) fn create_job(
+pub fn create_job(
     id: &str,
     name: &str,
     workspace: &str,
@@ -107,7 +107,7 @@ fn hydrate_mcp_actions(action: &mut JobAction) -> Result<(), CommandError> {
     Ok(())
 }
 
-pub(crate) fn format_response(
+pub fn format_response(
     operation: &str,
     response: &DaemonResponse,
     json: bool,

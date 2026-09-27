@@ -2,7 +2,7 @@ use crate::app::{AppState, ChatMessage, SessionAction};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionTransition {
+pub enum SessionTransition {
     Started {
         session_id: String,
     },
@@ -25,7 +25,7 @@ pub(crate) enum SessionTransition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionError {
+pub enum SessionError {
     EmptySession,
     NoSessionToResume,
     InvalidSessionId(String),
@@ -46,7 +46,7 @@ impl fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct SessionController;
+pub struct SessionController;
 
 impl SessionController {
     #[allow(dead_code)]
@@ -54,17 +54,14 @@ impl SessionController {
         state.active_session_id.clone()
     }
 
-    pub(crate) fn start_fresh(
-        &self,
-        state: &mut AppState,
-    ) -> Result<SessionTransition, SessionError> {
+    pub fn start_fresh(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
         crate::app::actions::start_new_session(state);
         Ok(SessionTransition::Started {
             session_id: state.active_session_id.clone(),
         })
     }
 
-    pub(crate) fn resume(
+    pub fn resume(
         &self,
         state: &mut AppState,
         action: SessionAction,
@@ -82,7 +79,7 @@ impl SessionController {
         })
     }
 
-    pub(crate) fn fork(
+    pub fn fork(
         &self,
         state: &mut AppState,
         action: SessionAction,
@@ -128,7 +125,7 @@ impl SessionController {
         })
     }
 
-    pub(crate) fn clear(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
+    pub fn clear(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
         state.history_display_start = state.history.len();
         state.clear_current_response();
         state.current_token_usage = None;
@@ -140,7 +137,7 @@ impl SessionController {
         })
     }
 
-    pub(crate) fn archive(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
+    pub fn archive(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
         if !crate::config::session_has_content(&state.history) {
             return Err(SessionError::EmptySession);
         }
@@ -151,7 +148,7 @@ impl SessionController {
         })
     }
 
-    pub(crate) fn delete(
+    pub fn delete(
         &self,
         state: &mut AppState,
         action: SessionAction,
@@ -207,7 +204,7 @@ impl SessionController {
     }
 }
 
-pub(crate) fn session_id_from_meta(meta: &crate::config::SessionMeta) -> Option<String> {
+pub fn session_id_from_meta(meta: &crate::config::SessionMeta) -> Option<String> {
     crate::config::session_id_from_path(&meta.path)
 }
 

@@ -151,7 +151,7 @@ fn add_usage(total: &mut Option<TokenUsage>, usage: Option<TokenUsage>) {
 
 impl TurnRunner {
     #[cfg(test)]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_max_continuations(crate::config::DEFAULT_MAX_TOOL_CONTINUATIONS)
     }
 

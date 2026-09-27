@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::ui::render_snapshot::render_snapshot;
 
 pub(super) fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
     if available_height == 0 {
@@ -21,7 +23,7 @@ pub(super) fn render_live_tail_snapshot(
 
 #[cfg(test)]
 pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     render_live_tail_snapshot(&snapshot, width, height)
 }
 
@@ -158,10 +160,10 @@ pub(super) fn render_selected_subagent_context(
         return Vec::new();
     };
     let status = match agent.status() {
-        crate::app::SubAgentStatus::Running => "running",
-        crate::app::SubAgentStatus::Completed => "completed",
-        crate::app::SubAgentStatus::Failed => "failed",
-        crate::app::SubAgentStatus::Cancelled => "cancelled",
+        rustcode::app::SubAgentStatus::Running => "running",
+        rustcode::app::SubAgentStatus::Completed => "completed",
+        rustcode::app::SubAgentStatus::Failed => "failed",
+        rustcode::app::SubAgentStatus::Cancelled => "cancelled",
     };
     let parent = agent
         .parent_id()
@@ -356,7 +358,7 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::from(""));
     let message_padding = Span::styled("  ", line_style);
-    let recap = crate::app::sanitize_recap_content(content);
+    let recap = rustcode::app::sanitize_recap_content(content);
     if !recap.is_empty() {
         let mut recap_lines = Vec::new();
         push_wrapped_with_continuation(
@@ -384,7 +386,7 @@ pub(crate) fn render_committed_tool_result_group(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     render_committed_tool_result_group_snapshot(&snapshot, message_indices, width, show_picker)
 }
 
@@ -394,7 +396,7 @@ pub(crate) fn render_work_separator_before_assistant(
     assistant_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     render_work_separator_before_assistant_snapshot(&snapshot, assistant_index, width)
 }
 
@@ -404,7 +406,7 @@ pub(crate) fn build_claude_startup_banner(
     total_width: usize,
     max_height: usize,
 ) -> Vec<Line<'static>> {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     build_claude_startup_banner_snapshot(&snapshot, total_width, max_height)
 }
 
@@ -414,7 +416,7 @@ pub(crate) fn render_committed_history_block(
     message_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let snapshot = state.render_snapshot();
+    let snapshot = render_snapshot(&state);
     render_committed_history_block_snapshot(&snapshot, message_index, width)
 }
 
@@ -465,7 +467,7 @@ pub(crate) fn render_committed_assistant_text(
 pub(super) fn render_committed_assistant_text_with_metrics(
     content: &str,
     width: u16,
-    token_usage: Option<crate::app::TokenUsage>,
+    token_usage: Option<rustcode::app::TokenUsage>,
     response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,

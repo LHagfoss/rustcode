@@ -72,7 +72,7 @@ pub(in crate::ui) fn render_question_modal(
 /// Build the question body as explicitly wrapped rows so height measurement
 /// and painting use the same layout.
 pub(super) fn question_modal_lines(
-    question: &crate::app::PendingQuestion,
+    question: &rustcode::app::PendingQuestion,
     header: &str,
     width: usize,
 ) -> (Vec<Line<'static>>, Option<u16>, u16) {
@@ -203,7 +203,7 @@ pub(super) fn question_modal_lines(
 }
 
 pub(super) fn question_modal_header(
-    question: &crate::app::PendingQuestion,
+    question: &rustcode::app::PendingQuestion,
     chain_len: usize,
     position: usize,
     unanswered: usize,
@@ -219,7 +219,7 @@ pub(super) fn question_modal_header(
 }
 
 pub(super) fn question_modal_footer(
-    question: &crate::app::PendingQuestion,
+    question: &rustcode::app::PendingQuestion,
     chained: bool,
     width: usize,
 ) -> Line<'static> {
@@ -253,7 +253,7 @@ pub(super) fn question_modal_footer(
 }
 
 pub(super) fn question_modal_footer_lines(
-    question: &crate::app::PendingQuestion,
+    question: &rustcode::app::PendingQuestion,
     chained: bool,
     width: usize,
 ) -> Vec<Line<'static>> {

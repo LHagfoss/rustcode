@@ -10,7 +10,7 @@ pub(crate) struct AcpEventStream {
 }
 
 impl AcpEventStream {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             streamed_prose: String::new(),
             pending: String::new(),

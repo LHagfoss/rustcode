@@ -54,10 +54,10 @@ pub(super) fn render_tool_result<'a>(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &crate::app::Verbosity,
+    verbosity: &rustcode::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    if matches!(verbosity, crate::app::Verbosity::High) {
+    if matches!(verbosity, rustcode::app::Verbosity::High) {
         return Vec::new();
     }
 
@@ -343,7 +343,7 @@ mod tests {
             "view_file",
             "[File: src/main.rs, Lines 4 to 5 of 5]\n4: fn main() {}",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 2);
@@ -362,7 +362,7 @@ mod tests {
             "grep",
             "src/main.rs:\n  12: fn main() {}",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 2);
@@ -381,7 +381,7 @@ mod tests {
             "list_directory",
             "src/\nmain.rs",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(lines[0].spans[0].content.contains('▸'));
@@ -394,7 +394,7 @@ mod tests {
             "run_command",
             "exit code: 0\nstdout:\ncargo test\nstderr:\n",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(!lines.iter().any(|line| {
@@ -412,7 +412,7 @@ mod tests {
             "run_command",
             "exit code: 1\nstderr:\npermission denied",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(lines[0].spans[0].content.contains("✗ exit 1"));
@@ -425,7 +425,7 @@ mod tests {
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 1);
@@ -442,7 +442,7 @@ mod tests {
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'\n\n```diff\n@@\n-old\n+new\n```",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(lines.len() > 1);
@@ -468,7 +468,7 @@ mod tests {
                 "use_skill",
                 "loaded skill",
                 80,
-                &crate::app::Verbosity::Low,
+                &rustcode::app::Verbosity::Low,
                 false
             )
             .is_empty()
@@ -478,7 +478,7 @@ mod tests {
                 "spawn_agent",
                 "agent done",
                 80,
-                &crate::app::Verbosity::Low,
+                &rustcode::app::Verbosity::Low,
                 false
             )
             .is_empty()
@@ -491,7 +491,7 @@ mod tests {
             "run_command",
             "exit code: 0\nstdout:\nhello world",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(!lines.is_empty());
@@ -505,7 +505,7 @@ mod tests {
             "mcp_custom_tool",
             "completed\nerror: remote service failed",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 2);
@@ -540,7 +540,7 @@ mod tests {
             "mcp_custom_tool",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -562,14 +562,14 @@ mod tests {
             "run_command",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         let generic = render_tool_result(
             "mcp_custom_tool",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -596,7 +596,7 @@ mod tests {
             "run_command",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -619,7 +619,7 @@ mod tests {
             "run_command",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -635,7 +635,7 @@ mod tests {
             "mcp_custom_tool",
             "first\n\nsecond",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -651,7 +651,7 @@ mod tests {
             "mcp_custom_tool",
             "\n\nfirst\n\n\n\nsecond\n\n",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -666,7 +666,7 @@ mod tests {
             "view_file",
             "[File: src/main.rs, Lines 1 to 2 of 9, Bytes offset: 0]\n1: fn main() {}",
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         let header = text_of(&lines[0]);
@@ -686,7 +686,7 @@ mod tests {
             "replace_file_content",
             &result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
 
@@ -706,7 +706,7 @@ mod tests {
             "manage_task",
             result,
             80,
-            &crate::app::Verbosity::Low,
+            &rustcode::app::Verbosity::Low,
             false,
         );
         assert!(!lines.is_empty());
@@ -721,7 +721,7 @@ mod tests {
                 "manage_task",
                 result,
                 80,
-                &crate::app::Verbosity::High,
+                &rustcode::app::Verbosity::High,
                 false
             )
             .is_empty()
@@ -731,7 +731,7 @@ mod tests {
                 "replace_file_content",
                 "edited file",
                 80,
-                &crate::app::Verbosity::High,
+                &rustcode::app::Verbosity::High,
                 false
             )
             .is_empty()
@@ -741,7 +741,7 @@ mod tests {
                 "run_command",
                 "command output",
                 80,
-                &crate::app::Verbosity::High,
+                &rustcode::app::Verbosity::High,
                 false
             )
             .is_empty()
