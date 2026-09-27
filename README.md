@@ -107,6 +107,10 @@ the bundled app to see its Dock and Finder icon.
 
 Build the terminal executable separately with `cargo build --bin rustcode`.
 
+Tagged releases publish the terminal binaries for Linux, macOS and Windows,
+plus `RustCode.app` for Apple Silicon (unsigned — right-click to open on
+first launch).
+
 ## Keeping it upgraded
 
 RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows.
