@@ -1,15 +1,21 @@
+//! Pasted-text markers (`<!--PASTE:<chars>:<payload>-->`).
+//!
+//! Pure text framing shared by provider payloads, context compaction, and
+//! every frontend: parsing, lookup, compaction for display, and expansion
+//! back to the original text.
+
 const PASTE_PREFIX: &str = "<!--PASTE:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PasteMarker<'a> {
-    pub(crate) end: usize,
-    pub(crate) char_count: usize,
-    pub(crate) payload: &'a str,
+pub struct PasteMarker<'a> {
+    pub end: usize,
+    pub char_count: usize,
+    pub payload: &'a str,
 }
 
 /// Parse a marker at `start`, using its declared character count instead of
 /// searching for the first closing delimiter inside the pasted payload.
-pub(crate) fn parse_at(text: &str, start: usize) -> Option<PasteMarker<'_>> {
+pub fn parse_at(text: &str, start: usize) -> Option<PasteMarker<'_>> {
     let after_prefix = text.get(start..)?.strip_prefix(PASTE_PREFIX)?;
     let (count_text, payload_with_end) = after_prefix.split_once(':')?;
     let char_count = count_text.parse().ok()?;
@@ -42,13 +48,13 @@ pub(crate) fn parse_at(text: &str, start: usize) -> Option<PasteMarker<'_>> {
     }
 }
 
-pub(crate) fn find(text: &str, from: usize) -> Option<(usize, PasteMarker<'_>)> {
+pub fn find(text: &str, from: usize) -> Option<(usize, PasteMarker<'_>)> {
     let relative = text.get(from..)?.find(PASTE_PREFIX)?;
     let start = from + relative;
     parse_at(text, start).map(|marker| (start, marker))
 }
 
-pub(crate) fn compact(text: &str) -> String {
+pub fn compact(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut cursor = 0;
     let mut number = 0;
@@ -70,7 +76,7 @@ pub(crate) fn compact(text: &str) -> String {
 /// provider boundary so the actual pasted content is preserved there; these
 /// metadata fields should never expose benchmark/provenance framing or invite
 /// the model to treat it as an instruction.
-pub(crate) fn compact_for_context(text: &str) -> String {
+pub fn compact_for_context(text: &str) -> String {
     let compacted = compact(text);
     let mut output = String::with_capacity(compacted.len());
     let mut cursor = 0;
@@ -91,7 +97,7 @@ pub(crate) fn compact_for_context(text: &str) -> String {
     output
 }
 
-pub(crate) fn expand(text: &str) -> String {
+pub fn expand(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut cursor = 0;
     while let Some((start, marker)) = find(text, cursor) {

@@ -135,7 +135,7 @@ fn looks_like_transcript_echo(content: &str) -> bool {
 }
 
 pub(crate) fn sanitize_recap_content(content: &str) -> String {
-    let compact = crate::paste::compact(content);
+    let compact = rustcode_core::paste::compact(content);
     crate::network::text::strip_tool_call_syntax(&crate::network::text::strip_think_blocks(
         &compact,
     ))

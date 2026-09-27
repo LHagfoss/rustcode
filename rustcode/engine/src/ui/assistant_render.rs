@@ -15,7 +15,7 @@ pub(super) fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<Colla
 
     while !rest.is_empty() {
         let next_img = rest.find(MARK_IMG);
-        let next_paste = crate::paste::find(rest, 0).map(|(index, _)| index);
+        let next_paste = rustcode_core::paste::find(rest, 0).map(|(index, _)| index);
         let (idx, is_image) = match (next_img, next_paste) {
             (None, None) => {
                 segments.push((rest.to_owned(), None));
@@ -39,7 +39,7 @@ pub(super) fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<Colla
             segments.push((format!("[Image #{img_n}]"), Some(CollapsedMarker::Image)));
             rest = &after[close + 1..];
         } else {
-            let Some(marker) = crate::paste::parse_at(rest, idx) else {
+            let Some(marker) = rustcode_core::paste::parse_at(rest, idx) else {
                 segments.push((rest[idx..].to_owned(), None));
                 break;
             };
