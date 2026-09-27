@@ -23,4 +23,4 @@ pub use state::*;
 pub(crate) use subagent_controller::{
     SubagentCompletion, SubagentController, SubagentError, SubagentId, SubagentSupervisor,
 };
-pub use suggestion::{get_at_word_query, list_project_file_paths};
+pub use suggestion::list_project_file_paths;

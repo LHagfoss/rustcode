@@ -289,11 +289,11 @@ impl HistoryCell for AssistantMarkdownCell {
 }
 
 fn is_exploration_tool(name: &str) -> bool {
-    crate::app::activity::is_exploration_tool(name)
+    rustcode_core::activity::is_exploration_tool(name)
 }
 
 fn is_editing_tool(name: &str) -> bool {
-    crate::app::activity::is_editing_tool(name)
+    rustcode_core::activity::is_editing_tool(name)
 }
 
 pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {

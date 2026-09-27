@@ -5086,7 +5086,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     let active_usage = super::context_usage::context_usage(&snapshot);
     assert_eq!(active_usage.used_tokens, 4_000);
     assert_eq!(
-        crate::app::status::context_remaining_percent(active_usage.used_tokens, 100_000),
+        rustcode_core::status::context_remaining_percent(active_usage.used_tokens, 100_000),
         96
     );
 

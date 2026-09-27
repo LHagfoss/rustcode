@@ -56,7 +56,7 @@ pub(super) fn background_terminal_list(session_id: &str) -> String {
         text.push_str(&format!(
             "\n  • {} · {} · PID {} · {}",
             task.id,
-            crate::app::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
+            rustcode_core::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
             pid,
             crate::tools::background_command_label(&task.command, 500)
         ));
