@@ -149,6 +149,12 @@ jobs:
               # warnings visible locally while denying only correctness lints.
               run: cargo clippy --locked -- -A warnings -D clippy::correctness
 
+            - name: Check the core builds without the terminal UI
+              # Frontends that never draw a frame (native desktop, ACP, daemon,
+              # headless) link the library with `default-features = false`. Keep
+              # that path compiling so the rendering stack stays out of the core.
+              run: cargo check --locked --no-default-features
+
     macos-seatbelt:
         needs: changes
         if: needs.changes.outputs.code == 'true'

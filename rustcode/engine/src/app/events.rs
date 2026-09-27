@@ -1,3 +1,4 @@
+#[cfg(feature = "tui")]
 use crate::ui::TuiEvent;
 use tokio::sync::mpsc;
 
@@ -56,6 +57,9 @@ pub(crate) enum SessionAction {
 
 #[allow(dead_code)]
 pub(crate) enum AppEvent {
+    /// Terminal input. Only the interactive frontend produces or consumes it,
+    /// so the variant disappears when the binary is built without a TUI.
+    #[cfg(feature = "tui")]
     Tui(TuiEvent),
     SubmitPrompt(String),
     CancelActiveTurn,
@@ -112,7 +116,6 @@ mod tests {
         AppEvent, AppEventSender, ApprovalDecision, Overlay, QuestionAnswer, SessionAction,
         UpdateDecision,
     };
-    use crate::ui::TuiEvent;
 
     #[test]
     fn approval_and_submit_events_preserve_payloads() {
@@ -160,12 +163,9 @@ mod tests {
     async fn sender_round_trips_typed_events_without_exposing_channels() {
         let (sender, mut receiver) = AppEventSender::channel();
         sender
-            .send(AppEvent::Tui(TuiEvent::Draw))
+            .send(AppEvent::RequestDraw)
             .expect("event receiver is still open");
 
-        assert!(matches!(
-            receiver.recv().await,
-            Some(AppEvent::Tui(TuiEvent::Draw))
-        ));
+        assert!(matches!(receiver.recv().await, Some(AppEvent::RequestDraw)));
     }
 }

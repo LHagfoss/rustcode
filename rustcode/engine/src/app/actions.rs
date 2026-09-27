@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Pid, System};
 use tokio::sync::Mutex;
 
-const CHANGELOG_CONTENT: &str = include_str!("../../CHANGELOG.md");
+const CHANGELOG_CONTENT: &str = include_str!("../../../../CHANGELOG.md");
 pub(crate) const CTRL_C_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(2);
 
 pub fn build_latest_changelog() -> String {

@@ -63,6 +63,16 @@ pub(crate) struct RenderSnapshot {
     selected_subagent: Option<SelectedSubagentSnapshot>,
 }
 
+impl crate::app::AppState {
+    /// Capture the immutable view the renderer needs for this frame.
+    ///
+    /// The method lives here rather than on the state module so shared state
+    /// never names a rendering type.
+    pub(crate) fn render_snapshot(&self) -> RenderSnapshot {
+        RenderSnapshot::new(self)
+    }
+}
+
 /// Data used exclusively by modal overlays. Large collections and editable
 /// buffers are captured only while their owning overlay is visible.
 struct OverlaySnapshot {
@@ -580,7 +590,7 @@ impl SelectedSubagentSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus};
+    use crate::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
     use std::sync::Arc;
 
     #[test]
@@ -634,14 +644,14 @@ mod tests {
     fn render_metrics_reject_stale_revision() {
         let mut state = AppState::new();
         let revision = state.render_snapshot().revision();
-        let input_area = ratatui::layout::Rect::new(2, 3, 40, 4);
+        let input_area = UiRect::new(2, 3, 40, 4);
 
         assert!(state.publish_render_metrics(revision, 12, input_area));
         assert_eq!(state.conversation_content_height, 12);
         assert_eq!(state.input_text_area, Some(input_area));
 
         state.request_redraw();
-        assert!(!state.publish_render_metrics(revision, 99, ratatui::layout::Rect::default()));
+        assert!(!state.publish_render_metrics(revision, 99, UiRect::default()));
         assert_eq!(state.conversation_content_height, 12);
         assert_eq!(state.input_text_area, Some(input_area));
     }
@@ -673,20 +683,12 @@ mod tests {
         let append_revision = state.render_snapshot().revision();
         state.append_current_response("streamed output");
         assert_eq!(state.current_response.as_str(), "streamed output");
-        assert!(!state.publish_render_metrics(
-            append_revision,
-            12,
-            ratatui::layout::Rect::default()
-        ));
+        assert!(!state.publish_render_metrics(append_revision, 12, UiRect::default()));
 
         let clear_revision = state.render_snapshot().revision();
         state.clear_current_response();
         assert!(state.current_response.is_empty());
-        assert!(!state.publish_render_metrics(
-            clear_revision,
-            12,
-            ratatui::layout::Rect::default()
-        ));
+        assert!(!state.publish_render_metrics(clear_revision, 12, UiRect::default()));
     }
 
     #[test]
@@ -953,32 +955,20 @@ mod tests {
         let mut state = AppState::new();
         let input_revision = state.render_snapshot().revision();
         state.insert_char('x');
-        assert!(!state.publish_render_metrics(input_revision, 1, ratatui::layout::Rect::default()));
+        assert!(!state.publish_render_metrics(input_revision, 1, UiRect::default()));
 
         let cursor_revision = state.render_snapshot().revision();
         state.move_cursor_to_start();
-        assert!(!state.publish_render_metrics(
-            cursor_revision,
-            1,
-            ratatui::layout::Rect::default()
-        ));
+        assert!(!state.publish_render_metrics(cursor_revision, 1, UiRect::default()));
 
         state.pending_queue.push("queued".to_owned());
         let recall_revision = state.render_snapshot().revision();
         state.composer().pop_queued_prompt();
-        assert!(!state.publish_render_metrics(
-            recall_revision,
-            1,
-            ratatui::layout::Rect::default()
-        ));
+        assert!(!state.publish_render_metrics(recall_revision, 1, UiRect::default()));
 
         state.input_buffer = "/he".to_owned();
         let autocomplete_revision = state.render_snapshot().revision();
         crate::app::actions::apply_autocomplete(&mut state);
-        assert!(!state.publish_render_metrics(
-            autocomplete_revision,
-            1,
-            ratatui::layout::Rect::default()
-        ));
+        assert!(!state.publish_render_metrics(autocomplete_revision, 1, UiRect::default()));
     }
 }

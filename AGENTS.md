@@ -57,5 +57,6 @@ instructions for work in this repository.
   the same string.
 - Sessions/history: `~/.config/rustcode/sessions/<id>/history.json`.
 - Adding a built-in tool: add one `pub const …: Tool` in
-  `src/tools/{search,filesystem,exec,misc}.rs`, then add it to `TOOLS` in
-  `src/tools/mod.rs`. No other tables need updating.
+  `rustcode/engine/src/tools/{search,filesystem,exec,misc}.rs`, then add it
+  to `TOOLS` in `rustcode/engine/src/tools/mod.rs`. No other tables need
+  updating.

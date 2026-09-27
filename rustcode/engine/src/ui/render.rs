@@ -20,7 +20,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     let revision = snapshot.revision();
     let (content_height, input_area) =
         render_with_transcript_snapshot(f, &snapshot, &mut transcript);
-    state.publish_render_metrics(revision, content_height, input_area);
+    state.publish_render_metrics(revision, content_height, input_area.into());
 }
 
 pub(super) fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
@@ -364,5 +364,5 @@ pub fn render_with_transcript(
     let snapshot = state.render_snapshot();
     let revision = snapshot.revision();
     let (content_height, input_area) = render_with_transcript_snapshot(f, &snapshot, transcript);
-    state.publish_render_metrics(revision, content_height, input_area);
+    state.publish_render_metrics(revision, content_height, input_area.into());
 }

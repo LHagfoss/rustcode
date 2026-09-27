@@ -1,10 +1,10 @@
 use super::{AppState, HoverTarget};
-use ratatui::layout::Rect;
+use crate::app::UiRect;
 
 #[test]
 fn hover_target_prefers_the_pill_then_clickable_rows() {
     let mut s = AppState::new();
-    s.scroll_to_bottom_btn = Some(Rect::new(60, 20, 20, 1));
+    s.scroll_to_bottom_btn = Some(UiRect::new(60, 20, 20, 1));
     s.code_copy_rows = vec![(9, "code".to_string())];
 
     assert_eq!(s.hover_target_at(65, 20), HoverTarget::ScrollPill);

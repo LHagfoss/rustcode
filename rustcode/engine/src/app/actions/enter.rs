@@ -474,6 +474,9 @@ async fn handle_enter_inner(
                     s.history.push(ChatMessage::new("system", label));
                 }
             }
+            // Theme browsing renders a picker, so it only exists in builds
+            // that ship the terminal UI.
+            #[cfg(feature = "tui")]
             "/theme" => {
                 let themes = crate::ui::theme::load_available_themes();
                 match tokens.get(1) {
