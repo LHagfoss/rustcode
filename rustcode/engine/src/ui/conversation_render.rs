@@ -64,10 +64,11 @@ pub(crate) fn render_live_tail_with_transcript(
         .cloned()
         .collect::<Vec<_>>();
     if !tail.is_empty() {
-        let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
-        let is_tool_syntax = crate::tools::is_tool_call_start(&tail);
+        let parsed_tool =
+            rustcode_tool_protocol::parse_tool_call(&tail, state.active_tool_protocol());
+        let is_tool_syntax = rustcode_tool_protocol::is_tool_call_start(&tail);
         let should_hide_stream = match parsed_tool {
-            Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
+            Some(ref tool_call) => !rustcode_tool_protocol::is_code_editing_tool(&tool_call.name),
             None => is_tool_syntax,
         };
 

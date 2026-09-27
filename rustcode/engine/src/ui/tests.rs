@@ -3231,8 +3231,11 @@ fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
         r#"{"name":"replace_file_content","arguments":{"path":"src/main.rs","target_content":"old","replacement":"new"}}"#
     ));
     assert!(
-        crate::tools::parse_tool_call(&state.current_response, state.active_tool_protocol())
-            .is_some()
+        rustcode_tool_protocol::parse_tool_call(
+            &state.current_response,
+            state.active_tool_protocol()
+        )
+        .is_some()
     );
     assert!(
         super::scrollback::mutable_stream_text(&state.current_response).contains("target_content")
