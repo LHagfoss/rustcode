@@ -21,7 +21,8 @@ use gpui_kit::{
 
 use backend::NativeBackend;
 use view::{
-    AppView, CloseChatSearch, FocusSessionSearch, OpenSettings, ToggleChatSearch, ToggleSidebar,
+    AppView, CloseChatSearch, FocusSessionSearch, NewChat, OpenSettings, ToggleChatSearch,
+    ToggleSidebar,
 };
 
 gpui_kit::actions!([Quit, CloseWindow, MinimizeWindow]);
@@ -47,6 +48,7 @@ fn main() {
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", ToggleChatSearch, None),
                 KeyBinding::new("cmd-k", FocusSessionSearch, None),
+                KeyBinding::new("cmd-n", NewChat, None),
                 KeyBinding::new("escape", CloseChatSearch, None),
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-w", CloseWindow, None),
@@ -119,6 +121,10 @@ fn main() {
                         let toggle_view = view.downgrade();
                         cx.on_action(move |_: &ToggleSidebar, cx| {
                             let _ = toggle_view.update(cx, |view, cx| view.toggle_sidebar(cx));
+                        });
+                        let new_chat_view = view.downgrade();
+                        cx.on_action(move |_: &NewChat, cx| {
+                            let _ = new_chat_view.update(cx, |view, cx| view.start_new_chat(cx));
                         });
                         let settings_window = window.window_handle();
                         let settings_view = view.downgrade();
