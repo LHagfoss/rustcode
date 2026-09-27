@@ -3,8 +3,8 @@ use std::{ops::Range, time::Duration};
 use gpui_kit::{
     AnyElement, App, Axis, Context, ElementId, Entity, FollowMode, InteractiveElement, IntoElement,
     ListAlignment, ListOffset, ListState, ParentElement as _, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, container_query, div, hsla,
-    list, prelude::FluentBuilder as _, px, rems,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, TestSupportExt as _, Window,
+    container_query, div, hsla, list, prelude::FluentBuilder as _, px, rems,
 };
 use gpui_kit::{
     base::motion::{Transition, transition},
@@ -142,6 +142,7 @@ pub struct TranscriptScroller {
     renderer: Box<dyn FnMut(usize, &mut Window, &mut App) -> AnyElement + 'static>,
     style: StyleRefinement,
     content_style: StyleRefinement,
+    column_style: StyleRefinement,
     list_style: StyleRefinement,
     row_style: StyleRefinement,
     scrollbar: bool,
@@ -169,6 +170,7 @@ impl TranscriptScroller {
             }),
             style: StyleRefinement::default(),
             content_style: StyleRefinement::default(),
+            column_style: StyleRefinement::default(),
             list_style: StyleRefinement::default(),
             row_style: StyleRefinement::default(),
             scrollbar: true,
@@ -181,6 +183,11 @@ impl TranscriptScroller {
 
     pub fn with_content_style(mut self, style: StyleRefinement) -> Self {
         self.content_style = style;
+        self
+    }
+
+    pub fn with_column_style(mut self, style: StyleRefinement) -> Self {
+        self.column_style = style;
         self
     }
 
@@ -262,7 +269,8 @@ impl RenderOnce for TranscriptScroller {
             .min_w_0()
             .child(list)
             .when(self.scrollbar, |this| this.vertical_scrollbar(&list_state))
-            .refine_style(&self.content_style);
+            .refine_style(&self.content_style)
+            .test_support();
 
         let mut root = div()
             .id(root_id.clone())
@@ -274,6 +282,9 @@ impl RenderOnce for TranscriptScroller {
             .flex_row();
 
         if rail_visible {
+            // Mirror the rail width on the trailing edge so the message column
+            // keeps the composer's horizontal center.
+            root = root.pr(px(MARKER_HIT_TARGET_WIDTH));
             let state = self.state.clone();
             let row_count = self.position_rail_rows;
             let rail_id = root_id.clone();
@@ -346,7 +357,8 @@ impl RenderOnce for TranscriptScroller {
             .min_w_0()
             .min_h_0()
             .child(viewport)
-            .child(ScrollableMask::new(Axis::Vertical, &list_state).id(root_id.clone()));
+            .child(ScrollableMask::new(Axis::Vertical, &list_state).id(root_id.clone()))
+            .refine_style(&self.column_style);
 
         if self.jump_button && jump_visibility > 0. {
             let state = self.state.clone();
