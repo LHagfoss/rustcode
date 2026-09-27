@@ -5,10 +5,6 @@ pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 12.;
 pub const MARKER_GAP: f32 = 4.;
 pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
 pub const RAIL_VERTICAL_INSET: f32 = 8.;
-pub const RAIL_CONTENT_GAP: f32 = 3.;
-pub const RAIL_CONTENT_INSET: f32 =
-    MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP;
-pub const RAIL_LEFT_CONTENT_INSET: f32 = MARKER_HIT_TARGET_WIDTH + MARKER_GAP;
 
 pub fn marker_slot_height(viewport_height: f32, markers: usize) -> f32 {
     if markers == 0 {
@@ -167,10 +163,9 @@ mod tests {
         assert_eq!(MARKER_HIT_TARGET_WIDTH, 30.);
         assert_eq!(MARKER_HIT_TARGET_HEIGHT, 16.);
         assert_eq!(MIN_MARKER_HIT_TARGET_HEIGHT, 12.);
-        assert_eq!(
-            RAIL_CONTENT_INSET,
-            MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + RAIL_CONTENT_GAP
-        );
+        // The strip lives in its own flex column outside the message
+        // viewport, so hit targets never cover message controls.
+        assert_eq!(MARKER_GAP, 4.);
         // Fourteen 16px targets plus the rail's 8px top/bottom inset fit in
         // a compact 300px transcript viewport without vertical overlap.
         assert!(MAX_MARKERS as f32 * MARKER_HIT_TARGET_HEIGHT + 2. * RAIL_VERTICAL_INSET <= 300.);
@@ -179,10 +174,6 @@ mod tests {
     #[test]
     fn flexible_marker_slots_fit_constrained_transcript_heights() {
         assert_eq!(RAIL_SCROLLBAR_INSET, 20.);
-        assert_eq!(
-            RAIL_CONTENT_INSET,
-            MARKER_HIT_TARGET_WIDTH + RAIL_SCROLLBAR_INSET + 3.
-        );
 
         for viewport_height in [120., 180., 300.] {
             let slot = marker_slot_height(viewport_height, MAX_MARKERS);
@@ -257,14 +248,6 @@ mod tests {
             Some(rows - 1)
         );
         assert_eq!(active_marker_with_count(50, rows, markers), Some(3));
-    }
-
-    #[test]
-    fn left_rail_geometry_keeps_a_small_content_gap() {
-        // The left-hugging strip reserves just its own width plus a couple
-        // of pixels before message text starts.
-        assert_eq!(RAIL_LEFT_CONTENT_INSET, 34.);
-        assert_eq!(MARKER_GAP, 4.);
     }
 
     #[test]
