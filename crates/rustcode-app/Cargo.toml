@@ -4,7 +4,9 @@ version = "0.56.0"
 edition = "2024"
 
 [dependencies]
-rustcode = { path = "../.." }
+# The desktop shell renders with GPUI, not ratatui: skip the terminal frontend
+# and its rendering stack entirely.
+rustcode = { path = "../..", default-features = false }
 gpui-kit = "=0.6.6"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync"] }
 syntect = "5.2"

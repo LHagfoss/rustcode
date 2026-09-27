@@ -1,33 +1,58 @@
-use crate::app::{
-    AppEvent, AppEventSender, AppState, AppStatus, ChatMessage, UpdateDecision, Verbosity,
-};
+//! Turn-control helpers shared by every frontend, plus the interactive
+//! terminal event loop.
+//!
+//! Only `AppRuntime` and the input/render submodules know about a screen.
+//! Everything else here — orchestrating a turn, applying approvals, questions
+//! and background-task completions — is used by the controller, ACP and the
+//! daemon too, so it stays available without the `tui` feature.
+
+#[cfg(feature = "tui")]
+use crate::app::{AppEvent, AppEventSender, ChatMessage, UpdateDecision, Verbosity};
+use crate::app::{AppState, AppStatus};
 use crate::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
+#[cfg(feature = "tui")]
 use crate::ui;
+#[cfg(feature = "tui")]
 use crate::ui::{
     FrameRequester, FrameStream, TerminalRuntime, TranscriptState, TuiEvent, TuiEventStream,
 };
+#[cfg(feature = "tui")]
 use crossterm::{
     event::{self, KeyCode, KeyModifiers},
     execute,
 };
+#[cfg(feature = "tui")]
 use ratatui::layout::Size;
+#[cfg(feature = "tui")]
 use std::collections::HashMap;
+#[cfg(feature = "tui")]
 use std::error::Error;
+#[cfg(feature = "tui")]
 use std::fmt;
 use std::sync::Arc;
+#[cfg(feature = "tui")]
 use std::time::Duration;
-#[cfg(test)]
+use tokio::sync::Mutex;
+#[cfg(all(test, feature = "tui"))]
 use tokio::sync::MutexGuard;
-use tokio::sync::{Mutex, mpsc};
+#[cfg(feature = "tui")]
+use tokio::sync::mpsc;
+#[cfg(feature = "tui")]
 use tokio_util::sync::CancellationToken;
 
 mod events;
+#[cfg(feature = "tui")]
 mod input;
 mod orchestration;
+#[cfg(feature = "tui")]
 mod render;
+#[cfg(feature = "tui")]
 mod sessions;
+#[cfg(feature = "tui")]
 mod terminal;
+#[cfg(feature = "tui")]
 mod transcript;
+#[cfg(feature = "tui")]
 mod updates;
 
 pub(crate) use orchestration::{apply_background_task_event, spawn_observed_orchestrator};
@@ -35,21 +60,29 @@ pub(crate) use orchestration::{apply_background_task_event, spawn_observed_orche
 pub(crate) use events::{
     apply_approval_decision, apply_approval_decision_for_batch, apply_question_answer,
 };
+#[cfg(feature = "tui")]
 use input::{InputContext, InputFlow, handle_app_event};
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 use render::session_title_for_render;
+#[cfg(feature = "tui")]
 use render::{RenderFrameContext, render_frame};
+#[cfg(feature = "tui")]
 use sessions::{apply_session_event, apply_subagent_selection, open_overlay};
+#[cfg(feature = "tui")]
 use terminal::{handle_terminal_resize, notify_response_finished, restore_terminal};
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 use transcript::render_finalized_assistant_scrollback;
+#[cfg(feature = "tui")]
 use updates::{apply_update_decision, run_update_command};
 
+#[cfg(feature = "tui")]
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 // Keep streaming frames at the same cadence as the event loop so a provider
 // chunk cannot sit in the live response buffer for a perceptible interval.
+#[cfg(feature = "tui")]
 const STREAM_FRAME_INTERVAL: Duration = EVENT_POLL_INTERVAL;
 
+#[cfg(feature = "tui")]
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
@@ -74,23 +107,28 @@ pub(crate) struct AppRuntime {
     task_subscriptions: HashMap<String, rustcode_tasks::TaskSubscription>,
 }
 
+#[cfg(feature = "tui")]
 #[derive(Debug)]
 pub(crate) struct AppError(String);
 
+#[cfg(feature = "tui")]
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
+#[cfg(feature = "tui")]
 impl Error for AppError {}
 
+#[cfg(feature = "tui")]
 #[allow(dead_code)]
 pub(crate) enum AppRunControl {
     Continue,
     Exit(crate::ExitSummary),
 }
 
+#[cfg(feature = "tui")]
 impl AppRuntime {
     pub(crate) fn new(
         mut terminal_runtime: TerminalRuntime,
@@ -167,7 +205,7 @@ impl AppRuntime {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 mod tests {
     use super::{
         AppRunControl, AppRuntime, EVENT_POLL_INTERVAL, STREAM_FRAME_INTERVAL,
@@ -236,14 +274,14 @@ mod tests {
 
         let mut state = runtime.app_state().await;
         state.conversation_content_height = 7;
-        state.input_text_area = Some(ratatui::layout::Rect::new(3, 4, 20, 2));
+        state.input_text_area = Some(ratatui::layout::Rect::new(3, 4, 20, 2).into());
         state.request_redraw();
 
-        assert!(!state.publish_render_metrics(revision, 99, input_area));
+        assert!(!state.publish_render_metrics(revision, 99, input_area.into()));
         assert_eq!(state.conversation_content_height, 7);
         assert_eq!(
             state.input_text_area,
-            Some(ratatui::layout::Rect::new(3, 4, 20, 2))
+            Some(ratatui::layout::Rect::new(3, 4, 20, 2).into())
         );
     }
 

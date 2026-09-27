@@ -12,6 +12,7 @@ pub mod controller;
 pub mod daemon;
 mod discord_rpc;
 mod doctor;
+#[cfg(feature = "tui")]
 mod inline_terminal;
 mod mcp;
 mod memory;
@@ -24,13 +25,17 @@ mod shell_env;
 mod skills;
 mod symbols;
 mod tools;
+#[cfg(feature = "tui")]
 mod ui;
 mod update;
 
+#[cfg(feature = "tui")]
 use crate::app::runtime::AppRuntime;
 use crate::app::{AppState, ChatMessage};
+#[cfg(feature = "tui")]
 use crate::ui::TerminalRuntime;
 use clap::Parser;
+#[cfg(feature = "tui")]
 use ratatui::{
     backend::Backend,
     widgets::{Paragraph, Widget, Wrap},
@@ -38,6 +43,7 @@ use ratatui::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[cfg(feature = "tui")]
 pub(crate) fn insert_scrollback_lines<B: Backend>(
     terminal: &mut crate::inline_terminal::InlineTerminal<B>,
     lines: Vec<ratatui::text::Line<'static>>,
@@ -57,6 +63,7 @@ pub(crate) fn insert_scrollback_lines<B: Backend>(
     })
 }
 
+#[cfg(feature = "tui")]
 pub(crate) fn should_clear_mutable_viewport_before_history(
     _response_just_finished: bool,
     _transcript_at_start: bool,
@@ -597,11 +604,39 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    #[cfg(feature = "tui")]
+    return run_interactive(cli_args, model_override).await;
+
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = (&cli_args, &model_override);
+        Err(
+            "this binary was built without the terminal UI (default feature `tui` disabled); \
+             pass a prompt with `-p` for headless runs or start the ACP server"
+                .into(),
+        )
+    }
+}
+
+/// Interactive terminal session: the only path that owns a screen.
+///
+/// Gated behind the `tui` feature so non-TUI frontends never compile — or
+/// link — the rendering stack.
+#[cfg(feature = "tui")]
+async fn run_interactive(
+    cli_args: cli::Cli,
+    model_override: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let terminal_runtime = TerminalRuntime::start()?;
 
     crate::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
+    // Themes are a terminal-UI concern: shared state no longer applies them.
+    // The interactive runtime seeds the palette once before the first frame;
+    // every render re-applies it from `state.config().theme`.
+    crate::ui::theme::ensure_themes_dir();
+    crate::ui::theme::set_active_theme(&app_state_struct.config.theme);
     if cli_args.yolo {
         app_state_struct.auto_confirm = true;
     }
@@ -707,6 +742,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(feature = "tui")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExitSummary {
     pub(crate) prompt_tokens: u64,
@@ -719,6 +755,7 @@ pub(crate) struct ExitSummary {
     pub(crate) warnings: Vec<String>,
 }
 
+#[cfg(feature = "tui")]
 impl ExitSummary {
     pub(crate) fn from_state(state: &AppState) -> Self {
         let mut summary = Self {
@@ -774,6 +811,7 @@ impl ExitSummary {
     }
 }
 
+#[cfg(feature = "tui")]
 fn format_number(value: u64) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
@@ -786,6 +824,7 @@ fn format_number(value: u64) -> String {
     formatted
 }
 
+#[cfg(feature = "tui")]
 /// Printed after restoring the terminal and erasing the transient composer,
 /// matching Codex's compact usage and resume handoff.
 fn print_exit_summary(summary: &ExitSummary) {
@@ -807,7 +846,7 @@ fn print_exit_summary(summary: &ExitSummary) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 mod draw_loop_tests {
     use super::{
         ExitSummary, background_task_history_message, format_number, queue_background_wakeup,

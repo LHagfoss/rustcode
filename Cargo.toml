@@ -18,6 +18,19 @@ members = [
 ]
 resolver = "3"
 
+# `tui` is the terminal frontend. Frontends that never draw a frame (native
+# desktop, ACP, daemon, headless, and any future server) build with
+# `default-features = false` and skip the whole rendering stack.
+[features]
+default = ["tui"]
+tui = [
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:syntect",
+    "dep:pulldown-cmark",
+    "dep:unicode-width",
+]
+
 [[bin]]
 name = "rustcode"
 path = "src/main.rs"
@@ -30,14 +43,14 @@ chrono = { version = "0.4.39", default-features = false, features = ["clock", "s
 chrono-tz = { version = "0.10.4", features = ["serde"] }
 clap = { version = "4.6.4", features = ["derive"] }
 cron = "0.15.0"
-crossterm = { version = "0.29.0", features = ["event-stream"] }
+crossterm = { version = "0.29.0", features = ["event-stream"], optional = true }
 discord-rich-presence = "=0.2.4"
 futures-util = "0.3.32"
 globset = "0.4"
 ignore = "0.4"
-pulldown-cmark = "0.12.2"
+pulldown-cmark = { version = "0.12.2", optional = true }
 rand = "0.10.2"
-ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"], optional = true }
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
 reqwest-middleware = "0.4.2"
@@ -46,7 +59,7 @@ scraper = "0.22.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 similar = { version = "3.1.1", features = ["inline"] }
-syntect = "5.2"
+syntect = { version = "5.2", optional = true }
 streaming-iterator = "0.1.9"
 sysinfo = "0.39.6"
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
@@ -56,7 +69,7 @@ tiktoken-rs = "0.5.9"
 toml = "0.8.19"
 tree-sitter = "0.24.4"
 tree-sitter-rust = "0.23.2"
-unicode-width = "0.2.2"
+unicode-width = { version = "0.2.2", optional = true }
 urlencoding = "2.1.3"
 serde_millis = "0.1.1"
 sha2 = "0.10"
