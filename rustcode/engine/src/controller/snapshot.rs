@@ -363,7 +363,7 @@ impl ControllerSnapshot {
                         })
                         .or_else(|| {
                             record.changed_paths.first().map(|path| {
-                                crate::app::activity::sanitize_tool_parameter(path, 120)
+                                rustcode_core::activity::sanitize_tool_parameter(path, 120)
                             })
                         })
                 });

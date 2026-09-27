@@ -69,7 +69,9 @@ pub(super) fn format_pi_tool_action(
         _ => crate::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_case(name)),
     };
 
-    if let Some(target) = crate::app::activity::exploration_tool_parameters(name, args, home_path) {
+    if let Some(target) =
+        rustcode_core::activity::exploration_tool_parameters(name, args, home_path)
+    {
         return (action_label, target);
     }
 
@@ -158,14 +160,14 @@ pub(super) fn format_pi_tool_action(
         "remember" | "forget_memory" => args
             .get("key")
             .and_then(|v| v.as_str())
-            .map(|v| crate::app::activity::sanitize_tool_parameter(v, 100))
+            .map(|v| rustcode_core::activity::sanitize_tool_parameter(v, 100))
             .unwrap_or_else(|| "?".to_owned()),
         "use_skill" => args
             .get("name")
             .or_else(|| args.get("skill"))
             .or_else(|| args.get("skill_name"))
             .and_then(|v| v.as_str())
-            .map(|v| crate::app::activity::sanitize_tool_parameter(v, 100))
+            .map(|v| rustcode_core::activity::sanitize_tool_parameter(v, 100))
             .unwrap_or_default(),
         "spawn_agent" => "agent task".to_owned(),
         "send_agent" => "agent message".to_owned(),
@@ -242,7 +244,7 @@ pub(super) fn format_generic_tool_args(args: &serde_json::Value) -> String {
         }
         let val_str = match v {
             serde_json::Value::String(s) => {
-                let first_line = crate::app::activity::sanitize_tool_parameter(
+                let first_line = rustcode_core::activity::sanitize_tool_parameter(
                     s.lines().next().unwrap_or("").trim(),
                     30,
                 );
@@ -445,7 +447,7 @@ pub(super) fn ask_question_text(args: &serde_json::Value) -> String {
                 .and_then(|value| value.as_str())
         })
         .unwrap_or("");
-    let clean = crate::app::activity::sanitize_tool_parameter(text, 110);
+    let clean = rustcode_core::activity::sanitize_tool_parameter(text, 110);
     if clean.is_empty() {
         "a question".to_owned()
     } else {
@@ -484,7 +486,7 @@ pub(super) fn ask_question_answer(history: &[ChatMessage], message_index: usize)
     } else {
         summary
     };
-    let clean = crate::app::activity::sanitize_tool_parameter(summary, 90);
+    let clean = rustcode_core::activity::sanitize_tool_parameter(summary, 90);
     if clean.is_empty() {
         "no answer".to_owned()
     } else {
@@ -652,11 +654,11 @@ pub(crate) enum ToolTranscriptKind {
 }
 
 pub(crate) fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
-    if crate::app::activity::is_exploration_tool(tool_name) {
+    if rustcode_core::activity::is_exploration_tool(tool_name) {
         ToolTranscriptKind::Explored
     } else if tool_name == "run_command" || tool_name.eq_ignore_ascii_case("bash") {
         ToolTranscriptKind::Command
-    } else if crate::app::activity::is_editing_tool(tool_name) {
+    } else if rustcode_core::activity::is_editing_tool(tool_name) {
         ToolTranscriptKind::Edit
     } else {
         ToolTranscriptKind::Tool

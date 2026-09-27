@@ -495,7 +495,7 @@ impl RenderSnapshot {
         if let Some(command) = crate::app::suggestion::command_token(&self.input_buffer) {
             return Some(format!("command:{command}"));
         }
-        crate::app::get_at_word_query(&self.input_buffer, self.cursor_position)
+        rustcode_core::input::get_at_word_query(&self.input_buffer, self.cursor_position)
             .map(|(start, query)| format!("file:{start}:{query}"))
     }
     pub(crate) fn get_command_suggestion(&self) -> Option<&str> {

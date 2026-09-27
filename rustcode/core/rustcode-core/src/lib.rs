@@ -8,7 +8,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub mod activity;
+pub mod input;
 pub mod paste;
+pub mod status;
 pub mod update;
 
 fn current_timestamp() -> String {
