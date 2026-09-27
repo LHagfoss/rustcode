@@ -1,0 +1,60 @@
+# Frontend seam allow-list (issue #1431).
+#
+# The TUI render layer (rustcode/engine/src/ui + inline_terminal.rs) may only
+# reference the keys below. Convergence = deleting entries from this file.
+# Keys are one or two path segments: `crate::tools` covers `use
+# crate::tools::{...}` brace imports, `crate::tools::parse_tool_call` covers
+# direct paths. Anything observed that is not listed fails CI.
+
+# TUI-internal: the render layer talking to itself and its event loop.
+crate::ui
+crate::inline_terminal
+crate::app::runtime
+
+# The seam: every frontend drives this (target state: ONLY this + internals).
+crate::controller
+
+# --- Convergence targets. Each entry removed = one step toward #1431. ---
+# Shared state access (route through controller snapshots):
+crate::app
+crate::app::state
+crate::app::activity
+crate::app::actions
+crate::app::suggestion
+crate::app::status
+crate::app::get_completion_len
+crate::app::get_at_word_query
+crate::app::list_project_file_paths
+crate::app::sanitize_recap_content
+crate::app::build_help_text
+crate::app::apply_autocomplete
+# Turn machinery (route through controller):
+crate::network
+crate::network::ui_adapter
+crate::network::compaction
+crate::network::text
+# Background-task observation:
+crate::tools
+crate::tools::parse_tool_call
+crate::tools::background_command_label
+crate::tools::stop_background_tasks
+crate::tools::spawn_background_task_for_test
+crate::tools::tool_system_prompt
+crate::tools::resolve_tool_calls
+crate::tools::mcp_tool_display_name
+crate::tools::is_tool_call_start
+crate::tools::is_code_editing_tool
+crate::tools::find_closing_tool_fence
+crate::tools::background_task_snapshots
+# Config mutation:
+crate::config
+crate::config::save_entire_config
+crate::config::get_config_dir
+# Leaf utilities (likely permanent; revisit last):
+crate::update
+crate::update::format_version
+crate::update::current_version
+crate::update::is_brew_install
+crate::skills::discover_skills
+crate::paste::parse_at
+crate::paste::find
