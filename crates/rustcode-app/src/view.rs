@@ -40,7 +40,8 @@ actions!(
         OpenSettings,
         ToggleChatSearch,
         CloseChatSearch,
-        FocusSessionSearch
+        FocusSessionSearch,
+        NewChat
     ]
 );
 
@@ -149,7 +150,6 @@ fn code_copy_actions(
             } else {
                 IconName::Copy
             })
-            .label(if copied { "Copied" } else { "Copy" })
             .accessibility_label("Copy code block")
             .tooltip(if copied { "Copied!" } else { "Copy code block" })
             .on_click(move |_, _, cx| {
@@ -532,9 +532,10 @@ impl AppView {
     /// Merge a session list into the sidebar without ever shrinking it on
     /// partial snapshots: snapshots can arrive with a partial list (or be
     /// dropped as stale), which previously left the panel intermittently
-    /// empty. A genuinely empty list still resets it.
-    fn merge_recent_sessions(&mut self, sessions: &[SessionChoice]) {
-        if sessions.is_empty() {
+    /// empty. Only a session-less empty state (fresh launch, no active
+    /// session) resets the list, so starting a new chat keeps old chats.
+    fn merge_recent_sessions(&mut self, sessions: &[SessionChoice], active_session: Option<&str>) {
+        if sessions.is_empty() && active_session.is_none() {
             self.recent_sessions.clear();
             return;
         }
@@ -555,7 +556,7 @@ impl AppView {
         // Session lists are monotonic sidebar data: merge them even from
         // stale generations so the panel never flashes empty.
         if let ControllerUpdate::Snapshot(snapshot) = &event.update {
-            self.merge_recent_sessions(&snapshot.sessions);
+            self.merge_recent_sessions(&snapshot.sessions, snapshot.session_id.as_deref());
         }
         if self
             .navigation
@@ -606,7 +607,7 @@ impl AppView {
                     self.approval_in_flight.take(),
                     pending_batch_id,
                 );
-                self.merge_recent_sessions(&snapshot.sessions);
+                self.merge_recent_sessions(&snapshot.sessions, snapshot.session_id.as_deref());
                 let prior_session_id = self
                     .navigation
                     .chat_snapshot
@@ -764,7 +765,7 @@ impl AppView {
         }
     }
 
-    fn start_new_chat(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_new_chat(&mut self, cx: &mut Context<Self>) {
         if !start_new_chat_enabled(self.starting_new_session, self.switching_session) {
             return;
         }
@@ -1794,6 +1795,7 @@ impl AppView {
             .ghost()
             .w_full()
             .justify_start()
+            .rounded(ButtonRounded::Large)
             .accessibility_label("Back to app")
             .child(
                 div()
@@ -1813,6 +1815,7 @@ impl AppView {
             SidebarMenuItem::new("General")
                 .icon(Icon::new(IconName::Settings))
                 .gap_x_0p5()
+                .rounded_lg()
                 .active(true),
         );
 
@@ -1858,6 +1861,7 @@ impl AppView {
                     .ghost()
                     .w_full()
                     .justify_start()
+                    .rounded(ButtonRounded::Large)
                     .disabled(navigation_disabled)
                     .accessibility_label("Start a new chat")
                     .child(
@@ -1875,10 +1879,19 @@ impl AppView {
                     })),
             )
             .child(
-                Input::new(&self.session_search_input)
-                    .id("session-search-input")
-                    .bordered(true)
-                    .w_full(),
+                div()
+                    .w_full()
+                    .rounded_xl()
+                    .overflow_hidden()
+                    .bg(rgb(Palette::SURFACE_ELEVATED))
+                    .border_1()
+                    .border_color(rgb(Palette::APP_BACKGROUND))
+                    .child(
+                        Input::new(&self.session_search_input)
+                            .id("session-search-input")
+                            .bordered(false)
+                            .w_full(),
+                    ),
             );
 
         let projects = SidebarGroup::new("Projects").child(
@@ -1886,6 +1899,7 @@ impl AppView {
                 SidebarMenuItem::new(project_name)
                     .icon(Icon::new(IconName::FolderOpen))
                     .gap_x_0p5()
+                    .rounded_lg()
                     .label_style(gpui_kit::StyleRefinement::default().text_ellipsis())
                     .disable(navigation_disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1927,6 +1941,7 @@ impl AppView {
                     SidebarMenuItem::new(project)
                         .icon(Icon::new(IconName::FolderOpen))
                         .gap_x_0p5()
+                        .rounded_lg()
                         .disable(true),
                 );
                 for session in sessions {
@@ -1937,6 +1952,7 @@ impl AppView {
                         SidebarMenuItem::new(session.title.clone())
                             .icon(Icon::new(IconName::FileText))
                             .gap_x_0p5()
+                            .rounded_lg()
                             // The toolkit's label is a flex row whose text child
                             // clips before ellipsis. Give the suffix slot the
                             // remaining width and render a constrained text block.
@@ -1982,6 +1998,7 @@ impl AppView {
             .ghost()
             .w_full()
             .justify_start()
+            .rounded(ButtonRounded::Large)
             .selected(matches!(
                 self.navigation.destination,
                 AppDestination::Settings(_)
@@ -2270,6 +2287,7 @@ impl AppView {
                         .child(
                             Button::new("approval-deny")
                                 .small()
+                                .rounded(ButtonRounded::Large)
                                 .label(if in_flight { "Denying…" } else { "Deny" })
                                 .disabled(in_flight)
                                 .on_click(move |_, _, cx| {
@@ -2303,6 +2321,7 @@ impl AppView {
                             Button::new("approval-approve")
                                 .primary()
                                 .small()
+                                .rounded(ButtonRounded::Large)
                                 .label(if in_flight { "Approving…" } else { "Approve" })
                                 .disabled(in_flight)
                                 .on_click(move |_, _, cx| {
@@ -3338,6 +3357,40 @@ impl Render for AppView {
                     .text_base()
                     .text_color(rgb(Palette::TEXT_MUTED))
                     .child(start_screen.detail),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap_2()
+                    .pt_2()
+                    .children(
+                        [
+                            "Explain this repository",
+                            "Check git status",
+                            "What changed recently?",
+                        ]
+                        .into_iter()
+                        .map(|suggestion| {
+                            let text: String = suggestion.to_owned();
+                            Button::new(format!("welcome-suggestion-{text}"))
+                                .ghost()
+                                .compact()
+                                .small()
+                                .rounded(ButtonRounded::Large)
+                                .label(suggestion)
+                                .accessibility_label(format!("Ask: {text}"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.composer.update(cx, |state, cx| {
+                                        state.set_value(&text, window, cx);
+                                        state.focus(window, cx);
+                                    });
+                                    cx.notify();
+                                }))
+                        }),
+                    ),
             );
 
         let center = if has_session {
