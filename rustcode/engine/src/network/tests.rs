@@ -4240,10 +4240,11 @@ fn file_context_marks_fresh_and_stale_snapshots() {
 
 #[test]
 fn compiler_diagnostics_include_bounded_source_context_for_known_locations() {
-    let diagnostics = "error: mismatched arguments\n --> src/network.rs:1:1";
-    let enriched = compiler_diagnostics_with_snippets(diagnostics);
-    assert!(enriched.contains(diagnostics));
-    assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
+    let location = "rustcode/engine/src/network.rs";
+    let diagnostics = format!("error: mismatched arguments\n --> {location}:1:1");
+    let enriched = compiler_diagnostics_with_snippets(&diagnostics);
+    assert!(enriched.contains(&diagnostics));
+    assert!(enriched.contains(&format!("[compiler context: {location}:1:1]")));
     assert!(enriched.contains("use crate::app::{AppState"));
 }
 

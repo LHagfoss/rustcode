@@ -207,14 +207,22 @@ package_rows=()
 while IFS= read -r row; do
     package_rows+=("$row")
 done < <(
-    jq -r '.packages[] | [.name, (.manifest_path | sub("/Cargo.toml$"; ""))] | @tsv' <<<"$json_packages"
+    jq -r '
+        .packages[]
+        | [ .name,
+            (.manifest_path | sub("/Cargo.toml$"; "")),
+            ([ .targets[]
+                | select((.kind | index("lib")) != null or (.kind | index("bin")) != null)
+                | .src_path ]
+             | first // "") ]
+        | @tsv' <<<"$json_packages"
 )
 ((${#package_rows[@]} > 0)) || die "workspace has no packages"
 
 packages=()
 source_files=()
 for row in "${package_rows[@]}"; do
-    IFS=$'\t' read -r package manifest_dir <<<"$row"
+    IFS=$'\t' read -r package manifest_dir declared_source <<<"$row"
     selected=1
     if ((${#requested_packages[@]} > 0)); then
         selected=0
@@ -224,7 +232,11 @@ for row in "${package_rows[@]}"; do
     fi
     ((selected)) || continue
     packages+=("$package")
-    if [[ -f "$manifest_dir/src/lib.rs" ]]; then
+    # Prefer the entry point Cargo itself declares, since a package may keep
+    # its sources outside the manifest directory.
+    if [[ -n "$declared_source" && -f "$declared_source" ]]; then
+        source_files+=("$declared_source")
+    elif [[ -f "$manifest_dir/src/lib.rs" ]]; then
         source_files+=("$manifest_dir/src/lib.rs")
     elif [[ -f "$manifest_dir/src/main.rs" ]]; then
         source_files+=("$manifest_dir/src/main.rs")
