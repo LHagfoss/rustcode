@@ -189,7 +189,9 @@ jobs:
         needs: changes
         if: needs.changes.outputs.code == 'true'
         name: macOS native app
-        runs-on: macos-15
+        # Tahoe: the app bundle requires Xcode 26 (Icon Composer), which the
+        # macos-15 image does not ship. The seatbelt job stays on macos-15.
+        runs-on: macos-26
         # The GPUI dependency tree compiles from scratch on a cold cache
         # (~15min+); fail fast instead of hanging for the 6h default.
         timeout-minutes: 60
@@ -217,6 +219,11 @@ jobs:
 
             - name: Build native app
               run: cargo build --locked -p rustcode-app
+
+            - name: Bundle macOS app
+              # Validates the release bundler (Icon Composer, Info.plist)
+              # on every PR so tagged builds do not discover it broken.
+              run: scripts/build-native-app.sh
 
     portability:
         name: ${{ matrix.name }} portability coverage
