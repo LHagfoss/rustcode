@@ -56,5 +56,3 @@ crate::update::format_version
 crate::update::current_version
 crate::update::is_brew_install
 crate::skills::discover_skills
-crate::paste::parse_at
-crate::paste::find
