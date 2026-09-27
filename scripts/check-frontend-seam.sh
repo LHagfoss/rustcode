@@ -35,19 +35,25 @@ if ((${#paths[@]} == 0)); then
     paths=("$repo_root/rustcode/engine/src/ui" "$repo_root/rustcode/engine/src/inline_terminal.rs")
 fi
 [[ -f "$allowlist" ]] || { echo "check-frontend-seam: allow-list not found: $allowlist" >&2; exit 2; }
+command -v rg >/dev/null 2>&1 || { echo "check-frontend-seam: ripgrep (rg) is not installed" >&2; exit 2; }
+for path in "${paths[@]}"; do
+    [[ -e "$path" ]] || { echo "check-frontend-seam: path not found: $path" >&2; exit 2; }
+done
 
 observed="$(mktemp)"
 allowed="$(mktemp)"
-trap 'rm -f -- "$observed" "$allowed"' EXIT INT TERM
+rg_stderr="$(mktemp)"
+trap 'rm -f -- "$observed" "$allowed" "$rg_stderr"' EXIT INT TERM
 
 set +e
-rg -o --no-filename 'crate::[A-Za-z_:]+' "${paths[@]}" 2>/dev/null \
+rg -o --no-filename 'crate::[A-Za-z_:]+' "${paths[@]}" 2>"$rg_stderr" \
     | sed -E -e 's/^crate::ui(::[A-Za-z_0-9]+)+$/crate::ui/' -e 's/^((crate::[a-z_]+)(::[a-z_]+)?).*/\1/' \
     | sort -u >"$observed"
-rg_status="${PIPESTATUS[0]}"
+pipeline_status=("${PIPESTATUS[@]}")
 set -e
-if ((rg_status > 1)); then
-    echo "check-frontend-seam: search failed" >&2
+if ((pipeline_status[0] > 1)); then
+    echo "check-frontend-seam: search failed (rg exit ${pipeline_status[0]}):" >&2
+    cat "$rg_stderr" >&2
     exit 2
 fi
 
