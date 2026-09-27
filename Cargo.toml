@@ -6,15 +6,19 @@ license = "Apache-2.0"
 
 [workspace]
 members = [
-    "crates/rustcode-core",
-    "crates/rustcode-session",
-    "crates/rustcode-tool-protocol",
-    "crates/rustcode-tools",
-    "crates/rustcode-command",
-    "crates/rustcode-lifecycle",
-    "crates/rustcode-tasks",
-    "crates/rustcode-loop-detect",
-    "crates/rustcode-app",
+    # Core libraries: no terminal UI, no frontend assumptions.
+    "rustcode/core/rustcode-core",
+    "rustcode/core/rustcode-session",
+    "rustcode/core/rustcode-tool-protocol",
+    "rustcode/core/rustcode-tools",
+    "rustcode/core/rustcode-command",
+    "rustcode/core/rustcode-lifecycle",
+    "rustcode/core/rustcode-tasks",
+    "rustcode/core/rustcode-loop-detect",
+    # The engine is the root package itself: agent loop, tools, config,
+    # session state, ACP, daemon, and the terminal frontend behind `tui`.
+    # Native desktop shell (GPUI).
+    "rustcode/desktop",
 ]
 resolver = "3"
 
@@ -31,9 +35,13 @@ tui = [
     "dep:unicode-width",
 ]
 
+[lib]
+name = "rustcode"
+path = "rustcode/engine/src/lib.rs"
+
 [[bin]]
 name = "rustcode"
-path = "src/main.rs"
+path = "rustcode/engine/src/main.rs"
 
 [dependencies]
 anyhow = "1.0.97"
@@ -82,14 +90,14 @@ libc = "0.2"
 tar = "0.4"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.10"
-rustcode-core = { path = "crates/rustcode-core" }
-rustcode-session = { path = "crates/rustcode-session" }
-rustcode-tool-protocol = { path = "crates/rustcode-tool-protocol" }
-rustcode-tools = { path = "crates/rustcode-tools" }
-rustcode-command = { path = "crates/rustcode-command" }
-rustcode-lifecycle = { path = "crates/rustcode-lifecycle" }
-rustcode-loop-detect = { path = "crates/rustcode-loop-detect" }
-rustcode-tasks = { path = "crates/rustcode-tasks" }
+rustcode-core = { path = "rustcode/core/rustcode-core" }
+rustcode-session = { path = "rustcode/core/rustcode-session" }
+rustcode-tool-protocol = { path = "rustcode/core/rustcode-tool-protocol" }
+rustcode-tools = { path = "rustcode/core/rustcode-tools" }
+rustcode-command = { path = "rustcode/core/rustcode-command" }
+rustcode-lifecycle = { path = "rustcode/core/rustcode-lifecycle" }
+rustcode-loop-detect = { path = "rustcode/core/rustcode-loop-detect" }
+rustcode-tasks = { path = "rustcode/core/rustcode-tasks" }
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0

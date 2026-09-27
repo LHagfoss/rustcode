@@ -4,6 +4,35 @@ RustCode is a Rust workspace with a root application crate and small domain
 crates. The extracted crates keep frequently edited functionality from forcing
 unrelated heavyweight dependencies to rebuild.
 
+## Repository layout
+
+```text
+rustcode/
+├── core/       Domain libraries. No terminal UI, no frontend assumptions.
+│   ├── rustcode-core/         stable shared types and path helpers
+│   ├── rustcode-session/      session persistence primitives
+│   ├── rustcode-tool-protocol/ tool-call protocol envelopes
+│   ├── rustcode-tools/        filesystem tool implementations
+│   ├── rustcode-command/      cross-platform command execution
+│   ├── rustcode-lifecycle/    turn lifecycle and stop-state types
+│   ├── rustcode-tasks/        background task state and event delivery
+│   └── rustcode-loop-detect/  semantic loop and progress guards
+├── engine/     Sources of the root `rustcode` crate: agent loop, tools,
+│               config, session state, ACP, daemon, and the terminal
+│               frontend (behind the `tui` feature).
+└── desktop/    `rustcode-app`, the native GPUI shell.
+```
+
+The root `Cargo.toml` is both the workspace manifest and the `rustcode`
+package manifest; the engine lives in `rustcode/engine/src` and is declared
+with `[lib] path` / `[[bin]] path`.
+
+The engine exposes two feature sets. `tui` (on by default) builds the
+terminal frontend — ratatui, crossterm, syntect, pulldown-cmark. Frontends
+that never draw a frame build with `default-features = false`; CI checks
+`cargo check --no-default-features` so that path cannot rot. Nothing under
+`rustcode/core` may reference ratatui or crossterm.
+
 ## Workspace crates
 
 | Crate | Responsibility |
@@ -17,9 +46,9 @@ unrelated heavyweight dependencies to rebuild.
 | `rustcode-tasks` | Session-aware background task state and event delivery |
 | `rustcode-loop-detect` | Semantic loop, failure, progress, and reasoning guards |
 
-The root `rustcode` crate owns integration concerns: TUI state, model/network
-turns, ACP, configuration, media/audio tools, and adapters between the smaller
-crates.
+The root `rustcode` crate owns integration concerns: model/network turns,
+ACP, configuration, media/audio tools, the terminal UI state, and adapters
+between the smaller crates.
 
 ## Command and task flow
 
@@ -59,7 +88,7 @@ Interactive, headless, and ACP consumers have separate adapters:
 
 ## Build and CI boundaries
 
-Changes under `crates/` and CI helper scripts trigger the required Linux test
+Changes under `rustcode/` and CI helper scripts trigger the required Linux test
 and lint jobs, plus advisory macOS/Windows portability checks. The required
 test and lint jobs run in parallel so merges do not wait for their combined
 compile time. Release artifacts are built for:
