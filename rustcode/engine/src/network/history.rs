@@ -554,7 +554,7 @@ fn to_messages_with_scope(
             "content": format!("```tool\n{}\n```", serde_json::json!({"name": call.name, "arguments": call.arguments})),
         }),
         HistoryEntry::Assistant(content) => {
-            let prose = super::text::strip_think_blocks(&content);
+            let prose = rustcode_tool_protocol::text::strip_think_blocks(&content);
             let prose = prose.trim();
             let final_content = if prose.is_empty() {
                 "(completed reasoning)".to_string()
@@ -673,7 +673,7 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
             // reasoning around it is the only record of why this step was taken,
             // and replaying a turn as a bare call leaves the model re-deciding
             // the same step from scratch every round.
-            let prose = super::text::strip_tool_call_syntax(&message.content);
+            let prose = rustcode_tool_protocol::text::strip_tool_call_syntax(&message.content);
             let prose = prose.trim();
             let content = if prose.is_empty() {
                 serde_json::Value::String(tool_continuity_note(message))

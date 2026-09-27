@@ -1,4 +1,4 @@
-use super::super::text::cap_diff_lines;
+use rustcode_tool_protocol::text::cap_diff_lines;
 
 pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     if name == "replace_file_content" {

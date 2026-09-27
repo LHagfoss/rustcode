@@ -9,7 +9,6 @@ use super::super::events::{self, ToolResult};
 use super::super::lifecycle;
 use super::super::loop_detect;
 use super::super::policy;
-use super::super::text::has_intended_tool_call;
 use super::super::tool_exec::{get_tool_project_root, tool_result_history_message};
 use super::super::verification;
 use super::super::{
@@ -25,6 +24,7 @@ use super::{
     GroundedArtifactEvidence, TurnContext, append_cancelled_batch_results,
     hydrate_explicit_verification_from_history,
 };
+use rustcode_tool_protocol::text::has_intended_tool_call;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolHandlingOutcome {

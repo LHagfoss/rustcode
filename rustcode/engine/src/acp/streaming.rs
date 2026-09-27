@@ -146,8 +146,8 @@ impl AcpEventStream {
             }
             crate::network::AgentUiEvent::TurnFinished { content, .. } => {
                 let mut updates = self.flush();
-                let promoted = crate::network::text::promote_bare_thought_markers(&content);
-                let prose = crate::network::text::strip_think_blocks(&promoted);
+                let promoted = rustcode_tool_protocol::text::promote_bare_thought_markers(&content);
+                let prose = rustcode_tool_protocol::text::strip_think_blocks(&promoted);
                 let trimmed_prose = prose.trim();
                 if !trimmed_prose.is_empty()
                     && !self.streamed_prose.ends_with(&prose)

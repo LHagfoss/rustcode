@@ -274,10 +274,11 @@ where
         add_usage(&mut token_usage, chunk.token_usage);
         if !has_native_tool_calls {
             let cut_off = crate::network::is_cut_off(&accumulated, chunk.finish_reason.as_deref());
-            let adaptive_candidate = crate::network::text::is_adaptive_tool_continuation_candidate(
-                &accumulated,
-                chunk.finish_reason.as_deref(),
-            );
+            let adaptive_candidate =
+                rustcode_tool_protocol::text::is_adaptive_tool_continuation_candidate(
+                    &accumulated,
+                    chunk.finish_reason.as_deref(),
+                );
             let adaptive_limit = if adaptive_candidate {
                 runner.adaptive_output_limit(chunk.output_token_limit, &accumulated, &policy)
             } else {
@@ -310,7 +311,7 @@ where
             }
         }
         let (content, finish_reason) = if let Some(prefix) =
-            crate::network::text::complete_native_tool_call_prefix(&accumulated)
+            rustcode_tool_protocol::text::complete_native_tool_call_prefix(&accumulated)
         {
             // A complete native call is actionable now. Drop any later
             // incomplete call so tolerant JSON repair cannot execute a

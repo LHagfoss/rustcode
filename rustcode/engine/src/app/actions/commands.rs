@@ -100,7 +100,7 @@ pub(crate) fn compact_idle_summary(content: &str) -> String {
     // Some models put their recap inside their reasoning stream. Remove that
     // before applying the compacting rules so the UI never exposes scratchpad
     // text or truncates the actual answer after a long `<think>` block.
-    let text = crate::network::text::strip_think_blocks(content)
+    let text = rustcode_tool_protocol::text::strip_think_blocks(content)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -136,11 +136,11 @@ fn looks_like_transcript_echo(content: &str) -> bool {
 
 pub(crate) fn sanitize_recap_content(content: &str) -> String {
     let compact = rustcode_core::paste::compact(content);
-    crate::network::text::strip_tool_call_syntax(&crate::network::text::strip_think_blocks(
-        &compact,
-    ))
+    rustcode_tool_protocol::text::strip_tool_call_syntax(
+        &rustcode_tool_protocol::text::strip_think_blocks(&compact),
+    )
     .lines()
-    .map(crate::network::text::strip_ansi_escapes)
+    .map(rustcode_tool_protocol::text::strip_ansi_escapes)
     .map(|line| -> String {
         line.chars()
             .filter(|character| !character.is_control())

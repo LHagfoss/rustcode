@@ -6471,7 +6471,7 @@ fn session_interruption_and_recovery_safety() {
 
 #[test]
 fn test_continuation_assistant_message_strips_massive_think_traces() {
-    use super::text::format_continuation_assistant_message;
+    use rustcode_tool_protocol::text::format_continuation_assistant_message;
 
     // 1. Completed massive reasoning trace followed by visible prose
     let massive_think = format!(
@@ -6511,7 +6511,7 @@ fn test_continuation_assistant_message_strips_massive_think_traces() {
 
 #[test]
 fn test_continuation_nudges_are_category_aware() {
-    use super::text::continuation_nudge_for_category;
+    use rustcode_tool_protocol::text::continuation_nudge_for_category;
 
     // Length cutoff
     assert_eq!(

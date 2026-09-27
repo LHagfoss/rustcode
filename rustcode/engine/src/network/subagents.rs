@@ -6,13 +6,13 @@ use super::loop_detect;
 use super::messages::{inject_system_reminder, trim_msgs_to_budget};
 use super::runner;
 use super::stream_request::stream_request;
-use super::text::{
-    continuation_nudge_for_category, format_continuation_assistant_message, strip_leading_think,
-};
 use super::{
     StreamBuffer, compact_history_to_budget, confirm_and_execute, final_tool_diff,
     is_read_only_tool, push_status_line, subagent_tool_history_message,
     tool_result_precludes_preview_fallback,
+};
+use rustcode_tool_protocol::text::{
+    continuation_nudge_for_category, format_continuation_assistant_message, strip_leading_think,
 };
 
 fn subagent_model_result_content(message: &ChatMessage) -> String {

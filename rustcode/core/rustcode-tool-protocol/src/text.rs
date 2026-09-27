@@ -1,10 +1,11 @@
 //! Pure response-text helpers: detecting cut-off/incomplete replies, stripping
 //! `<think>` blocks and tool-call syntax, and small formatting utilities.
 //!
-//! Extracted from `network.rs`. All functions here are side-effect free and
-//! depend only on `crate::tools` / `crate::config` for tool-call parsing.
+//! All functions here are side-effect free and build on the protocol parser
+//! in this crate, so every subsystem (network turns, ACP, context compaction,
+//! all frontends) shares one implementation.
 
-pub(crate) fn has_intended_tool_call(content: &str) -> bool {
+pub fn has_intended_tool_call(content: &str) -> bool {
     let lower = content.to_lowercase();
     lower.contains("```tool")
         || lower.contains("<tool_call>")
@@ -23,12 +24,12 @@ fn has_textual_write_call(content: &str) -> bool {
 /// identifies an unclosed fence/tag and therefore an incomplete envelope.
 fn has_incomplete_tool_arguments(content: &str) -> bool {
     has_intended_tool_call(content)
-        && !crate::tools::has_incomplete_actionable_tool_call(content)
-        && crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty()
-        && crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty()
+        && !crate::has_incomplete_actionable_tool_call(content)
+        && crate::parse_tool_calls(content, rustcode_core::ToolProtocol::Json).is_empty()
+        && crate::parse_tool_calls(content, rustcode_core::ToolProtocol::Native).is_empty()
 }
 
-pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
+pub fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     if matches!(finish_reason, Some("reasoning_loop" | "reasoning_budget")) {
         return false;
     }
@@ -36,7 +37,7 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     // Keep an incomplete textual envelope incomplete even if the tolerant
     // parser can repair its JSON. Executing repaired output after a length
     // stop would risk silently applying a truncated mutation.
-    if crate::tools::has_incomplete_actionable_tool_call(content) {
+    if crate::has_incomplete_actionable_tool_call(content) {
         // Native tag responses can contain several calls. The parser is
         // intentionally tolerant and the incomplete-call detector must keep
         // mutation-only responses safe, but a valid call before a trailing
@@ -50,7 +51,7 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
 
     // If the model already produced a valid tool call, we don't need to continue text generation.
     // We should execute the tool and get its output first.
-    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty() {
+    if !crate::parse_tool_calls(content, rustcode_core::ToolProtocol::Native).is_empty() {
         return false;
     }
 
@@ -101,7 +102,7 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
 /// Return the safe prefix when a native response has complete calls followed
 /// by an incomplete call. The incomplete suffix must not reach the tolerant
 /// parser, which could otherwise repair and execute a truncated mutation.
-pub(crate) fn complete_native_tool_call_prefix(content: &str) -> Option<&str> {
+pub fn complete_native_tool_call_prefix(content: &str) -> Option<&str> {
     const MARKER: &str = "[TOOL_CALLS]";
     let markers: Vec<usize> = content
         .match_indices(MARKER)
@@ -111,12 +112,9 @@ pub(crate) fn complete_native_tool_call_prefix(content: &str) -> Option<&str> {
     for (index, &start) in markers.iter().enumerate() {
         let end = markers.get(index + 1).copied().unwrap_or(content.len());
         let segment = &content[start..end];
-        if crate::tools::has_incomplete_actionable_tool_call(segment) {
-            if !crate::tools::parse_tool_calls(
-                &content[..start],
-                crate::config::ToolProtocol::Native,
-            )
-            .is_empty()
+        if crate::has_incomplete_actionable_tool_call(segment) {
+            if !crate::parse_tool_calls(&content[..start], rustcode_core::ToolProtocol::Native)
+                .is_empty()
             {
                 return Some(&content[..start]);
             }
@@ -130,13 +128,10 @@ pub(crate) fn complete_native_tool_call_prefix(content: &str) -> Option<&str> {
 /// Evidence used by adaptive continuation. This is deliberately narrower than
 /// `is_cut_off`: ordinary prose and reasoning-only responses may continue for
 /// the existing reasons, but they must never receive a larger output ceiling.
-pub(crate) fn is_adaptive_tool_continuation_candidate(
-    content: &str,
-    finish_reason: Option<&str>,
-) -> bool {
+pub fn is_adaptive_tool_continuation_candidate(content: &str, finish_reason: Option<&str>) -> bool {
     matches!(finish_reason, Some("length" | "tool_arguments_limit"))
         && !is_reasoning_only(content)
-        && crate::tools::has_incomplete_actionable_tool_call(content)
+        && crate::has_incomplete_actionable_tool_call(content)
         && complete_native_tool_call_prefix(content).is_none()
 }
 
@@ -211,7 +206,7 @@ fn ends_with_stated_intent(content: &str) -> bool {
 ///
 /// A span runs from its marker to the next marker, the next fenced block, or
 /// the end of the text. Content that already carries `<think>` is left alone.
-pub(crate) fn promote_bare_thought_markers(content: &str) -> String {
+pub fn promote_bare_thought_markers(content: &str) -> String {
     const MARKER: &str = "thought";
 
     if content.contains("<think>") || !content.contains(MARKER) {
@@ -255,7 +250,7 @@ pub(crate) fn promote_bare_thought_markers(content: &str) -> String {
 /// Remove top-level `<think>...</think>` spans outside code blocks so we can
 /// inspect the model's actual answer/tool output without corrupting code that
 /// contains literal `<think>` tags.
-pub(crate) fn strip_think_blocks(content: &str) -> String {
+pub fn strip_think_blocks(content: &str) -> String {
     let mut out = String::new();
     let mut in_fence = false;
     let mut fence_marker = "";
@@ -313,7 +308,7 @@ pub(crate) fn strip_think_blocks(content: &str) -> String {
 /// fences or Mistral `[TOOL_CALLS]...[ARGS]{...}`), so on the forced wrap-up
 /// turn — where we refuse to execute anything — we must remove that syntax
 /// before saving, or the "answer" is a raw tool call. Returns the trimmed prose.
-pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
+pub fn strip_tool_call_syntax(content: &str) -> String {
     let mut out = strip_think_blocks(content);
 
     // Remove ```tool ... ``` / ```json ... ``` fenced blocks (for ```json, only if it's a tool call).
@@ -323,12 +318,11 @@ pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
             let start = search_from + relative_start;
             let block_start = start + fence.len();
             let after_tag = &out[block_start..];
-            let (rel_end, next_rel) = crate::tools::find_closing_tool_fence(after_tag);
+            let (rel_end, next_rel) = crate::find_closing_tool_fence(after_tag);
             let block = &after_tag[..rel_end];
 
             let is_tool = fence == "```tool"
-                || crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json)
-                    .is_some();
+                || crate::parse_tool_call(block, rustcode_core::ToolProtocol::Json).is_some();
 
             if is_tool {
                 if rel_end < after_tag.len() {
@@ -378,7 +372,7 @@ pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
 
 /// True when the turn is nothing but reasoning: a non-empty response whose only
 /// content is `<think>` blocks, leaving no answer or tool call to act on.
-pub(crate) fn is_reasoning_only(content: &str) -> bool {
+pub fn is_reasoning_only(content: &str) -> bool {
     if content.trim().is_empty() {
         return false;
     }
@@ -389,7 +383,7 @@ pub(crate) fn is_reasoning_only(content: &str) -> bool {
 /// Strips completed `<think>` blocks and bounds unclosed reasoning scratchpads
 /// so massive reasoning traces (e.g. 20k-32k tokens) are not amplified and
 /// resent verbatim on every continuation round.
-pub(crate) fn format_continuation_assistant_message(previous: &str) -> String {
+pub fn format_continuation_assistant_message(previous: &str) -> String {
     let has_unclosed_think = previous.contains("<think>") && !previous.contains("</think>");
     if has_unclosed_think {
         // If cut off mid-thought, keep only the most recent thought suffix if long.
@@ -415,7 +409,7 @@ pub(crate) fn format_continuation_assistant_message(previous: &str) -> String {
 }
 
 /// Nudge sent to resume a cut-off turn, tailored to the reason the turn was interrupted.
-pub(crate) fn continuation_nudge_for_category(
+pub fn continuation_nudge_for_category(
     previous: &str,
     finish_reason: Option<&str>,
 ) -> &'static str {
@@ -442,13 +436,13 @@ pub(crate) fn continuation_nudge_for_category(
 
 /// Nudge sent to resume a cut-off turn.
 #[allow(dead_code)]
-pub(crate) fn continuation_nudge(previous: &str) -> &'static str {
+pub fn continuation_nudge(previous: &str) -> &'static str {
     continuation_nudge_for_category(previous, None)
 }
 
 /// Cap a diff preview at 10 lines, appending a "... (N more lines changed)"
 /// footer so long edits don't flood the status stream.
-pub(crate) fn cap_diff_lines(prev: String) -> String {
+pub fn cap_diff_lines(prev: String) -> String {
     if prev.trim().is_empty() {
         return String::new();
     }
@@ -464,7 +458,7 @@ pub(crate) fn cap_diff_lines(prev: String) -> String {
 }
 
 /// Strip ANSI colour/escape sequences from compiler or command output.
-pub(crate) fn strip_ansi_escapes(s: &str) -> String {
+pub fn strip_ansi_escapes(s: &str) -> String {
     static ANSI_RE: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]").unwrap());
     ANSI_RE.replace_all(s, "").into_owned()
@@ -472,7 +466,7 @@ pub(crate) fn strip_ansi_escapes(s: &str) -> String {
 
 /// Drop a single leading `<think>...</think>` block, returning the prose that
 /// follows. Leaves text untouched when there is no leading block.
-pub(crate) fn strip_leading_think(text: &str) -> &str {
+pub fn strip_leading_think(text: &str) -> &str {
     match (
         text.trim_start().starts_with("<think>"),
         text.find("</think>"),
