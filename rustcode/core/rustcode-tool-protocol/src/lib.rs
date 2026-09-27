@@ -3,6 +3,8 @@ use rustcode_core::ToolProtocol;
 use serde_json::Value;
 use std::sync::LazyLock;
 
+pub mod text;
+
 /// A parsed tool request emitted by a model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {

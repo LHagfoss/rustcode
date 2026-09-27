@@ -1250,7 +1250,7 @@ fn test_parse_tool_call_with_nested_code_fences_in_arguments() {
     );
     assert!(diagnose_failed_tool_call(text).is_none());
 
-    let stripped = crate::network::text::strip_tool_call_syntax(text);
+    let stripped = rustcode_tool_protocol::text::strip_tool_call_syntax(text);
     assert_eq!(stripped.trim(), "Follow-up prose.");
 }
 

@@ -15,7 +15,7 @@ use super::super::{
 };
 use super::TurnContext;
 
-use crate::network::text::{
+use rustcode_tool_protocol::text::{
     continuation_nudge_for_category, format_continuation_assistant_message,
 };
 
@@ -109,7 +109,7 @@ impl StreamOutputPhase {
 
 fn stream_output_phase(error: &runner::ResponseError) -> StreamOutputPhase {
     if !error.partial_native_tool_calls.is_empty()
-        || crate::network::text::has_intended_tool_call(&error.partial_content)
+        || rustcode_tool_protocol::text::has_intended_tool_call(&error.partial_content)
     {
         StreamOutputPhase::ToolCall
     } else if error.partial_content.is_empty() {
@@ -144,7 +144,7 @@ fn bounded_stream_recovery_checkpoint(content: &str) -> String {
 }
 
 fn recoverable_textual_stream_failure(content: &str) -> bool {
-    if content.trim().is_empty() || !crate::network::text::has_intended_tool_call(content) {
+    if content.trim().is_empty() || !rustcode_tool_protocol::text::has_intended_tool_call(content) {
         return false;
     }
 

@@ -1,8 +1,8 @@
 use super::TurnContext;
 use super::events::ToolResult;
-use super::text::strip_ansi_escapes;
 use crate::platform::{compiler_augmented_path, resolve_bin};
 use regex::Regex;
+use rustcode_tool_protocol::text::strip_ansi_escapes;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use tokio_util::sync::CancellationToken;

@@ -60,9 +60,7 @@ pub(crate) use messages::{
     trim_msgs_to_budget, truncate_context_tail_to_tokens,
 };
 
-#[path = "network/text.rs"]
-pub(crate) mod text;
-use text::is_cut_off;
+use rustcode_tool_protocol::text::is_cut_off;
 
 #[path = "network/stream.rs"]
 pub(crate) mod stream;

@@ -389,7 +389,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
         let mut output = Vec::<(String, bool)>::new();
         for chunk in &call.output {
-            let clean = crate::network::text::strip_ansi_escapes(&chunk.text);
+            let clean = rustcode_tool_protocol::text::strip_ansi_escapes(&chunk.text);
             output.extend(
                 clean
                     .split('\n')
