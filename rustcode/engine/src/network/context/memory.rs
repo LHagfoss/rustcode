@@ -169,7 +169,7 @@ impl StructuredSessionMemory {
                         }
                     }
                 }
-                let prose = crate::network::text::strip_think_blocks(&message.content);
+                let prose = rustcode_tool_protocol::text::strip_think_blocks(&message.content);
                 let line = compact_context_line(&prose, 300);
                 if !line.is_empty()
                     && !line.starts_with("```tool")

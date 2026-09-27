@@ -32,7 +32,6 @@ crate::app::apply_autocomplete
 crate::network
 crate::network::ui_adapter
 crate::network::compaction
-crate::network::text
 # Background-task observation:
 crate::tools
 crate::tools::parse_tool_call

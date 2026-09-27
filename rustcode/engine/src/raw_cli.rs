@@ -443,7 +443,7 @@ pub(crate) async fn run_headless_turn_cancellable(
         .await;
     }
 
-    let prose = crate::network::text::strip_tool_call_syntax(&ctx.response.final_content);
+    let prose = rustcode_tool_protocol::text::strip_tool_call_syntax(&ctx.response.final_content);
     if !quiet && !prose.trim().is_empty() {
         println!("\nAssistant: {}", prose.trim());
     }
