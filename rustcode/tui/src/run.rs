@@ -501,11 +501,13 @@ async fn run_interactive(
     cli_args: crate::cli::Cli,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let terminal_runtime = TerminalRuntime::start()?;
-
     rustcode::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
+    let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
+    let fullscreen =
+        fullscreen_requested && crate::terminal_probe::probe().supports_alternate_screen();
+    let terminal_runtime = TerminalRuntime::start(fullscreen)?;
     // Themes are a terminal-UI concern: shared state no longer applies them.
     // The interactive runtime seeds the palette once before the first frame;
     // every render re-applies it from `state.config().theme`.

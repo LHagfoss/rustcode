@@ -40,3 +40,24 @@ stable seam for anything new.
 - Adding a frontend: add a package that depends on `rustcode`, drive
   `controller`, and add its paths to `scripts/ci-relevant-changes.sh` so CI
   triggers on it.
+
+## Optional fullscreen terminal mode (Phase 0)
+
+The terminal UI stays inline by default. Set `fullscreen = true` in the
+configuration file or pass `--fullscreen` to opt in. The startup capability
+check is passive: it reads terminal attributes and environment variables
+without sending queries or reading stdin, so it cannot delay the UI or
+consume a user's first keypress. Cursor-report, color, and keyboard support
+are estimates until a later phase negotiates those protocols.
+
+| Environment | Phase 0 behavior |
+| --- | --- |
+| macOS Terminal (`xterm-*`) | Alternate screen when requested; standard keyboard input |
+| Ghostty, Kitty, WezTerm | Alternate screen when requested; keyboard enhancement inferred where identified |
+| tmux, screen | Inline fallback |
+| SSH session | Inline fallback |
+| Non-TTY, `TERM=dumb`, unknown terminal | Inline fallback |
+
+Fullscreen releases the alternate screen on normal exit, panic, Ctrl-Z
+suspension, and the terminal runtime's external-command handoff. The main
+screen scrollback is never cleared as part of fullscreen exit.
