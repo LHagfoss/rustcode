@@ -627,8 +627,22 @@ fn settings_picker_uses_unified_modal_picker_style() {
         .collect::<String>();
 
     assert!(rendered.contains("Output verbosity"));
-    assert!(rendered.contains("● High"));
+    assert!(rendered.contains("› High"));
     assert!(rendered.contains("Pure model text output"));
+}
+
+#[test]
+fn picker_uses_full_terminal_viewport() {
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let state = AppState::new();
+    terminal
+        .draw(|frame| {
+            render_verbosity_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 20, 80, 3))
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(0, 0)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(79, 19)].bg, COLOR_PANEL());
 }
 
 #[test]
@@ -650,7 +664,7 @@ fn yolo_picker_renders_options() {
         .collect::<String>();
 
     assert!(rendered.contains("Automatic tool confirmation"));
-    assert!(rendered.contains("● On"));
+    assert!(rendered.contains("› On"));
     assert!(rendered.contains("Auto-confirm tool executions"));
     assert!(rendered.contains("Off"));
 }
@@ -674,7 +688,7 @@ fn effort_picker_renders_options() {
         .collect::<String>();
 
     assert!(rendered.contains("Reasoning effort"));
-    assert!(rendered.contains("● Low"));
+    assert!(rendered.contains("› Low"));
     assert!(rendered.contains("Medium"));
     assert!(rendered.contains("High"));
     assert!(rendered.contains("Off"));
@@ -706,7 +720,7 @@ fn history_picker_renders_borderless_full_width_options() {
         .collect::<String>();
 
     assert!(rendered.contains("Resume session"));
-    assert!(rendered.contains("●"));
+    assert!(rendered.contains("›"));
     assert!(rendered.contains("6 msgs"));
     assert!(rendered.contains("17:35"));
 }

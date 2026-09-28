@@ -650,17 +650,7 @@ async fn handle_enter_inner(
                 }
             }
             "/status" => {
-                let mut text = String::from("Session status");
-                let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
-                let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
-                let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
-                text.push_str(&format!(
-                    "\nMessages: {} user · {} assistant · {} tool calls",
-                    user_msgs, assistant_msgs, tool_calls
-                ));
-                text.push_str(&format!("\nModel: {}", s.model_name));
-                text.push_str(&format!("\nSession: {}", s.active_session_id));
-                s.history.push(ChatMessage::new("system", text));
+                s.show_status_modal = true;
             }
             "/usage" | "/stats" => {
                 let mut text = String::from("Session usage:");
@@ -802,7 +792,7 @@ async fn handle_enter_inner(
                 text.push_str("\n\nTool execution is guarded by cancellation and loop detection; calls run sequentially.");
                 s.history.push(ChatMessage::new("system", text));
             }
-            "/model" => {
+            "/model" | "/models" => {
                 if tokens.len() < 2 {
                     s.show_model_picker = true;
                     s.model_picker_index = 0;
@@ -1055,7 +1045,7 @@ async fn handle_enter_inner(
             }
         }
 
-        if matches!(cmd, "/model" | "/provider" | "/ollama") {
+        if matches!(cmd, "/model" | "/models" | "/provider" | "/ollama") {
             spawn_context_window_detection(Arc::clone(state), client.clone());
         }
 

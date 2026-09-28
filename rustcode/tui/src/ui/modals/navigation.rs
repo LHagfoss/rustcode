@@ -68,28 +68,28 @@ pub(in crate::ui) fn render_model_picker_modal(
         let max_name_width = (inner_area.width as usize).saturating_sub(item.desc.width() + 5);
         let name_display = truncate_middle_to_width(&item.name, max_name_width);
         let line = if is_selected {
-            let left_text = format!(" ● {}", name_display);
+            let left_text = format!("› {}", name_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     item.desc.clone(),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", name_display);
+            let left_text = format!("  {}", name_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
             Line::from(vec![
@@ -277,25 +277,25 @@ pub(in crate::ui) fn render_history_picker_modal(
         let max_title_width = (inner_area.width as usize).saturating_sub(desc.width() + 5);
         let title_display = truncate_middle_to_width(&session.title, max_title_width);
         let line = if is_selected {
-            let left_text = format!(" ● {}", title_display);
+            let left_text = format!("› {}", title_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
-                Span::styled(desc, Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY())),
+                Span::styled(desc, Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG())),
             ])
         } else {
-            let left_text = format!("   {}", title_display);
+            let left_text = format!("  {}", title_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
             Line::from(vec![
@@ -652,7 +652,7 @@ pub(in crate::ui) fn render_mcp_config_modal(
             let cmd_text = format!("{} {}", srv.command, srv.args.join(" "));
 
             let line = if is_selected {
-                let left_text = format!(" ● {}", srv.name);
+                let left_text = format!("› {}", srv.name);
                 let right_text = format!(" [{}] {}", status, cmd_text);
                 let padding_len = (inner_area.width as usize)
                     .saturating_sub(left_text.width() + right_text.width());
@@ -661,20 +661,20 @@ pub(in crate::ui) fn render_mcp_config_modal(
                     Span::styled(
                         left_text,
                         Style::default()
-                            .fg(COLOR_BG())
-                            .bg(COLOR_PRIMARY())
+                            .fg(COLOR_TEXT())
+                            .bg(COLOR_HOVER_BG())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         " ".repeat(padding_len),
-                        Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                        Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                     ),
-                    Span::styled(format!(" [{}]", status), status_style.bg(COLOR_PRIMARY())),
+                    Span::styled(format!(" [{}]", status), status_style.bg(COLOR_HOVER_BG())),
                     Span::styled(
                         format!(" {}", cmd_text),
                         Style::default()
-                            .fg(COLOR_BG())
-                            .bg(COLOR_PRIMARY())
+                            .fg(COLOR_TEXT())
+                            .bg(COLOR_HOVER_BG())
                             .add_modifier(Modifier::ITALIC),
                     ),
                 ])
@@ -798,6 +798,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/context",
     },
     PaletteItem {
+        group: "Session",
+        name: "Show session status",
+        shortcut: "/status",
+    },
+    PaletteItem {
         group: "Agent",
         name: "Set parser/tool protocol",
         shortcut: "/parser",
@@ -895,6 +900,7 @@ pub(in crate::ui) fn render_command_picker_modal(
         .filter(|item| {
             item.name.to_lowercase().contains(&search)
                 || item.group.to_lowercase().contains(&search)
+                || item.shortcut.to_lowercase().contains(&search)
         })
         .collect();
 
@@ -956,28 +962,28 @@ pub(in crate::ui) fn render_command_picker_modal(
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let line = if is_selected {
-            let left_text = format!(" ● {}", item.name);
+            let left_text = format!("› {}", item.name);
             let padding_len = (inner_area.width as usize)
                 .saturating_sub(left_text.width() + item.shortcut.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     item.shortcut.to_string(),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", item.name);
+            let left_text = format!("  {}", item.name);
             let padding_len = (inner_area.width as usize)
                 .saturating_sub(left_text.width() + item.shortcut.width());
             Line::from(vec![

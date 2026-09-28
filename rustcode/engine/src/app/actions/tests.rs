@@ -1188,6 +1188,25 @@ async fn context_command_opens_modal_and_sets_window() {
 }
 
 #[tokio::test]
+async fn status_command_opens_screen_without_adding_chat_history() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.input_buffer = "/status".to_owned();
+    let client = reqwest::Client::new();
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    let trigger = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
+    assert!(!trigger);
+    let state = state.lock().await;
+    assert!(state.show_status_modal);
+    assert!(state.modal_open());
+    assert!(state.history.is_empty());
+}
+
+#[tokio::test]
 async fn update_command_initiates_check_and_sets_notice() {
     use crate::app::state::AppState;
     use std::sync::Arc;

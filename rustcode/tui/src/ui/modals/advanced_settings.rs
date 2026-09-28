@@ -74,28 +74,28 @@ pub(in crate::ui) fn render_thinking_picker_modal(
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let left_text = format!(" ● {}", name);
+            let left_text = format!("› {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     full_desc,
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", name);
+            let left_text = format!("  {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
@@ -197,28 +197,28 @@ pub(in crate::ui) fn render_effort_picker_modal(
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let left_text = format!(" ● {}", name);
+            let left_text = format!("› {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     full_desc,
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", name);
+            let left_text = format!("  {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
@@ -326,28 +326,28 @@ pub(in crate::ui) fn render_protocol_picker_modal(
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let left_text = format!(" ● {}", name);
+            let left_text = format!("› {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     full_desc,
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", name);
+            let left_text = format!("  {}", name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
@@ -475,7 +475,7 @@ pub(in crate::ui) fn render_update_prompt_modal(
         .enumerate()
         .map(|(index, (label, description))| {
             let selected = index == selected;
-            let prefix = if selected { " ● " } else { "   " };
+            let prefix = if selected { "› " } else { "  " };
             let left = format!("{prefix}{label}");
             let padding =
                 (inner_area.width as usize).saturating_sub(left.width() + description.width());
@@ -484,17 +484,17 @@ pub(in crate::ui) fn render_update_prompt_modal(
                     Span::styled(
                         left,
                         Style::default()
-                            .fg(COLOR_BG())
-                            .bg(COLOR_PRIMARY())
+                            .fg(COLOR_TEXT())
+                            .bg(COLOR_HOVER_BG())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         " ".repeat(padding),
-                        Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                        Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                     ),
                     Span::styled(
                         *description,
-                        Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                        Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                     ),
                 ])
             } else {

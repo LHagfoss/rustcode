@@ -92,6 +92,7 @@ struct OverlaySnapshot {
     show_subagent_picker: bool,
     subagent_picker_index: usize,
     show_context_modal: bool,
+    show_status_modal: bool,
     show_update_prompt: bool,
     update_check: rustcode_core::update::UpdateState,
     update_prompt_index: usize,
@@ -135,6 +136,7 @@ impl OverlaySnapshot {
             show_subagent_picker: state.show_subagent_picker,
             subagent_picker_index: state.subagent_picker_index,
             show_context_modal: state.show_context_modal,
+            show_status_modal: state.show_status_modal,
             show_update_prompt: state.show_update_prompt,
             update_check: state.update_check,
             update_prompt_index: state.update_prompt_index,
@@ -419,6 +421,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn show_context_modal(&self) -> bool {
         self.overlay.show_context_modal
+    }
+    pub(crate) fn show_status_modal(&self) -> bool {
+        self.overlay.show_status_modal
     }
     pub(crate) fn show_update_prompt(&self) -> bool {
         self.overlay.show_update_prompt

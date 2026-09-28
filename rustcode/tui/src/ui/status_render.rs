@@ -445,6 +445,25 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     // the compact rewrite dropped it).
     banner.push(make_row(vec![]));
 
+    if inner_w >= 50 {
+        for (index, wordmark_line) in RUSTCODE_WORDMARK.lines().enumerate() {
+            let color = match index {
+                0 => Color::Rgb(119, 151, 184),
+                1 => Color::Rgb(145, 166, 192),
+                2 => Color::Rgb(180, 188, 207),
+                _ => Color::Rgb(218, 212, 222),
+            };
+            banner.push(make_row(vec![
+                Span::raw("  "),
+                Span::styled(
+                    wordmark_line.to_owned(),
+                    Style::default().fg(color).bg(reset_bg),
+                ),
+            ]));
+        }
+        banner.push(make_row(vec![]));
+    }
+
     // Session identity is useful when copying a report or resuming a run, so
     // keep it visually separate from the mutable model/workspace settings.
     // Keep the welcome card's content comfortably away from the border on
