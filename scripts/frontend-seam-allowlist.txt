@@ -56,8 +56,6 @@ rustcode::network::compaction
 # stop_background_tasks, Command::StopBackgroundTask — issue #1439).
 # Test-only direct manager use (tui test helper spawns real tasks).
 rustcode::tools::background_task_manager
-rustcode::tools::tool_system_prompt
-rustcode::tools::mcp_tool_display_name
 # Config read/mutate now routes through rustcode::controller (AppConfig,
 # AgentMode, ModelProfile, SessionMeta, ToolProtocol, save_config,
 # config_dir, Command::SaveConfig — issue #1440). The CLI entry keeps its

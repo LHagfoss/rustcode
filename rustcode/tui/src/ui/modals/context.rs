@@ -177,7 +177,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         .unwrap_or(state.config().tool_protocol);
     let agent_mode = state.agent_mode();
     let tools_prompt =
-        rustcode::tools::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
+        rustcode::controller::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
     let full_system_prompt_tokens = rustcode::controller::estimate_tokens(&tools_prompt);
 
     let skills = rustcode::controller::discover_skills();
