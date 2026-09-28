@@ -21,6 +21,7 @@ pub(crate) const RUSTCODE_WORDMARK: &str = include_str!("rustcode_wordmark.txt")
 pub(crate) const RUSTCODE_WORDMARK_SPLIT: usize = 24;
 
 pub(crate) use crate::runtime::{Composer, ComposerAction};
+pub(crate) use composer_render::composer_cursor_from_mouse;
 pub(crate) use composer_render::render_input;
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};

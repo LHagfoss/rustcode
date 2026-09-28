@@ -6,8 +6,27 @@ pub(super) fn wrap_input_chars(
     cursor_char_index: usize,
     prompt_style: Style,
 ) -> (Vec<Line<'static>>, u16, u16) {
+    let (lines, x, y, _) = wrap_input_chars_with_hits(
+        styled_chars,
+        inner_width,
+        cursor_char_index,
+        prompt_style,
+        false,
+    );
+    (lines, x, y)
+}
+
+type InputHits = Vec<Vec<(u16, usize)>>;
+
+fn wrap_input_chars_with_hits(
+    styled_chars: &[(char, Style)],
+    inner_width: usize,
+    cursor_char_index: usize,
+    prompt_style: Style,
+    collect_hits: bool,
+) -> (Vec<Line<'static>>, u16, u16, InputHits) {
     if inner_width == 0 {
-        return (vec![Line::default()], 0, 0);
+        return (vec![Line::default()], 0, 0, vec![vec![(0, 0)]]);
     }
 
     type InputChar = (usize, char, Style);
@@ -52,6 +71,7 @@ pub(super) fn wrap_input_chars(
 
     let mut cursor_positions = vec![None; styled_chars.len() + 1];
     let mut lines = Vec::with_capacity(wrapped.len());
+    let mut hit_rows = Vec::with_capacity(wrapped.len());
     for (row, (characters, start)) in wrapped.into_iter().enumerate() {
         let mut spans = vec![Span::styled(
             if row == 0 { "› " } else { "  " },
@@ -59,6 +79,11 @@ pub(super) fn wrap_input_chars(
         )];
         let mut current_run: Option<(Style, String)> = None;
         let mut column = indent;
+        let mut hits = if collect_hits {
+            vec![(column as u16, start)]
+        } else {
+            Vec::new()
+        };
         cursor_positions[start] = Some((column as u16, row as u16));
 
         for (index, character, style) in characters {
@@ -73,12 +98,18 @@ pub(super) fn wrap_input_chars(
                 }
             }
             column += character.width().unwrap_or(1);
+            if collect_hits {
+                hits.push((column as u16, index + 1));
+            }
             cursor_positions[index + 1] = Some((column as u16, row as u16));
         }
         if let Some((run_style, text)) = current_run {
             spans.push(Span::styled(text, run_style));
         }
         lines.push(Line::from(spans));
+        if collect_hits {
+            hit_rows.push(hits);
+        }
     }
 
     let cursor = cursor_positions
@@ -86,7 +117,167 @@ pub(super) fn wrap_input_chars(
         .copied()
         .flatten()
         .unwrap_or((indent as u16, 0));
-    (lines, cursor.0, cursor.1)
+    (lines, cursor.0, cursor.1, hit_rows)
+}
+
+/// Resolve a click against the same wrapping, prompt indent, and vertical scroll
+/// used by the composer renderer. The returned position is a UTF-8 byte offset.
+pub(crate) fn composer_cursor_from_mouse(
+    input: &str,
+    cursor_byte: usize,
+    suggestion: Option<&str>,
+    area: ratatui::layout::Rect,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 0,
+    });
+    if !inner.contains(ratatui::layout::Position::new(column, row)) {
+        return None;
+    }
+
+    let displayed = collapsed_marker_segments(input)
+        .into_iter()
+        .map(|(segment, _)| segment)
+        .collect::<String>();
+    let editable_chars = displayed.chars().count();
+    let mut rendered = displayed;
+    if input.is_empty() && suggestion.is_none() {
+        rendered.push_str("Ask RustCode to do anything");
+    } else if let Some(suffix) = suggestion {
+        rendered.push_str(suffix);
+    }
+    let styled = rendered
+        .chars()
+        .map(|character| (character, Style::default()))
+        .collect::<Vec<_>>();
+    let safe_cursor = safe_byte_index(input, cursor_byte);
+    let cursor_index = collapse_image_markers(&input[..safe_cursor])
+        .chars()
+        .count();
+    let (_, _, cursor_row, hit_rows) = wrap_input_chars_with_hits(
+        &styled,
+        inner.width as usize,
+        cursor_index,
+        Style::default(),
+        true,
+    );
+    let scroll_start = usize::from(cursor_row).saturating_sub(usize::from(inner.height) - 1);
+    let clicked_row = usize::from(row - inner.y) + scroll_start;
+    let hits = hit_rows.get(clicked_row)?;
+    let clicked_column = column - inner.x;
+    let display_index = hits
+        .iter()
+        .take_while(|(x, _)| *x <= clicked_column)
+        .last()
+        .unwrap_or(&hits[0])
+        .1
+        .min(editable_chars);
+    Some(display_index_to_byte(input, display_index))
+}
+
+fn display_index_to_byte(input: &str, index: usize) -> usize {
+    let mut raw_offset = 0;
+    let mut display_offset = 0;
+    for (segment, marker) in collapsed_marker_segments(input) {
+        let displayed_len = segment.chars().count();
+        let raw_end = match marker {
+            None => raw_offset + segment.len(),
+            Some(CollapsedMarker::Image) => {
+                let after_prefix = &input[raw_offset + "![image](file://".len()..];
+                raw_offset + "![image](file://".len() + after_prefix.find(')').unwrap_or(0) + 1
+            }
+            Some(CollapsedMarker::PastedText) => rustcode_core::paste::parse_at(input, raw_offset)
+                .map_or(input.len(), |marker| marker.end),
+        };
+        if index <= display_offset + displayed_len {
+            return match marker {
+                None => {
+                    let char_index = index - display_offset;
+                    segment
+                        .char_indices()
+                        .nth(char_index)
+                        .map_or(raw_end, |(offset, _)| raw_offset + offset)
+                }
+                Some(_) if index - display_offset <= displayed_len / 2 => raw_offset,
+                Some(_) => raw_end,
+            };
+        }
+        display_offset += displayed_len;
+        raw_offset = raw_end;
+    }
+    input.len()
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    #[test]
+    fn click_places_cursor_on_wrapped_unicode_and_empty_lines() {
+        let area = ratatui::layout::Rect::new(3, 4, 8, 5);
+        let input = "ab界cde\n\nx";
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 7, 5),
+            Some(2)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 8, 5),
+            Some(2)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 5, 6),
+            Some(7)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 5, 7),
+            Some(9)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 4, 5),
+            Some(0)
+        );
+        assert_eq!(composer_cursor_from_mouse(input, 0, None, area, 5, 4), None);
+    }
+
+    #[test]
+    fn click_treats_collapsed_markers_as_atomic_text() {
+        let area = ratatui::layout::Rect::new(0, 0, 40, 3);
+        let input = "a![image](file:///tmp/a.png)b";
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 3, 1),
+            Some(1)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 13, 1),
+            Some(input.len() - 1)
+        );
+        let pasted = "a<!--PASTE:5:hello-->b";
+        assert_eq!(
+            composer_cursor_from_mouse(pasted, 0, None, area, 3, 1),
+            Some(1)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(pasted, 0, None, area, 30, 1),
+            Some(pasted.len())
+        );
+    }
+
+    #[test]
+    fn click_uses_the_visible_rows_when_composer_is_scrolled() {
+        let area = ratatui::layout::Rect::new(0, 0, 8, 4);
+        let input = "one\ntwo\nthree";
+        assert_eq!(
+            composer_cursor_from_mouse(input, input.len(), None, area, 2, 1),
+            Some(4)
+        );
+        assert_eq!(
+            composer_cursor_from_mouse(input, input.len(), None, area, 2, 2),
+            Some(8)
+        );
+    }
 }
 
 #[cfg(test)]
