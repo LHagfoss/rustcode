@@ -498,7 +498,7 @@ fn natural_latest_mails_request_binds_inbox_listing_among_unrelated_servers() {
     let mut tools = (0..MAX_MCP_NATIVE_SCHEMAS)
         .map(|index| {
             (
-                format!("mcp__discord__tool_{index:02}"),
+                format!("codebase_latest_{index:02}"),
                 "Unrelated operation".to_string(),
                 serde_json::json!({"type":"object"}),
             )
@@ -506,31 +506,46 @@ fn natural_latest_mails_request_binds_inbox_listing_among_unrelated_servers() {
         .collect::<Vec<_>>();
     tools.extend([
         (
-            "list_emails".to_string(),
-            "List recent emails from a folder".to_string(),
+            "mcp__mail__list_attachments".to_string(),
+            "List attachments for a known email".to_string(),
             serde_json::json!({"type":"object"}),
         ),
         (
-            "mcp__mail__list_attachments".to_string(),
-            "List attachments for a known email".to_string(),
+            "search_emails".to_string(),
+            "Search emails by free text".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "reply_email".to_string(),
+            "Reply to an email by UID".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "send_email".to_string(),
+            "Send a new email".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "list_emails".to_string(),
+            "List recent emails from a folder".to_string(),
             serde_json::json!({"type":"object"}),
         ),
     ]);
     let mut messages = vec![serde_json::json!({
         "role":"user","content":"what are my latest mails"
     })];
-    let (selected, _) = select_mcp_tools_for_context(&tools, &messages);
+    let (_, stats) = select_mcp_tools_for_context(&tools, &messages);
     assert!(
-        selected.contains(&MAX_MCP_NATIVE_SCHEMAS),
+        stats.selected_names.contains(&"list_emails".to_string()),
         "latest mails should bind list_emails before catalog discovery"
     );
 
     messages.push(serde_json::json!({
         "role":"tool","content":"registry catalog lists list_emails"
     }));
-    let (selected, _) = select_mcp_tools_for_context(&tools, &messages);
+    let (_, stats) = select_mcp_tools_for_context(&tools, &messages);
     assert!(
-        selected.contains(&MAX_MCP_NATIVE_SCHEMAS),
+        stats.selected_names.contains(&"list_emails".to_string()),
         "list_emails should remain callable after discovery"
     );
 }

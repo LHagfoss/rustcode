@@ -1005,17 +1005,26 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
         }
         let content = message.get("content").and_then(Value::as_str).unwrap_or("");
         let content = content.split("<rustcode_context>").next().unwrap_or("");
+        let mut message_terms = std::collections::HashSet::new();
         for token in content
             .split(|ch: char| !ch.is_ascii_alphanumeric())
             .map(str::to_ascii_lowercase)
         {
             if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
-                if matches!(token.as_str(), "mail" | "mails") {
-                    terms.insert("email".to_string());
+                if matches!(token.as_str(), "mail" | "mails" | "emails") {
+                    message_terms.insert("email".to_string());
                 }
-                terms.insert(token);
+                message_terms.insert(token);
             }
         }
+        if message_terms.contains("email")
+            && ["latest", "newest", "recent"]
+                .iter()
+                .any(|term| message_terms.contains(*term))
+        {
+            message_terms.insert("list".to_string());
+        }
+        terms.extend(message_terms);
         // Structured tool turns often have an empty assistant content field.
         // Keep their names in the relevance set so the next request retains
         // the exact schema needed to continue the active tool exchange.
