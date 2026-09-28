@@ -1101,6 +1101,36 @@ fn api_native_builtin_selection_keeps_coding_core_and_routes_specialized_tools()
 }
 
 #[test]
+fn api_native_exposes_file_creation_for_new_file_requests() {
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Make a new file for the parser"
+    })];
+    let names = native_tools_schema_for_context(ToolSchemaPolicy::root(false), &messages)
+        .0
+        .into_iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "write_to_file"));
+    assert!(names.iter().any(|name| name == "write_file_chunk"));
+}
+
+#[test]
+fn compact_text_prompt_explains_how_to_create_a_file() {
+    let prompt = tool_system_prompt_for_policy(
+        ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+            false,
+            crate::config::AgentMode::Build,
+            true,
+        ),
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+    assert!(prompt.contains("write_to_file | Args:"));
+    assert!(prompt.contains("new or existing file path"));
+}
+
+#[test]
 fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
