@@ -17,6 +17,7 @@ mod terminal_runtime;
 mod transcript;
 
 pub(crate) const RUSTCODE_WORDMARK: &str = include_str!("rustcode_wordmark.txt");
+pub(crate) const RUSTCODE_WORDMARK_SPLIT: usize = 24;
 
 pub(crate) use crate::runtime::{Composer, ComposerAction};
 pub(crate) use composer_render::render_input;
