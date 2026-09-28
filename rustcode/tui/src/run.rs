@@ -774,8 +774,21 @@ mod tests {
     #[test]
     fn exit_wordmark_is_bundled_for_the_terminal_handoff() {
         let lines: Vec<_> = crate::ui::RUSTCODE_WORDMARK.lines().collect();
-        assert_eq!(lines.len(), 3);
-        assert!(lines.iter().all(|line| line.contains('▀')));
+        assert_eq!(
+            lines,
+            [
+                "                  ▄                   █",
+                "▄▀▀▀ █   █ ▄▀▀▀▀ ▀█▀▀ ▄▀▀▀▀ ▄▀▀▀▄ ▄▀▀▀█ ▄▀▀▀▄",
+                "█    █   █  ▀▀▀▄  █   █     █   █ █   █ █▀▀▀▀",
+                "▀     ▀▀▀  ▀▀▀▀    ▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀",
+            ]
+        );
+        let banner =
+            crate::ui::build_claude_startup_banner(&rustcode::app::AppState::new(), 100, 30);
+        let rendered = banner.iter().map(ToString::to_string).collect::<Vec<_>>();
+        for line in lines {
+            assert!(rendered.iter().any(|row| row.contains(line.trim_end())));
+        }
     }
 
     #[test]
