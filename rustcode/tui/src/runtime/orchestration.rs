@@ -305,6 +305,7 @@ impl AppRuntime {
             if should_draw {
                 render_frame(RenderFrameContext {
                     terminal_runtime: &mut terminal_runtime,
+                    frame_requester: &frame_requester,
                     app_state: &app_state,
                     discord_rpc: &discord_rpc,
                     transcript_cursor: &mut transcript_cursor,

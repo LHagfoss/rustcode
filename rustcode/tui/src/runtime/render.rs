@@ -5,7 +5,13 @@ use tokio::sync::Mutex;
 
 use super::terminal::{clear_terminal_for_transcript_replacement, reset_transcript_presentation};
 use super::transcript::commit_transcript;
-use crate::ui::{TerminalRuntime, TranscriptState};
+use crate::ui::{FrameRequester, TerminalRuntime, TranscriptState};
+
+fn step_selection_for_frame(transcript_state: &mut TranscriptState, frames: &FrameRequester) {
+    if transcript_state.step_selection_scroll() {
+        frames.schedule_frame();
+    }
+}
 
 pub(super) async fn session_title_for_render(
     state: &Arc<Mutex<AppState>>,
@@ -34,6 +40,7 @@ pub(super) async fn session_title_for_render(
 
 pub(super) struct RenderFrameContext<'a> {
     pub terminal_runtime: &'a mut TerminalRuntime,
+    pub frame_requester: &'a FrameRequester,
     pub app_state: &'a Arc<Mutex<AppState>>,
     pub discord_rpc: &'a rustcode::discord_rpc::DiscordRpcWorker,
     pub transcript_cursor: &'a mut crate::ui::scrollback::TranscriptCursor,
@@ -50,6 +57,7 @@ pub(super) async fn render_frame(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let RenderFrameContext {
         terminal_runtime,
+        frame_requester,
         app_state,
         discord_rpc,
         transcript_cursor,
@@ -194,6 +202,7 @@ pub(super) async fn render_frame(
         *last_progress_sent = std::time::Instant::now();
     }
 
+    step_selection_for_frame(transcript_state, frame_requester);
     let desired_height = crate::ui::desired_height_snapshot(
         &snapshot,
         transcript_state,
@@ -223,4 +232,76 @@ pub(super) async fn render_frame(
         ),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inline_terminal::InlineTerminal;
+    use crate::ui::render_snapshot::render_snapshot;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    use rustcode::app::ChatMessage;
+    use std::time::Duration;
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[tokio::test]
+    async fn frame_path_advances_edge_drag_and_requests_follow_up_frame() {
+        let mut state = AppState::new();
+        state.history.push(ChatMessage::new(
+            "assistant",
+            (0..40)
+                .map(|row| format!("history row {row:02}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
+        let snapshot = render_snapshot(&state);
+        let mut transcript = TranscriptState::default();
+        let mut terminal = InlineTerminal::new(TestBackend::new(32, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                crate::ui::render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+            })
+            .unwrap();
+        let area = transcript.selection.area();
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+
+        let (frames, mut draws) = FrameRequester::new(Duration::from_millis(1));
+        step_selection_for_frame(&mut transcript, &frames);
+        terminal
+            .draw(|frame| {
+                crate::ui::render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+            })
+            .unwrap();
+
+        assert_eq!(transcript.scroll_rows(), 1);
+        assert!(transcript.selection.selected_text().is_some());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), draws.next())
+                .await
+                .unwrap(),
+            Some(crate::ui::TuiEvent::Draw)
+        );
+    }
 }

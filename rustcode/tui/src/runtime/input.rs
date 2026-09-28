@@ -25,6 +25,21 @@ fn is_shift_tab(key: crossterm::event::KeyEvent) -> bool {
         || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
 }
 
+fn is_transcript_navigation(key: crossterm::event::KeyEvent) -> bool {
+    matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+        || (key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Up | KeyCode::Down))
+}
+
+fn clear_selection_for_composer_key(
+    transcript: &mut TranscriptState,
+    key: crossterm::event::KeyEvent,
+) {
+    if transcript.selection.is_active() && !is_transcript_navigation(key) {
+        transcript.selection.clear();
+    }
+}
+
 fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
     if transcript.scroll_rows() == 0 {
         return false;
@@ -141,6 +156,9 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                 }
+
+                let transcript_navigation = is_transcript_navigation(key);
+                clear_selection_for_composer_key(transcript_state, key);
 
                 if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
                     if rustcode::app::handle_ctrl_c(&app_state).await {
@@ -1362,10 +1380,7 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
                 drop(s);
-                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
-                    || (key.modifiers.contains(KeyModifiers::SHIFT)
-                        && matches!(key.code, KeyCode::Up | KeyCode::Down))
-                {
+                if transcript_navigation {
                     let page = terminal_runtime.terminal().area().height.saturating_sub(4) as usize;
                     // Keep every intermediate row visible while a mouse range is growing.
                     let page = if transcript_state.selection.is_dragging() {
@@ -1373,7 +1388,15 @@ pub(super) async fn handle_app_event(
                     } else {
                         page.max(1)
                     };
-                    if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
+                    if transcript_state.selection.is_active() {
+                        let direction = if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
+                            -1
+                        } else {
+                            1
+                        };
+                        transcript_state.selection.queue_scroll(direction, page);
+                        frame_requester.schedule_frame();
+                    } else if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
                         transcript_state.scroll_up(page);
                     } else {
                         transcript_state.scroll_down(page);
@@ -1701,14 +1724,14 @@ pub(super) async fn handle_app_event(
             }
             TuiEvent::Mouse(mouse) => {
                 match mouse.kind {
-                    event::MouseEventKind::ScrollUp => {
-                        transcript_state.selection.pause_edge_scroll();
-                        transcript_state.scroll_up(1);
+                    event::MouseEventKind::ScrollUp if transcript_state.selection.is_active() => {
+                        transcript_state.selection.queue_scroll(-1, 1);
                     }
-                    event::MouseEventKind::ScrollDown => {
-                        transcript_state.selection.pause_edge_scroll();
-                        transcript_state.scroll_down(1);
+                    event::MouseEventKind::ScrollDown if transcript_state.selection.is_active() => {
+                        transcript_state.selection.queue_scroll(1, 1);
                     }
+                    event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
+                    event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
                     _ => {
                         if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left)
                             && mouse.modifiers.is_empty()
@@ -1777,6 +1800,7 @@ pub(super) async fn handle_app_event(
                 *needs_redraw = true;
             }
             TuiEvent::Paste(text) => {
+                transcript_state.selection.clear();
                 transcript_state.scroll_down(usize::MAX);
                 app_state.lock().await.mark_user_activity();
                 // Terminals with bracketed paste enabled deliver Cmd+V through
@@ -1823,23 +1847,7 @@ pub(super) async fn handle_app_event(
             TuiEvent::Resize { .. } => {
                 *needs_redraw = true;
             }
-            TuiEvent::Draw => {
-                let before = transcript_state.scroll_rows();
-                if let Some(direction) = transcript_state.selection.edge_scroll_direction(before) {
-                    transcript_state
-                        .selection
-                        .mark_edge_attempt(direction, before);
-                    if direction < 0 {
-                        transcript_state.scroll_up(1);
-                    } else {
-                        transcript_state.scroll_down(1);
-                    }
-                    if transcript_state.scroll_rows() != before {
-                        frame_requester.schedule_frame();
-                    }
-                }
-                *needs_redraw = true;
-            }
+            TuiEvent::Draw => *needs_redraw = true,
         },
         _ => {}
     }
@@ -1848,9 +1856,16 @@ pub(super) async fn handle_app_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_shift_tab, return_to_latest_for_key};
+    use super::{
+        clear_selection_for_composer_key, is_shift_tab, is_transcript_navigation,
+        return_to_latest_for_key,
+    };
     use crate::ui::TranscriptState;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui::{buffer::Buffer, layout::Rect};
+    use rustcode::app::AppState;
 
     #[test]
     fn shift_tab_is_normalized_from_supported_terminal_events() {
@@ -1881,5 +1896,48 @@ mod tests {
         transcript.scroll_up(2);
         assert!(return_to_latest_for_key(&mut transcript, KeyCode::Esc));
         assert_eq!(transcript.scroll_rows(), 0);
+    }
+
+    #[test]
+    fn typing_and_submission_end_pinned_selection_while_transcript_navigation_keeps_it() {
+        let mut transcript = TranscriptState::default();
+        let area = Rect::new(0, 0, 8, 2);
+        let buffer = Buffer::empty(area);
+        transcript.selection.refresh(area, &buffer, &[false, false]);
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let begin = |transcript: &mut TranscriptState| {
+            transcript.selection.begin_with_snapshot(
+                down,
+                crate::ui::render_snapshot::render_snapshot(&AppState::new()),
+                transcript.scroll_rows(),
+            );
+            assert!(transcript.selection.is_active());
+        };
+        begin(&mut transcript);
+        assert!(is_transcript_navigation(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE
+        )));
+        clear_selection_for_composer_key(
+            &mut transcript,
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+        );
+        assert!(transcript.selection.is_active());
+        clear_selection_for_composer_key(
+            &mut transcript,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert!(!transcript.selection.is_active());
+        begin(&mut transcript);
+        clear_selection_for_composer_key(
+            &mut transcript,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(!transcript.selection.is_active());
     }
 }
