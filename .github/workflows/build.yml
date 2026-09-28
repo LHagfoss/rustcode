@@ -96,13 +96,6 @@ jobs:
                   chmod +x ${{ matrix.name }}
                   tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
 
-            - name: Bundle macOS desktop app
-              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'macOS'
-              shell: bash
-              run: |
-                  scripts/build-native-app.sh --release
-                  tar czf ${{ matrix.name }}-app.tar.gz -C target/release RustCode.app
-
             - name: Package Windows binary
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
               shell: powershell
@@ -119,12 +112,43 @@ jobs:
                   # unmatched patterns are skipped, not an error.
                   path: |
                       ${{ matrix.name }}.tar.gz
-                      ${{ matrix.name }}-app.tar.gz
                       ${{ matrix.name }}.zip
+
+    desktop:
+        needs: verify-tag
+        runs-on: macos-26
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-app
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Bundle tagged macOS desktop app
+              run: |
+                  scripts/build-native-app.sh --release
+                  tar czf rustcode-macos-aarch64-app.tar.gz -C target/release RustCode.app
+
+            - name: Show compiler cache stats
+              if: always()
+              run: ${SCCACHE_PATH} --show-stats
+
+            - name: Upload desktop artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: rustcode-macos-aarch64-app
+                  path: rustcode-macos-aarch64-app.tar.gz
 
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: build
+        needs: [build, desktop]
         runs-on: ubuntu-latest
         steps:
             - name: Download artifacts
