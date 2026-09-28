@@ -52,15 +52,7 @@ fn render_live_tail_mode(
         return render_selected_subagent_context(state, width, height);
     }
 
-    let visible_history_is_empty =
-        state.history().is_empty() || state.history_display_start() >= state.history().len();
-    if visible_history_is_empty
-        && state.current_response().is_empty()
-        && matches!(state.status(), AppStatus::Idle)
-        && state.running_tools().is_empty()
-        && state.live_tool_calls().is_empty()
-        && state.background_tasks().is_empty()
-    {
+    if welcome_is_live(state) {
         return build_claude_startup_banner_snapshot(state, width as usize, height as usize);
     }
 
@@ -177,6 +169,15 @@ fn render_live_tail_mode(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+fn welcome_is_live(state: &RenderSnapshot) -> bool {
+    (state.history().is_empty() || state.history_display_start() >= state.history().len())
+        && state.current_response().is_empty()
+        && matches!(state.status(), AppStatus::Idle)
+        && state.running_tools().is_empty()
+        && state.live_tool_calls().is_empty()
+        && state.background_tasks().is_empty()
+}
+
 /// Keep recent committed messages visible while the composer owns the full
 /// terminal viewport. The terminal still records each message in scrollback;
 /// this projection supplies the on-screen chat that would otherwise disappear
@@ -228,6 +229,16 @@ pub(crate) fn render_visible_conversation_with_transcript(
         rows += block.len();
         blocks.push(block);
         index = next_index;
+    }
+    // The welcome cell is the first item in the projected transcript. It is
+    // also committed to terminal scrollback, but the full-height viewport
+    // must include it so a notice or turn cannot make it disappear.
+    if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
+        blocks.push(build_claude_startup_banner_snapshot(
+            state,
+            width as usize,
+            height as usize,
+        ));
     }
     let mut lines = Vec::new();
     for block in blocks.into_iter().rev() {
