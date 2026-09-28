@@ -42,7 +42,7 @@ rustcode::app::get_completion_len
 rustcode::app::list_project_file_paths
 rustcode::app::sanitize_recap_content
 rustcode::app::build_help_text
-rustcode::app::apply_autocomplete
+# apply_autocomplete converged in #1442 (composer input lives in runtime/).
 # Turn machinery (route through controller):
 rustcode::network
 rustcode::network::ui_adapter
