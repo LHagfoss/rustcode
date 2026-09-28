@@ -46,6 +46,9 @@ rustcode::app::apply_autocomplete
 # Turn machinery (route through controller):
 rustcode::network
 rustcode::network::ui_adapter
+# compaction stays for SUMMARY_MARKER only (transcript render protocol,
+# converges with the turn machinery in #1442); token estimation now routes
+# through rustcode::controller (issue #1441).
 rustcode::network::compaction
 # Background-task observation now routes through rustcode::controller
 # (TaskDisplay, background_task_snapshots, background_command_label,
@@ -62,4 +65,5 @@ rustcode::tools::mcp_tool_display_name
 # current_version stays: env!("CARGO_PKG_VERSION") must resolve to the
 # shipping binary, not the core library.
 rustcode::update::current_version
-rustcode::skills::discover_skills
+# Skills discovery now routes through rustcode::controller (SkillInfo,
+# discover_skills — issue #1441).

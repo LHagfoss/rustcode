@@ -148,20 +148,20 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     for msg in state.active_history() {
         match msg.role.as_str() {
             "user" => {
-                user_tokens += rustcode::network::compaction::estimate_tokens(&msg.content);
+                user_tokens += rustcode::controller::estimate_tokens(&msg.content);
             }
             "assistant" => {
-                assistant_tokens += rustcode::network::compaction::estimate_tokens(&msg.content);
+                assistant_tokens += rustcode::controller::estimate_tokens(&msg.content);
                 if !msg.tool_calls.is_empty() {
                     if let Ok(tc_str) = serde_json::to_string(&msg.tool_calls) {
-                        tool_tokens += rustcode::network::compaction::estimate_tokens(&tc_str);
+                        tool_tokens += rustcode::controller::estimate_tokens(&tc_str);
                     }
                 }
             }
             "tool" => {
-                tool_tokens += rustcode::network::compaction::estimate_tokens(&msg.content);
+                tool_tokens += rustcode::controller::estimate_tokens(&msg.content);
                 if let Some(ref id) = msg.tool_call_id {
-                    tool_tokens += rustcode::network::compaction::estimate_tokens(id);
+                    tool_tokens += rustcode::controller::estimate_tokens(id);
                 }
             }
             _ => {}
@@ -178,9 +178,9 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let agent_mode = state.agent_mode();
     let tools_prompt =
         rustcode::tools::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
-    let full_system_prompt_tokens = rustcode::network::compaction::estimate_tokens(&tools_prompt);
+    let full_system_prompt_tokens = rustcode::controller::estimate_tokens(&tools_prompt);
 
-    let skills = rustcode::skills::discover_skills();
+    let skills = rustcode::controller::discover_skills();
     let skills_str = skills
         .iter()
         .map(|s| format!("{} {}", s.name, s.description))
@@ -189,7 +189,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let skills_tokens = if skills.is_empty() {
         0
     } else {
-        rustcode::network::compaction::estimate_tokens(&skills_str)
+        rustcode::controller::estimate_tokens(&skills_str)
     };
 
     let system_tools_tokens = full_system_prompt_tokens.saturating_sub(skills_tokens) / 2;
