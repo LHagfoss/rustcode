@@ -351,6 +351,16 @@ pub(super) fn render_assistant_message<'a>(
     copy_registry: &mut Vec<(usize, String)>,
     options: AssistantRenderOptions,
 ) {
+    render_assistant_message_with_cache(content, lines, copy_registry, options, None);
+}
+
+pub(super) fn render_assistant_message_with_cache<'a>(
+    content: &'a str,
+    lines: &mut Vec<Line<'a>>,
+    copy_registry: &mut Vec<(usize, String)>,
+    options: AssistantRenderOptions,
+    mut streaming_cache: Option<&mut Vec<super::markdown::StreamingMarkdownCache>>,
+) {
     let AssistantRenderOptions {
         token_usage,
         response_time_ms,
@@ -486,6 +496,7 @@ pub(super) fn render_assistant_message<'a>(
         let box_width = content_width;
         let mut i = 0;
         let mut emitted_assistant_gutter = false;
+        let mut markdown_block_index = 0;
         let mut fence_open = None;
         let mut current_lang = String::new();
         while i < processed_lines.len() {
@@ -641,8 +652,15 @@ pub(super) fn render_assistant_message<'a>(
                 if lines.last().is_some_and(|l| !l.spans.is_empty()) {
                     lines.push(Line::from(""));
                 }
-                let markdown_lines =
-                    render_markdown(&normal_text, content_width, show_picker, !is_generating);
+                let markdown_lines = if let Some(cache) = streaming_cache.as_deref_mut() {
+                    if cache.len() <= markdown_block_index {
+                        cache.resize_with(markdown_block_index + 1, Default::default);
+                    }
+                    cache[markdown_block_index].render(&normal_text, content_width, show_picker)
+                } else {
+                    render_markdown(&normal_text, content_width, show_picker, !is_generating)
+                };
+                markdown_block_index += 1;
                 for markdown_line in markdown_lines {
                     if markdown_line.spans.is_empty() {
                         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
@@ -662,6 +680,9 @@ pub(super) fn render_assistant_message<'a>(
         }
         if !is_generating {
             lines.push(Line::from(""));
+        }
+        if let Some(cache) = streaming_cache.as_deref_mut() {
+            cache.truncate(markdown_block_index);
         }
     }
 
