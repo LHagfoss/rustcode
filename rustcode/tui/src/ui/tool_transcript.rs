@@ -1494,6 +1494,7 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
 }
 
 const COMPACT_TOOL_WARNING: &str = "[Warning, check debug for more info]";
+const DEFERRED_TOOL_NOTICE: &str = "Tool calls were deferred by the scheduler; they did not run.";
 
 fn is_deferred_tool_batch_notice(content: &str) -> bool {
     let content = content.trim();
@@ -1516,7 +1517,7 @@ fn is_validation_rejection_notice(content: &str) -> bool {
 /// call ids should not expand into a wide, noisy transcript row.
 pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
     if is_deferred_tool_batch_notice(content) {
-        None
+        Some(DEFERRED_TOOL_NOTICE)
     } else if is_validation_rejection_notice(content) {
         Some(COMPACT_TOOL_WARNING)
     } else if is_hidden_system_notice(content) {
@@ -1566,7 +1567,7 @@ mod tests {
     };
 
     #[test]
-    fn deferred_tool_batch_notice_is_hidden_from_transcript() {
+    fn raw_deferred_batch_notice_is_hidden_from_model_cells() {
         assert!(is_hidden_system_notice(
             "[The model emitted 4 tool calls. Only one was executed this round; the remaining calls (grep, write_to_file) were not executed or scheduled.]"
         ));
@@ -1579,7 +1580,7 @@ mod tests {
             super::system_notice_for_display(
                 "[The model emitted 5 tool calls. 4 were executed this round; the remaining calls (get_status (call_123)) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]"
             ),
-            None
+            Some("Tool calls were deferred by the scheduler; they did not run.")
         );
     }
 
