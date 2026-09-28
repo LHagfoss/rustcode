@@ -30,6 +30,7 @@ use tokio::sync::MutexGuard;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+mod composer;
 pub(crate) mod events;
 mod input;
 mod orchestration;
@@ -39,6 +40,7 @@ mod terminal;
 mod transcript;
 mod updates;
 
+pub(crate) use composer::{Composer, ComposerAction};
 pub(crate) use rustcode::controller::{apply_background_task_event, spawn_observed_orchestrator};
 
 use input::{InputContext, InputFlow, handle_app_event};
