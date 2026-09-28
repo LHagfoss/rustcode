@@ -177,6 +177,17 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let lines =
         render_visible_conversation_with_transcript(state, chat_width, max_chat_height, transcript);
+    let soft_wrap_before = lines
+        .iter()
+        .flat_map(|line| {
+            let count = Paragraph::new(line.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(chat_width)
+                .max(1);
+            std::iter::once(false).chain(std::iter::repeat_n(true, count.saturating_sub(1)))
+        })
+        .take(max_chat_height as usize)
+        .collect::<Vec<_>>();
     let conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(chat_width) as u16;
@@ -293,6 +304,11 @@ pub(crate) fn render_with_transcript_snapshot(
     if *state.status() == AppStatus::YoloPicker {
         render_yolo_picker_modal(f, state, input_box_area);
     }
+
+    transcript
+        .selection
+        .refresh(chunks[0], f.buffer(), &soft_wrap_before);
+    transcript.selection.highlight(f.buffer_mut());
 
     (conversation_content_height, input_box_area)
 }
