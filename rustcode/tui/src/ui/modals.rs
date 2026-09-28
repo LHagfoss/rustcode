@@ -40,7 +40,9 @@ pub(in crate::ui) use advanced_settings::{
 pub(in crate::ui) use confirmation::{question_height, render_tool_confirmation_modal};
 #[cfg(test)]
 pub(super) use context::calculate_context_breakdown;
-pub(in crate::ui) use context::{render_context_modal, render_theme_picker_modal};
+pub(in crate::ui) use context::{
+    render_context_modal, render_status_modal, render_theme_picker_modal,
+};
 pub use navigation::{PALETTE_ITEMS, PaletteItem};
 pub(in crate::ui) use navigation::{
     render_command_picker_modal, render_history_picker_modal, render_mcp_config_modal,
@@ -112,9 +114,12 @@ pub(super) fn render_popup_menu(
     filtered_cmds: &[&CommandInfo],
     area: ratatui::layout::Rect,
 ) {
-    // The popup is allocated below the input box. Scroll the list so the
-    // selected command stays visible when the available rows are bounded.
-    let max_rows = (area.height as usize).max(1);
+    // Scroll the menu while keeping the selected command in the space above
+    // the composer. A zero-height area never paints over the input.
+    let max_rows = area.height as usize;
+    if max_rows == 0 || area.width == 0 {
+        return;
+    }
     let selected = state.active_suggestion_index().unwrap_or(0);
     let offset = if selected >= max_rows {
         selected + 1 - max_rows
@@ -136,8 +141,8 @@ pub(super) fn render_popup_menu(
             .map(|i| i == idx)
             .unwrap_or(false);
 
-        // Match the Codex popup's selected-row marker and aligned name/description
-        // columns while keeping every row inside the available terminal width.
+        // The command and description share a row, with the whole selected row
+        // highlighted like Codex's completion menu.
         let marker = if is_selected { "› " } else { "  " };
         let left_text = truncate_to_width(
             &format!("{marker}{:<name_width$}  ", cmd.name),
@@ -146,16 +151,21 @@ pub(super) fn render_popup_menu(
         let description_width = (area.width as usize).saturating_sub(left_text.width());
         let desc_text = truncate_to_width(cmd.desc, description_width);
         let padding_len = description_width.saturating_sub(desc_text.width());
+        let background = if is_selected {
+            COLOR_PRIMARY()
+        } else {
+            COLOR_BG()
+        };
         let line = Line::from(vec![
             Span::styled(
                 left_text,
                 Style::default()
                     .fg(if is_selected {
-                        COLOR_PRIMARY()
+                        Color::White
                     } else {
                         COLOR_TEXT()
                     })
-                    .bg(COLOR_PANEL())
+                    .bg(background)
                     .add_modifier(if is_selected {
                         Modifier::BOLD
                     } else {
@@ -164,14 +174,25 @@ pub(super) fn render_popup_menu(
             ),
             Span::styled(
                 desc_text,
-                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+                Style::default()
+                    .fg(if is_selected {
+                        Color::White
+                    } else {
+                        COLOR_MUTED()
+                    })
+                    .bg(background)
+                    .add_modifier(if is_selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
-            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(background)),
         ]);
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
         area,
     );
 }
@@ -205,7 +226,10 @@ pub(super) fn render_at_popup_menu(
     file_matches: &[String],
     area: ratatui::layout::Rect,
 ) {
-    let max_rows = (area.height as usize).max(1);
+    let max_rows = area.height as usize;
+    if max_rows == 0 || area.width == 0 {
+        return;
+    }
     let selected = state.active_suggestion_index().unwrap_or(0);
     let offset = if selected >= max_rows {
         selected + 1 - max_rows
@@ -219,30 +243,35 @@ pub(super) fn render_at_popup_menu(
     for (i, file) in file_matches.iter().skip(offset).take(max_rows).enumerate() {
         let is_selected = selected == (offset + i);
         let marker = if is_selected { "› " } else { "  " };
-        let left_text = format!("{marker}{file}");
+        let left_text = truncate_to_width(&format!("{marker}{file}"), area.width as usize);
         let padding_len = (area.width as usize).saturating_sub(left_text.width());
+        let background = if is_selected {
+            COLOR_PRIMARY()
+        } else {
+            COLOR_BG()
+        };
         let line = Line::from(vec![
             Span::styled(
                 left_text,
                 Style::default()
                     .fg(if is_selected {
-                        COLOR_PRIMARY()
+                        Color::White
                     } else {
                         COLOR_TEXT()
                     })
-                    .bg(COLOR_PANEL())
+                    .bg(background)
                     .add_modifier(if is_selected {
                         Modifier::BOLD
                     } else {
                         Modifier::empty()
                     }),
             ),
-            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(background)),
         ]);
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
         area,
     );
 }
@@ -285,18 +314,19 @@ pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
         .collect()
 }
 
-/// Computes a rect for an inline picker anchored directly above the chat input box (`input_area`).
+/// Picker surface fills the viewport above the bottom-anchored composer.
 pub(super) fn input_anchor_rect(
-    _f: &Frame,
+    f: &Frame,
     input_area: ratatui::layout::Rect,
-    max_height: u16,
+    _max_height: u16,
 ) -> ratatui::layout::Rect {
-    let width = input_area.width;
-    let available_h = input_area.y;
-    let height = max_height.min(available_h).max(4);
-    let x = input_area.x;
-    let y = input_area.y.saturating_sub(height);
-    ratatui::layout::Rect::new(x, y, width, height)
+    let viewport = f.area();
+    ratatui::layout::Rect::new(
+        viewport.x,
+        viewport.y,
+        viewport.width,
+        input_area.y.saturating_sub(viewport.y),
+    )
 }
 
 #[allow(dead_code)]

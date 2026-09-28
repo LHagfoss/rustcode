@@ -724,6 +724,17 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                if s.show_status_modal {
+                    if matches!(
+                        key.code,
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q')
+                    ) {
+                        s.show_status_modal = false;
+                    }
+                    drop(s);
+                    return Ok(InputFlow::ContinueIteration);
+                }
+
                 if s.show_history_picker {
                     // Ctrl+D triggers delete confirmation overlay
                     if key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -1110,6 +1121,7 @@ pub(super) async fn handle_app_event(
                         .filter(|item| {
                             item.name.to_lowercase().contains(&search)
                                 || item.group.to_lowercase().contains(&search)
+                                || item.shortcut.to_lowercase().contains(&search)
                         })
                         .collect();
 
@@ -1149,7 +1161,7 @@ pub(super) async fn handle_app_event(
                                     "ctrl+c" => {
                                         exit_flag = true;
                                     }
-                                    "/model" => {
+                                    "/model" | "/models" => {
                                         s.show_model_picker = true;
                                     }
                                     "/new" => {
@@ -1234,10 +1246,7 @@ pub(super) async fn handle_app_event(
                                         s.history.push(ChatMessage::new("system", help));
                                     }
                                     "/context" => {
-                                        s.history.push(ChatMessage::new(
-                                    "system",
-                                    "Use /context <tokens> to set context window (e.g. /context 262144)",
-                                ));
+                                        s.show_context_modal = true;
                                     }
                                     "/parser" | "/protocol" => {
                                         s.history.push(ChatMessage::new(
@@ -1283,7 +1292,10 @@ pub(super) async fn handle_app_event(
                                         s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
                                         s.status = rustcode::app::AppStatus::YoloPicker;
                                     }
-                                    "/stats" | "/usage" | "/status" => {
+                                    "/status" => {
+                                        s.show_status_modal = true;
+                                    }
+                                    "/stats" | "/usage" => {
                                         s.history.push(ChatMessage::new(
                                             "system",
                                             "Token usage data will appear after your next message",
@@ -1325,6 +1337,18 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
                 drop(s);
+                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+                    || (key.modifiers.contains(KeyModifiers::SHIFT)
+                        && matches!(key.code, KeyCode::Up | KeyCode::Down))
+                {
+                    let page = terminal_runtime.terminal().area().height.saturating_sub(4) as usize;
+                    if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
+                        transcript_state.scroll_up(page.max(1));
+                    } else {
+                        transcript_state.scroll_down(page.max(1));
+                    }
+                    return Ok(InputFlow::ContinueIteration);
+                }
                 match {
                     let mut state = app_state.lock().await;
                     composer.handle_key(&mut state, key)
@@ -1639,6 +1663,15 @@ pub(super) async fn handle_app_event(
                     }
                     _ => {}
                 }
+            }
+            TuiEvent::Mouse(mouse) => {
+                match mouse.kind {
+                    event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
+                    event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
+                    _ => return Ok(InputFlow::ContinueIteration),
+                }
+                *needs_redraw = true;
+                return Ok(InputFlow::ContinueIteration);
             }
             TuiEvent::FocusGained => {
                 *terminal_focused = true;

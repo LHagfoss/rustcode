@@ -38,6 +38,16 @@ pub(crate) fn render_live_tail_with_transcript(
     height: u16,
     transcript: &mut TranscriptState,
 ) -> Vec<Line<'static>> {
+    render_live_tail_mode(state, width, height, transcript, false)
+}
+
+fn render_live_tail_mode(
+    state: &RenderSnapshot,
+    width: u16,
+    height: u16,
+    transcript: &mut TranscriptState,
+    full_viewport: bool,
+) -> Vec<Line<'static>> {
     if state.selected_subagent().is_some() {
         return render_selected_subagent_context(state, width, height);
     }
@@ -54,7 +64,11 @@ pub(crate) fn render_live_tail_with_transcript(
         return build_claude_startup_banner_snapshot(state, width as usize, height as usize);
     }
 
-    let tail = scrollback::mutable_stream_text(&state.current_response());
+    let tail = if full_viewport {
+        state.current_response().to_owned()
+    } else {
+        scrollback::mutable_stream_text(&state.current_response())
+    };
     let mut lines = Vec::new();
 
     let mut has_visible_active_cell = false;
@@ -77,6 +91,18 @@ pub(crate) fn render_live_tail_with_transcript(
         if !should_hide_stream {
             model_live_text = &tail;
         }
+    }
+
+    // A tool may start after the assistant's thought has already entered
+    // committed history while current_response still holds the same text.
+    // Keep the committed thought and the live tool row, but do not paint the
+    // stale thought a second time below the tool.
+    if !visible_live_tool_calls.is_empty()
+        && state.history().last().is_some_and(|message| {
+            message.role == "assistant" && message.content.trim() == model_live_text.trim()
+        })
+    {
+        model_live_text = "";
     }
 
     if visible_live_tool_calls.is_empty() {
@@ -118,7 +144,7 @@ pub(crate) fn render_live_tail_with_transcript(
 
         transcript.set_assistant(
             &model_tail,
-            scrollback::mutable_stream_is_continuation(&state.current_response()),
+            !full_viewport && scrollback::mutable_stream_is_continuation(&state.current_response()),
             state
                 .generation_start_time()
                 .map(|started| started.elapsed().as_millis() as u64),
@@ -149,6 +175,54 @@ pub(crate) fn render_live_tail_with_transcript(
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+/// Keep recent committed messages visible while the composer owns the full
+/// terminal viewport. The terminal still records each message in scrollback;
+/// this projection supplies the on-screen chat that would otherwise disappear
+/// behind a full-height mutable viewport.
+pub(crate) fn render_visible_conversation_with_transcript(
+    state: &RenderSnapshot,
+    width: u16,
+    height: u16,
+    transcript: &mut TranscriptState,
+) -> Vec<Line<'static>> {
+    let live_height = if transcript.scroll_rows() > 0 && !state.history().is_empty() {
+        0
+    } else {
+        height
+    };
+    let live = render_live_tail_mode(state, width, live_height, transcript, true);
+    if height == 0 || state.selected_subagent().is_some() || state.modal_open() {
+        return live;
+    }
+
+    let capacity = height as usize;
+    let target_rows = capacity
+        .saturating_add(transcript.scroll_rows())
+        .saturating_add(1);
+    let mut blocks = Vec::new();
+    let mut rows = live.len();
+    for index in (state.history_display_start()..state.history().len()).rev() {
+        if rows >= target_rows {
+            break;
+        }
+        let block = render_committed_history_block_snapshot(state, index, width);
+        rows += block.len();
+        blocks.push(block);
+    }
+    let mut lines = Vec::new();
+    for block in blocks.into_iter().rev() {
+        lines.extend(block);
+    }
+    lines.extend(live);
+    let max_scroll = lines.len().saturating_sub(capacity);
+    let scroll = transcript.clamp_scroll_rows(max_scroll);
+    let end = lines.len().saturating_sub(scroll);
+    let start = end.saturating_sub(capacity);
+    lines.truncate(end);
+    lines.drain(..start);
+    lines
 }
 
 pub(super) fn render_selected_subagent_context(
