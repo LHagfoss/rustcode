@@ -494,6 +494,63 @@ fn mcp_server_suffix_alias_pins_the_requested_server() {
 }
 
 #[test]
+fn natural_latest_mails_request_binds_inbox_listing_among_unrelated_servers() {
+    let mut tools = (0..MAX_MCP_NATIVE_SCHEMAS)
+        .map(|index| {
+            (
+                format!("codebase_latest_{index:02}"),
+                "Unrelated operation".to_string(),
+                serde_json::json!({"type":"object"}),
+            )
+        })
+        .collect::<Vec<_>>();
+    tools.extend([
+        (
+            "mcp__mail__list_attachments".to_string(),
+            "List attachments for a known email".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "search_emails".to_string(),
+            "Search emails by free text".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "reply_email".to_string(),
+            "Reply to an email by UID".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "send_email".to_string(),
+            "Send a new email".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "list_emails".to_string(),
+            "List recent emails from a folder".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+    ]);
+    let mut messages = vec![serde_json::json!({
+        "role":"user","content":"what are my latest mails"
+    })];
+    let (_, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert!(
+        stats.selected_names.contains(&"list_emails".to_string()),
+        "latest mails should bind list_emails before catalog discovery"
+    );
+
+    messages.push(serde_json::json!({
+        "role":"tool","content":"registry catalog lists list_emails"
+    }));
+    let (_, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert!(
+        stats.selected_names.contains(&"list_emails".to_string()),
+        "list_emails should remain callable after discovery"
+    );
+}
+
+#[test]
 fn runtime_context_server_names_do_not_displace_requested_mail_tools() {
     let mut tools = (0..MAX_MCP_NATIVE_SCHEMAS)
         .map(|index| {
