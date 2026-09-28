@@ -282,6 +282,18 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                 }
             }
+            Command::StopBackgroundTask {
+                session_id,
+                task_id,
+            } => {
+                stop_background_tasks(&session_id, task_id.as_deref());
+                if let Some(session) = active.as_ref() {
+                    let state = session.state.lock().await;
+                    if state.active_session_id == session_id {
+                        send_snapshot_locked(&updates, session.generation, &state);
+                    }
+                }
+            }
             Command::SetAutoApprove(enabled) => {
                 auto_approve = enabled;
                 if let Some(session) = active.as_ref() {
@@ -730,6 +742,7 @@ fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
         pending_question: None,
         pending_approval: None,
         pending_approval_batch: None,
+        background_tasks: Vec::new(),
     }
 }
 

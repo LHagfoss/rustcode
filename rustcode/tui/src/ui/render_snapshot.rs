@@ -43,7 +43,7 @@ pub(crate) struct RenderSnapshot {
     pending_question_chain_position: usize,
     pending_question_chain_answered: usize,
     running_tools: Vec<String>,
-    background_tasks: Vec<rustcode::tools::BackgroundTaskSnapshot>,
+    background_tasks: Vec<rustcode::controller::TaskDisplay>,
     waiting_for_background_terminal: bool,
     live_tool_calls: Arc<Vec<LiveToolCall>>,
     stream_tracker: Option<StreamTracker>,
@@ -219,7 +219,9 @@ impl RenderSnapshot {
             pending_question_chain_position: state.question_chain_position(),
             pending_question_chain_answered: state.question_chain_answered(),
             running_tools: state.running_tools.clone(),
-            background_tasks: rustcode::tools::background_task_snapshots(&state.active_session_id),
+            background_tasks: rustcode::controller::background_task_snapshots(
+                &state.active_session_id,
+            ),
             waiting_for_background_terminal: state.background_turn_context.is_some(),
             live_tool_calls: Arc::clone(&state.live_tool_calls),
             stream_tracker: state.stream_tracker.clone(),
@@ -339,7 +341,7 @@ impl RenderSnapshot {
     pub(crate) fn running_tools(&self) -> &[String] {
         &self.running_tools
     }
-    pub(crate) fn background_tasks(&self) -> &[rustcode::tools::BackgroundTaskSnapshot] {
+    pub(crate) fn background_tasks(&self) -> &[rustcode::controller::TaskDisplay] {
         &self.background_tasks
     }
     pub(crate) fn waiting_for_background_terminal(&self) -> bool {

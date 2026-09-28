@@ -4158,6 +4158,7 @@ mod tests {
             pending_question: None,
             pending_approval: None,
             pending_approval_batch: None,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -4888,6 +4889,7 @@ mod tests {
                     pending_question: None,
                     pending_approval: None,
                     pending_approval_batch: None,
+                    background_tasks: Vec::new(),
                 };
                 view.apply_event(
                     ControllerEvent {
@@ -4938,6 +4940,7 @@ mod tests {
                     pending_question: None,
                     pending_approval: None,
                     pending_approval_batch: None,
+                    background_tasks: Vec::new(),
                 };
                 let choice = |id: &str| SessionChoice {
                     id: id.to_owned(),
@@ -5188,6 +5191,7 @@ mod tests {
             pending_question: None,
             pending_approval: None,
             pending_approval_batch: None,
+            background_tasks: Vec::new(),
         }));
 
         navigation.open_settings();
@@ -5276,6 +5280,7 @@ mod tests {
             pending_question: None,
             pending_approval: None,
             pending_approval_batch: None,
+            background_tasks: Vec::new(),
         };
         let listed = ControllerSnapshot {
             sessions: vec![SessionChoice {
