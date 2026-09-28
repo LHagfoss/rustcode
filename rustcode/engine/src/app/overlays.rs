@@ -1,7 +1,7 @@
 use crate::app::events::Overlay;
 use crate::app::state::{AppState, AppStatus, ChatMessage, History};
 
-pub(crate) struct OverlayState<'a> {
+pub struct OverlayState<'a> {
     history: &'a mut History,
     status: &'a mut AppStatus,
     show_model_picker: &'a mut bool,
@@ -22,7 +22,7 @@ pub(crate) struct OverlayState<'a> {
 }
 
 impl<'a> OverlayState<'a> {
-    pub(crate) fn new(state: &'a mut AppState) -> Self {
+    pub fn new(state: &'a mut AppState) -> Self {
         Self {
             history: &mut state.history,
             status: &mut state.status,
@@ -67,7 +67,7 @@ impl<'a> OverlayState<'a> {
             )
     }
 
-    pub(crate) fn close_all(&mut self) {
+    pub fn close_all(&mut self) {
         *self.show_model_picker = false;
         *self.show_theme_picker = false;
         *self.show_command_picker = false;
@@ -95,7 +95,7 @@ impl<'a> OverlayState<'a> {
         }
     }
 
-    pub(crate) fn open(&mut self, overlay: Overlay) {
+    pub fn open(&mut self, overlay: Overlay) {
         match overlay {
             Overlay::CommandPalette => *self.show_command_picker = true,
             Overlay::History => *self.show_history_picker = true,
@@ -127,7 +127,7 @@ impl<'a> OverlayState<'a> {
         *self.tool_confirmation_selected
     }
 
-    pub(crate) fn move_approval_selection(&mut self, direction: i8) {
+    pub fn move_approval_selection(&mut self, direction: i8) {
         let max = self
             .pending_tool_confirmation
             .as_ref()
@@ -147,7 +147,7 @@ impl<'a> OverlayState<'a> {
         };
     }
 
-    pub(crate) fn toggle_auto_confirm(&mut self) {
+    pub fn toggle_auto_confirm(&mut self) {
         *self.auto_confirm = !*self.auto_confirm;
         let status = if *self.auto_confirm {
             "enabled"
@@ -160,7 +160,7 @@ impl<'a> OverlayState<'a> {
 }
 
 impl AppState {
-    pub(crate) fn overlays(&mut self) -> OverlayState<'_> {
+    pub fn overlays(&mut self) -> OverlayState<'_> {
         OverlayState::new(self)
     }
 }

@@ -24,13 +24,13 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DiscordPresence {
+pub struct DiscordPresence {
     pub(crate) state: String,
     pub(crate) details: String,
 }
 
 impl DiscordPresence {
-    pub(crate) fn from_activity_with_usage(
+    pub fn from_activity_with_usage(
         activity: &ActivitySnapshot,
         session_title: &str,
         usage: Option<&TokenUsage>,
@@ -67,7 +67,7 @@ impl DiscordPresence {
 /// Return a display-safe workspace identity without ever exposing parent
 /// directories. This is intentionally based on the final path component, not
 /// on a path with the user's home directory replaced or abbreviated.
-pub(crate) fn workspace_basename(path: Option<&Path>) -> String {
+pub fn workspace_basename(path: Option<&Path>) -> String {
     let Some(path) = path else {
         return "workspace".to_owned();
     };
@@ -207,7 +207,7 @@ pub(crate) fn ipc_socket_candidates() -> Vec<PathBuf> {
     }
 }
 
-pub(crate) fn ipc_socket_detected() -> bool {
+pub fn ipc_socket_detected() -> bool {
     ipc_socket_detected_in(&ipc_socket_candidates())
 }
 
@@ -300,14 +300,14 @@ enum Command {
 
 /// Non-blocking handle used by the TUI. Presence updates are deduplicated
 /// before they reach the worker, so streaming frames do not spam Discord IPC.
-pub(crate) struct DiscordRpcWorker {
+pub struct DiscordRpcWorker {
     sender: Sender<Command>,
     last_presence: Arc<Mutex<Option<DiscordPresence>>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl DiscordRpcWorker {
-    pub(crate) fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool) -> Self {
         let (sender, receiver) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("rustcode-discord-rpc".to_owned())
@@ -320,7 +320,7 @@ impl DiscordRpcWorker {
         }
     }
 
-    pub(crate) fn update(&self, presence: DiscordPresence) {
+    pub fn update(&self, presence: DiscordPresence) {
         let Ok(mut last_presence) = self.last_presence.lock() else {
             return;
         };
@@ -331,7 +331,7 @@ impl DiscordRpcWorker {
         let _ = self.sender.send(Command::Update(presence));
     }
 
-    pub(crate) fn shutdown(mut self) {
+    pub fn shutdown(mut self) {
         let _ = self.sender.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();

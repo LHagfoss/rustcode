@@ -248,7 +248,7 @@ impl RequestPrefixCache {
         self.context_updates
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.rendered_history.clear();
         self.stable_request.clear();
         self.context.clear();

@@ -22,7 +22,7 @@ pub(crate) struct TranscriptState<'a> {
 
 impl<'a> TranscriptState<'a> {
     #[cfg(test)]
-    pub(crate) fn new(state: &'a mut AppState) -> Self {
+    pub fn new(state: &'a mut AppState) -> Self {
         Self {
             history: &mut state.history,
             history_display_start: &mut state.history_display_start,

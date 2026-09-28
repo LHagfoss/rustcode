@@ -1,5 +1,6 @@
 //! UI-neutral contract for frontends that control and observe a RustCode session.
 
+mod apply;
 mod attachments;
 mod events;
 mod native_commands;
@@ -22,6 +23,10 @@ pub(crate) fn next_approval_batch_id() -> String {
 #[cfg(test)]
 mod tests;
 
+pub use apply::{
+    apply_approval_decision, apply_approval_decision_for_batch, apply_background_task_event,
+    apply_question_answer, spawn_observed_orchestrator,
+};
 pub use attachments::save_image_attachment;
 pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,

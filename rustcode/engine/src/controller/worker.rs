@@ -625,11 +625,11 @@ async fn poll_background_events(
         let belongs_to_active = active_session_id.as_deref() == Some(&event_session_id);
         let Some(session) = active.as_mut().filter(|_| belongs_to_active) else {
             if let Some(session) = active.as_ref() {
-                crate::app::runtime::apply_background_task_event(&session.state, event).await;
+                crate::controller::apply_background_task_event(&session.state, event).await;
             }
             continue;
         };
-        if crate::app::runtime::apply_background_task_event(&session.state, event).await {
+        if crate::controller::apply_background_task_event(&session.state, event).await {
             start_pending_turn(session, client, updates).await;
             send_snapshot(updates, session.generation, &session.state).await;
         }
@@ -660,7 +660,7 @@ async fn poll_background_events(
     }
     for event in late_events {
         if let Some(session) = active.as_ref() {
-            crate::app::runtime::apply_background_task_event(&session.state, event).await;
+            crate::controller::apply_background_task_event(&session.state, event).await;
         }
     }
 
@@ -912,7 +912,7 @@ pub(super) async fn answer_question(
             crate::app::QuestionAnswer::Custom(answer)
         }
     };
-    crate::app::runtime::apply_question_answer(state, cancel_token, answer).await;
+    crate::controller::apply_question_answer(state, cancel_token, answer).await;
     Ok(())
 }
 
@@ -926,13 +926,8 @@ pub(super) async fn apply_approval(
         ApprovalChoice::Approve => crate::app::ApprovalDecision::Approve,
         ApprovalChoice::Deny => crate::app::ApprovalDecision::Deny,
     };
-    if crate::app::runtime::apply_approval_decision_for_batch(
-        state,
-        cancel_token,
-        batch_id,
-        decision,
-    )
-    .await
+    if crate::controller::apply_approval_decision_for_batch(state, cancel_token, batch_id, decision)
+        .await
     {
         Ok(())
     } else {

@@ -144,7 +144,7 @@ fn apply_profile_sampling_options(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ThinkingMode {
+pub enum ThinkingMode {
     Normal,
     BoundedRecovery,
     Disabled,

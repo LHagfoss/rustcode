@@ -7100,16 +7100,13 @@ dependencies = [
  "chrono-tz",
  "clap",
  "cron",
- "crossterm",
  "discord-rich-presence",
  "flate2",
  "futures-util",
  "globset",
  "ignore",
  "libc",
- "pulldown-cmark",
  "rand 0.10.2",
- "ratatui",
  "regex",
  "reqwest 0.13.4",
  "reqwest-middleware",
@@ -7129,7 +7126,6 @@ dependencies = [
  "sha2 0.10.9",
  "similar",
  "streaming-iterator",
- "syntect",
  "sysinfo 0.39.6",
  "tar",
  "tempfile",
@@ -7144,7 +7140,6 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
- "unicode-width",
  "urlencoding",
  "zip",
 ]
@@ -7222,6 +7217,31 @@ dependencies = [
  "sha2 0.10.9",
  "similar",
  "tempfile",
+]
+
+[[package]]
+name = "rustcode-tui"
+version = "0.56.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "ctor",
+ "futures-util",
+ "pulldown-cmark",
+ "ratatui",
+ "reqwest 0.13.4",
+ "rustcode",
+ "rustcode-command",
+ "rustcode-core",
+ "rustcode-tasks",
+ "rustcode-tool-protocol",
+ "serde",
+ "serde_json",
+ "syntect",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
+ "unicode-width",
 ]
 
 [[package]]

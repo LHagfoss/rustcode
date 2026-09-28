@@ -51,7 +51,7 @@ pub(crate) struct SessionTurnState {
 }
 
 impl SessionTurnState {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             gate: Arc::new(Mutex::new(())),
             next_id: std::sync::atomic::AtomicU64::new(1),

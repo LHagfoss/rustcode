@@ -97,12 +97,13 @@ jobs:
               # These tests depend on user-installed skills or runner-specific
               # ripgrep output. Keep them in the local suite, but exclude them
               # from the clean-runner gate until they have portable fixtures.
-              # Scope to the root `rustcode` package: the native GPUI app has
-              # macOS-only UI dependencies and is covered by the macOS job.
+              # Whole workspace except the native GPUI app, which has macOS-only
+              # UI dependencies and is covered by the macOS job. This keeps the
+              # extracted core crates' suites (and the TUI's) in the gate.
               # Sandbox-gated tests skip themselves when bubblewrap cannot run
               # (GitHub runners block unprivileged user namespaces).
               run: >-
-                  cargo test --locked -p rustcode --
+                  cargo test --locked --workspace --exclude rustcode-app --
                   --skip control_plane_tool_does_not_stall_while_reading_workspace_root
                   --skip grep_stops_at_byte_cap_for_large_matching_lines
 
@@ -147,13 +148,8 @@ jobs:
             - name: Clippy correctness gate
               # The codebase has an established warning baseline. Keep those
               # warnings visible locally while denying only correctness lints.
-              run: cargo clippy --locked -- -A warnings -D clippy::correctness
-
-            - name: Check the core builds without the terminal UI
-              # Frontends that never draw a frame (native desktop, ACP, daemon,
-              # headless) link the library with `default-features = false`. Keep
-              # that path compiling so the rendering stack stays out of the core.
-              run: cargo check --locked --no-default-features
+              # Whole workspace except the macOS-only native app.
+              run: cargo clippy --locked --workspace --exclude rustcode-app -- -A warnings -D clippy::correctness
 
             - name: Check the TUI stays behind the frontend seam
               # The render layer may only reach core through

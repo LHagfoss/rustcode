@@ -1,0 +1,357 @@
+//! Turn-control decisions applied to session state.
+//!
+//! Approval/question answers, background-task event routing, and the observed
+//! queue orchestrator. Used by the controller worker and the terminal event
+//! loop alike; the loop itself lives in the frontend.
+
+use crate::app::{AppState, AppStatus, ApprovalDecision, QuestionAnswer};
+use crate::network::ui_adapter::AgentUiEventSender;
+use rustcode_tasks::TaskEvent;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+
+pub async fn spawn_observed_orchestrator(
+    client: reqwest::Client,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    ui_events: AgentUiEventSender,
+) -> bool {
+    let lease = {
+        let mut state = state.lock().await;
+        if state.summary_in_flight || state.pending_queue.is_empty() {
+            return false;
+        }
+        let Some(lease) = state.claim_orchestrator() else {
+            return false;
+        };
+        state.status = AppStatus::Queued;
+        lease
+    };
+
+    let handle = tokio::spawn(async move {
+        crate::network::process_queue_orchestrator_with_ui_events(
+            client,
+            state,
+            cancel_token,
+            Arc::new(crate::network::policy::InteractivePolicy),
+            ui_events,
+            lease,
+        )
+        .await;
+    });
+    tokio::spawn(async move {
+        match handle.await {
+            Ok(()) => {}
+            Err(error) if error.is_cancelled() => {
+                crate::dbg_log!("Orchestrator task cancelled");
+            }
+            Err(error) => {
+                crate::dbg_log!("Orchestrator task died: {error}");
+                crate::logger::operational_event(
+                    "orchestrator.task_died",
+                    serde_json::json!({ "error": error.to_string() }),
+                );
+            }
+        }
+    });
+    true
+}
+
+fn record_active_background_task(
+    state: &mut crate::app::AppState,
+    task_id: &str,
+    output: crate::tools::ToolExecutionOutput,
+) -> bool {
+    if state.background_wakeup_ids.contains(task_id) {
+        return false;
+    }
+    if state.orchestrator_running {
+        // A turn is in flight: withhold the output so it joins history at
+        // the next turn boundary instead of derailing the current turn's
+        // context mid-stream. The wakeup is still queued now.
+        state
+            .pending_background_outputs
+            .push(crate::PendingBackgroundOutput {
+                task_id: task_id.to_owned(),
+                output,
+            });
+        crate::queue_background_wakeup(state, task_id);
+        return true;
+    }
+    state
+        .history
+        .push(crate::background_task_history_message(task_id, output));
+    crate::queue_background_wakeup(state, task_id);
+    true
+}
+
+pub async fn apply_background_task_event(
+    app_state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    event: TaskEvent,
+) -> bool {
+    let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
+        return false;
+    };
+    let mut state = app_state.lock().await;
+    if state.active_session_id == session_id {
+        if record_active_background_task(&mut state, &task_id, output) {
+            crate::config::save_session_history(&session_id, &state.history);
+            true
+        } else {
+            false
+        }
+    } else {
+        let mut history = crate::config::load_session_history_direct(&session_id);
+        history.push(crate::background_task_history_message(&task_id, output));
+        crate::config::save_session_history(&session_id, &history);
+        false
+    }
+}
+
+pub async fn apply_approval_decision(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    decision: ApprovalDecision,
+) {
+    let (approved, remember_prefix) = match decision {
+        ApprovalDecision::Approve => (true, None),
+        ApprovalDecision::ApproveAll => {
+            state.lock().await.auto_confirm = true;
+            (true, None)
+        }
+        ApprovalDecision::ApproveAndRemember(prefix) => (true, Some((prefix, false))),
+        ApprovalDecision::ForbidAndRemember(prefix) => (true, Some((prefix, true))),
+        ApprovalDecision::Deny => (false, None),
+        ApprovalDecision::Custom(reason) => (!reason.trim().is_empty(), None),
+    };
+    if !approved {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+    }
+    let mut state = state.lock().await;
+    if let Some(tx) = state.tool_confirmation_response.take() {
+        let response = if !approved {
+            crate::app::ToolConfirmationResponse::Deny
+        } else if let Some((prefix, forbid)) = remember_prefix {
+            let valid_prefix = state
+                .pending_tool_confirmation
+                .as_ref()
+                .filter(|items| {
+                    items.len() == 1
+                        && if forbid {
+                            items[0].forbidden_prefix.is_some()
+                        } else {
+                            items[0].rememberable_prefix.is_some()
+                        }
+                })
+                .and_then(|items| {
+                    if forbid {
+                        items[0].forbidden_prefix.clone()
+                    } else {
+                        items[0].rememberable_prefix.clone()
+                    }
+                })
+                .filter(|actual| actual == &prefix);
+            valid_prefix.map_or(crate::app::ToolConfirmationResponse::Approve, |prefix| {
+                if forbid {
+                    crate::app::ToolConfirmationResponse::ForbidAndRemember(prefix)
+                } else {
+                    crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)
+                }
+            })
+        } else {
+            crate::app::ToolConfirmationResponse::Approve
+        };
+        let _ = tx.send(response);
+    }
+    state.pending_tool_confirmation = None;
+    state.pending_approval_details = None;
+    state.pending_approval_batch_id = None;
+    state.request_redraw();
+}
+
+/// Resolves a native approval only while the controller-issued identity still
+/// names the batch currently held by the policy. The comparison and channel
+/// take happen under the same state lock so a delayed callback cannot resolve
+/// a replacement batch.
+pub async fn apply_approval_decision_for_batch(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    expected_batch_id: &str,
+    decision: ApprovalDecision,
+) -> bool {
+    let mut state = state.lock().await;
+    if state.pending_tool_confirmation.is_none()
+        || state.tool_confirmation_response.is_none()
+        || state.pending_approval_batch_id.as_deref() != Some(expected_batch_id)
+    {
+        return false;
+    }
+
+    let approved = match decision {
+        ApprovalDecision::Approve => true,
+        ApprovalDecision::Deny => false,
+        _ => return false,
+    };
+    if !approved {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+    }
+    if let Some(tx) = state.tool_confirmation_response.take() {
+        let response = if approved {
+            crate::app::ToolConfirmationResponse::Approve
+        } else {
+            crate::app::ToolConfirmationResponse::Deny
+        };
+        let _ = tx.send(response);
+    }
+    state.pending_tool_confirmation = None;
+    state.pending_approval_details = None;
+    state.pending_approval_batch_id = None;
+    state.request_redraw();
+    true
+}
+
+pub async fn apply_question_answer(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    answer: QuestionAnswer,
+) {
+    if matches!(answer, QuestionAnswer::Cancelled) {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+        let mut state = state.lock().await;
+        if let Some(tx) = state.question_response.take() {
+            let _ = tx.send("User cancelled prompt.".to_owned());
+        }
+        state.clear_question_chain();
+        state.enter_idle();
+        state.request_redraw();
+        return;
+    }
+    let current = match answer {
+        QuestionAnswer::Selected(answer) | QuestionAnswer::Custom(answer) => answer,
+        QuestionAnswer::Cancelled => unreachable!("cancelled handled above"),
+    };
+    let mut state = state.lock().await;
+    if !state.pending_question_queue.is_empty() {
+        // More questions remain in the chain: record this answer, advance to
+        // the next question, and keep waiting — the tool call resolves only
+        // once every question is answered (or the chain is cancelled).
+        state.advance_question_chain(current);
+        state.request_redraw();
+        return;
+    }
+    let answers = state.take_question_chain_answers(Some(current.clone()));
+    // A stale event with no active chain (e.g. a double Enter racing the
+    // submit) falls back to the raw answer instead of an empty submission.
+    let output = if answers.is_empty() {
+        format!("User selected: {current}")
+    } else {
+        crate::app::state::format_question_chain_answers(&answers)
+    };
+    if let Some(tx) = state.question_response.take() {
+        let _ = tx.send(output);
+    }
+    state.request_redraw();
+}
+#[cfg(test)]
+mod tests {
+    use super::record_active_background_task;
+    use crate::app::AppState;
+    use crate::tools::ToolExecutionOutput;
+
+    #[test]
+    fn active_completion_is_recorded_and_queued_once() {
+        let mut state = AppState::new();
+        state.active_session_id = "active-completion-session".to_owned();
+        let output = ToolExecutionOutput::success("cargo test passed".to_owned());
+
+        assert!(record_active_background_task(
+            &mut state,
+            "task-completed-once",
+            output.clone()
+        ));
+        assert!(!record_active_background_task(
+            &mut state,
+            "task-completed-once",
+            output
+        ));
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:task-completed-once".to_owned()]
+        );
+        assert!(state.background_wakeup_ids.contains("task-completed-once"));
+    }
+
+    #[test]
+    fn completion_during_active_turn_is_withheld_until_boundary() {
+        let mut state = AppState::new();
+        state.active_session_id = "withheld-session".to_owned();
+        state.orchestrator_running = true;
+        let output = ToolExecutionOutput::success("done".to_owned());
+
+        assert!(record_active_background_task(
+            &mut state,
+            "task-withheld",
+            output.clone()
+        ));
+        assert!(!record_active_background_task(
+            &mut state,
+            "task-withheld",
+            output
+        ));
+        assert_eq!(state.history.len(), 0);
+        assert_eq!(state.pending_background_outputs.len(), 1);
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:task-withheld".to_owned()]
+        );
+
+        state.orchestrator_running = false;
+        assert_eq!(crate::flush_pending_background_outputs(&mut state), 1);
+        assert_eq!(state.history.len(), 1);
+        assert!(state.history[0].content.contains("done"));
+        assert!(state.pending_background_outputs.is_empty());
+        assert_eq!(crate::flush_pending_background_outputs(&mut state), 0);
+    }
+
+    #[test]
+    fn session_subscription_retains_inactive_completion_until_consumed() {
+        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
+        let subscription = manager.subscribe_session("inactive-session");
+        let task = manager
+            .spawn_with_id(
+                "inactive-completion-task",
+                rustcode_tasks::TaskSpec::new(
+                    "inactive-session",
+                    rustcode_command::CommandRequest {
+                        command: if cfg!(target_os = "windows") {
+                            "echo retained".to_owned()
+                        } else {
+                            "printf retained".to_owned()
+                        },
+                        status_command: None,
+                        sandboxed_shell: false,
+                        cwd: None,
+                        env: Vec::new(),
+                        timeout: std::time::Duration::from_secs(5),
+                        process_group: true,
+                        inherited_fds: Vec::new(),
+                    },
+                ),
+            )
+            .expect("spawn inactive task");
+
+        let mut saw_finished = false;
+        while let Ok(event) = subscription.recv() {
+            if event.task_id() == task.id() && event.is_terminal() {
+                saw_finished = true;
+                break;
+            }
+        }
+        assert!(saw_finished, "inactive session completion was retained");
+    }
+}

@@ -453,7 +453,7 @@ async fn enter_accepts_file_completion_without_submitting_the_prompt() {
     let client = reqwest::Client::new();
     let mut cancel = CancellationToken::new();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
     let state = state.lock().await;
     assert!(state.input_buffer.contains("Cargo"));
     assert!(state.input_buffer.ends_with(' '));
@@ -477,7 +477,7 @@ async fn enter_routes_steer_mode_input_to_pending_steers() {
     let client = reqwest::Client::new();
     let mut cancel = CancellationToken::new();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let state = state.lock().await;
     assert!(state.input_buffer.is_empty());
@@ -504,7 +504,7 @@ async fn enter_routes_queue_mode_input_to_fifo_queue() {
     let client = reqwest::Client::new();
     let mut cancel = CancellationToken::new();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let state = state.lock().await;
     assert!(state.input_buffer.is_empty());
@@ -531,7 +531,7 @@ async fn pulled_back_queued_prompt_stays_in_fifo_during_a_steerable_turn() {
 
     let mut cancel = CancellationToken::new();
     let client = reqwest::Client::new();
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let state = state.lock().await;
     assert!(state.pending_steers.is_empty());
@@ -555,7 +555,7 @@ async fn enter_queues_input_when_the_streaming_turn_is_not_steerable() {
     let client = reqwest::Client::new();
     let mut cancel = CancellationToken::new();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let state = state.lock().await;
     assert!(state.pending_steers.is_empty());
@@ -595,7 +595,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
             app.input_buffer = format!("blocked state {index}");
             app.cursor_position = app.input_buffer.len();
         }
-        assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+        assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
     }
 
     {
@@ -613,7 +613,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
         app.input_buffer = "pending confirmation".to_owned();
         app.cursor_position = app.input_buffer.len();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     {
         let mut app = state.lock().await;
@@ -626,7 +626,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
         app.input_buffer = "pending question".to_owned();
         app.cursor_position = app.input_buffer.len();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     {
         let mut app = state.lock().await;
@@ -639,7 +639,7 @@ async fn enter_queues_input_for_each_blocked_steer_state() {
         app.input_buffer = "queued question".to_owned();
         app.cursor_position = app.input_buffer.len();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let app = state.lock().await;
     assert!(app.pending_steers.is_empty());
@@ -662,7 +662,7 @@ async fn slash_command_during_steerable_turn_uses_existing_dispatch() {
     let client = reqwest::Client::new();
     let mut cancel = CancellationToken::new();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
 
     let state = state.lock().await;
     assert!(state.pending_steers.is_empty());
@@ -863,7 +863,7 @@ async fn manual_compaction_cancellation_interrupts_detached_request() {
     let mut cancel_token = CancellationToken::new();
     let compact_token = cancel_token.clone();
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     tokio::time::timeout(Duration::from_secs(10), request_accepted)
         .await
         .expect("manual compaction request must start")
@@ -873,7 +873,7 @@ async fn manual_compaction_cancellation_interrupts_detached_request() {
         let mut app = state.lock().await;
         app.input_buffer = "/cancel".to_string();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     assert!(compact_token.is_cancelled());
     assert!(!cancel_token.is_cancelled());
 
@@ -911,7 +911,7 @@ async fn test_goal_command_flow() {
         let mut s = state.lock().await;
         s.input_buffer = "/goal ".to_string();
     }
-    let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
     assert!(!trigger);
     {
         let s = state.lock().await;
@@ -925,7 +925,7 @@ async fn test_goal_command_flow() {
         s.input_buffer = "/goal fix build issues".to_string();
         s.history.clear();
     }
-    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
     assert!(trigger2);
     {
         let s = state.lock().await;
@@ -968,7 +968,7 @@ async fn clear_and_new_preserve_history() {
         s.history.replace(original_history.clone());
         s.input_buffer = "/clear".to_string();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert!(s.history.as_slice() == original_history);
@@ -979,7 +979,7 @@ async fn clear_and_new_preserve_history() {
         let mut s = state.lock().await;
         s.input_buffer = "/new".to_string();
     }
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert_eq!(s.history.len(), 1);
@@ -1006,7 +1006,7 @@ async fn verbosity_command_opens_picker_on_the_active_value() {
         s.input_buffer = "/verbosity".to_owned();
     }
 
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
 
     let s = state.lock().await;
     assert_eq!(s.status, AppStatus::VerbosityPicker);
@@ -1025,7 +1025,7 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     let mut cancel_token = CancellationToken::new();
 
     state.lock().await.input_buffer = "/yolo".to_owned();
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert_eq!(s.status, AppStatus::YoloPicker);
@@ -1033,7 +1033,7 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     }
 
     state.lock().await.input_buffer = "/yolo on".to_owned();
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert!(s.auto_confirm);
@@ -1041,7 +1041,7 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     }
 
     state.lock().await.input_buffer = "/yolo off".to_owned();
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert!(!s.auto_confirm);
@@ -1049,7 +1049,7 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     }
 
     state.lock().await.input_buffer = "/yolo toggle".to_owned();
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
         assert!(s.auto_confirm);
@@ -1069,7 +1069,7 @@ async fn sandbox_command_shows_and_sets_the_effective_mode() {
     let mut cancel_token = CancellationToken::new();
 
     state.lock().await.input_buffer = "/sandbox read_only".to_owned();
-    assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     let s = state.lock().await;
     assert_eq!(s.config.sandbox_mode, SandboxMode::ReadOnly);
     assert!(s.history.last().unwrap().content.contains("read-only"));
@@ -1090,13 +1090,16 @@ async fn test_theme_command_flow() {
         let s = state.lock().await;
         s.config.theme.clone()
     };
+    // Fixed provider: the picker/command only needs theme names, never the
+    // theme files themselves.
+    let theme_names = || vec!["nord".to_owned(), initial_theme.clone()];
 
     // Open theme picker modal via /theme
     {
         let mut s = state.lock().await;
         s.input_buffer = "/theme".to_string();
     }
-    let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger = super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
     assert!(!trigger);
     {
         let s = state.lock().await;
@@ -1108,7 +1111,7 @@ async fn test_theme_command_flow() {
         let mut s = state.lock().await;
         s.input_buffer = "/theme nord".to_string();
     }
-    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
     assert!(!trigger2);
     {
         let s = state.lock().await;
@@ -1122,7 +1125,7 @@ async fn test_theme_command_flow() {
         let mut s = state.lock().await;
         s.input_buffer = "/theme unknown_theme".to_string();
     }
-    let trigger3 = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger3 = super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
     assert!(!trigger3);
     {
         let s = state.lock().await;
@@ -1141,7 +1144,7 @@ async fn test_theme_command_flow() {
         let mut s = state.lock().await;
         s.input_buffer = format!("/theme {}", initial_theme);
     }
-    let _ = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let _ = super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
 }
 
 #[tokio::test]
@@ -1159,7 +1162,7 @@ async fn context_command_opens_modal_and_sets_window() {
         let mut s = state.lock().await;
         s.input_buffer = "/context".to_string();
     }
-    let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
     assert!(!trigger);
     {
         let s = state.lock().await;
@@ -1173,7 +1176,7 @@ async fn context_command_opens_modal_and_sets_window() {
         s.show_context_modal = false;
         s.input_buffer = "/context 256k".to_string();
     }
-    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger2 = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
     assert!(!trigger2);
     {
         let s = state.lock().await;
@@ -1198,7 +1201,7 @@ async fn update_command_initiates_check_and_sets_notice() {
         let mut s = state.lock().await;
         s.input_buffer = "/update".to_string();
     }
-    let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+    let trigger = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
     assert!(!trigger);
     {
         let s = state.lock().await;

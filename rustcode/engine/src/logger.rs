@@ -223,7 +223,7 @@ fn decode_session_id(encoded: &str) -> Option<String> {
 /// Rotate `debug.log` out of the way if it has grown past the size cap.
 /// Also called before writes so a long-lived process cannot grow the global
 /// or session log beyond the cap by accumulating lines between restarts.
-pub(crate) fn rotate_if_oversized() {
+pub fn rotate_if_oversized() {
     let _guard = log_write_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -869,7 +869,7 @@ fn append_line_to_path(path: &Path, line: &str) {
 /// Unwind panics leave no macOS crash report, and a panic in a spawned task
 /// is silently dropped unless its JoinHandle is observed — so without this
 /// hook the next occurrence would be just as undiagnosable.
-pub(crate) fn install_panic_hook() {
+pub fn install_panic_hook() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
         let previous = std::panic::take_hook();
@@ -893,7 +893,7 @@ pub(crate) fn install_panic_hook() {
 }
 
 /// Write metadata-only lifecycle events to the global and owning session logs.
-pub(crate) fn operational_event(event: &str, fields: Value) {
+pub fn operational_event(event: &str, fields: Value) {
     // Keep every operational event attributable even when a call site is in a
     // low-level stream/parser helper that does not otherwise carry session
     // state. Explicit ownership wins so a stale task cannot be attributed to
