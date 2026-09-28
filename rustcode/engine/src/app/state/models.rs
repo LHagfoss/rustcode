@@ -429,7 +429,7 @@ pub const TIPS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CachedReadOutput {
+pub struct CachedReadOutput {
     pub(crate) replayable_content: Option<String>,
     pub(crate) content_offset: u64,
     pub(crate) success: bool,
@@ -866,7 +866,7 @@ mod prompt_cache_snapshot_tests {
 pub(super) const MAX_LIVE_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 
 impl LiveToolCall {
-    pub(crate) fn new(
+    pub fn new(
         key: impl Into<String>,
         provider_call_id: Option<String>,
         tool_name: impl Into<String>,

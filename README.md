@@ -105,7 +105,7 @@ The bundle includes both the layered icon for newer macOS versions and a
 fallback `.icns`. Running `cargo run` launches the executable directly, so use
 the bundled app to see its Dock and Finder icon.
 
-Build the terminal executable separately with `cargo build --bin rustcode`.
+Build the terminal executable separately with `cargo build -p rustcode-tui`.
 
 Tagged releases publish the terminal binaries for Linux, macOS and Windows,
 plus `RustCode.app` for Apple Silicon (unsigned — right-click to open on

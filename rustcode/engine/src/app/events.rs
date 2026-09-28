@@ -1,10 +1,6 @@
-#[cfg(feature = "tui")]
-use crate::ui::TuiEvent;
-use tokio::sync::mpsc;
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ApprovalDecision {
+pub enum ApprovalDecision {
     Approve,
     ApproveAndRemember(String),
     ForbidAndRemember(String),
@@ -15,7 +11,7 @@ pub(crate) enum ApprovalDecision {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum QuestionAnswer {
+pub enum QuestionAnswer {
     Selected(String),
     Custom(String),
     Cancelled,
@@ -23,7 +19,7 @@ pub(crate) enum QuestionAnswer {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UpdateDecision {
+pub enum UpdateDecision {
     UpdateNow,
     Skip,
     SkipUntilNextVersion,
@@ -31,7 +27,7 @@ pub(crate) enum UpdateDecision {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Overlay {
+pub enum Overlay {
     CommandPalette,
     History,
     Model,
@@ -50,33 +46,9 @@ pub(crate) enum Overlay {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionAction {
+pub enum SessionAction {
     Latest,
     Id(String),
-}
-
-#[allow(dead_code)]
-pub(crate) enum AppEvent {
-    /// Terminal input. Only the interactive frontend produces or consumes it,
-    /// so the variant disappears when the binary is built without a TUI.
-    #[cfg(feature = "tui")]
-    Tui(TuiEvent),
-    SubmitPrompt(String),
-    CancelActiveTurn,
-    ApprovalDecision(ApprovalDecision),
-    AnswerQuestion(QuestionAnswer),
-    UpdateDecision(UpdateDecision),
-    ClearSession,
-    ArchiveSession,
-    DeleteSession(SessionAction),
-    OpenOverlay(Overlay),
-    CloseOverlay,
-    NewSession,
-    ResumeSession(SessionAction),
-    ForkSession(SessionAction),
-    SelectSubagent(u32),
-    RequestDraw,
-    Exit,
 }
 
 #[allow(dead_code)]
@@ -93,79 +65,4 @@ pub(crate) enum AppCommand {
     ForkSession(SessionAction),
     SelectSubagent(u32),
     Exit,
-}
-
-pub(crate) struct AppEventSender {
-    sender: mpsc::UnboundedSender<AppEvent>,
-}
-
-impl AppEventSender {
-    pub(crate) fn channel() -> (Self, mpsc::UnboundedReceiver<AppEvent>) {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        (Self { sender }, receiver)
-    }
-
-    pub(crate) fn send(&self, event: AppEvent) -> Result<(), mpsc::error::SendError<AppEvent>> {
-        self.sender.send(event)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AppEvent, AppEventSender, ApprovalDecision, Overlay, QuestionAnswer, SessionAction,
-        UpdateDecision,
-    };
-
-    #[test]
-    fn approval_and_submit_events_preserve_payloads() {
-        let submit = AppEvent::SubmitPrompt("fix the parser".to_string());
-        let approval = AppEvent::ApprovalDecision(ApprovalDecision::Custom("once".to_string()));
-
-        assert!(matches!(submit, AppEvent::SubmitPrompt(prompt) if prompt == "fix the parser"));
-        assert!(matches!(
-            approval,
-            AppEvent::ApprovalDecision(ApprovalDecision::Custom(reason)) if reason == "once"
-        ));
-        let answer = AppEvent::AnswerQuestion(QuestionAnswer::Custom("later".to_string()));
-        assert!(matches!(
-            answer,
-            AppEvent::AnswerQuestion(QuestionAnswer::Custom(value)) if value == "later"
-        ));
-    }
-
-    #[test]
-    fn control_events_keep_their_distinct_meanings() {
-        assert!(matches!(
-            AppEvent::CancelActiveTurn,
-            AppEvent::CancelActiveTurn
-        ));
-        assert!(matches!(AppEvent::Exit, AppEvent::Exit));
-        assert!(matches!(
-            AppEvent::UpdateDecision(UpdateDecision::UpdateNow),
-            AppEvent::UpdateDecision(UpdateDecision::UpdateNow)
-        ));
-        assert!(matches!(
-            AppEvent::OpenOverlay(Overlay::History),
-            AppEvent::OpenOverlay(Overlay::History)
-        ));
-        assert!(matches!(
-            AppEvent::ResumeSession(SessionAction::Latest),
-            AppEvent::ResumeSession(SessionAction::Latest)
-        ));
-        assert!(matches!(
-            AppEvent::DeleteSession(SessionAction::Id("session-1".to_owned())),
-            AppEvent::DeleteSession(SessionAction::Id(id)) if id == "session-1"
-        ));
-    }
-
-    #[tokio::test]
-    async fn sender_round_trips_typed_events_without_exposing_channels() {
-        let (sender, mut receiver) = AppEventSender::channel();
-        sender
-            .send(AppEvent::RequestDraw)
-            .expect("event receiver is still open");
-
-        assert!(matches!(receiver.recv().await, Some(AppEvent::RequestDraw)));
-    }
 }

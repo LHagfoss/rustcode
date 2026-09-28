@@ -15,14 +15,14 @@ use tokio_util::sync::CancellationToken;
 /// newtype keeps that wire detail out of controller code and makes accidental
 /// mixing with unrelated integers harder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct SubagentId(u32);
+pub struct SubagentId(u32);
 
 impl SubagentId {
-    pub(crate) fn from_raw(id: u32) -> Self {
+    pub fn from_raw(id: u32) -> Self {
         Self(id)
     }
 
-    pub(crate) fn raw(self) -> u32 {
+    pub fn raw(self) -> u32 {
         self.0
     }
 }
@@ -39,7 +39,7 @@ pub(crate) struct SubagentContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SubagentCompletion {
+pub struct SubagentCompletion {
     pub(crate) id: SubagentId,
     pub(crate) status: SubAgentStatus,
     pub(crate) output: String,
@@ -66,12 +66,12 @@ struct SupervisorInner {
 }
 
 #[derive(Clone)]
-pub(crate) struct SubagentSupervisor {
+pub struct SubagentSupervisor {
     inner: Arc<SupervisorInner>,
 }
 
 impl SubagentSupervisor {
-    pub(crate) fn new(concurrency_limit: usize) -> Self {
+    pub fn new(concurrency_limit: usize) -> Self {
         Self::with_result_limits(concurrency_limit, 64, 8 * 1024)
     }
 
@@ -96,7 +96,7 @@ impl SubagentSupervisor {
     }
 
     #[cfg(test)]
-    pub(crate) fn spawn<F>(
+    pub fn spawn<F>(
         &self,
         id: SubagentId,
         parent_cancel: CancellationToken,
@@ -277,7 +277,7 @@ impl SubagentSupervisor {
         Ok(())
     }
 
-    pub(crate) fn shutdown(&self) {
+    pub fn shutdown(&self) {
         let active = {
             let mut state = self
                 .inner
@@ -322,7 +322,7 @@ impl SubagentSupervisor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SubagentError {
+pub enum SubagentError {
     MissingId(SubagentId),
     CannotSendToTerminal(SubagentId),
     AlreadyRunning(SubagentId),
@@ -343,10 +343,10 @@ impl fmt::Display for SubagentError {
 impl std::error::Error for SubagentError {}
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct SubagentController;
+pub struct SubagentController;
 
 impl SubagentController {
-    pub(crate) fn spawn(
+    pub fn spawn(
         &self,
         state: &mut AppState,
         task: impl Into<String>,
@@ -446,7 +446,7 @@ impl SubagentController {
         Ok(())
     }
 
-    pub(crate) fn select(&self, state: &mut AppState, id: SubagentId) -> Result<(), SubagentError> {
+    pub fn select(&self, state: &mut AppState, id: SubagentId) -> Result<(), SubagentError> {
         if !state.subagents.iter().any(|agent| agent.id == id.raw()) {
             return Err(SubagentError::MissingId(id));
         }
@@ -455,7 +455,7 @@ impl SubagentController {
         Ok(())
     }
 
-    pub(crate) fn select_root(&self, state: &mut AppState) {
+    pub fn select_root(&self, state: &mut AppState) {
         state.selected_subagent_id = None;
         state.request_redraw();
     }

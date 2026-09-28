@@ -1853,6 +1853,7 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 mod session;
+pub use session::session_title;
 pub use session::*;
 
 #[cfg(test)]

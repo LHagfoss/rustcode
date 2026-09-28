@@ -42,9 +42,8 @@ pub(crate) use schema::native_tools_schema_for_context_with_sticky_at;
 pub(crate) use schema::{
     MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
     ToolSurface, agent_tool_count, append_tool_response_limit, append_tool_response_policy,
-    mcp_tool_display_name, mcp_tool_read_only_hint,
-    native_tools_schema_for_context_with_sticky_at_and_reserved_servers, textual_tool_surface,
-    tool_schema_phase, tool_system_prompt_for_policy,
+    mcp_tool_read_only_hint, native_tools_schema_for_context_with_sticky_at_and_reserved_servers,
+    textual_tool_surface, tool_schema_phase, tool_system_prompt_for_policy,
 };
 
 #[cfg(test)]
@@ -70,14 +69,17 @@ mod tests;
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
+pub use exec::background_task_manager;
+pub use exec::stop_background_tasks;
 pub(crate) use exec::{
     CommandProgressCallback, abort_background_starts, approved_command_prefix_covers_call,
-    background_task_manager, command_confirmation_preview, command_requires_confirmation,
-    denied_command_prefix_covers_call, persisted_approved_command_prefix, release_background_start,
+    command_confirmation_preview, command_requires_confirmation, denied_command_prefix_covers_call,
+    persisted_approved_command_prefix, release_background_start,
     rememberable_command_forbid_prefix_for_call, rememberable_command_prefix_for_call,
     run_command_output_with_progress_cancellable_for_call_and_workspace,
-    run_command_output_with_workspace_for_call, stop_background_tasks, task_event_to_tool_output,
+    run_command_output_with_workspace_for_call, task_event_to_tool_output,
 };
+pub use schema::mcp_tool_display_name;
 
 pub(crate) use filesystem::edit_target_and_replacement;
 pub(crate) use misc::search_web_async;
@@ -242,7 +244,7 @@ pub fn filter_tools_by_query(query: &str, limit: usize) -> Vec<&'static str> {
 /// Authoritative facts returned by a tool invocation alongside its display
 /// text. Consumers must not reconstruct these fields from `content`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolExecutionOutput {
+pub struct ToolExecutionOutput {
     pub(crate) content: String,
     pub(crate) success: bool,
     pub(crate) pending: bool,
@@ -753,14 +755,14 @@ fn validate_value_against_schema(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct BackgroundTaskSnapshot {
+pub struct BackgroundTaskSnapshot {
     pub id: String,
     pub command: String,
     pub start_time: Instant,
     pub child_pid: Option<u32>,
 }
 
-pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot> {
+pub fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot> {
     background_task_manager()
         .list(session_id)
         .into_iter()
@@ -778,7 +780,7 @@ pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskS
         .collect()
 }
 
-pub(crate) fn background_command_label(command: &str, max_chars: usize) -> String {
+pub fn background_command_label(command: &str, max_chars: usize) -> String {
     let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
         return normalized;
@@ -805,7 +807,7 @@ pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> String {
     format!("{}…\n[output truncated to {max_bytes} bytes]", &text[..end])
 }
 
-pub(crate) fn has_background_tasks(session_id: &str) -> bool {
+pub fn has_background_tasks(session_id: &str) -> bool {
     background_task_manager().has_running(session_id)
 }
 
@@ -1001,7 +1003,7 @@ pub enum AuthorizationDecision {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ShellAssessment {
+pub struct ShellAssessment {
     pub(crate) cache_key: String,
     pub(crate) call_signature: String,
     pub(crate) local_authorization: AuthorizationDecision,

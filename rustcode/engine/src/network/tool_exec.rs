@@ -1568,7 +1568,7 @@ mod cancellation_tests {
         let (first_run, mut first_cancellation) = run(Arc::clone(&state));
         let first_id = wait_for_snapshot(&state).await;
         assert!(first_id.starts_with("controller:"));
-        let approved = crate::app::runtime::apply_approval_decision_for_batch(
+        let approved = crate::controller::apply_approval_decision_for_batch(
             &state,
             &mut first_cancellation,
             &first_id,
@@ -1597,7 +1597,7 @@ mod cancellation_tests {
             second_id,
             "snapshots must expose the final token installed with the batch"
         );
-        let approved = crate::app::runtime::apply_approval_decision_for_batch(
+        let approved = crate::controller::apply_approval_decision_for_batch(
             &state,
             &mut second_cancellation,
             &second_id,

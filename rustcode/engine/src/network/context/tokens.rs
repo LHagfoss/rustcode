@@ -100,7 +100,7 @@ pub fn estimate_tool_schema_tokens(tool_schemas: &[serde_json::Value]) -> usize 
 /// Estimate the provider-visible cost of a persisted chat message. Native
 /// tool calls are stored outside `content`, so counting only the prose would
 /// let large function arguments bypass the history budget.
-pub(crate) fn estimate_message_tokens(message: &ChatMessage) -> usize {
+pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
     let tool_calls = if message.tool_calls.is_empty() {
         0
     } else {

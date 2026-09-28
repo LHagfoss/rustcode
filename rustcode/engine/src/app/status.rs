@@ -2,7 +2,7 @@ use crate::app::state::{AppState, AppStatus, LiveToolCall, StreamTracker, TokenU
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub(crate) fn should_notify_response_finished(
+pub fn should_notify_response_finished(
     response_just_finished: bool,
     terminal_focused: bool,
 ) -> bool {
@@ -10,7 +10,7 @@ pub(crate) fn should_notify_response_finished(
 }
 
 #[allow(dead_code)]
-pub(crate) struct StatusState<'a> {
+pub struct StatusState<'a> {
     status: &'a mut AppStatus,
     response_time: &'a mut Option<Duration>,
     generation_start_time: &'a mut Option<Instant>,
@@ -24,7 +24,7 @@ pub(crate) struct StatusState<'a> {
 }
 
 impl<'a> StatusState<'a> {
-    pub(crate) fn new(state: &'a mut AppState) -> Self {
+    pub fn new(state: &'a mut AppState) -> Self {
         Self {
             status: &mut state.status,
             response_time: &mut state.response_time,
@@ -39,7 +39,7 @@ impl<'a> StatusState<'a> {
         }
     }
 
-    pub(crate) fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         *self.status != AppStatus::Idle
     }
 
@@ -60,7 +60,7 @@ impl<'a> StatusState<'a> {
 }
 
 impl AppState {
-    pub(crate) fn status_state(&mut self) -> StatusState<'_> {
+    pub fn status_state(&mut self) -> StatusState<'_> {
         StatusState::new(self)
     }
 }

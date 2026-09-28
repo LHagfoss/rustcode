@@ -1,7 +1,7 @@
 use crate::app::state::{AppState, DraftSubmitMode};
 use crate::app::suggestion::SuggestionCycle;
 
-pub(crate) struct ComposerState<'a> {
+pub struct ComposerState<'a> {
     input_buffer: &'a mut String,
     cursor_position: &'a mut usize,
     input_history: &'a mut Vec<String>,
@@ -15,7 +15,7 @@ pub(crate) struct ComposerState<'a> {
 }
 
 impl<'a> ComposerState<'a> {
-    pub(crate) fn new(state: &'a mut AppState) -> Self {
+    pub fn new(state: &'a mut AppState) -> Self {
         Self {
             input_buffer: &mut state.input_buffer,
             cursor_position: &mut state.cursor_position,
@@ -36,7 +36,7 @@ impl<'a> ComposerState<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn replace_input(&mut self, input: impl Into<String>) {
+    pub fn replace_input(&mut self, input: impl Into<String>) {
         *self.input_buffer = input.into();
         *self.cursor_position = self.input_buffer.len();
         *self.history_index = None;
@@ -47,7 +47,7 @@ impl<'a> ComposerState<'a> {
         self.suggestion_cycle.reset();
     }
 
-    pub(crate) fn pop_queued_prompt(&mut self) -> bool {
+    pub fn pop_queued_prompt(&mut self) -> bool {
         let Some(pos) = self
             .pending_queue
             .iter()
@@ -65,7 +65,7 @@ impl<'a> ComposerState<'a> {
         true
     }
 
-    pub(crate) fn history_up(&mut self) {
+    pub fn history_up(&mut self) {
         if self.input_history.is_empty() {
             return;
         }
@@ -84,7 +84,7 @@ impl<'a> ComposerState<'a> {
         *self.render_revision = self.render_revision.wrapping_add(1);
     }
 
-    pub(crate) fn history_down(&mut self) {
+    pub fn history_down(&mut self) {
         if self.input_history.is_empty() {
             return;
         }
@@ -106,7 +106,7 @@ impl<'a> ComposerState<'a> {
 }
 
 impl AppState {
-    pub(crate) fn composer(&mut self) -> ComposerState<'_> {
+    pub fn composer(&mut self) -> ComposerState<'_> {
         ComposerState::new(self)
     }
 }

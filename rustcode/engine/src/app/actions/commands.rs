@@ -19,7 +19,7 @@ fn ephemeral_status_class(content: &str) -> Option<&'static str> {
 /// Push an ephemeral status notice, replacing a previous notice of the same
 /// class instead of appending a near-duplicate system message. Unlike
 /// `set_notice`, repeated polls/toggles leave exactly one history entry.
-pub(crate) fn push_ephemeral_status(state: &mut AppState, text: String) {
+pub fn push_ephemeral_status(state: &mut AppState, text: String) {
     let class = ephemeral_status_class(&text);
     if class.is_some()
         && state.history.last().is_some_and(|last| {
@@ -134,7 +134,7 @@ fn looks_like_transcript_echo(content: &str) -> bool {
         || lower.contains("stderr:")
 }
 
-pub(crate) fn sanitize_recap_content(content: &str) -> String {
+pub fn sanitize_recap_content(content: &str) -> String {
     let compact = rustcode_core::paste::compact(content);
     rustcode_tool_protocol::text::strip_tool_call_syntax(
         &rustcode_tool_protocol::text::strip_think_blocks(&compact),
@@ -284,7 +284,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
     summarize_session_inner(state_arc, client, false, false).await;
 }
 
-pub(crate) async fn summarize_session_after_idle(
+pub async fn summarize_session_after_idle(
     state_arc: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
 ) {

@@ -1,50 +1,68 @@
 # Frontend seam allow-list (issue #1431).
 #
-# The TUI render layer (rustcode/engine/src/ui + inline_terminal.rs) may only
+# The TUI render layer (rustcode/tui/src/ui + inline_terminal.rs) may only
 # reference the keys below. Convergence = deleting entries from this file.
-# Keys are one or two path segments: `crate::tools` covers `use
-# crate::tools::{...}` brace imports, `crate::tools::parse_tool_call` covers
-# direct paths. Anything observed that is not listed fails CI.
+# Keys are one or two path segments: `rustcode::tools` covers brace imports,
+# `rustcode::tools::parse_tool_call` covers direct paths. Anything observed
+# that is not listed fails CI. The event loop (rustcode/tui/src/runtime) is
+# out of scope: it moves with the frontend and drives turns by design.
 
-# TUI-internal: the render layer talking to itself and its event loop.
+# TUI-internal: the frontend talking to itself (any depth collapses here).
 crate::ui
 crate::inline_terminal
-crate::app::runtime
+crate::runtime
+crate::run
+crate::cli
 
-# The seam: every frontend drives this (target state: ONLY this + internals).
-crate::controller
+# The seam: every frontend drives this (target state: ONLY this + leaves).
+rustcode::controller
+
+# Shared leaves (permanent): core crates any frontend may use.
+rustcode_core::activity
+rustcode_core::input
+rustcode_core::paste
+rustcode_core::status
+rustcode_core::update
+rustcode_tool_protocol::text
+rustcode_tool_protocol::parse_tool_call
+rustcode_tool_protocol::is_tool_call_start
+rustcode_tool_protocol::is_code_editing_tool
+rustcode_tool_protocol::find_closing_tool_fence
+rustcode_tool_protocol::resolve_tool_calls
 
 # --- Convergence targets. Each entry removed = one step toward #1431. ---
 # Shared state access (route through controller snapshots):
-crate::app
-crate::app::state
+rustcode::app
+rustcode::app::state
 # Live activity tracking (classify_*, ActivityKind) moves with the tui crate.
-crate::app::activity
-crate::app::actions
-crate::app::suggestion
-crate::app::get_completion_len
-crate::app::list_project_file_paths
-crate::app::sanitize_recap_content
-crate::app::build_help_text
-crate::app::apply_autocomplete
+rustcode::app::activity
+rustcode::app::actions
+rustcode::app::suggestion
+rustcode::app::get_completion_len
+rustcode::app::list_project_file_paths
+rustcode::app::sanitize_recap_content
+rustcode::app::build_help_text
+rustcode::app::apply_autocomplete
 # Turn machinery (route through controller):
-crate::network
-crate::network::ui_adapter
-crate::network::compaction
+rustcode::network
+rustcode::network::ui_adapter
+rustcode::network::compaction
 # Background-task observation:
-crate::tools
-crate::tools::background_command_label
-crate::tools::stop_background_tasks
-crate::tools::spawn_background_task_for_test
-crate::tools::tool_system_prompt
-crate::tools::mcp_tool_display_name
-crate::tools::background_task_snapshots
+rustcode::tools
+rustcode::tools::background_command_label
+# Test-only direct manager use (tui test helper spawns real tasks).
+rustcode::tools::background_task_manager
+rustcode::tools::stop_background_tasks
+rustcode::tools::spawn_background_task_for_test
+rustcode::tools::tool_system_prompt
+rustcode::tools::mcp_tool_display_name
+rustcode::tools::background_task_snapshots
 # Config mutation:
-crate::config
-crate::config::save_entire_config
-crate::config::get_config_dir
+rustcode::config
+rustcode::config::save_entire_config
+rustcode::config::get_config_dir
 # Leaf utilities (likely permanent; revisit last):
 # current_version stays: env!("CARGO_PKG_VERSION") must resolve to the
 # shipping binary, not the core library.
-crate::update::current_version
-crate::skills::discover_skills
+rustcode::update::current_version
+rustcode::skills::discover_skills

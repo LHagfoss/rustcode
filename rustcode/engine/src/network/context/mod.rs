@@ -8,8 +8,9 @@ mod tokens;
 pub use budget::calculate_preflight_budget;
 #[allow(unused_imports)]
 pub use budget::{PreflightBudget, calculate_preflight_budget_for_projection};
+pub use compact::SUMMARY_MARKER;
+pub(crate) use compact::durable_compaction_record_message;
 pub(crate) use compact::valid_compaction_boundary;
-pub(crate) use compact::{SUMMARY_MARKER, durable_compaction_record_message};
 #[cfg(test)]
 pub use compact::{force_compact, maybe_compact, maybe_compact_with_local_policy};
 pub use compact::{force_compact_with_budget, maybe_compact_with_local_policy_and_usage};
@@ -25,7 +26,7 @@ pub use prune::{
     prune_duplicate_tool_results, prune_historical_reasoning, prune_historical_tool_outputs,
     prune_old_tool_outputs,
 };
-pub(crate) use tokens::estimate_message_tokens;
+pub use tokens::estimate_message_tokens;
 pub use tokens::{estimate_tokens, estimate_tool_schema_tokens};
 
 #[cfg(test)]

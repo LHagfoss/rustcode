@@ -1,14 +1,14 @@
 /// Accumulates text emitted by a provider stream while the network layer
 /// processes the stream events.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum FinalAnswerBoundary {
+pub enum FinalAnswerBoundary {
     #[default]
     None,
     ReasoningClosed,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ProviderFinalAnswerState {
+pub enum ProviderFinalAnswerState {
     #[default]
     None,
     Terminal,
@@ -18,7 +18,7 @@ pub(crate) enum ProviderFinalAnswerState {
 /// when the provider failed. This is deliberately not a tool-call envelope:
 /// it can never be dispatched or rendered as a completed provider message.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NativeToolCallCheckpoint {
+pub struct NativeToolCallCheckpoint {
     pub index: Option<usize>,
     pub call_id: Option<String>,
     pub tool_name: String,
@@ -29,7 +29,7 @@ pub(crate) struct NativeToolCallCheckpoint {
     pub diagnostic: String,
 }
 
-pub(crate) struct StreamBuffer {
+pub struct StreamBuffer {
     pub content: String,
     /// Classification of a successful stream termination. Failures are
     /// carried by `StreamFailure` and classified by the turn layer.

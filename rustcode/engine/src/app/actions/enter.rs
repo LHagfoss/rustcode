@@ -4,17 +4,19 @@ pub async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     cancel_token: &mut tokio_util::sync::CancellationToken,
+    theme_names: &dyn Fn() -> Vec<String>,
 ) -> bool {
-    handle_enter_inner(state, client, cancel_token, None).await
+    handle_enter_inner(state, client, cancel_token, None, theme_names).await
 }
 
-pub(crate) async fn handle_enter_with_ui_events(
+pub async fn handle_enter_with_ui_events(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     cancel_token: &mut tokio_util::sync::CancellationToken,
     ui_events: crate::network::ui_adapter::AgentUiEventSender,
+    theme_names: &dyn Fn() -> Vec<String>,
 ) -> bool {
-    handle_enter_inner(state, client, cancel_token, Some(ui_events)).await
+    handle_enter_inner(state, client, cancel_token, Some(ui_events), theme_names).await
 }
 
 async fn handle_enter_inner(
@@ -22,6 +24,7 @@ async fn handle_enter_inner(
     client: &reqwest::Client,
     cancel_token: &mut tokio_util::sync::CancellationToken,
     ui_events: Option<crate::network::ui_adapter::AgentUiEventSender>,
+    theme_names: &dyn Fn() -> Vec<String>,
 ) -> bool {
     let mut s = state.lock().await;
     s.reset_suggestion_cycle();
@@ -474,17 +477,17 @@ async fn handle_enter_inner(
                     s.history.push(ChatMessage::new("system", label));
                 }
             }
-            // Theme browsing renders a picker, so it only exists in builds
-            // that ship the terminal UI.
-            #[cfg(feature = "tui")]
+            // Theme browsing renders a picker in the terminal frontend, which
+            // supplies the available names (reading theme files is a UI
+            // concern; this match only needs the names to pick and persist).
             "/theme" => {
-                let themes = crate::ui::theme::load_available_themes();
+                let themes: Vec<String> = theme_names();
                 match tokens.get(1) {
                     None => {
                         s.theme_picker_initial = s.config.theme.clone();
                         s.theme_picker_index = themes
                             .iter()
-                            .position(|t| t.name.eq_ignore_ascii_case(&s.config.theme))
+                            .position(|t| t.eq_ignore_ascii_case(&s.config.theme))
                             .unwrap_or(0);
                         s.show_theme_picker = true;
                     }
@@ -492,21 +495,19 @@ async fn handle_enter_inner(
                         if let Some((idx, theme)) = themes
                             .iter()
                             .enumerate()
-                            .find(|(_, t)| t.name.eq_ignore_ascii_case(theme_name))
+                            .find(|(_, t)| t.eq_ignore_ascii_case(theme_name))
                         {
-                            s.config.theme = theme.name.to_string();
+                            s.config.theme = theme.clone();
                             s.theme_picker_index = idx;
                             crate::config::save_entire_config(&s.config);
-                            s.set_notice(format!("Theme changed to '{}'", theme.name));
+                            s.set_notice(format!("Theme changed to '{theme}'"));
                         } else {
-                            let names: Vec<String> =
-                                themes.iter().map(|t| t.name.clone()).collect();
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
                                     "Unknown theme '{}'. Available themes: {}.",
                                     theme_name,
-                                    names.join(", ")
+                                    themes.join(", ")
                                 ),
                             ));
                         }
@@ -1123,7 +1124,7 @@ async fn handle_enter_inner(
         let (sender, _receiver) = crate::network::ui_adapter::AgentUiEventSender::channel();
         sender
     });
-    crate::app::runtime::spawn_observed_orchestrator(
+    crate::controller::spawn_observed_orchestrator(
         client_clone,
         state_clone,
         token_clone,
