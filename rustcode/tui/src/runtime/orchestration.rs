@@ -253,6 +253,7 @@ impl AppRuntime {
             let (response_active, background_redraw) = {
                 let mut s = app_state.lock().await;
                 let background_active = rustcode::tools::has_background_tasks(&s.active_session_id);
+                s.clear_expired_transient_notice();
                 (
                     s.status_state().is_active() || background_active,
                     s.take_redraw_request(),
@@ -352,6 +353,7 @@ impl AppRuntime {
                     client: &client,
                     current_cancel_token: &mut current_cancel_token,
                     needs_redraw: &mut needs_redraw,
+                    frame_requester: &frame_requester,
                     terminal_focused: &mut terminal_focused,
                     transcript_state: &mut transcript_state,
                     app_event_sender: &app_event_sender,

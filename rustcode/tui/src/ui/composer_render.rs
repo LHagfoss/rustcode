@@ -721,6 +721,11 @@ pub(super) fn render_composer_footer(
             "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
         )
+    } else if let Some(notice) = state.transient_notice() {
+        (
+            format!("  {notice}"),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        )
     } else {
         let mut metadata = Vec::new();
         if let Some(agent) = state.selected_subagent() {

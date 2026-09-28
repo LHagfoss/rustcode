@@ -457,6 +457,65 @@ fn transcript_scroll_moves_chat_without_changing_the_composer() {
 }
 
 #[test]
+fn transient_notice_appears_below_input_without_entering_chat_history() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.set_transient_notice("YOLO mode enabled");
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(rendered.contains("YOLO mode enabled"));
+    assert!(state.history.is_empty());
+}
+
+#[test]
+fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
+    use rustcode::app::{ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"echo ready"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "list_emails".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+        ]));
+    for (id, name) in [("call-1", "run_command"), ("call-2", "list_emails")] {
+        state.history.push(
+            ChatMessage::new("tool", format!("{name}: ok"))
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: name.to_owned(),
+                    success: true,
+                    ..Default::default()
+                }),
+        );
+    }
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    let rendered =
+        super::render_visible_conversation_with_transcript(&snapshot, 80, 20, &mut transcript)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line.contains("• Ran"))
+            .count(),
+        1
+    );
+    assert!(rendered.iter().any(|line| line.contains("Bash echo ready")));
+    assert!(rendered.iter().any(|line| line.contains("ListEmails")));
+}
+
+#[test]
 fn active_tool_does_not_repeat_a_committed_thought() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = AppState::new();
@@ -883,6 +942,26 @@ fn welcome_banner_pads_above_session_and_groups_session_with_model() {
         session + 1,
         "session and model must be adjacent: {rendered:?}"
     );
+}
+
+#[test]
+fn welcome_wordmark_has_room_above_and_to_its_left() {
+    let state = AppState::new();
+    let rendered = super::build_claude_startup_banner(&state, 100, 28)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let first_wordmark = rendered
+        .iter()
+        .position(|line| line.contains('█'))
+        .expect("wordmark is visible");
+    assert!(first_wordmark >= 3);
+    assert!(
+        rendered[1..first_wordmark]
+            .iter()
+            .all(|line| line.trim_matches(['│', ' ']).is_empty())
+    );
+    assert!(rendered[first_wordmark].starts_with("│    "));
 }
 
 #[test]
@@ -3034,13 +3113,13 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
     assert!(!super::is_hidden_system_notice(
         "Notice: background task finished"
     ));
-    assert!(!super::is_hidden_system_notice(
+    assert!(super::is_hidden_system_notice(
         "[harness: turn stopped — cancelled]"
     ));
 }
 
 #[test]
-fn deferred_tool_batch_notice_renders_as_a_compact_warning() {
+fn deferred_tool_batch_notice_stays_out_of_the_chat() {
     let mut state = rustcode::app::AppState::new();
     state.history.push(rustcode::app::ChatMessage::new(
         "system",
@@ -3052,17 +3131,26 @@ fn deferred_tool_batch_notice_renders_as_a_compact_warning() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("[Warning, check debug for more info]")),
-        "rendered: {rendered:?}"
-    );
-    assert!(rendered.iter().all(|line| !line.contains("call_123")));
+    assert!(rendered.is_empty(), "rendered: {rendered:?}");
 }
 
 #[test]
-fn cancelled_turn_renders_as_a_human_status_separator() {
+fn session_command_uses_the_bordered_status_panel() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new(
+        "system",
+        "Session ID: session-123\nActive model: deepseek-v4.1-flash",
+    ));
+    let rendered = super::render_committed_history_block(&state, 0, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(rendered[0].contains(">_ RustCode · Session"));
+    assert!(rendered.iter().any(|line| line.contains("session-123")));
+}
+
+#[test]
+fn cancelled_turn_status_stays_out_of_the_chat() {
     let mut state = rustcode::app::AppState::new();
     state.history.push(rustcode::app::ChatMessage::new(
         "system",
@@ -3074,13 +3162,11 @@ fn cancelled_turn_renders_as_a_human_status_separator() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("User Stopped")));
-    assert!(!rendered.iter().any(|line| line.contains('✕')));
-    assert!(!rendered.iter().any(|line| line.contains("[harness:")));
+    assert!(rendered.is_empty());
 }
 
 #[test]
-fn yolo_toggle_renders_as_a_human_status_separator() {
+fn old_yolo_status_stays_out_of_the_chat() {
     let mut state = rustcode::app::AppState::new();
     state.history.push(rustcode::app::ChatMessage::new(
         "system",
@@ -3092,12 +3178,7 @@ fn yolo_toggle_renders_as_a_human_status_separator() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("YOLO mode enabled"))
-    );
-    assert!(!rendered.iter().any(|line| line == "  YOLO mode enabled"));
+    assert!(rendered.is_empty());
 }
 
 #[test]
@@ -3868,6 +3949,10 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
     use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
+    state.history.push(ChatMessage::new(
+        "assistant",
+        "The previous answer stays visible.",
+    ));
     state.status = AppStatus::AwaitingQuestion;
     state.pending_question = Some(rustcode::app::PendingQuestion::new(
         "Choose an option.".to_owned(),
@@ -3885,6 +3970,7 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
         .collect::<String>();
 
     assert!(rendered.contains("Question"));
+    assert!(rendered.contains("The previous answer stays visible."));
     assert!(
         !rendered.contains("unanswered"),
         "single questions show no chain chrome"

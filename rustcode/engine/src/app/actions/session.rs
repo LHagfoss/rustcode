@@ -129,7 +129,7 @@ pub fn toggle_auto_confirm(s: &mut AppState) {
     } else {
         "disabled"
     };
-    s.set_notice(format!("YOLO mode {status}"));
+    s.set_transient_notice(format!("YOLO mode {status}"));
 }
 
 pub fn start_new_session(s: &mut AppState) {

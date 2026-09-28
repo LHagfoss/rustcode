@@ -442,6 +442,83 @@ fn mcp_schema_selection_avoids_arbitrary_zero_relevance_fallback() {
 }
 
 #[test]
+fn mcp_catalog_result_does_not_make_every_listed_tool_previously_used() {
+    let mut tools = (0..MAX_MCP_NATIVE_SCHEMAS)
+        .map(|index| {
+            (
+                format!("discord_tool_{index:02}"),
+                "Unrelated Discord operation".to_string(),
+                serde_json::json!({"type":"object"}),
+            )
+        })
+        .collect::<Vec<_>>();
+    tools.push((
+        "read_email".to_string(),
+        "Read an email by uid".to_string(),
+        serde_json::json!({"type":"object"}),
+    ));
+    let catalog = tools
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Read the newest email"}),
+        serde_json::json!({"role":"tool","content":catalog}),
+    ];
+    let (selected, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert!(selected.contains(&MAX_MCP_NATIVE_SCHEMAS));
+    assert_eq!(stats.previously_used, 0);
+}
+
+#[test]
+fn mcp_server_suffix_alias_pins_the_requested_server() {
+    let tools = vec![
+        (
+            "mcp__mail__read_email".to_string(),
+            "Read an email".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+        (
+            "mcp__mail__search_emails".to_string(),
+            "Search email".to_string(),
+            serde_json::json!({"type":"object"}),
+        ),
+    ];
+    let messages = vec![serde_json::json!({
+        "role":"user",
+        "content":"Check whether mail_mcp works"
+    })];
+    let (selected, _) = select_mcp_tools_for_context(&tools, &messages);
+    assert_eq!(selected, vec![0, 1]);
+}
+
+#[test]
+fn runtime_context_server_names_do_not_displace_requested_mail_tools() {
+    let mut tools = (0..MAX_MCP_NATIVE_SCHEMAS)
+        .map(|index| {
+            (
+                format!("mcp__discord__tool_{index:02}"),
+                "Unrelated operation".to_string(),
+                serde_json::json!({"type":"object"}),
+            )
+        })
+        .collect::<Vec<_>>();
+    tools.push((
+        "mcp__mail__read_email".to_string(),
+        "Read an email".to_string(),
+        serde_json::json!({"type":"object"}),
+    ));
+    let messages = vec![serde_json::json!({
+        "role":"user",
+        "content":"Check mail_mcp reads\n<rustcode_context>\nConnected servers: discord, mail\n</rustcode_context>"
+    })];
+    let (selected, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert_eq!(selected, vec![MAX_MCP_NATIVE_SCHEMAS]);
+    assert_eq!(stats.selected_names, vec!["mcp__mail__read_email"]);
+}
+
+#[test]
 fn mcp_schema_selection_enforces_a_measured_schema_byte_budget() {
     let large_description = "x".repeat(MAX_MCP_NATIVE_SCHEMA_BYTES);
     let tools = vec![

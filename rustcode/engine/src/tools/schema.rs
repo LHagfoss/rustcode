@@ -1002,6 +1002,7 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
             continue;
         }
         let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+        let content = content.split("<rustcode_context>").next().unwrap_or("");
         for token in content
             .split(|ch: char| !ch.is_ascii_alphanumeric())
             .map(str::to_ascii_lowercase)
@@ -1030,26 +1031,22 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
 }
 
 fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
-    let needle = name.to_ascii_lowercase();
     messages.iter().any(|message| {
-        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array)
-            && calls.iter().any(|call| {
-                call.get("function")
-                    .and_then(|function| function.get("name"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
-                    || call
-                        .get("name")
+        message
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|calls| {
+                calls.iter().any(|call| {
+                    call.get("function")
+                        .and_then(|function| function.get("name"))
                         .and_then(Value::as_str)
                         .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+                        || call
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+                })
             })
-        {
-            return true;
-        }
-        message
-            .get("content")
-            .and_then(Value::as_str)
-            .is_some_and(|content| content.to_ascii_lowercase().contains(&needle))
     })
 }
 
@@ -1062,6 +1059,9 @@ fn user_message_mentions_name(messages: &[Value], name: &str) -> bool {
         let content = message
             .get("content")
             .and_then(Value::as_str)
+            .unwrap_or("")
+            .split("<rustcode_context>")
+            .next()
             .unwrap_or("")
             .to_ascii_lowercase();
         let mut offset = 0;
@@ -1091,6 +1091,11 @@ fn canonical_mcp_server(name: &str) -> Option<&str> {
         .map(|(server, _)| server)
 }
 
+fn user_mentions_mcp_server(messages: &[Value], server: &str) -> bool {
+    user_message_mentions_name(messages, server)
+        || user_message_mentions_name(messages, &format!("{server}_mcp"))
+}
+
 /// Find MCP schemas named by the user, including every tool from a named MCP
 /// server. This intentionally reads user messages only: assistant/tool output
 /// can describe a tool without being an instruction to make its whole server
@@ -1103,7 +1108,7 @@ fn explicitly_requested_mcp_tool_names(
     for (name, _, _) in tools {
         if user_message_mentions_name(messages, name)
             || canonical_mcp_server(name)
-                .is_some_and(|server| user_message_mentions_name(messages, server))
+                .is_some_and(|server| user_mentions_mcp_server(messages, server))
         {
             requested.insert(name.clone());
         }
@@ -1115,7 +1120,7 @@ fn explicitly_requested_mcp_tool_names(
         let mut clients = registry.values().cloned().collect::<Vec<_>>();
         clients.sort_by(|left, right| left.name.cmp(&right.name));
         for client in &clients {
-            let server_requested = user_message_mentions_name(messages, &client.name)
+            let server_requested = user_mentions_mcp_server(messages, &client.name)
                 || user_message_mentions_name(
                     messages,
                     &client
@@ -1164,6 +1169,9 @@ fn mcp_tool_relevance(
             || (candidate.len() > 3 && candidate.strip_suffix('s') == Some(term))
             || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
     }
+    // `mcp__` is a transport prefix, not evidence that every MCP tool is
+    // relevant whenever a user names an MCP server.
+    let name = name.strip_prefix("mcp__").unwrap_or(name);
     let name_terms: Vec<String> = name
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|term| !term.is_empty())

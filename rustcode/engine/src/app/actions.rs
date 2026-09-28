@@ -41,6 +41,8 @@ pub async fn handle_escape(
 ) {
     let mut s = state.lock().await;
     let active_session_id = s.active_session_id.clone();
+    let had_active_turn = s.status == AppStatus::Streaming || s.orchestrator_running;
+    let had_draft = !s.input_buffer.is_empty();
     s.promote_pending_steers_to_queue(&active_session_id);
     s.clear_ctrl_c_exit_arming();
     s.reset_suggestion_cycle();
@@ -67,6 +69,11 @@ pub async fn handle_escape(
         }
     }
     s.background_turn_context = None;
+    if had_active_turn {
+        s.set_transient_notice("Turn stopped");
+    } else if had_draft {
+        s.set_transient_notice("Draft cleared");
+    }
 }
 
 /// Arm the exit confirmation on the first Ctrl+C and exit on the second.
