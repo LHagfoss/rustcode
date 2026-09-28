@@ -1367,10 +1367,16 @@ pub(super) async fn handle_app_event(
                         && matches!(key.code, KeyCode::Up | KeyCode::Down))
                 {
                     let page = terminal_runtime.terminal().area().height.saturating_sub(4) as usize;
-                    if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
-                        transcript_state.scroll_up(page.max(1));
+                    // Keep every intermediate row visible while a mouse range is growing.
+                    let page = if transcript_state.selection.is_dragging() {
+                        1
                     } else {
-                        transcript_state.scroll_down(page.max(1));
+                        page.max(1)
+                    };
+                    if matches!(key.code, KeyCode::PageUp | KeyCode::Up) {
+                        transcript_state.scroll_up(page);
+                    } else {
+                        transcript_state.scroll_down(page);
                     }
                     return Ok(InputFlow::ContinueIteration);
                 }
@@ -1695,8 +1701,14 @@ pub(super) async fn handle_app_event(
             }
             TuiEvent::Mouse(mouse) => {
                 match mouse.kind {
-                    event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
-                    event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
+                    event::MouseEventKind::ScrollUp => {
+                        transcript_state.selection.pause_edge_scroll();
+                        transcript_state.scroll_up(1);
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        transcript_state.selection.pause_edge_scroll();
+                        transcript_state.scroll_down(1);
+                    }
                     _ => {
                         if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left)
                             && mouse.modifiers.is_empty()
@@ -1728,7 +1740,24 @@ pub(super) async fn handle_app_event(
                                 return Ok(InputFlow::ContinueIteration);
                             }
                         }
-                        if let Some(text) = transcript_state.selection.mouse(mouse) {
+                        let selected = if mouse.kind
+                            == event::MouseEventKind::Down(event::MouseButton::Left)
+                        {
+                            let snapshot = {
+                                let state = app_state.lock().await;
+                                ui::render_snapshot::render_snapshot(&state)
+                            };
+                            let scroll_rows = transcript_state.scroll_rows();
+                            transcript_state.selection.begin_with_snapshot(
+                                mouse,
+                                snapshot,
+                                scroll_rows,
+                            );
+                            None
+                        } else {
+                            transcript_state.selection.mouse(mouse)
+                        };
+                        if let Some(text) = selected {
                             rustcode::clipboard::copy_to_clipboard(&text);
                         }
                         frame_requester.schedule_frame();
@@ -1795,6 +1824,20 @@ pub(super) async fn handle_app_event(
                 *needs_redraw = true;
             }
             TuiEvent::Draw => {
+                let before = transcript_state.scroll_rows();
+                if let Some(direction) = transcript_state.selection.edge_scroll_direction(before) {
+                    transcript_state
+                        .selection
+                        .mark_edge_attempt(direction, before);
+                    if direction < 0 {
+                        transcript_state.scroll_up(1);
+                    } else {
+                        transcript_state.scroll_down(1);
+                    }
+                    if transcript_state.scroll_rows() != before {
+                        frame_requester.schedule_frame();
+                    }
+                }
                 *needs_redraw = true;
             }
         },

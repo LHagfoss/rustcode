@@ -224,10 +224,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
             }
             (block, first)
         } else {
-            (
-                render_committed_history_block_snapshot(state, last, width),
-                last,
-            )
+            (transcript.committed_block(state, last, width), last)
         };
         rows += block.len();
         blocks.push(block);
