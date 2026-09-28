@@ -370,10 +370,27 @@ fn content_bearing_inspection_status(
     content: &str,
 ) -> Option<bool> {
     let call = call?;
+    if !metadata.success || metadata.pending || content.trim().is_empty() {
+        return None;
+    }
+    // MCP reads do not carry the file-range inspection metadata emitted by
+    // source tools. Count only known read-only MCP results (or tools with an
+    // explicit readOnlyHint); a deferred call has success=false above.
+    let mail_read = matches!(
+        call.name.rsplit("__").next().unwrap_or(&call.name),
+        "list_emails" | "search_emails" | "read_email" | "list_attachments"
+    );
+    if metadata.inspection.is_none()
+        && matches!(
+            crate::tools::tool_safety(&call.name),
+            crate::tools::ToolSafety::Unknown
+        )
+        && (mail_read || crate::tools::is_read_only_call(call))
+    {
+        return Some(!incomplete_tool_result(metadata) && !metadata.payload_truncated);
+    }
     let inspection = metadata.inspection.as_ref()?;
-    if !metadata.success
-        || content.trim().is_empty()
-        || !loop_detect::read_returns_content(&call.name, &call.arguments)
+    if !loop_detect::read_returns_content(&call.name, &call.arguments)
         || inspection.fingerprint.trim().is_empty()
         || inspection.requested_path.is_none()
         || inspection.returned_path.is_none()
@@ -3061,6 +3078,53 @@ mod tests {
         assert_eq!(
             content_bearing_inspection_status(Some(&call), &metadata, "source"),
             None
+        );
+    }
+
+    #[test]
+    fn completed_read_only_tool_result_supports_headless_synthesis_without_source_metadata() {
+        let call = ToolCall {
+            name: "read_email".to_string(),
+            arguments: serde_json::json!({"uid": 56}),
+            call_id: None,
+        };
+        let mut metadata = ToolResultMetadata {
+            success: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "Subject: test\nBody: hello"),
+            Some(true),
+            "a successful read-only tool result should count without file inspection metadata"
+        );
+
+        metadata.success = false;
+        metadata.error_kind = Some(crate::tools::ToolErrorKind::Deferred);
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "intentionally deferred"),
+            None,
+            "a deferred call did not run and must not count as evidence"
+        );
+
+        metadata.success = true;
+        metadata.error_kind = None;
+        metadata.truncated = true;
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "partial email"),
+            Some(false),
+            "a truncated MCP result cannot support a complete synthesis"
+        );
+
+        let send = ToolCall {
+            name: "send_email".to_string(),
+            arguments: serde_json::json!({"to": "example@example.com"}),
+            call_id: None,
+        };
+        metadata.truncated = false;
+        assert_eq!(
+            content_bearing_inspection_status(Some(&send), &metadata, "sent"),
+            None,
+            "a successful external action is not read-only inspection evidence"
         );
     }
 
