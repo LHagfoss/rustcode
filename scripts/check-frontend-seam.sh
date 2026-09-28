@@ -51,7 +51,7 @@ trap 'rm -f -- "$observed" "$allowed" "$search_stderr"' EXIT INT TERM
 
 set +e
 grep -R -h -o -E --include='*.rs' 'crate::[A-Za-z_:]+|rustcode::[a-z_]+(::[a-z_]+)?|rustcode_[a-z_]+::[a-z_]+' "${paths[@]}" 2>"$search_stderr" \
-    | sed -E -e 's/^(crate::(ui|runtime|inline_terminal|run|cli))::.*/\1/' -e 's/^((crate::[a-z_]+|rustcode::[a-z_]+|rustcode_[a-z_]+)(::[a-z_]+)?).*/\1/' \
+    | sed -E -e 's/^(crate::(ui|runtime|inline_terminal|run|cli))::.*/\1/' -e 's/^rustcode::controller::.*/rustcode::controller/' -e 's/^((crate::[a-z_]+|rustcode::[a-z_]+|rustcode_[a-z_]+)(::[a-z_]+)?).*/\1/' \
     | sort -u >"$observed"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e

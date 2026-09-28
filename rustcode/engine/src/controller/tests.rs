@@ -1672,3 +1672,67 @@ async fn provider_error_is_reported_and_a_later_submit_can_run() {
     server.await.expect("mock provider server");
     handle.send(Command::Shutdown).expect("shutdown");
 }
+
+#[tokio::test]
+async fn stop_background_task_command_clears_session_tasks() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let session_id = started.session_id.expect("session id");
+
+    crate::tools::spawn_background_task_for_test(
+        "worker-stop-background-task",
+        &session_id,
+        "sleep 30",
+    )
+    .expect("spawn background task");
+    // Wait for Running: a task with a published PID cancels synchronously,
+    // so the command's refresh snapshot deterministically shows no tasks.
+    for _ in 0..100 {
+        if super::background_task_snapshots(&session_id)
+            .first()
+            .is_some_and(|task| task.child_pid.is_some())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    handle
+        .send(Command::StopBackgroundTask {
+            session_id: session_id.clone(),
+            task_id: None,
+        })
+        .expect("stop background tasks");
+    // Task Started events may emit snapshots ahead of the command refresh;
+    // drain until the session reports no tasks.
+    let cleared = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if let ControllerUpdate::Snapshot(snapshot) = event.update
+                && snapshot.session_id.as_deref() == Some(session_id.as_str())
+                && snapshot.background_tasks.is_empty()
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("stop snapshot timeout");
+    assert!(cleared);
+    assert!(
+        super::background_task_snapshots(&session_id).is_empty(),
+        "manager holds no tasks after stop"
+    );
+    handle.send(Command::Shutdown).expect("shutdown");
+}

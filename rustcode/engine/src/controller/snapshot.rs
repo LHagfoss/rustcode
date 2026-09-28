@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::app::{AppState, AppStatus};
 
-use super::{ApprovalChoice, ControllerError};
+use super::{ApprovalChoice, ControllerError, TaskDisplay};
 
 /// Commands a frontend can send to the session controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,13 @@ pub enum Command {
     Cancel,
     SetAutoApprove(bool),
     SelectModel(String),
+    /// Stop background tasks: just `task_id` when given, the whole
+    /// `session_id` otherwise. Idempotent — unknown ids stop nothing and
+    /// still refresh the snapshot.
+    StopBackgroundTask {
+        session_id: String,
+        task_id: Option<String>,
+    },
     AnswerQuestion(String),
     /// Legacy unbound decision. The controller rejects it because it cannot
     /// identify which pending batch the caller reviewed.
@@ -251,6 +258,8 @@ pub struct ControllerSnapshot {
     pub turn_active: bool,
     pub auto_approve: bool,
     pub pending_question: Option<QuestionPrompt>,
+    /// Live background tasks for the active session (issue #1439).
+    pub background_tasks: Vec<TaskDisplay>,
     /// Legacy presentation-only projection. It carries no authorization token.
     pub pending_approval: Option<ApprovalPrompt>,
     /// Exact batch-aware approval data for native frontends.
@@ -462,6 +471,7 @@ impl ControllerSnapshot {
                     descriptions: question.descriptions.clone(),
                     multiple: question.is_multi_select,
                 }),
+            background_tasks: super::tasks::background_task_snapshots(&state.active_session_id),
             pending_approval,
             pending_approval_batch,
         }
