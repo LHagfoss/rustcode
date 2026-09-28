@@ -1176,7 +1176,7 @@ pub(super) async fn handle_app_event(
                                         s.subagent_picker_index = 0;
                                     }
                                     "/skills" => {
-                                        let skills = rustcode::skills::discover_skills();
+                                        let skills = rustcode::controller::discover_skills();
                                         if skills.is_empty() {
                                             s.history.push(ChatMessage::new(
                                         "system",
