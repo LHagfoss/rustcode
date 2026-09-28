@@ -162,14 +162,33 @@ impl TranscriptState {
         if let Some(cell) = self.assistant.as_mut()
             && cell.source == source
             && cell.continuation == continuation
-            && !source.contains("<think>")
-            && !source.contains("</think>")
         {
-            // Timer metadata is invisible without a thought preview. Keep the
-            // rendered Markdown when a frame arrives with unchanged text.
+            let has_thought_preview = source.contains("<think>") || source.contains("</think>");
+            let metadata_changed = cell.response_time_ms != response_time_ms
+                || cell.thought_time_ms != thought_time_ms
+                || cell.thought_tokens != thought_tokens;
             cell.response_time_ms = response_time_ms;
             cell.thought_time_ms = thought_time_ms;
             cell.thought_tokens = thought_tokens;
+            if has_thought_preview && metadata_changed {
+                cell.cached_display.replace(None);
+                self.revision = self.revision.saturating_add(1);
+            }
+            return;
+        }
+        if let Some(cell) = self.assistant.as_mut()
+            && cell.generating
+            && cell.continuation == continuation
+            && source.len() > cell.source.len()
+            && source.starts_with(&cell.source)
+        {
+            cell.source.clear();
+            cell.source.push_str(source);
+            cell.response_time_ms = response_time_ms;
+            cell.thought_time_ms = thought_time_ms;
+            cell.thought_tokens = thought_tokens;
+            cell.cached_display.replace(None);
+            self.revision = self.revision.saturating_add(1);
             return;
         }
         let changed = self.assistant.as_ref().is_none_or(|cell| {
@@ -270,6 +289,7 @@ pub(super) struct AssistantMarkdownCell {
     generating: bool,
     pub(super) continuation: bool,
     cached_display: RefCell<Option<(u16, String, Vec<Line<'static>>)>>,
+    streaming_markdown: RefCell<Vec<super::markdown::StreamingMarkdownCache>>,
 }
 
 struct LiveToolCell {
@@ -300,6 +320,7 @@ impl AssistantMarkdownCell {
             generating: false,
             continuation: false,
             cached_display: RefCell::new(None),
+            streaming_markdown: RefCell::new(Vec::new()),
         }
     }
 
@@ -319,6 +340,7 @@ impl AssistantMarkdownCell {
             generating: true,
             continuation,
             cached_display: RefCell::new(None),
+            streaming_markdown: RefCell::new(Vec::new()),
         }
     }
 }
@@ -335,7 +357,8 @@ impl HistoryCell for AssistantMarkdownCell {
 
         let mut lines = Vec::new();
         let mut copy_clicks = Vec::new();
-        super::render_assistant_message(
+        let mut streaming_markdown = self.streaming_markdown.borrow_mut();
+        super::render_assistant_message_with_cache(
             &self.source,
             &mut lines,
             &mut copy_clicks,
@@ -349,6 +372,7 @@ impl HistoryCell for AssistantMarkdownCell {
                 show_picker: false,
                 last_copy_text: None,
             },
+            self.generating.then_some(&mut *streaming_markdown),
         );
         if self.continuation {
             super::demote_assistant_bullet(&mut lines);
@@ -666,7 +690,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
 #[cfg(test)]
 mod tests {
-    use super::{HistoryCell, TranscriptState};
+    use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
     use rustcode::app::state::{ChatMessage, History};
 
     #[test]
@@ -763,5 +787,185 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(second.iter().any(|line| line.to_string().contains("200ms")));
+    }
+
+    #[test]
+    fn completed_stream_blocks_are_not_reparsed_for_every_append() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        super::super::markdown::take_parsed_bytes();
+        let mut transcript = TranscriptState::default();
+        let mut source = String::new();
+        for index in 0..24 {
+            if !source.is_empty() {
+                source.push_str("\n\n");
+            }
+            source.push_str(&format!(
+                "Paragraph {index}: **stable Markdown** with enough text to cross a terminal row and a `code` span."
+            ));
+            transcript.set_assistant(&source, false, None, None, None);
+            transcript.assistant.as_ref().unwrap().display_lines(72);
+        }
+        let parsed_bytes = super::super::markdown::take_parsed_bytes();
+        assert!(
+            parsed_bytes < source.len() * 8,
+            "completed prefix was repeatedly parsed: {parsed_bytes} bytes for {} source bytes",
+            source.len()
+        );
+    }
+
+    #[test]
+    fn streamed_markdown_matches_full_render_after_each_append() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let cases: &[&[&str]] = &[
+            &[
+                "# Heading",
+                "# Heading\n\nFirst paragraph",
+                "# Heading\n\nFirst paragraph\n\nSecond **bold** paragraph",
+            ],
+            &[
+                "- first item",
+                "- first item\n\n",
+                "- first item\n\n- second item",
+                "- first item\n\n- second item\n\nAfter the list",
+            ],
+            &[
+                "| Name | Value |",
+                "| Name | Value |\n|---|---|",
+                "| Name | Value |\n|---|---|\n|",
+                "| Name | Value |\n|---|---|\n| key",
+                "| Name | Value |\n|---|---|\n| key | **bold** value |",
+                "| Name | Value |\n|---|---|\n| key | **bold** value |\n\nAfter table",
+            ],
+            &[
+                "Before code",
+                "Before code\n\n```rust\nfn first() {}",
+                "Before code\n\n```rust\nfn first() {}\n```\n\nAfter code",
+            ],
+            &[
+                "[site][docs]",
+                "[site][docs]\n\nAnother paragraph",
+                "[site][docs]\n\nAnother paragraph\n\n[docs]: https://example.com",
+                "[site][docs]\n\nAnother paragraph\n\n[docs]: https://example.com\n\nLater text",
+            ],
+        ];
+        for steps in cases {
+            let mut transcript = TranscriptState::default();
+            for source in *steps {
+                transcript.set_assistant(source, false, None, None, None);
+                let incremental = transcript.assistant.as_ref().unwrap().display_lines(48);
+                let full = AssistantMarkdownCell::streaming(source, false, None, None, None)
+                    .display_lines(48);
+                assert_eq!(incremental, full, "source: {source:?}");
+            }
+            let source = steps.last().unwrap();
+            let narrow = transcript.assistant.as_ref().unwrap().display_lines(28);
+            let full_narrow =
+                AssistantMarkdownCell::streaming(source, false, None, None, None).display_lines(28);
+            assert_eq!(narrow, full_narrow, "narrow source: {source:?}");
+        }
+    }
+
+    #[test]
+    fn streamed_markdown_matches_full_render_for_partial_tokens() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let source = "# Heading\n\nA **bold** paragraph with [a link](https://example.com).\n\n- first item\n\n- second item\n\n| Key | Value |\n|---|---|\n| one | two |";
+        let mut transcript = TranscriptState::default();
+        for end in source
+            .char_indices()
+            .map(|(index, ch)| index + ch.len_utf8())
+        {
+            let prefix = &source[..end];
+            transcript.set_assistant(prefix, false, None, None, None);
+            let incremental = transcript.assistant.as_ref().unwrap().display_lines(48);
+            let full =
+                AssistantMarkdownCell::streaming(prefix, false, None, None, None).display_lines(48);
+            assert_eq!(incremental, full, "prefix ending at byte {end}: {prefix:?}");
+        }
+    }
+
+    #[test]
+    fn streaming_markdown_invalidates_after_source_rewrite_and_theme_change() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        super::super::theme::set_active_theme("default");
+        let mut transcript = TranscriptState::default();
+        for source in [
+            "First **bold** paragraph\n\nSecond paragraph",
+            "First **bold** paragraph\n\nSecond paragraph\n\nThird paragraph",
+            "Rewritten [link](https://example.com)\n\nSecond paragraph",
+        ] {
+            transcript.set_assistant(source, false, None, None, None);
+            let incremental = transcript.assistant.as_ref().unwrap().display_lines(48);
+            let full =
+                AssistantMarkdownCell::streaming(source, false, None, None, None).display_lines(48);
+            assert_eq!(incremental, full, "source: {source:?}");
+        }
+
+        super::super::theme::set_active_theme("nord");
+        let source = "Rewritten [link](https://example.com)\n\nSecond paragraph";
+        let incremental = transcript.assistant.as_ref().unwrap().display_lines(48);
+        let full =
+            AssistantMarkdownCell::streaming(source, false, None, None, None).display_lines(48);
+        super::super::theme::set_active_theme("default");
+        assert_eq!(incremental, full);
+    }
+
+    #[test]
+    fn thought_timer_redraw_keeps_streaming_cell_and_markdown_cache() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let mut transcript = TranscriptState::default();
+        let source = "<think>Working through this.\n\nAnother thought.</think>\n\nFinal paragraph";
+        transcript.set_assistant(source, false, Some(100), Some(100), Some(4));
+        let first = transcript.assistant.as_ref().unwrap().display_lines(48);
+        let cell = transcript.assistant.as_ref().unwrap() as *const AssistantMarkdownCell;
+        let cached_runs = transcript
+            .assistant
+            .as_ref()
+            .unwrap()
+            .streaming_markdown
+            .borrow()
+            .len();
+
+        transcript.set_assistant(source, false, Some(200), Some(200), Some(8));
+        let updated = transcript.assistant.as_ref().unwrap();
+        assert!(std::ptr::eq(cell, updated));
+        assert_eq!(updated.streaming_markdown.borrow().len(), cached_runs);
+        let second = updated.display_lines(48);
+        assert_ne!(first, second);
+        assert!(second.iter().any(|line| line.to_string().contains("200ms")));
+    }
+
+    #[test]
+    #[ignore = "manual before/after streaming Markdown benchmark"]
+    fn benchmark_long_multi_block_stream() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        for run in 0..3 {
+            let mut transcript = TranscriptState::default();
+            let mut source = String::new();
+            let started = std::time::Instant::now();
+            for index in 0..48 {
+                if !source.is_empty() {
+                    source.push_str("\n\n");
+                }
+                source.push_str(&format!(
+                    "Paragraph {index}: **stable text** with `inline code`, [a link](https://example.com), and enough words to wrap across several terminal rows. This paragraph also has _emphasis_ and a second sentence about the rendering path."
+                ));
+                transcript.set_assistant(&source, false, None, None, None);
+                let lines = transcript.assistant.as_ref().unwrap().display_lines(72);
+                std::hint::black_box(lines);
+            }
+            println!("multi-block stream run {run}: {:?}", started.elapsed());
+        }
     }
 }
