@@ -1,8 +1,10 @@
 use crate::app::events::Overlay;
-use crate::app::state::{AppState, AppStatus, ChatMessage, History};
+use crate::app::state::{AppState, AppStatus};
 
 pub struct OverlayState<'a> {
-    history: &'a mut History,
+    transient_notice: &'a mut Option<(String, std::time::Instant)>,
+    redraw_requested: &'a mut bool,
+    render_revision: &'a mut u64,
     status: &'a mut AppStatus,
     show_model_picker: &'a mut bool,
     show_theme_picker: &'a mut bool,
@@ -25,7 +27,9 @@ pub struct OverlayState<'a> {
 impl<'a> OverlayState<'a> {
     pub fn new(state: &'a mut AppState) -> Self {
         Self {
-            history: &mut state.history,
+            transient_notice: &mut state.transient_notice,
+            redraw_requested: &mut state.redraw_requested,
+            render_revision: &mut state.render_revision,
             status: &mut state.status,
             show_model_picker: &mut state.show_model_picker,
             show_theme_picker: &mut state.show_theme_picker,
@@ -158,8 +162,12 @@ impl<'a> OverlayState<'a> {
         } else {
             "disabled"
         };
-        self.history
-            .push(ChatMessage::new("system", format!("YOLO mode {status}")));
+        *self.transient_notice = Some((
+            format!("YOLO mode {status}"),
+            std::time::Instant::now() + std::time::Duration::from_secs(4),
+        ));
+        *self.redraw_requested = true;
+        *self.render_revision = self.render_revision.wrapping_add(1);
     }
 }
 
@@ -208,11 +216,8 @@ mod tests {
 
         assert_eq!(state.status, AppStatus::AwaitingToolConfirmation);
         assert!(state.auto_confirm);
-        let history = state.history.snapshot().into_vec();
-        assert_eq!(
-            history.last().map(|message| message.content.as_str()),
-            Some("YOLO mode enabled")
-        );
+        assert!(state.history.is_empty());
+        assert_eq!(state.active_transient_notice(), Some("YOLO mode enabled"));
     }
 
     #[test]

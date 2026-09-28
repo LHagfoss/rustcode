@@ -188,6 +188,8 @@ pub struct AppState {
     pub mcp_edit_state: Option<McpEditState>,
 
     pub last_copy_text: Option<(String, std::time::Instant)>,
+    /// Short-lived UI feedback; never part of the model conversation.
+    pub transient_notice: Option<(String, std::time::Instant)>,
     pub generation_start_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     /// Complete serialized arguments for the pending confirmation actions.
@@ -1094,6 +1096,7 @@ impl AppState {
             mcp_picker_index: 0,
             mcp_edit_state: None,
             last_copy_text: None,
+            transient_notice: None,
             generation_start_time: None,
             pending_tool_confirmation: None,
             pending_approval_details: None,
@@ -1845,6 +1848,34 @@ impl AppState {
     pub fn set_notice(&mut self, text: impl Into<String>) {
         self.history.push(ChatMessage::new("system", text.into()));
         self.request_redraw();
+    }
+
+    pub fn set_transient_notice(&mut self, text: impl Into<String>) {
+        self.transient_notice = Some((
+            text.into(),
+            std::time::Instant::now() + std::time::Duration::from_secs(4),
+        ));
+        self.request_redraw();
+    }
+
+    pub fn active_transient_notice(&self) -> Option<&str> {
+        self.transient_notice
+            .as_ref()
+            .filter(|(_, expires)| *expires > std::time::Instant::now())
+            .map(|(text, _)| text.as_str())
+    }
+
+    pub fn clear_expired_transient_notice(&mut self) -> bool {
+        if self
+            .transient_notice
+            .as_ref()
+            .is_some_and(|(_, expires)| *expires <= std::time::Instant::now())
+        {
+            self.transient_notice = None;
+            self.request_redraw();
+            return true;
+        }
+        false
     }
 
     pub fn set_warning_notice(&mut self, text: impl Into<String>) {
