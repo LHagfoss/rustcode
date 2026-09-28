@@ -27,6 +27,8 @@ jobs:
         runs-on: ubuntu-24.04
         outputs:
             code: ${{ steps.filter.outputs.code }}
+            packages: ${{ steps.filter.outputs.packages }}
+            seatbelt: ${{ steps.filter.outputs.seatbelt }}
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
@@ -41,10 +43,24 @@ jobs:
               run: |
                   if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
                       echo "code=true" >> "$GITHUB_OUTPUT"
+                      echo "packages=--workspace --exclude rustcode-app" >> "$GITHUB_OUTPUT"
+                      echo "seatbelt=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
 
                   changed_files="$(git diff --name-only "$BASE_SHA...HEAD")"
+                  if bash scripts/ci-version-only.sh "$BASE_SHA"; then
+                      packages=""
+                      echo "Release metadata only; reusing checks from the code PR"
+                  else
+                      packages="$(printf '%s\n' "$changed_files" | bash scripts/ci-affected-packages.sh)"
+                  fi
+                  echo "packages=$packages" >> "$GITHUB_OUTPUT"
+                  if [[ -n "$packages" ]] && printf '%s\n' "$changed_files" | grep -Eq '^(Cargo\.(toml|lock)$|rust-toolchain|\.cargo/|rustcode/engine/|rustcode/core/(rustcode-tools|rustcode-tool-protocol)/|src/|tests/)'; then
+                      echo "seatbelt=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "seatbelt=false" >> "$GITHUB_OUTPUT"
+                  fi
                   if printf '%s\n' "$changed_files" | bash scripts/ci-relevant-changes.sh; then
                       echo "Relevant code or build files changed"
                       echo "code=true" >> "$GITHUB_OUTPUT"
@@ -56,7 +72,6 @@ jobs:
     test:
         # Keep this context name stable: main branch protection requires `test`.
         needs: changes
-        if: needs.changes.outputs.code == 'true'
         name: test
         runs-on: ubuntu-24.04
         # Healthy runs finish in ~6min. A hung runner or wedged test must
@@ -64,14 +79,17 @@ jobs:
         timeout-minutes: 20
         env:
             RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
+            AFFECTED_PACKAGES: ${{ needs.changes.outputs.packages }}
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
 
             - name: Install Rust toolchain
+              if: env.AFFECTED_PACKAGES != ''
               uses: dtolnay/rust-toolchain@stable
 
             - name: Rust Cache
+              if: env.AFFECTED_PACKAGES != ''
               uses: Swatinem/rust-cache@v2
               with:
                   # Share dependency and native build-script artifacts between
@@ -81,59 +99,69 @@ jobs:
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
 
             - name: Configure shared compiler cache
+              if: env.AFFECTED_PACKAGES != ''
               uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Install FFmpeg
+              if: env.AFFECTED_PACKAGES != ''
               run: |
                   sudo apt-get update
                   sudo apt-get install --no-install-recommends -y ffmpeg bubblewrap
 
             - name: Verify FFmpeg tools
+              if: env.AFFECTED_PACKAGES != ''
               run: |
                   ffmpeg -version
                   ffprobe -version
 
             - name: Run tests
+              if: env.AFFECTED_PACKAGES != ''
               # These tests depend on user-installed skills or runner-specific
               # ripgrep output. Keep them in the local suite, but exclude them
               # from the clean-runner gate until they have portable fixtures.
-              # Whole workspace except the native GPUI app, which has macOS-only
-              # UI dependencies and is covered by the macOS job. This keeps the
-              # extracted core crates' suites (and the TUI's) in the gate.
+              # Test only packages with changed source. Workspace build inputs
+              # (Cargo manifests/lock/toolchain) still select the full suite.
               # Sandbox-gated tests skip themselves when bubblewrap cannot run
               # (GitHub runners block unprivileged user namespaces).
-              run: >-
-                  cargo test --locked --workspace --exclude rustcode-app --
-                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
-                  --skip grep_stops_at_byte_cap_for_large_matching_lines
+              shell: bash
+              run: |
+                  read -ra packages <<< "$AFFECTED_PACKAGES"
+                  cargo test --locked "${packages[@]}" -- \
+                      --skip control_plane_tool_does_not_stall_while_reading_workspace_root \
+                      --skip grep_stops_at_byte_cap_for_large_matching_lines
 
     lint:
         # Keep linting separate from the required test job so the expensive
         # compiler work runs in parallel. This context is required alongside
         # `test` by main branch protection.
         needs: changes
-        if: needs.changes.outputs.code == 'true'
         name: lint
         runs-on: ubuntu-24.04
+        env:
+            AFFECTED_PACKAGES: ${{ needs.changes.outputs.packages }}
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
 
             - name: Install Rust toolchain
+              if: env.AFFECTED_PACKAGES != ''
               uses: dtolnay/rust-toolchain@stable
               with:
                   components: rustfmt
 
             - name: Rust Cache
+              if: env.AFFECTED_PACKAGES != ''
               uses: Swatinem/rust-cache@v2
               with:
                   shared-key: linux
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
 
             - name: Configure shared compiler cache
+              if: env.AFFECTED_PACKAGES != ''
               uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Check formatting
+              if: env.AFFECTED_PACKAGES != ''
               run: cargo fmt --all -- --check
 
             - name: Check shell installer syntax
@@ -145,24 +173,35 @@ jobs:
             - name: Check CI change matcher
               run: bash scripts/test-ci-relevant-changes.sh
 
+            - name: Check affected package matcher
+              run: bash scripts/test-ci-affected-packages.sh
+
+            - name: Check version-only matcher
+              run: bash scripts/test-ci-version-only.sh
+
             - name: Clippy correctness gate
+              if: env.AFFECTED_PACKAGES != ''
               # The codebase has an established warning baseline. Keep those
               # warnings visible locally while denying only correctness lints.
-              # Whole workspace except the macOS-only native app.
-              run: cargo clippy --locked --workspace --exclude rustcode-app -- -A warnings -D clippy::correctness
+              shell: bash
+              run: |
+                  read -ra packages <<< "$AFFECTED_PACKAGES"
+                  cargo clippy --locked "${packages[@]}" -- -A warnings -D clippy::correctness
 
             - name: Check the TUI stays behind the frontend seam
+              if: needs.changes.outputs.code == 'true'
               # The render layer may only reach core through
               # rustcode::controller, plus the convergence allow-list in
               # scripts/frontend-seam-allowlist.txt (issue #1431).
               run: bash scripts/check-frontend-seam.sh
 
             - name: Test the frontend-seam guard
+              if: needs.changes.outputs.code == 'true'
               run: bash scripts/test-check-frontend-seam.sh
 
     macos-seatbelt:
         needs: changes
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.seatbelt == 'true'
         name: macOS Seatbelt
         runs-on: macos-15
         steps:
@@ -182,58 +221,15 @@ jobs:
               uses: mozilla-actions/sccache-action@v0.0.11
 
             - name: Check test targets
-              run: cargo check --locked --tests
-
-            - name: Test command status metadata
-              run: cargo test --locked -p rustcode-command
+              run: cargo check --locked -p rustcode --tests
 
             - name: Test Seatbelt enforcement
               run: cargo test --locked --lib tools::exec::sandbox::tests -- --test-threads=1
 
-    macos-app:
-        needs: changes
-        if: needs.changes.outputs.code == 'true'
-        name: macOS native app
-        # Tahoe: the app bundle requires Xcode 26 (Icon Composer), which the
-        # macos-15 image does not ship. The seatbelt job stays on macos-15.
-        runs-on: macos-26
-        # The GPUI dependency tree compiles from scratch on a cold cache
-        # (~15min+); fail fast instead of hanging for the 6h default.
-        timeout-minutes: 60
-        steps:
-            - name: Check out repository
-              uses: actions/checkout@v7
-
-            - name: Install Rust toolchain
-              uses: dtolnay/rust-toolchain@stable
-
-            - name: Rust Cache
-              uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: macos-app
-                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
-
-            - name: Configure shared compiler cache
-              uses: mozilla-actions/sccache-action@v0.0.11
-
-            - name: Check native app test targets
-              run: cargo check --locked -p rustcode-app --tests
-
-            - name: Test native app
-              run: cargo test --locked -p rustcode-app
-
-            - name: Build native app
-              run: cargo build --locked -p rustcode-app
-
-            - name: Bundle macOS app
-              # Validates the release bundler (Icon Composer, Info.plist)
-              # on every PR so tagged builds do not discover it broken.
-              run: scripts/build-native-app.sh
-
     portability:
         name: ${{ matrix.name }} portability coverage
         needs: changes
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.packages != ''
         # Linux is the required quality gate. Native platform checks remain
         # visible and actionable without delaying or blocking a merge.
         continue-on-error: true
@@ -285,4 +281,9 @@ jobs:
               # Linux runs the behavioral suite. These advisory jobs verify the
               # shipped binary's native macOS/Windows cfg without compiling or
               # linking the test harness again.
-              run: cargo check --locked
+              shell: bash
+              env:
+                  AFFECTED_PACKAGES: ${{ needs.changes.outputs.packages }}
+              run: |
+                  read -ra packages <<< "$AFFECTED_PACKAGES"
+                  cargo check --locked "${packages[@]}"
