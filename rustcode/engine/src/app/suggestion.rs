@@ -69,6 +69,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Open model picker, switch profile, or override model",
     },
     CommandInfo {
+        name: "/models",
+        desc: "Open the model picker",
+    },
+    CommandInfo {
         name: "/new",
         desc: "Start a new conversation",
     },
@@ -232,10 +236,17 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
 }
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
-    filtered_commands(prefix)
+    let commands = filtered_commands(prefix);
+    // Once the typed token names a command, Tab keeps that command selected.
+    // A longer alias may still appear in the popup, but it must not silently
+    // replace a valid command when cycling or dismissing completion.
+    if let Some(exact) = commands
         .iter()
-        .map(|command| command.name)
-        .collect()
+        .find(|command| command.name.eq_ignore_ascii_case(prefix))
+    {
+        return vec![exact.name];
+    }
+    commands.iter().map(|command| command.name).collect()
 }
 
 #[derive(Debug, Default)]
