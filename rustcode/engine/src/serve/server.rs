@@ -17,7 +17,9 @@ use tokio::sync::{Mutex, broadcast};
 use crate::controller::{
     Command, ControllerEvent, ControllerHandle, ControllerUpdate, InteractiveController,
 };
-use crate::daemon::protocol::{ProtocolError, read_async_frame, write_async_frame};
+use crate::daemon::protocol::{
+    ProtocolError, read_async_frame, read_async_frame_with_buffer, write_async_frame,
+};
 
 use super::protocol::{SERVE_PROTOCOL_VERSION, ServeRequest, ServeResponse};
 
@@ -152,9 +154,10 @@ async fn serve_connection(
         write_async_frame(&mut writer, &ServeResponse::Event(snapshot)).await?;
     }
 
+    let mut pending_request = Vec::new();
     loop {
         tokio::select! {
-            request = read_async_frame(&mut reader) => {
+            request = read_async_frame_with_buffer(&mut reader, &mut pending_request) => {
                 apply_request(&shared.handle, request?);
             }
             response = feed.recv() => {
@@ -236,13 +239,14 @@ mod tests {
         async fn next_value(&mut self) -> serde_json::Value {
             use tokio::io::AsyncBufReadExt;
             let mut line = Vec::new();
-            tokio::time::timeout(
+            let read = tokio::time::timeout(
                 Duration::from_secs(15),
                 self.reader.read_until(b'\n', &mut line),
             )
             .await
             .expect("response timeout")
             .expect("read response");
+            assert!(read > 0, "serve connection closed before a response frame");
             serde_json::from_slice(&line).expect("response JSON")
         }
 
@@ -389,6 +393,59 @@ mod tests {
         let update = client.next_value().await;
         assert_eq!(update["update"]["type"], "text_delta");
         assert_eq!(update["update"]["text"], "during replay");
+        connection.abort();
+    }
+
+    #[tokio::test]
+    async fn partial_request_survives_an_interleaved_update() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let (commands, mut received_commands) = tokio::sync::mpsc::unbounded_channel();
+        let (updates, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let shared = Arc::new(Shared {
+            handle: ControllerHandle::new(commands),
+            updates,
+            latest_snapshot: Mutex::new(None),
+        });
+        let connection_shared = Arc::clone(&shared);
+        let connection = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept");
+            serve_connection(socket, connection_shared, "test-token").await
+        });
+
+        let mut client = ScriptClient::connect(addr).await;
+        client
+            .send(&ServeRequest::Auth {
+                token: "test-token".into(),
+            })
+            .await;
+        assert_eq!(client.next_value().await["type"], "ready");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while shared.updates.receiver_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("feed subscription");
+
+        client.writer.write_all(b"{\"type\":\"list").await.unwrap();
+        // Allow the server to consume the first bytes while waiting for the newline.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        shared
+            .updates
+            .send(ServeResponse::Event(ControllerEvent {
+                generation: 1,
+                update: ControllerUpdate::Turn(TurnUpdate::TextDelta("interleaved".into())),
+            }))
+            .unwrap();
+        assert_eq!(client.next_value().await["update"]["text"], "interleaved");
+        client.writer.write_all(b"_sessions\"}\n").await.unwrap();
+        let request = tokio::time::timeout(Duration::from_secs(2), received_commands.recv())
+            .await
+            .expect("server should retain the partial request");
+        assert!(matches!(request, Some(Command::ListSessions)));
         connection.abort();
     }
 
