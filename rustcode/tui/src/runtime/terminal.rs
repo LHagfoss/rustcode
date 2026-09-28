@@ -24,10 +24,12 @@ pub(super) fn reset_transcript_presentation(
 pub(super) fn clear_terminal_for_transcript_replacement(
     terminal_runtime: &mut TerminalRuntime,
 ) -> std::io::Result<()> {
-    execute!(
-        terminal_runtime.terminal().backend_mut(),
-        crossterm::style::Print("\x1b[3J")
-    )?;
+    if !terminal_runtime.is_fullscreen() {
+        execute!(
+            terminal_runtime.terminal().backend_mut(),
+            crossterm::style::Print("\x1b[3J")
+        )?;
+    }
     terminal_runtime.terminal().clear_screen()
 }
 

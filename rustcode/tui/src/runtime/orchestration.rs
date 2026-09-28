@@ -324,6 +324,20 @@ impl AppRuntime {
                 let Some(ev) = event_result? else {
                     continue;
                 };
+                #[cfg(unix)]
+                if let TuiEvent::Key(key) = &ev
+                    && terminal_runtime.is_fullscreen()
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('z') | KeyCode::Char('Z'))
+                {
+                    tui_events.pause();
+                    let suspend_result = terminal_runtime.suspend().await;
+                    tui_events.resume();
+                    suspend_result?;
+                    app_state.lock().await.request_clear_screen();
+                    needs_redraw = true;
+                    continue;
+                }
                 let _ = app_event_sender.send(AppEvent::Tui(ev));
             }
 
