@@ -47,6 +47,20 @@ pub fn resolve_bind(bind: &str, allow_remote: bool) -> Result<IpAddr, String> {
     Ok(ip)
 }
 
+/// Compare every byte without returning early for a matching prefix. Runtime
+/// may still reveal the presented token's length, which is client controlled.
+fn token_matches(expected: &str, presented: &str) -> bool {
+    let expected = expected.as_bytes();
+    let presented = presented.as_bytes();
+    let mut difference = expected.len() ^ presented.len();
+    for index in 0..expected.len().max(presented.len()) {
+        difference |= usize::from(
+            expected.get(index).copied().unwrap_or(0) ^ presented.get(index).copied().unwrap_or(0),
+        );
+    }
+    difference == 0
+}
+
 struct Shared {
     handle: ControllerHandle,
     updates: broadcast::Sender<ServeResponse>,
@@ -116,7 +130,7 @@ async fn serve_connection(
         .await?;
         return Ok(());
     };
-    if presented != token {
+    if !token_matches(token, &presented) {
         write_async_frame(
             &mut writer,
             &ServeResponse::error("unauthorized", "bad token"),
@@ -131,11 +145,13 @@ async fn serve_connection(
         },
     )
     .await?;
-    if let Some(snapshot) = shared.latest_snapshot.lock().await.clone() {
+    let mut feed = shared.updates.subscribe();
+    let snapshot = shared.latest_snapshot.lock().await.clone();
+    let mut current_generation = snapshot.as_ref().map(|event| event.generation);
+    if let Some(snapshot) = snapshot {
         write_async_frame(&mut writer, &ServeResponse::Event(snapshot)).await?;
     }
 
-    let mut feed = shared.updates.subscribe();
     loop {
         tokio::select! {
             request = read_async_frame(&mut reader) => {
@@ -143,6 +159,12 @@ async fn serve_connection(
             }
             response = feed.recv() => {
                 let response = response.map_err(|_| ProtocolError::UnexpectedEof)?;
+                if let ServeResponse::Event(event) = &response {
+                    if current_generation.is_some_and(|generation| event.generation < generation) {
+                        continue;
+                    }
+                    current_generation = Some(event.generation);
+                }
                 write_async_frame(&mut writer, &response).await?;
             }
         }
@@ -166,7 +188,7 @@ fn apply_request(handle: &ControllerHandle, request: ServeRequest) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::ControllerUpdate;
+    use crate::controller::{ControllerSnapshot, ControllerUpdate, TurnUpdate};
     use std::time::Duration;
     use tokio::net::TcpStream;
 
@@ -178,6 +200,14 @@ mod tests {
         assert!(resolve_bind("192.168.1.10", false).is_err());
         assert!(resolve_bind("0.0.0.0", true).is_ok());
         assert!(resolve_bind("not-an-addr", false).is_err());
+    }
+
+    #[test]
+    fn token_match_requires_equal_length_and_all_bytes() {
+        assert!(token_matches("secret-token", "secret-token"));
+        assert!(!token_matches("secret-token", "secret-tokem"));
+        assert!(!token_matches("secret-token", "secret-token-extra"));
+        assert!(!token_matches("secret-token", "secret-toke"));
     }
 
     struct ScriptClient {
@@ -299,6 +329,67 @@ mod tests {
                 .expect("read close"),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn reconnect_keeps_updates_arriving_during_snapshot_replay() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (handle, _updates) = InteractiveController::spawn(
+            &tokio::runtime::Handle::current(),
+            workspace.path().to_path_buf(),
+        );
+        let snapshot = ControllerEvent {
+            generation: 1,
+            update: ControllerUpdate::Snapshot(ControllerSnapshot::from_state(
+                1,
+                &crate::app::AppState::new(),
+            )),
+        };
+        let (fanout, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let shared = Arc::new(Shared {
+            handle,
+            updates: fanout,
+            latest_snapshot: Mutex::new(Some(snapshot)),
+        });
+        let snapshot_guard = shared.latest_snapshot.lock().await;
+        let connection_shared = Arc::clone(&shared);
+        let connection = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept");
+            serve_connection(socket, connection_shared, "test-token").await
+        });
+
+        let mut client = ScriptClient::connect(addr).await;
+        client
+            .send(&ServeRequest::Auth {
+                token: "test-token".into(),
+            })
+            .await;
+        assert_eq!(client.next_value().await["type"], "ready");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while shared.updates.receiver_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("live feed subscribed before snapshot replay");
+        let stale = ControllerEvent {
+            generation: 0,
+            update: ControllerUpdate::Turn(TurnUpdate::TextDelta("stale".into())),
+        };
+        let _ = shared.updates.send(ServeResponse::Event(stale));
+        let live = ControllerEvent {
+            generation: 1,
+            update: ControllerUpdate::Turn(TurnUpdate::TextDelta("during replay".into())),
+        };
+        let _ = shared.updates.send(ServeResponse::Event(live));
+        drop(snapshot_guard);
+        assert_eq!(client.next_value().await["update"]["type"], "snapshot");
+        let update = client.next_value().await;
+        assert_eq!(update["update"]["type"], "text_delta");
+        assert_eq!(update["update"]["text"], "during replay");
+        connection.abort();
     }
 
     #[tokio::test]
