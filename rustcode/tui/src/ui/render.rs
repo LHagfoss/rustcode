@@ -6,13 +6,30 @@ pub(super) fn render_live_conversation(
     f: &mut Frame,
     area: ratatui::layout::Rect,
     lines: Vec<Line<'static>>,
+    layout_width: u16,
 ) {
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(COLOR_BG()));
+    if layout_width == area.width {
+        f.render_widget(paragraph, area);
+        return;
+    }
+    // Retain the selected snapshot's visual row layout across terminal resize.
+    let source_area = ratatui::layout::Rect::new(0, 0, layout_width, area.height);
+    let mut source = ratatui::buffer::Buffer::empty(source_area);
+    ratatui::widgets::Widget::render(paragraph, source_area, &mut source);
     f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .style(Style::default().bg(COLOR_BG())),
+        Paragraph::new("").style(Style::default().bg(COLOR_BG())),
         area,
     );
+    for y in 0..area.height {
+        for x in 0..area.width.min(layout_width) {
+            if let Some(cell) = f.buffer_mut().cell_mut((area.x + x, area.y + y)) {
+                *cell = source[(x, y)].clone();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -204,14 +221,21 @@ pub(crate) fn render_with_transcript_snapshot(
         .saturating_sub(popup_height);
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
 
-    let lines =
-        render_visible_conversation_with_transcript(state, chat_width, max_chat_height, transcript);
+    let pinned = transcript.selection.pinned_snapshot();
+    let layout_width = transcript.selection.pinned_width().unwrap_or(chat_width);
+    let display_state = pinned.as_deref().unwrap_or(state);
+    let lines = render_visible_conversation_with_transcript(
+        display_state,
+        layout_width,
+        max_chat_height,
+        transcript,
+    );
     let soft_wrap_before = lines
         .iter()
         .flat_map(|line| {
             let count = Paragraph::new(line.clone())
                 .wrap(Wrap { trim: false })
-                .line_count(chat_width)
+                .line_count(layout_width)
                 .max(1);
             std::iter::once(false).chain(std::iter::repeat_n(true, count.saturating_sub(1)))
         })
@@ -219,7 +243,7 @@ pub(crate) fn render_with_transcript_snapshot(
         .collect::<Vec<_>>();
     let conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
-        .line_count(chat_width) as u16;
+        .line_count(layout_width) as u16;
 
     let chat_height = max_chat_height;
     let chunks = Layout::default()
@@ -235,7 +259,7 @@ pub(crate) fn render_with_transcript_snapshot(
         ])
         .split(layout_area);
 
-    render_live_conversation(f, chunks[0], lines);
+    render_live_conversation(f, chunks[0], lines, layout_width);
 
     let composer_chunks = [chunks[0], chunks[1], chunks[2], chunks[4], chunks[5]];
     render_queue_line(f, &composer_chunks, state);
@@ -373,9 +397,12 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         chunks[0]
     };
-    transcript
-        .selection
-        .refresh(selection_area, f.buffer(), &soft_wrap_before);
+    transcript.selection.refresh_view(
+        selection_area,
+        f.buffer(),
+        &soft_wrap_before,
+        transcript.scroll_rows(),
+    );
     transcript.selection.highlight(f.buffer_mut());
 
     (conversation_content_height, input_box_area)

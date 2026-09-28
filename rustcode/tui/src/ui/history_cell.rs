@@ -11,6 +11,7 @@ use ratatui::{
 };
 use rustcode::app::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
@@ -43,17 +44,34 @@ pub(crate) struct TranscriptState {
     model: super::TranscriptModel,
     scroll_rows: usize,
     pub(crate) selection: super::selection::TranscriptSelection,
+    committed_cache: Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Vec<Line<'static>>>>,
 }
 
 impl TranscriptState {
     pub(crate) fn scroll_up(&mut self, rows: usize) {
-        self.selection.clear();
         self.scroll_rows = self.scroll_rows.saturating_add(rows).min(10_000);
     }
 
     pub(crate) fn scroll_down(&mut self, rows: usize) {
-        self.selection.clear();
         self.scroll_rows = self.scroll_rows.saturating_sub(rows);
+    }
+
+    /// Advance at most one selected row before painting so every crossed row is cached.
+    pub(crate) fn step_selection_scroll(&mut self) -> bool {
+        let before = self.scroll_rows;
+        let Some(direction) = self.selection.take_scroll_step(before) else {
+            return false;
+        };
+        if direction < 0 {
+            self.scroll_up(1);
+        } else {
+            self.scroll_down(1);
+        }
+        if self.scroll_rows == before {
+            self.selection.cancel_pending_scroll();
+            return false;
+        }
+        true
     }
 
     pub(crate) fn scroll_rows(&self) -> usize {
@@ -93,6 +111,34 @@ impl TranscriptState {
 
     pub(crate) fn model(&self) -> &super::TranscriptModel {
         &self.model
+    }
+
+    pub(crate) fn committed_block(
+        &mut self,
+        state: &super::RenderSnapshot,
+        index: usize,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        let mut theme_hash = std::collections::hash_map::DefaultHasher::new();
+        super::theme::active_palette().name.hash(&mut theme_hash);
+        let mut session_hash = std::collections::hash_map::DefaultHasher::new();
+        state.active_session_id().hash(&mut session_hash);
+        let key = (
+            session_hash.finish(),
+            state.history().revision(),
+            index,
+            width,
+            theme_hash.finish(),
+        );
+        let cache = self
+            .committed_cache
+            .get_or_insert_with(|| super::lru::LruCache::new(4));
+        if let Some(lines) = cache.get(&key) {
+            return lines.clone();
+        }
+        let lines = super::render_committed_history_block_snapshot(state, index, width);
+        cache.insert(key, lines.clone());
+        lines
     }
 
     #[cfg(test)]
