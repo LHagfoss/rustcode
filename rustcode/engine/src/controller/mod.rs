@@ -8,6 +8,7 @@ mod events;
 mod native_commands;
 mod snapshot;
 mod tasks;
+mod transcript;
 mod worker;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,5 +49,6 @@ pub use tasks::{
     TaskDisplay, background_command_label, background_task_snapshots, has_background_tasks,
     stop_background_tasks,
 };
+pub use transcript::{AgentUiEvent, SubAgentStatus, TokenUsage, Verbosity, sanitize_recap_content};
 
 pub use worker::InteractiveController;

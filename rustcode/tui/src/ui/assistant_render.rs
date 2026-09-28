@@ -105,7 +105,7 @@ pub(super) fn model_label(state: &RenderSnapshot) -> String {
 }
 
 pub(super) struct AssistantRenderOptions {
-    pub(super) token_usage: Option<rustcode::app::TokenUsage>,
+    pub(super) token_usage: Option<rustcode::controller::TokenUsage>,
     pub(super) response_time_ms: Option<u64>,
     pub(super) thought_time_ms: Option<u64>,
     pub(super) thought_tokens: Option<u32>,
