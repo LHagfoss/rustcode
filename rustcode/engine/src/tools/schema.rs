@@ -532,6 +532,8 @@ const CORE_CODING_TOOLS: &[&str] = &[
     "find_symbol",
     "get_project_map",
     "view_file",
+    "write_to_file",
+    "write_file_chunk",
     "run_command",
     "manage_task",
     "ask_question",

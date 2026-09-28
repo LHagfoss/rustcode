@@ -2032,6 +2032,37 @@ fn completed_edits_have_a_distinct_transcript_heading() {
 }
 
 #[test]
+fn committed_file_write_is_labeled_as_a_write() {
+    use rustcode::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "write_to_file".to_owned(),
+            arguments: r#"{"path":"src/new.rs","content":"pub fn new() {}"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "write_to_file: wrote src/new.rs")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "write_to_file".to_owned(),
+                success: true,
+                changed_paths: vec!["src/new.rs".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Wrote", "  └ src/new.rs"]);
+}
+
+#[test]
 fn committed_batched_edits_with_casing_aliases_group_under_edited() {
     use rustcode::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
