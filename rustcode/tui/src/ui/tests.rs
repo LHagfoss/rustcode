@@ -45,6 +45,29 @@ fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String
         .join("\n")
 }
 
+fn render_state_to_text_with_transcript(
+    state: &mut AppState,
+    transcript: &mut TranscriptState,
+    width: u16,
+    height: u16,
+) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| render_with_transcript(frame, state, transcript))
+        .unwrap();
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_context_modal_to_text(state: &AppState, width: u16, height: u16) -> String {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, layout::Rect};
@@ -310,6 +333,31 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
         rendered.contains("streamed output"),
         "rendered: {rendered:?}"
     );
+}
+
+#[test]
+fn working_status_is_fixed_immediately_above_the_composer() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.history.push(ChatMessage::new("user", "hello"));
+    state.replace_current_response(
+        (1..=20)
+            .map(|index| format!("response line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let mut transcript = TranscriptState::default();
+    let rendered = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
+    let composer_y = state.input_text_area.expect("composer area").y as usize;
+    let rows = rendered.lines().collect::<Vec<_>>();
+    assert!(rows[composer_y - 1].contains("Working"));
+    assert_eq!(rendered.matches("Working").count(), 1);
+
+    transcript.scroll_up(4);
+    let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
+    let rows = scrolled.lines().collect::<Vec<_>>();
+    assert!(rows[composer_y - 1].contains("Working"));
+    assert_eq!(scrolled.matches("Working").count(), 1);
 }
 
 #[test]
