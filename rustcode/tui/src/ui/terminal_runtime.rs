@@ -1,4 +1,5 @@
 use crate::inline_terminal::InlineTerminal;
+use crate::ui::TuiEventStream;
 use crossterm::{
     cursor::{MoveTo, SetCursorStyle},
     event::{
@@ -10,7 +11,84 @@ use crossterm::{
 };
 use ratatui::backend::CrosstermBackend;
 use std::future::Future;
-use std::io;
+use std::io::{self, Write};
+use std::sync::{
+    Once,
+    atomic::{AtomicBool, Ordering},
+};
+
+static FULLSCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PANIC_HOOK: Once = Once::new();
+
+#[derive(Debug, Default)]
+struct AlternateScreen {
+    active: bool,
+}
+
+impl AlternateScreen {
+    fn is_active(&self) -> bool {
+        self.active
+    }
+
+    fn enter(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if self.active {
+            return Ok(());
+        }
+        // A partial write can have entered the alternate screen. Keep cleanup
+        // armed until a leave sequence has been written successfully.
+        self.active = true;
+        out.write_all(b"\x1b[?1049h")?;
+        out.flush()
+    }
+
+    fn leave(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        out.write_all(b"\x1b[?1049l")?;
+        out.flush()?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+fn install_panic_restore() {
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if FULLSCREEN_ACTIVE.load(Ordering::SeqCst) {
+                let mut out = io::stdout();
+                let _ = execute!(out, PopKeyboardEnhancementFlags);
+                let _ = execute!(
+                    out,
+                    DisableBracketedPaste,
+                    DisableFocusChange,
+                    SetCursorStyle::DefaultUserShape,
+                    crossterm::style::Print("\x1b]9;4;0;0\x07")
+                );
+                if out.write_all(b"\x1b[?1049l\x1b[?25h").is_ok() && out.flush().is_ok() {
+                    FULLSCREEN_ACTIVE.store(false, Ordering::SeqCst);
+                }
+                let _ = terminal::disable_raw_mode();
+            }
+            previous(info);
+        }));
+    });
+}
+
+fn restore_partial_start(out: &mut impl Write, screen: &mut AlternateScreen) {
+    let _ = execute!(out, PopKeyboardEnhancementFlags);
+    let _ = execute!(
+        out,
+        DisableBracketedPaste,
+        DisableFocusChange,
+        SetCursorStyle::DefaultUserShape
+    );
+    if screen.leave(out).is_ok() {
+        FULLSCREEN_ACTIVE.store(false, Ordering::SeqCst);
+    }
+    let _ = terminal::disable_raw_mode();
+}
 
 #[derive(Debug, Default)]
 struct Lifecycle {
@@ -43,13 +121,16 @@ impl Lifecycle {
 pub(crate) struct TerminalRuntime {
     terminal: InlineTerminal<CrosstermBackend<io::Stdout>>,
     lifecycle: Lifecycle,
+    alternate_screen: AlternateScreen,
+    fullscreen: bool,
 }
 
 impl TerminalRuntime {
-    pub(crate) fn start() -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn start(fullscreen_requested: bool) -> Result<Self, Box<dyn std::error::Error>> {
         terminal::enable_raw_mode()?;
 
         let mut stdout = io::stdout();
+        let mut alternate_screen = AlternateScreen::default();
         if let Err(error) = execute!(
             stdout,
             EnableBracketedPaste,
@@ -58,7 +139,7 @@ impl TerminalRuntime {
             crossterm::style::Print("\x1b]0;rustcode · new session\x07"),
             crossterm::style::Print("\x1b]9;4;0;0\x07")
         ) {
-            let _ = terminal::disable_raw_mode();
+            restore_partial_start(&mut stdout, &mut alternate_screen);
             return Err(Box::new(error));
         }
 
@@ -69,11 +150,32 @@ impl TerminalRuntime {
             )
         );
 
+        if fullscreen_requested {
+            install_panic_restore();
+            FULLSCREEN_ACTIVE.store(true, Ordering::SeqCst);
+            if alternate_screen.enter(&mut stdout).is_err() {
+                if let Err(error) = alternate_screen.leave(&mut stdout) {
+                    restore_partial_start(&mut stdout, &mut alternate_screen);
+                    return Err(Box::new(error));
+                }
+                FULLSCREEN_ACTIVE.store(false, Ordering::SeqCst);
+            }
+        }
+        let fullscreen = alternate_screen.is_active();
         let backend = CrosstermBackend::new(stdout);
-        let terminal = match InlineTerminal::new(backend) {
+        let terminal = match if fullscreen {
+            InlineTerminal::new_at_origin(backend)
+        } else {
+            InlineTerminal::new(backend)
+        } {
             Ok(terminal) => terminal,
             Err(error) => {
-                let _ = terminal::disable_raw_mode();
+                if fullscreen {
+                    let mut out = io::stdout();
+                    restore_partial_start(&mut out, &mut alternate_screen);
+                } else {
+                    restore_partial_start(&mut io::stdout(), &mut alternate_screen);
+                }
                 return Err(Box::new(error));
             }
         };
@@ -81,6 +183,8 @@ impl TerminalRuntime {
         Ok(Self {
             terminal,
             lifecycle: Lifecycle::active(),
+            alternate_screen,
+            fullscreen,
         })
     }
 
@@ -93,11 +197,11 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn restore_at(&mut self, cursor_y: Option<u16>) -> io::Result<()> {
-        if self.lifecycle.is_restored() {
+        if self.lifecycle.is_restored() && !self.alternate_screen.is_active() {
             return Ok(());
         }
 
-        terminal::disable_raw_mode()?;
+        let raw_result = terminal::disable_raw_mode();
         let area = self.terminal.area();
         let transcript_end =
             cursor_y.unwrap_or_else(|| area.y.saturating_add(area.height.saturating_sub(1)));
@@ -106,18 +210,50 @@ impl TerminalRuntime {
         // best-effort; cleanup must do the same or a normal quit reports a
         // spurious `Unsupported` error after the app has otherwise exited.
         let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
-        execute!(
+        let mode_result = execute!(
             self.terminal.backend_mut(),
             DisableBracketedPaste,
             DisableFocusChange,
             SetCursorStyle::DefaultUserShape,
-            crossterm::style::Print("\x1b]9;4;0;0\x07"),
-            MoveTo(0, transcript_end),
-            Clear(ClearType::FromCursorDown)
-        )?;
-        self.terminal.show_cursor()?;
-        self.lifecycle.mark_restored();
-        Ok(())
+            crossterm::style::Print("\x1b]9;4;0;0\x07")
+        );
+        let screen_result = if self.alternate_screen.is_active() {
+            let result = self.alternate_screen.leave(&mut io::stdout());
+            if result.is_ok() {
+                FULLSCREEN_ACTIVE.store(false, Ordering::SeqCst);
+            }
+            result
+        } else if self.fullscreen {
+            Ok(())
+        } else {
+            execute!(
+                self.terminal.backend_mut(),
+                MoveTo(0, transcript_end),
+                Clear(ClearType::FromCursorDown)
+            )
+        };
+        let cursor_result = self.terminal.show_cursor();
+        let result = raw_result
+            .and(mode_result)
+            .and(screen_result)
+            .and(cursor_result);
+        if result.is_ok() {
+            self.lifecycle.mark_restored();
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn suspend(&mut self) -> io::Result<()> {
+        self.restore()?;
+        // Ctrl-Z is read as a key in raw mode, so the shell cannot suspend us
+        // until raw mode and the alternate screen have been released.
+        unsafe { libc::raise(libc::SIGTSTP) };
+        self.activate().await
+    }
+
+    pub(crate) fn is_fullscreen(&self) -> bool {
+        self.fullscreen
     }
 
     #[allow(dead_code)]
@@ -127,34 +263,63 @@ impl TerminalRuntime {
         }
 
         terminal::enable_raw_mode()?;
+        self.lifecycle.mark_active();
         execute!(
             self.terminal.backend_mut(),
             EnableBracketedPaste,
             EnableFocusChange,
-            PushKeyboardEnhancementFlags(
-                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            ),
             SetCursorStyle::BlinkingBar
         )?;
-        self.lifecycle.mark_active();
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            PushKeyboardEnhancementFlags(
+                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        );
+        if self.alternate_screen.is_active() {
+            FULLSCREEN_ACTIVE.store(true, Ordering::SeqCst);
+        } else if self.fullscreen_requested() {
+            FULLSCREEN_ACTIVE.store(true, Ordering::SeqCst);
+            self.alternate_screen.enter(&mut io::stdout())?;
+            self.terminal.clear_screen()?;
+        }
         Ok(())
     }
 
+    fn fullscreen_requested(&self) -> bool {
+        // A restored fullscreen session remains opted in for editor handoff
+        // and job control. Inline sessions never switch screens on resume.
+        self.fullscreen
+    }
+
     #[allow(dead_code)]
-    pub(crate) async fn with_restored<F, Fut, T>(&mut self, f: F) -> T
+    pub(crate) async fn with_restored<F, Fut, T>(
+        &mut self,
+        events: &mut TuiEventStream,
+        f: F,
+    ) -> io::Result<T>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = T>,
     {
+        struct ResumeEvents<'a>(&'a mut TuiEventStream);
+        impl Drop for ResumeEvents<'_> {
+            fn drop(&mut self) {
+                self.0.resume();
+            }
+        }
+
+        events.pause();
+        let _resume_events = ResumeEvents(events);
         let was_active = self.lifecycle.is_active();
         if was_active {
-            let _ = self.restore();
+            self.restore()?;
         }
         let result = f().await;
         if was_active {
-            let _ = self.activate().await;
+            self.activate().await?;
         }
-        result
+        Ok(result)
     }
 }
 
@@ -166,7 +331,40 @@ impl Drop for TerminalRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::Lifecycle;
+    use super::{AlternateScreen, Lifecycle};
+
+    #[test]
+    fn alternate_screen_enter_leave_writes_only_screen_switches() {
+        let mut screen = AlternateScreen::default();
+        let mut output = Vec::new();
+        screen.enter(&mut output).unwrap();
+        screen.enter(&mut output).unwrap();
+        screen.leave(&mut output).unwrap();
+        screen.leave(&mut output).unwrap();
+        assert_eq!(output, b"\x1b[?1049h\x1b[?1049l");
+    }
+
+    #[test]
+    fn alternate_screen_restore_is_retryable_after_write_failure() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disconnected"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut screen = AlternateScreen::default();
+        assert!(screen.enter(&mut FailingWriter).is_err());
+        assert!(screen.is_active());
+        assert!(screen.leave(&mut FailingWriter).is_err());
+        assert!(screen.is_active());
+        let mut output = Vec::new();
+        screen.leave(&mut output).unwrap();
+        assert_eq!(output, b"\x1b[?1049l");
+        assert!(!screen.is_active());
+    }
 
     #[test]
     fn restoring_lifecycle_is_idempotent() {

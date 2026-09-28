@@ -7227,6 +7227,7 @@ dependencies = [
  "crossterm",
  "ctor",
  "futures-util",
+ "libc",
  "pulldown-cmark",
  "ratatui",
  "reqwest 0.13.4",
