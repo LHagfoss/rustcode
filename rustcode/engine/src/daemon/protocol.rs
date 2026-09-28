@@ -122,14 +122,28 @@ pub async fn read_async_frame<R: AsyncBufRead + Unpin, T: DeserializeOwned>(
     reader: &mut R,
 ) -> Result<T, ProtocolError> {
     let mut frame = Vec::new();
-    reader
-        .take((MAX_FRAME_BYTES + 2) as u64)
-        .read_until(b'\n', &mut frame)
-        .await?;
+    read_async_frame_with_buffer(reader, &mut frame).await
+}
+
+/// Keep `frame` outside a `tokio::select!` branch so cancellation cannot
+/// discard bytes already consumed from the reader before a newline arrives.
+pub async fn read_async_frame_with_buffer<R: AsyncBufRead + Unpin, T: DeserializeOwned>(
+    reader: &mut R,
+    frame: &mut Vec<u8>,
+) -> Result<T, ProtocolError> {
     if frame.len() > MAX_FRAME_BYTES + 1 {
         return Err(ProtocolError::FrameTooLarge);
     }
-    decode(frame)
+    if frame.last() != Some(&b'\n') {
+        reader
+            .take((MAX_FRAME_BYTES + 2 - frame.len()) as u64)
+            .read_until(b'\n', frame)
+            .await?;
+    }
+    if frame.len() > MAX_FRAME_BYTES + 1 {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+    decode(std::mem::take(frame))
 }
 
 pub async fn write_async_frame<W: AsyncWrite + Unpin, T: Serialize>(

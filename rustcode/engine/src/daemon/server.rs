@@ -636,7 +636,27 @@ mod tests {
         assert!(!lifecycle.socket_path().exists());
         assert!(!lifecycle.registration_path().exists());
         fs::remove_dir(lifecycle.database_path()).unwrap();
-        tokio::task::yield_now().await;
-        drop(lifecycle.bind().unwrap());
+        // A concurrent fork can briefly inherit the old lock descriptor even
+        // after the failed server has dropped it. Require eventual cleanup,
+        // with a bounded wait and the real lock error if it never releases.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match lifecycle.bind() {
+                Ok(server) => {
+                    drop(server);
+                    break;
+                }
+                Err(error) if crate::daemon::lifecycle::is_lock_busy(&error) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "owner lock remained busy after failed store initialization: {error:#}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("retry after failed store initialization: {error:#}"),
+            }
+        }
+        assert!(!lifecycle.socket_path().exists());
+        assert!(!lifecycle.registration_path().exists());
     }
 }
