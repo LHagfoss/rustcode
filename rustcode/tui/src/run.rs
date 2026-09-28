@@ -505,9 +505,9 @@ async fn run_interactive(
 
     let mut app_state_struct = AppState::new();
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
-    let fullscreen =
-        fullscreen_requested && crate::terminal_probe::probe().supports_alternate_screen();
-    let terminal_runtime = TerminalRuntime::start(fullscreen)?;
+    let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
+    let fullscreen = fullscreen_requested && local_terminal;
+    let terminal_runtime = TerminalRuntime::start(fullscreen, local_terminal)?;
     // Themes are a terminal-UI concern: shared state no longer applies them.
     // The interactive runtime seeds the palette once before the first frame;
     // every render re-applies it from `state.config().theme`.
@@ -701,14 +701,40 @@ fn format_number(value: u64) -> String {
 /// Printed after restoring the terminal and erasing the transient composer,
 /// matching Codex's compact usage and resume handoff.
 fn print_exit_summary(summary: &ExitSummary) {
-    use std::io::Write;
+    use std::io::{IsTerminal, Write};
 
     let mut out = std::io::stdout();
+    let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let wordmark = if crossterm::terminal::size().is_ok_and(|(width, _)| width >= 50) {
+        crate::ui::RUSTCODE_WORDMARK.lines().collect::<Vec<_>>()
+    } else {
+        vec!["RustCode"]
+    };
+    for line in wordmark {
+        if color {
+            let purple = line
+                .chars()
+                .take(crate::ui::RUSTCODE_WORDMARK_SPLIT)
+                .collect::<String>();
+            let white = line
+                .chars()
+                .skip(crate::ui::RUSTCODE_WORDMARK_SPLIT)
+                .collect::<String>();
+            let _ = writeln!(
+                out,
+                "\x1b[38;2;181;139;255m{purple}\x1b[38;2;255;255;255m{white}\x1b[0m"
+            );
+        } else {
+            let _ = writeln!(out, "{line}");
+        }
+    }
+    let _ = writeln!(out);
     if let Some(usage) = summary.usage_line() {
         let _ = writeln!(out, "{usage}");
     }
     if !summary.session_id.is_empty() {
-        let _ = writeln!(out, "To continue this session, run rustcode --resume");
+        let _ = writeln!(out, "Session   {}", summary.session_id);
+        let _ = writeln!(out, "Continue  rustcode --resume");
     }
     if !summary.warnings.is_empty() {
         let _ = writeln!(out);
@@ -743,6 +769,13 @@ mod tests {
         );
         assert_eq!(format_number(999), "999");
         assert_eq!(format_number(1_000), "1,000");
+    }
+
+    #[test]
+    fn exit_wordmark_is_bundled_for_the_terminal_handoff() {
+        let lines: Vec<_> = crate::ui::RUSTCODE_WORDMARK.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|line| line.contains('▀')));
     }
 
     #[test]

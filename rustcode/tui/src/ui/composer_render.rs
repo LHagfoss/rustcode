@@ -611,7 +611,7 @@ pub(crate) fn render_input(
     state: &RenderSnapshot,
 ) -> Margin {
     let show_picker = state.modal_open();
-    let area = chunks[2];
+    let area = chunks[3];
     f.render_widget(Clear, area);
     f.render_widget(
         ratatui::widgets::Block::default().style(Style::default().bg(COLOR_PANEL())),

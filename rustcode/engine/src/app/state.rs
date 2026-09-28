@@ -178,6 +178,7 @@ pub struct AppState {
     pub show_subagent_picker: bool,
     pub subagent_picker_index: usize,
     pub show_context_modal: bool,
+    pub show_status_modal: bool,
     pub active_session_id: String,
     /// Whether the current logical turn may set the title of a new session.
     pub session_title_tool_available: bool,
@@ -1087,6 +1088,7 @@ impl AppState {
             show_subagent_picker: false,
             subagent_picker_index: 0,
             show_context_modal: false,
+            show_status_modal: false,
             session_title_tool_available: false,
             show_mcp_config: false,
             mcp_picker_index: 0,
@@ -1169,6 +1171,7 @@ impl AppState {
             || self.show_history_picker
             || self.show_subagent_picker
             || self.show_context_modal
+            || self.show_status_modal
             || self.show_update_prompt
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation

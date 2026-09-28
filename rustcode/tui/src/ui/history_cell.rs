@@ -41,9 +41,27 @@ pub(crate) struct TranscriptState {
     revision: u64,
     history_revision: Option<u64>,
     model: super::TranscriptModel,
+    scroll_rows: usize,
 }
 
 impl TranscriptState {
+    pub(crate) fn scroll_up(&mut self, rows: usize) {
+        self.scroll_rows = self.scroll_rows.saturating_add(rows).min(10_000);
+    }
+
+    pub(crate) fn scroll_down(&mut self, rows: usize) {
+        self.scroll_rows = self.scroll_rows.saturating_sub(rows);
+    }
+
+    pub(crate) fn scroll_rows(&self) -> usize {
+        self.scroll_rows
+    }
+
+    pub(crate) fn clamp_scroll_rows(&mut self, maximum: usize) -> usize {
+        self.scroll_rows = self.scroll_rows.min(maximum);
+        self.scroll_rows
+    }
+
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }

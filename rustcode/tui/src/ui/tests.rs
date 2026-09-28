@@ -351,12 +351,132 @@ fn acceptance_narrow_terminal_keeps_the_composer_visible() {
 }
 
 #[test]
-fn desired_height_keeps_an_idle_conversation_compact() {
+fn desired_height_keeps_the_composer_at_the_terminal_bottom() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     let mut transcript = TranscriptState::default();
 
-    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 6);
+    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 40);
+}
+
+#[test]
+fn short_live_reply_starts_at_the_top_of_the_chat_area() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.replace_current_response("short reply");
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let reply_row = lines
+        .iter()
+        .position(|line| line.contains("short reply"))
+        .unwrap();
+    let composer_row = lines
+        .iter()
+        .position(|line| line.contains("Ask RustCode to do anything"))
+        .unwrap();
+    assert!(reply_row < 3, "rendered: {rendered:?}");
+    assert!(composer_row > 18, "rendered: {rendered:?}");
+}
+
+#[test]
+fn streaming_reply_keeps_earlier_lines_visible_in_the_full_viewport() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.replace_current_response("First answer line\nSecond answer line");
+
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(
+        rendered.contains("First answer line"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Second answer line"),
+        "rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn static_slash_output_stays_visible_after_a_picker_closes() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("system", "RustCode build information"));
+    state.show_model_picker = true;
+    let picker = render_state_to_text(&mut state, 80, 24);
+    assert!(picker.contains("Select model"));
+    state.show_model_picker = false;
+    let chat = render_state_to_text(&mut state, 80, 24);
+    assert!(
+        chat.contains("RustCode build information"),
+        "rendered: {chat:?}"
+    );
+}
+
+#[test]
+fn transcript_scroll_moves_chat_without_changing_the_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    for index in 0..30 {
+        state
+            .history
+            .push(ChatMessage::new("system", format!("entry {index}")));
+    }
+    state.input_buffer = "unchanged draft".to_owned();
+    state.cursor_position = state.input_buffer.len();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let render_text = |terminal: &Terminal<TestBackend>| {
+        (0..24)
+            .map(|row| {
+                (0..80)
+                    .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let latest = render_text(&terminal);
+    transcript.scroll_up(1);
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let older = render_text(&terminal);
+    assert_ne!(latest, older);
+    assert!(latest.contains("unchanged draft"));
+    assert!(older.contains("unchanged draft"));
+    assert_eq!(state.input_buffer, "unchanged draft");
+}
+
+#[test]
+fn active_tool_does_not_repeat_a_committed_thought() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    let thought = "<think>Plan the shell command.</think>";
+    state.history.push(ChatMessage::new("assistant", thought));
+    state.replace_current_response(thought);
+    state.status = AppStatus::Streaming;
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(rustcode::app::LiveToolCall::new(
+        "call-1",
+        None,
+        "run_command",
+        "Bash",
+        "sleep 10",
+    ));
+    let rendered = render_state_to_text(&mut state, 100, 24);
+    assert_eq!(
+        rendered.matches("Plan the shell command.").count(),
+        1,
+        "rendered: {rendered:?}"
+    );
 }
 
 #[test]
@@ -454,7 +574,7 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
 }
 
 #[test]
-fn inline_command_suggestions_render_below_the_composer() {
+fn inline_command_suggestions_render_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -474,19 +594,65 @@ fn inline_command_suggestions_render_below_the_composer() {
             .collect::<String>()
     };
     let composer_row = (0..20)
-        .find(|row| row_text(*row).contains("/"))
+        .rev()
+        .find(|row| row_text(*row).contains("› /"))
         .expect("composer input row should be visible");
     let popup_row = (0..20)
         .find(|row| row_text(*row).contains("/cancel"))
         .expect("inline command popup should be visible");
 
     assert!(
-        popup_row > composer_row,
-        "popup should be below the composer: composer={composer_row}, popup={popup_row}"
+        popup_row < composer_row,
+        "popup should be above the composer: composer={composer_row}, popup={popup_row}"
     );
     assert!(
         !(0..20).any(|row| row_text(row).contains("context left")),
         "the footer should be hidden while completions are visible"
+    );
+}
+
+#[test]
+fn command_popup_keeps_composer_on_the_same_bottom_row() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.input_buffer = "/".to_owned();
+    state.cursor_position = 1;
+    state.active_suggestion_index = Some(0);
+    let with_popup = render_state_to_text(&mut state, 80, 24);
+    state.input_buffer = "draft".to_owned();
+    state.cursor_position = 5;
+    state.active_suggestion_index = None;
+    let without_popup = render_state_to_text(&mut state, 80, 24);
+    let input_row = |rendered: &str, needle: &str| {
+        rendered
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(needle))
+            .map(|(index, _)| index)
+            .last()
+            .expect("composer row")
+    };
+    assert_eq!(
+        input_row(&with_popup, "› /"),
+        input_row(&without_popup, "› draft")
+    );
+}
+
+#[test]
+fn status_screen_uses_the_viewport_above_the_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.show_status_modal = true;
+    state.active_session_id = "status-test".to_owned();
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(rendered.contains("Session status"));
+    assert!(rendered.contains("status-test"));
+    assert!(rendered.contains("Ask RustCode to do anything"));
+    assert!(
+        rendered
+            .lines()
+            .next()
+            .is_some_and(|line| line.trim().is_empty())
     );
 }
 
@@ -516,6 +682,7 @@ fn inline_command_selection_is_distinct_from_typed_input() {
         };
 
         let input_row = (0..20)
+            .rev()
             .find(|row| row_text(*row).contains(input))
             .expect("composer input row should be visible");
         let input_column = row_text(input_row)
@@ -547,7 +714,8 @@ fn inline_command_selection_is_distinct_from_typed_input() {
             })
             .unwrap();
         let selected_cell = &popup_terminal.backend().buffer()[(2, 0)];
-        assert_eq!(selected_cell.fg, COLOR_PRIMARY());
+        assert_eq!(selected_cell.fg, ratatui::style::Color::White);
+        assert_eq!(selected_cell.bg, COLOR_PRIMARY());
         assert!(selected_cell.modifier.contains(Modifier::BOLD));
         assert_eq!(popup_terminal.backend().buffer()[(0, 0)].symbol(), "›");
     }
@@ -861,7 +1029,7 @@ fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
     );
 
     let mut transcript = TranscriptState::default();
-    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 6);
+    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 40);
 }
 
 #[test]
@@ -4745,8 +4913,8 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
     state.show_model_picker = false;
     let h2 = desired_height(&state, &mut transcript, 80, 24);
     assert!(
-        h2 < h1,
-        "viewport should shrink on modal close, h1={h1}, h2={h2}"
+        h2 == h1,
+        "viewport should stay anchored on modal close, h1={h1}, h2={h2}"
     );
     terminal
         .draw_height(h2, |f| {
@@ -5114,10 +5282,9 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert_eq!(summary_row, header_row + 2);
     assert_eq!(first_grid_row, summary_row);
     assert_eq!(category_header_row, summary_row + 2);
-    assert_eq!(
-        21usize.saturating_sub(headroom_row + 1),
-        0,
-        "context modal should not leave bottom padding after its stats: headroom_row={headroom_row}, rendered={rendered:?}"
+    assert!(
+        headroom_row < lines.len() - 1,
+        "context stats should fit within the full-height view: {rendered:?}"
     );
 }
 

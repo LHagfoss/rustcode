@@ -1,5 +1,60 @@
 use super::*;
 
+pub(in crate::ui) fn render_status_modal(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let area = input_anchor_rect(f, input_area, 0);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let user_count = state.history().iter().filter(|m| m.role == "user").count();
+    let assistant_count = state
+        .history()
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .count();
+    let tool_count = state.history().iter().filter(|m| m.role == "tool").count();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Session status",
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  esc to close", Style::default().fg(COLOR_MUTED())),
+        ]),
+        Line::default(),
+        Line::from(format!("Model       {}", state.model_name())),
+        Line::from(format!("Session     {}", state.active_session_id())),
+        Line::from(format!(
+            "Messages    {user_count} user · {assistant_count} assistant · {tool_count} tool calls"
+        )),
+    ];
+    if let Some(usage) = state.current_token_usage() {
+        lines.push(Line::from(format!(
+            "Last turn   {} prompt + {} completion = {} tokens",
+            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
+        inner,
+    );
+}
+
 pub(in crate::ui) fn render_theme_picker_modal(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -60,28 +115,28 @@ pub(in crate::ui) fn render_theme_picker_modal(
         let active_badge = if is_active { " (active)" } else { "" };
         let full_desc = format!("{}{}", theme.description, active_badge);
         let line = if is_selected {
-            let left_text = format!(" ● {}", theme.name);
+            let left_text = format!("› {}", theme.name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
                     Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
+                        .fg(COLOR_TEXT())
+                        .bg(COLOR_HOVER_BG())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
                 Span::styled(
                     full_desc,
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
                 ),
             ])
         } else {
-            let left_text = format!("   {}", theme.name);
+            let left_text = format!("  {}", theme.name);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![

@@ -5,6 +5,7 @@ use std::io;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TuiEvent {
     Key(event::KeyEvent),
+    Mouse(event::MouseEvent),
     Paste(String),
     Resize { width: u16, height: u16 },
     FocusGained,
@@ -25,7 +26,7 @@ fn normalize_event(event: event::Event) -> Option<TuiEvent> {
         event::Event::Resize(width, height) => Some(TuiEvent::Resize { width, height }),
         event::Event::FocusGained => Some(TuiEvent::FocusGained),
         event::Event::FocusLost => Some(TuiEvent::FocusLost),
-        event::Event::Mouse(_) => None,
+        event::Event::Mouse(mouse) => Some(TuiEvent::Mouse(mouse)),
     }
 }
 
@@ -91,7 +92,9 @@ impl TuiEventStream {
 #[cfg(test)]
 mod tests {
     use super::{TuiEvent, normalize_event};
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    };
 
     #[test]
     fn normalizes_key_press_and_ignores_release() {
@@ -130,6 +133,20 @@ mod tests {
                 width: 120,
                 height: 40
             })
+        );
+    }
+
+    #[test]
+    fn forwards_mouse_wheel_events_for_transcript_scrolling() {
+        let wheel = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 2,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            normalize_event(Event::Mouse(wheel)),
+            Some(TuiEvent::Mouse(wheel))
         );
     }
 }

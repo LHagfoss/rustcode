@@ -3,8 +3,9 @@ use crate::ui::TuiEventStream;
 use crossterm::{
     cursor::{MoveTo, SetCursorStyle},
     event::{
-        self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{self, Clear, ClearType},
@@ -63,6 +64,7 @@ fn install_panic_restore() {
                     out,
                     DisableBracketedPaste,
                     DisableFocusChange,
+                    DisableMouseCapture,
                     SetCursorStyle::DefaultUserShape,
                     crossterm::style::Print("\x1b]9;4;0;0\x07")
                 );
@@ -82,6 +84,7 @@ fn restore_partial_start(out: &mut impl Write, screen: &mut AlternateScreen) {
         out,
         DisableBracketedPaste,
         DisableFocusChange,
+        DisableMouseCapture,
         SetCursorStyle::DefaultUserShape
     );
     if screen.leave(out).is_ok() {
@@ -123,10 +126,14 @@ pub(crate) struct TerminalRuntime {
     lifecycle: Lifecycle,
     alternate_screen: AlternateScreen,
     fullscreen: bool,
+    mouse_capture: bool,
 }
 
 impl TerminalRuntime {
-    pub(crate) fn start(fullscreen_requested: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn start(
+        fullscreen_requested: bool,
+        mouse_capture: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         terminal::enable_raw_mode()?;
 
         let mut stdout = io::stdout();
@@ -162,6 +169,12 @@ impl TerminalRuntime {
             }
         }
         let fullscreen = alternate_screen.is_active();
+        // Both modes now paint a full-height viewport. Enable wheel input only
+        // on local terminals whose capabilities we recognize, so tmux and SSH
+        // sessions never receive an unverified mouse protocol sequence.
+        if mouse_capture {
+            let _ = execute!(stdout, EnableMouseCapture);
+        }
         let backend = CrosstermBackend::new(stdout);
         let terminal = match if fullscreen {
             InlineTerminal::new_at_origin(backend)
@@ -185,6 +198,7 @@ impl TerminalRuntime {
             lifecycle: Lifecycle::active(),
             alternate_screen,
             fullscreen,
+            mouse_capture,
         })
     }
 
@@ -196,15 +210,13 @@ impl TerminalRuntime {
         self.restore_at(None)
     }
 
-    pub(crate) fn restore_at(&mut self, cursor_y: Option<u16>) -> io::Result<()> {
+    pub(crate) fn restore_at(&mut self, _cursor_y: Option<u16>) -> io::Result<()> {
         if self.lifecycle.is_restored() && !self.alternate_screen.is_active() {
             return Ok(());
         }
 
         let raw_result = terminal::disable_raw_mode();
         let area = self.terminal.area();
-        let transcript_end =
-            cursor_y.unwrap_or_else(|| area.y.saturating_add(area.height.saturating_sub(1)));
         // Keyboard enhancement flags are unsupported by Crossterm's legacy
         // Windows console API. Startup already treats enabling them as
         // best-effort; cleanup must do the same or a normal quit reports a
@@ -214,6 +226,7 @@ impl TerminalRuntime {
             self.terminal.backend_mut(),
             DisableBracketedPaste,
             DisableFocusChange,
+            DisableMouseCapture,
             SetCursorStyle::DefaultUserShape,
             crossterm::style::Print("\x1b]9;4;0;0\x07")
         );
@@ -228,7 +241,10 @@ impl TerminalRuntime {
         } else {
             execute!(
                 self.terminal.backend_mut(),
-                MoveTo(0, transcript_end),
+                // The full-height inline projection is transient. Clearing
+                // from its first row keeps committed native scrollback above
+                // it and avoids duplicating chat beside the exit handoff.
+                MoveTo(0, area.y),
                 Clear(ClearType::FromCursorDown)
             )
         };
@@ -270,6 +286,9 @@ impl TerminalRuntime {
             EnableFocusChange,
             SetCursorStyle::BlinkingBar
         )?;
+        if self.mouse_capture {
+            let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        }
         let _ = execute!(
             self.terminal.backend_mut(),
             PushKeyboardEnhancementFlags(
