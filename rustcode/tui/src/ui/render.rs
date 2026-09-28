@@ -159,6 +159,7 @@ pub(crate) fn render_with_transcript_snapshot(
         f.area()
             .height
             .saturating_sub(vertical_padding)
+            .saturating_sub(queue_block_height)
             .saturating_sub(provisional_input_height)
             .saturating_sub(footer_height),
     );
