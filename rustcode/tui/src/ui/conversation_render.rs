@@ -160,10 +160,10 @@ pub(super) fn render_selected_subagent_context(
         return Vec::new();
     };
     let status = match agent.status() {
-        rustcode::app::SubAgentStatus::Running => "running",
-        rustcode::app::SubAgentStatus::Completed => "completed",
-        rustcode::app::SubAgentStatus::Failed => "failed",
-        rustcode::app::SubAgentStatus::Cancelled => "cancelled",
+        rustcode::controller::SubAgentStatus::Running => "running",
+        rustcode::controller::SubAgentStatus::Completed => "completed",
+        rustcode::controller::SubAgentStatus::Failed => "failed",
+        rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
     };
     let parent = agent
         .parent_id()
@@ -358,7 +358,7 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::from(""));
     let message_padding = Span::styled("  ", line_style);
-    let recap = rustcode::app::sanitize_recap_content(content);
+    let recap = rustcode::controller::sanitize_recap_content(content);
     if !recap.is_empty() {
         let mut recap_lines = Vec::new();
         push_wrapped_with_continuation(
@@ -467,7 +467,7 @@ pub(crate) fn render_committed_assistant_text(
 pub(super) fn render_committed_assistant_text_with_metrics(
     content: &str,
     width: u16,
-    token_usage: Option<rustcode::app::TokenUsage>,
+    token_usage: Option<rustcode::controller::TokenUsage>,
     response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,

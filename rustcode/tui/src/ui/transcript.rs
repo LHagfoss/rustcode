@@ -126,29 +126,26 @@ impl TranscriptModel {
         }
     }
 
-    pub(crate) fn apply_agent_event(
-        &mut self,
-        event: &rustcode::network::ui_adapter::AgentUiEvent,
-    ) {
+    pub(crate) fn apply_agent_event(&mut self, event: &rustcode::controller::AgentUiEvent) {
         match event {
-            rustcode::network::ui_adapter::AgentUiEvent::PromptStarted { .. } => {
+            rustcode::controller::AgentUiEvent::PromptStarted { .. } => {
                 self.live = None;
             }
-            rustcode::network::ui_adapter::AgentUiEvent::SubagentUpdated { .. } => {}
-            rustcode::network::ui_adapter::AgentUiEvent::TextDelta { text } => {
+            rustcode::controller::AgentUiEvent::SubagentUpdated { .. } => {}
+            rustcode::controller::AgentUiEvent::TextDelta { text } => {
                 self.apply_text_delta(text);
             }
-            rustcode::network::ui_adapter::AgentUiEvent::TurnFinished { content, .. } => {
+            rustcode::controller::AgentUiEvent::TurnFinished { content, .. } => {
                 if !content.is_empty() {
                     self.replace_live_text(content);
                 }
                 self.commit_live();
             }
-            rustcode::network::ui_adapter::AgentUiEvent::Cancelled { .. }
-            | rustcode::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
-            | rustcode::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
-            | rustcode::network::ui_adapter::AgentUiEvent::QuestionRequested { .. }
-            | rustcode::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
+            rustcode::controller::AgentUiEvent::Cancelled { .. }
+            | rustcode::controller::AgentUiEvent::ToolStarted { .. }
+            | rustcode::controller::AgentUiEvent::ApprovalRequested { .. }
+            | rustcode::controller::AgentUiEvent::QuestionRequested { .. }
+            | rustcode::controller::AgentUiEvent::ToolFinished { .. } => {}
         }
     }
 
@@ -259,10 +256,10 @@ mod tests {
     #[test]
     fn agent_ui_events_update_one_live_cell_and_commit_it() {
         let mut model = TranscriptModel::default();
-        model.apply_agent_event(&rustcode::network::ui_adapter::AgentUiEvent::TextDelta {
+        model.apply_agent_event(&rustcode::controller::AgentUiEvent::TextDelta {
             text: "answer".to_owned(),
         });
-        model.apply_agent_event(&rustcode::network::ui_adapter::AgentUiEvent::TurnFinished {
+        model.apply_agent_event(&rustcode::controller::AgentUiEvent::TurnFinished {
             content: "answer".to_owned(),
             completed: true,
         });

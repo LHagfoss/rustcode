@@ -195,7 +195,7 @@ fn render_snapshot_preserves_existing_ui_output() {
         task: "review the patch".to_owned(),
         model: Some("test-model".to_owned()),
         history: std::sync::Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
-        status: rustcode::app::SubAgentStatus::Running,
+        status: rustcode::controller::SubAgentStatus::Running,
         active_turn: true,
         parent_id: Some(3),
         write_access: false,
@@ -1032,7 +1032,7 @@ fn theme_change_changes_cache_keys() {
 
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-    let verbosity = rustcode::app::Verbosity::Low;
+    let verbosity = rustcode::controller::Verbosity::Low;
     theme::set_active_theme("default");
     let key1 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
     theme::set_active_theme("nord");
@@ -1161,7 +1161,7 @@ fn persisted_edit_result_resolves_tool_name_without_previous_call() {
             tool_name.as_deref().unwrap(),
             result.strip_prefix("replace_file_content: ").unwrap(),
             80,
-            &rustcode::app::Verbosity::Low,
+            &rustcode::controller::Verbosity::Low,
             false,
         )
         .iter()
@@ -1825,8 +1825,8 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
 #[test]
 fn default_verbosity_is_high() {
     assert_eq!(
-        rustcode::app::Verbosity::default(),
-        rustcode::app::Verbosity::High
+        rustcode::controller::Verbosity::default(),
+        rustcode::controller::Verbosity::High
     );
 }
 
@@ -2467,7 +2467,7 @@ fn thought_preview_does_not_split_wide_or_multibyte_characters() {
 #[test]
 fn test_thinking_renders_metadata_and_summary() {
     use super::{AssistantRenderOptions, render_assistant_message};
-    use rustcode::app::TokenUsage;
+    use rustcode::controller::TokenUsage;
 
     let content =
         "<think>\nUnderstanding the history issue.\nTracing line by line.\n</think>\nDone";
@@ -2512,7 +2512,7 @@ fn test_thinking_renders_metadata_and_summary() {
 #[test]
 fn thinking_metadata_uses_thought_stats_not_full_response_stats() {
     use super::{AssistantRenderOptions, render_assistant_message};
-    use rustcode::app::TokenUsage;
+    use rustcode::controller::TokenUsage;
 
     let mut lines = Vec::new();
     let mut copies = Vec::new();
@@ -3678,7 +3678,7 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
     let rendered = super::history_cell::render_live_tool_cell_with_verbosity(
         &[call],
         80,
-        &rustcode::app::Verbosity::High,
+        &rustcode::controller::Verbosity::High,
         false,
     )
     .into_iter()
@@ -5134,7 +5134,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     state
         .history
         .push(ChatMessage::new("tool", "x".repeat(80_000)));
-    state.current_token_usage = Some(rustcode::app::TokenUsage {
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
         prompt_tokens: 4_000,
         completion_tokens: 500,
         total_tokens: 4_500,
@@ -5193,7 +5193,7 @@ fn selected_subagent_context_usage_and_categories_use_child_history() {
         task: "review".to_owned(),
         model: None,
         history: std::sync::Arc::new(child_history.clone()),
-        status: rustcode::app::SubAgentStatus::Completed,
+        status: rustcode::controller::SubAgentStatus::Completed,
         active_turn: false,
         parent_id: None,
         write_access: false,

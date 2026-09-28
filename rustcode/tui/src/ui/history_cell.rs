@@ -66,10 +66,7 @@ impl TranscriptState {
         self.model.replace_live_text(live_text);
     }
 
-    pub(crate) fn apply_agent_event(
-        &mut self,
-        event: &rustcode::network::ui_adapter::AgentUiEvent,
-    ) {
+    pub(crate) fn apply_agent_event(&mut self, event: &rustcode::controller::AgentUiEvent) {
         self.model.apply_agent_event(event);
     }
 
@@ -186,7 +183,7 @@ impl TranscriptState {
 
 pub(super) struct AssistantMarkdownCell {
     pub(super) source: String,
-    token_usage: Option<rustcode::app::TokenUsage>,
+    token_usage: Option<rustcode::controller::TokenUsage>,
     pub(super) response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
@@ -209,7 +206,7 @@ impl HistoryCell for LiveToolCell {
 impl AssistantMarkdownCell {
     pub(super) fn committed(
         source: &str,
-        token_usage: Option<rustcode::app::TokenUsage>,
+        token_usage: Option<rustcode::controller::TokenUsage>,
         response_time_ms: Option<u64>,
         thought_time_ms: Option<u64>,
         thought_tokens: Option<u32>,
