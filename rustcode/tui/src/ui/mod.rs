@@ -1,5 +1,4 @@
 mod assistant_render;
-mod composer;
 mod composer_render;
 mod context_usage;
 mod conversation_render;
@@ -7,7 +6,7 @@ mod events;
 mod frame_requester;
 mod highlight;
 mod history_cell;
-mod keymap;
+pub(crate) mod keymap;
 mod lru;
 mod markdown;
 mod modals;
@@ -17,7 +16,8 @@ mod status_render;
 mod terminal_runtime;
 mod transcript;
 
-pub(crate) use composer::{Composer, ComposerAction};
+pub(crate) use crate::runtime::{Composer, ComposerAction};
+pub(crate) use composer_render::render_input;
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
 pub(crate) use history_cell::TranscriptState;
