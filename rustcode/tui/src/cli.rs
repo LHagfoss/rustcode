@@ -118,6 +118,22 @@ pub enum Commands {
         command: DaemonCommands,
     },
 
+    /// Serve interactive sessions over TCP for remote frontends (experimental)
+    Serve {
+        /// TCP port to listen on
+        #[arg(long, default_value_t = 17878)]
+        port: u16,
+        /// Address to bind (loopback by default; non-loopback needs --allow-remote)
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Per-launch auth token (generated and printed when omitted)
+        #[arg(long)]
+        token: Option<String>,
+        /// Allow binding non-loopback addresses for LAN clients
+        #[arg(long)]
+        allow_remote: bool,
+    },
+
     /// Manage scheduled jobs through the running daemon
     Cron {
         #[command(subcommand)]

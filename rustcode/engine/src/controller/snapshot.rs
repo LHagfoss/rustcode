@@ -71,13 +71,13 @@ impl ControllerHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ModelChoice {
     pub id: String,
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionChoice {
     pub id: String,
     pub title: String,
@@ -100,19 +100,19 @@ impl SessionChoice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum PromptSubmitMode {
     Steer,
     Queue,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum PendingPromptKind {
     Steer,
     Queue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PendingPrompt {
     pub session_id: String,
     pub generation: u64,
@@ -123,7 +123,7 @@ pub struct PendingPrompt {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TranscriptItem {
     pub role: String,
     pub content: String,
@@ -135,7 +135,7 @@ pub struct TranscriptItem {
     pub thought_time_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct QuestionPrompt {
     pub header: String,
     pub text: String,
@@ -144,7 +144,7 @@ pub struct QuestionPrompt {
     pub multiple: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalAction {
     pub request_id: String,
     pub tool_name: String,
@@ -203,14 +203,14 @@ impl ApprovalAction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalPrompt {
     pub tool_name: String,
     pub description: String,
 }
 
 /// Exact, controller-owned approval batch for batch-aware frontends.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalBatchPrompt {
     /// Presentation signature for the action request IDs in this batch.
     pub request_id: String,
@@ -253,7 +253,7 @@ fn bounded_preview(value: &str, max_chars: usize) -> String {
 }
 
 /// An owned, presentation-independent view of the current interactive session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ControllerSnapshot {
     pub generation: u64,
     pub workspace: Option<PathBuf>,
