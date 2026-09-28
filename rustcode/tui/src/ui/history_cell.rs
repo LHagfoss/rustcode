@@ -113,6 +113,19 @@ impl TranscriptState {
         thought_time_ms: Option<u64>,
         thought_tokens: Option<u32>,
     ) {
+        if let Some(cell) = self.assistant.as_mut()
+            && cell.source == source
+            && cell.continuation == continuation
+            && !source.contains("<think>")
+            && !source.contains("</think>")
+        {
+            // Timer metadata is invisible without a thought preview. Keep the
+            // rendered Markdown when a frame arrives with unchanged text.
+            cell.response_time_ms = response_time_ms;
+            cell.thought_time_ms = thought_time_ms;
+            cell.thought_tokens = thought_tokens;
+            return;
+        }
         let changed = self.assistant.as_ref().is_none_or(|cell| {
             cell.source != source
                 || cell.continuation != continuation
@@ -607,7 +620,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
 #[cfg(test)]
 mod tests {
-    use super::TranscriptState;
+    use super::{HistoryCell, TranscriptState};
     use rustcode::app::state::{ChatMessage, History};
 
     #[test]
@@ -653,5 +666,56 @@ mod tests {
                 .iter()
                 .all(|cell| !matches!(cell, crate::ui::transcript::HistoryCell::System(_)))
         );
+    }
+
+    #[test]
+    fn plain_stream_timer_update_reuses_rendered_markdown() {
+        let mut transcript = TranscriptState::default();
+        transcript.set_assistant(
+            "A **long** response\n\nwith more text",
+            false,
+            Some(100),
+            None,
+            None,
+        );
+        let rendered = transcript.assistant.as_ref().unwrap().display_lines(80);
+        let revision = transcript.revision();
+
+        transcript.set_assistant(
+            "A **long** response\n\nwith more text",
+            false,
+            Some(200),
+            None,
+            None,
+        );
+
+        assert_eq!(transcript.revision(), revision);
+        assert!(
+            transcript
+                .assistant
+                .as_ref()
+                .unwrap()
+                .cached_display
+                .borrow()
+                .is_some()
+        );
+        assert_eq!(
+            transcript.assistant.as_ref().unwrap().display_lines(80),
+            rendered
+        );
+    }
+
+    #[test]
+    fn thought_stream_timer_update_refreshes_visible_elapsed_time() {
+        let mut transcript = TranscriptState::default();
+        let source = "<think>Inspecting the file</think>Answer";
+        transcript.set_assistant(source, false, Some(100), Some(100), None);
+        let first = transcript.assistant.as_ref().unwrap().display_lines(80);
+
+        transcript.set_assistant(source, false, Some(200), Some(200), None);
+        let second = transcript.assistant.as_ref().unwrap().display_lines(80);
+
+        assert_ne!(first, second);
+        assert!(second.iter().any(|line| line.to_string().contains("200ms")));
     }
 }
