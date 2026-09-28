@@ -131,6 +131,26 @@ impl MarkdownTableCell {
         self.spans.push(Span::styled(text.to_owned(), style));
     }
 
+    fn push_capped_text(&mut self, text: &str, style: ratatui::style::Style) {
+        const MAX_CONTENT_BYTES: usize = 400;
+        let remaining = MAX_CONTENT_BYTES.saturating_sub(self.plain_text().len());
+        let end = text
+            .char_indices()
+            .take_while(|(index, character)| index + character.len_utf8() <= remaining)
+            .map(|(index, character)| index + character.len_utf8())
+            .last()
+            .unwrap_or(0);
+        self.push_text(&text[..end], style);
+        if end < text.len()
+            && !self
+                .spans
+                .last()
+                .is_some_and(|span| span.content.ends_with('…'))
+        {
+            self.push_text("…", style);
+        }
+    }
+
     fn plain_text(&self) -> String {
         self.spans
             .iter()
@@ -939,7 +959,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         let fallback = format!(" ({destination})");
                         let style = text_style(inline, show_picker);
                         if in_table {
-                            current_cell.push_text(&fallback, style);
+                            current_cell.push_capped_text(&fallback, style);
                         } else {
                             paragraph.push(Span::styled(fallback, style));
                         }
@@ -957,21 +977,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     } else {
                         text_style(inline, show_picker)
                     };
-                    let current_len = current_cell.plain_text().len();
-                    let remaining = 400usize.saturating_sub(current_len);
-                    if remaining > 0 {
-                        let end = text
-                            .char_indices()
-                            .take_while(|(index, _)| *index < remaining)
-                            .map(|(index, character)| index + character.len_utf8())
-                            .last()
-                            .unwrap_or(0)
-                            .min(text.len());
-                        current_cell.push_text(&text[..end], style);
-                        if end < text.len() {
-                            current_cell.push_text("…", style);
-                        }
-                    }
+                    current_cell.push_capped_text(&text, style);
                     continue;
                 }
                 let mut style = inline;
@@ -1225,6 +1231,22 @@ mod tests {
         assert!(
             copyable.contains("https://example.com/docs"),
             "rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn long_table_link_destination_is_utf8_safe_and_visibly_truncated() {
+        let destination = format!("https://example.com/{}", "é".repeat(1_000));
+        let markdown = format!("| Resource |\n|---|\n| [guide]({destination}) |");
+        let rendered = render_markdown(&markdown, 80, false, false)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains('…'), "rendered: {rendered:?}");
+        assert!(
+            rendered.matches('é').count() <= 200,
+            "table cell exceeded its 400-byte content cap"
         );
     }
 
