@@ -54,10 +54,10 @@ rustcode::network::compaction
 rustcode::tools::background_task_manager
 rustcode::tools::tool_system_prompt
 rustcode::tools::mcp_tool_display_name
-# Config mutation:
-rustcode::config
-rustcode::config::save_entire_config
-rustcode::config::get_config_dir
+# Config read/mutate now routes through rustcode::controller (AppConfig,
+# AgentMode, ModelProfile, SessionMeta, ToolProtocol, save_config,
+# config_dir, Command::SaveConfig — issue #1440). The CLI entry keeps its
+# process-level config uses: it boots before any session exists.
 # Leaf utilities (likely permanent; revisit last):
 # current_version stays: env!("CARGO_PKG_VERSION") must resolve to the
 # shipping binary, not the core library.

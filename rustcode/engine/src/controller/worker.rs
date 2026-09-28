@@ -282,6 +282,15 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                 }
             }
+            Command::SaveConfig => {
+                if let Some(session) = active.as_ref() {
+                    let state = session.state.lock().await;
+                    super::config::save_config(&state.config);
+                    send_snapshot_locked(&updates, session.generation, &state);
+                } else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                }
+            }
             Command::StopBackgroundTask {
                 session_id,
                 task_id,

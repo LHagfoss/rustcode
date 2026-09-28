@@ -300,17 +300,17 @@ pub(in crate::ui) fn render_protocol_picker_modal(
     let choices = [
         (
             "ApiNative",
-            rustcode::config::ToolProtocol::ApiNative,
+            rustcode::controller::ToolProtocol::ApiNative,
             "Structured API schema (`tools` field + `tool_calls` output)",
         ),
         (
             "Json",
-            rustcode::config::ToolProtocol::Json,
+            rustcode::controller::ToolProtocol::Json,
             "Standard JSON markdown (```tool)",
         ),
         (
             "Native",
-            rustcode::config::ToolProtocol::Native,
+            rustcode::controller::ToolProtocol::Native,
             "Bracketed format ([TOOL_CALLS])",
         ),
     ];
