@@ -40,7 +40,13 @@ error frame (idempotent stop semantics do not apply to approvals).
 ```
 
 After `ready`, the server replays the latest snapshot, then streams worker
-events. `update` is a flat tagged map — never a nested envelope:
+events. The live subscription starts before snapshot replay. A replay can
+therefore be followed by a duplicate snapshot or update; clients should treat
+snapshots as authoritative and ignore events from older `generation` values.
+A client that falls more than 64 queued updates behind is disconnected and
+must reconnect for a fresh snapshot. There is no per-update sequence number
+or exact resume position in protocol v1. `update` is a flat tagged map —
+never a nested envelope:
 
 - `{"type": "snapshot", …}` — full `ControllerSnapshot` (transcript,
   pending prompts/approvals/questions, models, sessions, background tasks
@@ -56,6 +62,12 @@ frames, never as an `update`, so a client needs one error path. Codes are
 stable snake_case: `no_active_session`, `invalid_workspace`, `session`,
 `model`, `provider`, `channel_closed`, plus `unauthorized` for a failed
 handshake. Field order within a frame is not significant.
+
+MVP limits: every snapshot contains the full transcript. Once its serialized
+frame exceeds 1 MiB, that client connection closes; transcript paging or
+bounded snapshots are follow-up work. Authentication compares all token bytes
+without an early exit, but there is no connection cap or auth rate limit.
+Use loopback or a trusted LAN only; the transport has no TLS.
 
 A typical round-trip: `auth` → `ready` + snapshot → `list_sessions` →
 snapshot → `submit` → snapshot/turn stream → (`approve` with the batch id
