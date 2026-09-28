@@ -40,6 +40,7 @@ use rustcode::controller::ControllerHandle;
 fn draw(handle: &rustcode::controller::ControllerHandle, text: &str) {
     let _ = crate::ui::theme::current();
     let _ = rustcode_core::paste::expand(text);
+    let _ = rustcode::controller::background_command_label(text, 8);
     let _ = handle;
 }
 EOF

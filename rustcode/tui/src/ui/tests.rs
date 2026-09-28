@@ -3087,7 +3087,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     let snapshot = render_snapshot(&state);
     state.background_turn_context = None;
     let neutral_snapshot = render_snapshot(&state);
-    rustcode::tools::stop_background_tasks(&session_id);
+    rustcode::controller::stop_background_tasks(&session_id, None);
 
     let status = super::activity_status_line(&snapshot, false).to_string();
     assert!(status.contains("Idle"), "{status}");
@@ -3114,7 +3114,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     assert!(live_tail.contains("⠋ 1 running ("));
     assert!(live_tail.contains(&format!("  └ {long_command}")));
     assert_eq!(
-        rustcode::tools::background_command_label("cargo\n test\t--locked", 80),
+        rustcode::controller::background_command_label("cargo\n test\t--locked", 80),
         "cargo test --locked"
     );
 }
@@ -3143,7 +3143,7 @@ fn background_terminal_chip_compacts_more_than_three_tasks() {
 
     let snapshot = render_snapshot(&state);
     let summary = super::background_terminal_summary(&snapshot);
-    rustcode::tools::stop_background_tasks(&session_id);
+    rustcode::controller::stop_background_tasks(&session_id, None);
 
     assert!(summary.contains("⠋ 4 running ("), "{summary}");
     assert!(summary.contains("1 more"), "{summary}");

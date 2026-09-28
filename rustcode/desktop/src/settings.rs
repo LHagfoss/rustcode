@@ -97,6 +97,7 @@ mod tests {
             pending_question: None,
             pending_approval: None,
             pending_approval_batch: None,
+            background_tasks: Vec::new(),
         }
     }
 

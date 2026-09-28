@@ -5,6 +5,7 @@ mod attachments;
 mod events;
 mod native_commands;
 mod snapshot;
+mod tasks;
 mod worker;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +37,10 @@ pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
     ControllerSnapshot, ModelChoice, PendingPrompt, PendingPromptKind, PromptSubmitMode,
     QuestionPrompt, SessionChoice, TranscriptItem,
+};
+pub use tasks::{
+    TaskDisplay, background_command_label, background_task_snapshots, has_background_tasks,
+    stop_background_tasks,
 };
 
 pub use worker::InteractiveController;
