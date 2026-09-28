@@ -252,14 +252,16 @@ impl Composer {
 
     fn toggle_agent_mode(&self, state: &mut AppState) {
         state.agent_mode = match state.agent_mode {
-            rustcode::config::AgentMode::Build => rustcode::config::AgentMode::Plan,
-            rustcode::config::AgentMode::Plan => rustcode::config::AgentMode::Build,
+            rustcode::controller::AgentMode::Build => rustcode::controller::AgentMode::Plan,
+            rustcode::controller::AgentMode::Plan => rustcode::controller::AgentMode::Build,
         };
         state.config.agent_mode = state.agent_mode;
-        rustcode::config::save_entire_config(&state.config);
+        rustcode::controller::save_config(&state.config);
         let notice = match state.agent_mode {
-            rustcode::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
-            rustcode::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
+            rustcode::controller::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
+            rustcode::controller::AgentMode::Plan => {
+                "Switched to Plan Mode (Read-only / Design only)"
+            }
         };
         rustcode::app::actions::push_ephemeral_status(state, notice.to_string());
     }
@@ -332,7 +334,7 @@ mod tests {
     fn shift_tab_toggles_agent_mode_without_changing_auto_confirm() {
         let composer = Composer::default();
         let mut state = AppState::new();
-        state.agent_mode = rustcode::config::AgentMode::Build;
+        state.agent_mode = rustcode::controller::AgentMode::Build;
         state.auto_confirm = false;
         state.input_buffer = "cargo test".to_owned();
         state.cursor_position = state.input_buffer.chars().count();
@@ -345,11 +347,11 @@ mod tests {
             ),
             ComposerAction::Handled
         );
-        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Plan);
+        assert_eq!(state.agent_mode, rustcode::controller::AgentMode::Plan);
         assert!(!state.auto_confirm);
 
         composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
-        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Build);
+        assert_eq!(state.agent_mode, rustcode::controller::AgentMode::Build);
         assert!(!state.auto_confirm);
     }
 
@@ -357,7 +359,7 @@ mod tests {
     fn plain_tab_does_not_toggle_agent_mode_without_completion() {
         let composer = Composer::default();
         let mut state = AppState::new();
-        state.agent_mode = rustcode::config::AgentMode::Plan;
+        state.agent_mode = rustcode::controller::AgentMode::Plan;
         state.input_buffer = "/context".to_owned();
         state.cursor_position = state.input_buffer.chars().count();
         state.active_suggestion_index = Some(0);
@@ -366,7 +368,7 @@ mod tests {
             composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),),
             ComposerAction::Handled
         );
-        assert_eq!(state.agent_mode, rustcode::config::AgentMode::Plan);
+        assert_eq!(state.agent_mode, rustcode::controller::AgentMode::Plan);
     }
 
     #[test]

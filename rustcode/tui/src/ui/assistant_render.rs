@@ -272,7 +272,7 @@ pub(super) fn strip_rendered_tool_blocks(content: &str) -> String {
             let block = &after_tag[..rel_end];
             let is_tool_call = rustcode_tool_protocol::parse_tool_call(
                 block,
-                rustcode::config::ToolProtocol::Json,
+                rustcode::controller::ToolProtocol::Json,
             )
             .is_some();
 

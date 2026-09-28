@@ -23,6 +23,8 @@ pub enum Command {
     Cancel,
     SetAutoApprove(bool),
     SelectModel(String),
+    /// Persist the active session's config to disk (settings/MCP flows).
+    SaveConfig,
     /// Stop background tasks: just `task_id` when given, the whole
     /// `session_id` otherwise. Idempotent — unknown ids stop nothing and
     /// still refresh the snapshot.
