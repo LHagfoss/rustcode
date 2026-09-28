@@ -14,6 +14,10 @@ frontend carries only its own rendering and input code.
 | Daemon / headless | in-tree (`engine/src/daemon.rs`, CLI flags) | same crate |
 | Mobile | remote only — see `docs/mobile.md` | JSON protocol, never links Rust |
 
+The experimental `rustcode serve` command is the TCP transport for remote
+frontends. It drives `rustcode::controller` and is documented in
+[`mobile.md`](mobile.md).
+
 ## The seam
 
 `rustcode::controller` (`engine/src/controller/`) is the UI-neutral contract
