@@ -69,7 +69,7 @@ pub(crate) fn desired_height_snapshot(
     let filtered_cmds = if completion_dismissed {
         Vec::new()
     } else {
-        rustcode::app::suggestion::filtered_commands(&state.input_buffer())
+        rustcode::controller::filtered_commands(&state.input_buffer())
     };
     let (_, at_query) =
         rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
@@ -80,7 +80,7 @@ pub(crate) fn desired_height_snapshot(
                 [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
-        rustcode::app::list_project_file_paths(&at_query)
+        rustcode::controller::list_project_file_paths(&at_query)
     } else {
         Vec::new()
     };
@@ -162,7 +162,7 @@ pub(crate) fn render_with_transcript_snapshot(
     let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
         Vec::new()
     } else {
-        rustcode::app::suggestion::filtered_commands(&state.input_buffer())
+        rustcode::controller::filtered_commands(&state.input_buffer())
     };
 
     let inner_width = f.area().width.max(1);
@@ -188,7 +188,7 @@ pub(crate) fn render_with_transcript_snapshot(
                 [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
-        rustcode::app::list_project_file_paths(&at_query)
+        rustcode::controller::list_project_file_paths(&at_query)
     } else {
         Vec::new()
     };

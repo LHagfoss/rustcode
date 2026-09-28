@@ -5,6 +5,7 @@ mod attachments;
 mod config;
 mod context;
 mod events;
+mod input;
 mod native_commands;
 mod snapshot;
 mod tasks;
@@ -42,10 +43,15 @@ pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,
     accepts_generation,
 };
+pub use input::{
+    ActivityKind, ActivitySnapshot, CommandInfo, build_help_text, classify_activity,
+    classify_live_tools, command_token, filtered_commands, get_completion_len,
+    list_project_file_paths, summarize_tool_call,
+};
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
-    ControllerSnapshot, ModelChoice, PendingPrompt, PendingPromptKind, PendingQuestion,
-    PromptSubmitMode, QuestionPrompt, SessionChoice, TranscriptItem,
+    ControllerSnapshot, DraftSubmitMode, ModelChoice, PendingPrompt, PendingPromptKind,
+    PendingQuestion, PromptSubmitMode, QuestionPrompt, SessionChoice, TranscriptItem,
 };
 pub use tasks::{
     TaskDisplay, background_command_label, background_task_snapshots, has_background_tasks,

@@ -34,15 +34,9 @@ rustcode_tool_protocol::resolve_tool_calls
 # Shared state access (route through controller snapshots):
 rustcode::app
 rustcode::app::state
-# Live activity tracking (classify_*, ActivityKind) moves with the tui crate.
-rustcode::app::activity
-rustcode::app::actions
-rustcode::app::suggestion
-rustcode::app::get_completion_len
-rustcode::app::list_project_file_paths
-# sanitize_recap_content converged in #1442 (controller wrapper).
-rustcode::app::build_help_text
-# apply_autocomplete converged in #1442 (composer input lives in runtime/).
+# Composer assistance + activity display converge in #1442 (controller/input:
+# classify_*, ActivityKind/Snapshot, suggestion, completion, file mentions,
+# help text; input driving already lives in runtime/).
 # Turn machinery (route through controller):
 # ui_adapter converged in #1442 (transcript renders the re-exported
 # AgentUiEvent contract type; native TurnUpdate production is endgame work).
