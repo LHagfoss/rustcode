@@ -600,7 +600,7 @@ fn render_preview_prompt(
     );
 }
 
-pub(super) fn render_input(
+pub(crate) fn render_input(
     f: &mut Frame,
     chunks: &[ratatui::layout::Rect],
     state: &RenderSnapshot,

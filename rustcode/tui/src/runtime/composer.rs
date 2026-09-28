@@ -1,6 +1,6 @@
-use super::RenderSnapshot;
-use super::keymap::{KeyAction, KeyMap};
 use crate::inline_terminal::Frame;
+use crate::ui::keymap::{KeyAction, KeyMap};
+use crate::ui::render_snapshot::RenderSnapshot;
 use crossterm::event::KeyEvent;
 use ratatui::layout::{Margin, Rect};
 use rustcode::app::{AppState, ChatMessage};
@@ -213,7 +213,7 @@ impl Composer {
         chunks: &[Rect],
         state: &RenderSnapshot,
     ) -> Margin {
-        super::render_input(frame, chunks, state)
+        crate::ui::render_input(frame, chunks, state)
     }
 
     fn cycle_suggestion(&self, state: &mut AppState, next: bool) -> bool {
