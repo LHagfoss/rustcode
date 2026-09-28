@@ -56,6 +56,24 @@ impl TranscriptState {
         self.scroll_rows = self.scroll_rows.saturating_sub(rows);
     }
 
+    /// Advance at most one selected row before painting so every crossed row is cached.
+    pub(crate) fn step_selection_scroll(&mut self) -> bool {
+        let before = self.scroll_rows;
+        let Some(direction) = self.selection.take_scroll_step(before) else {
+            return false;
+        };
+        if direction < 0 {
+            self.scroll_up(1);
+        } else {
+            self.scroll_down(1);
+        }
+        if self.scroll_rows == before {
+            self.selection.cancel_pending_scroll();
+            return false;
+        }
+        true
+    }
+
     pub(crate) fn scroll_rows(&self) -> usize {
         self.scroll_rows
     }

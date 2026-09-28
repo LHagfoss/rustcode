@@ -35,6 +35,7 @@ pub(crate) struct TranscriptSelection {
     captured: BTreeMap<i64, CapturedRow>,
     viewport_scroll: usize,
     viewport_top_key: i64,
+    pending_scroll: isize,
     pointer: Option<(u16, u16)>,
     origin_row: u16,
     moved_vertically: bool,
@@ -51,6 +52,7 @@ impl TranscriptSelection {
         self.pointer = None;
         self.moved_vertically = false;
         self.last_edge_attempt = None;
+        self.pending_scroll = 0;
     }
 
     pub(crate) fn has_selection(&self) -> bool {
@@ -59,6 +61,15 @@ impl TranscriptSelection {
 
     pub(crate) fn is_dragging(&self) -> bool {
         self.dragging
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.snapshot.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn area(&self) -> Rect {
+        self.area
     }
 
     pub(crate) fn refresh(&mut self, area: Rect, buffer: &Buffer, soft_wrap_before: &[bool]) {
@@ -100,12 +111,13 @@ impl TranscriptSelection {
             let old = &previous_rows[..old_count];
             let new = &rows[..new_count];
             let scroll_up = scroll_rows > self.viewport_scroll;
+            let minimum_shift = scroll_rows.abs_diff(self.viewport_scroll);
             let max_overlap = old_count.min(new_count);
             let overlap = (1..=max_overlap).rev().find(|&count| {
                 if scroll_up {
-                    old[..count] == new[new_count - count..]
+                    new_count - count >= minimum_shift && old[..count] == new[new_count - count..]
                 } else {
-                    old[old_count - count..] == new[..count]
+                    old_count - count >= minimum_shift && old[old_count - count..] == new[..count]
                 }
             });
             let advanced = if scroll_up {
@@ -284,6 +296,29 @@ impl TranscriptSelection {
     pub(crate) fn pause_edge_scroll(&mut self) {
         self.pointer = None;
         self.last_edge_attempt = None;
+    }
+
+    pub(crate) fn queue_scroll(&mut self, direction: isize, count: usize) {
+        self.pause_edge_scroll();
+        self.pending_scroll = self
+            .pending_scroll
+            .saturating_add(direction.saturating_mul(count as isize))
+            .clamp(-10_000, 10_000);
+    }
+
+    pub(crate) fn take_scroll_step(&mut self, scroll_rows: usize) -> Option<isize> {
+        if self.pending_scroll != 0 {
+            let direction = self.pending_scroll.signum();
+            self.pending_scroll -= direction;
+            return Some(direction);
+        }
+        let direction = self.edge_scroll_direction(scroll_rows)?;
+        self.mark_edge_attempt(direction, scroll_rows);
+        Some(direction)
+    }
+
+    pub(crate) fn cancel_pending_scroll(&mut self) {
+        self.pending_scroll = 0;
     }
 
     pub(crate) fn edge_scroll_direction(&self, scroll_rows: usize) -> Option<isize> {
@@ -713,5 +748,68 @@ mod tests {
         let _ = rendered_transcript(&state, &mut transcript);
         assert_eq!(transcript.selection.viewport_top_key, old_top);
         assert_eq!(transcript.selection.selected_text().unwrap(), after);
+    }
+
+    #[test]
+    fn repeated_identical_rows_still_advance_anchor_when_scrolled() {
+        let mut state = AppState::new();
+        state.history.push(ChatMessage::new(
+            "assistant",
+            std::iter::repeat_n("repeat", 40)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 1,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        let old_top = transcript.selection.viewport_top_key;
+
+        transcript.scroll_up(1);
+        let _ = rendered_transcript(&state, &mut transcript);
+
+        assert_eq!(transcript.selection.viewport_top_key, old_top - 1);
+    }
+
+    #[test]
+    fn coalesced_wheel_steps_capture_each_row_before_later_drag() {
+        let state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.queue_scroll(-1, 3);
+        for step in 1..=3 {
+            assert!(transcript.step_selection_scroll());
+            let _ = rendered_transcript(&state, &mut transcript);
+            assert_eq!(transcript.scroll_rows(), step);
+        }
+        assert!(!transcript.step_selection_scroll());
+        assert!(transcript.selection.captured.len() >= area.height as usize + 3);
+
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+        let selected = transcript.selection.selected_text().unwrap();
+        assert!(selected.contains("history row"));
+        assert_eq!(transcript.selection.viewport_top_key, -3);
     }
 }
