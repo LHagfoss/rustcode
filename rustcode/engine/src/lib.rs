@@ -18,6 +18,7 @@ pub mod network;
 mod notifications;
 mod platform;
 pub mod raw_cli;
+pub mod serve;
 pub mod shell_env;
 pub mod skills;
 mod symbols;
