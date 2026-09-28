@@ -389,7 +389,7 @@ impl DaemonLifecycle {
     }
 }
 
-fn is_lock_busy(error: &anyhow::Error) -> bool {
+pub(super) fn is_lock_busy(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
