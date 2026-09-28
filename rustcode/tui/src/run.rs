@@ -215,6 +215,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if run_daemon_or_cron_command(&cli_args).await? {
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Serve {
+        port,
+        bind,
+        token,
+        allow_remote,
+    }) = cli_args.command.as_ref()
+    {
+        let workspace = std::env::current_dir()?;
+        rustcode::serve::run(bind, *port, token.clone(), *allow_remote, workspace).await?;
+        return Ok(());
+    }
     // Rotate a debug log left by a previous process before startup emits new
     // diagnostics. The logger also checks the cap before each append so long-
     // lived processes remain bounded.
