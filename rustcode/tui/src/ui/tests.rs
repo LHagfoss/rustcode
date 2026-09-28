@@ -3182,7 +3182,7 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
 }
 
 #[test]
-fn deferred_tool_batch_notice_stays_out_of_the_chat() {
+fn deferred_tool_batch_notice_explains_scheduling_without_a_failure_warning() {
     let mut state = rustcode::app::AppState::new();
     state.history.push(rustcode::app::ChatMessage::new(
         "system",
@@ -3194,7 +3194,14 @@ fn deferred_tool_batch_notice_stays_out_of_the_chat() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.is_empty(), "rendered: {rendered:?}");
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("deferred by the scheduler")),
+        "rendered: {rendered:?}"
+    );
+    assert!(rendered.iter().all(|line| !line.starts_with("! ")));
+    assert!(rendered.iter().all(|line| !line.contains("call_123")));
 }
 
 #[test]
@@ -4058,6 +4065,116 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
             .all(|row| !row.contains('╭') && !row.contains('╰')),
         "the question panel should stay borderless while the welcome panel remains in chat"
     );
+}
+
+#[test]
+fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    for index in 0..12 {
+        state.history.push(ChatMessage::new(
+            "user",
+            format!("conversation message {index}"),
+        ));
+    }
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    let mut transcript = TranscriptState::default();
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let before_cells = terminal.backend().buffer().content.clone();
+    let before = (0..20)
+        .map(|row| {
+            (0..60)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    state.status = AppStatus::AwaitingQuestion;
+    state.pending_question = Some(rustcode::app::PendingQuestion::new(
+        "Choose an option.".to_owned(),
+        vec!["Option 1".to_owned(), "Option 2".to_owned()],
+        false,
+    ));
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let after = (0..20)
+        .map(|row| {
+            (0..60)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &after[..6],
+        &before[..6],
+        "question should overlay the existing chat"
+    );
+    assert!(after.iter().any(|row| row.contains("Choose an option.")));
+
+    state.status = AppStatus::Idle;
+    state.pending_question = None;
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let restored = (0..20)
+        .map(|row| {
+            (0..60)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(restored, before, "closing the question restores the chat");
+    assert_eq!(terminal.backend().buffer().content, before_cells);
+}
+
+#[test]
+fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    for index in 0..12 {
+        state.history.push(ChatMessage::new(
+            "user",
+            format!(
+                "message {index} with enough words to wrap across the narrow transcript viewport"
+            ),
+        ));
+    }
+    let mut terminal = Terminal::new(TestBackend::new(36, 16)).unwrap();
+    let mut transcript = TranscriptState::default();
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let input_top = state.input_text_area.expect("composer area").y;
+    let before = (0..input_top)
+        .map(|row| {
+            (0..36)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    transcript.scroll_up(1);
+    terminal
+        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .unwrap();
+    let after = (0..input_top)
+        .map(|row| {
+            (0..36)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(after, before, "wheel step should move the transcript");
+    assert_eq!(after[2..], before[1..before.len() - 1]);
 }
 
 #[test]

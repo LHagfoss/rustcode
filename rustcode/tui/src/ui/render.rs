@@ -102,10 +102,15 @@ pub(crate) fn render_with_transcript_snapshot(
     let raw_input_lines = input_line_count(state, inner_width as usize);
     let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
     let question_active = *state.status() == AppStatus::AwaitingQuestion;
+    // Keep a lone prior answer visible above the question. With a longer
+    // transcript, overlay the question so the visible chat does not reflow.
+    let question_in_bottom_pane = question_active && state.history().len() <= 1;
     let provisional_input_height = if approval_active {
         tool_confirmation_height(state, f.area().height.saturating_sub(2))
-    } else if question_active {
+    } else if question_in_bottom_pane {
         question_height(state, f.area().width, f.area().height.saturating_sub(2))
+    } else if question_active {
+        3
     } else {
         raw_input_lines + 2
     };
@@ -150,7 +155,7 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(footer_height),
     );
 
-    let input_height = if approval_active || question_active {
+    let input_height = if approval_active || question_in_bottom_pane {
         provisional_input_height
     } else {
         let max_input_lines = f
@@ -208,14 +213,35 @@ pub(crate) fn render_with_transcript_snapshot(
     render_live_conversation(f, chunks[0], lines);
 
     render_queue_line(f, &chunks, state);
+    let question_area = if question_active && !question_in_bottom_pane {
+        let height = question_height(
+            state,
+            f.area().width,
+            layout_area.height.saturating_sub(footer_height),
+        );
+        Some(ratatui::layout::Rect::new(
+            chunks[3].x,
+            chunks[3].bottom().saturating_sub(height),
+            chunks[3].width,
+            height,
+        ))
+    } else {
+        None
+    };
     let input_margin = if approval_active {
         render_tool_confirmation_modal(f, state, chunks[3]);
         Margin {
             vertical: 0,
             horizontal: 0,
         }
-    } else if question_active {
+    } else if question_in_bottom_pane {
         render_question_modal(f, state, chunks[3]);
+        Margin {
+            vertical: 0,
+            horizontal: 0,
+        }
+    } else if let Some(area) = question_area {
+        render_question_modal(f, state, area);
         Margin {
             vertical: 0,
             horizontal: 0,
@@ -247,7 +273,7 @@ pub(crate) fn render_with_transcript_snapshot(
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 
-    let input_box_area = chunks[3];
+    let input_box_area = question_area.unwrap_or(chunks[3]);
 
     if state.show_model_picker() {
         render_model_picker_modal(f, state, input_box_area);
@@ -305,9 +331,19 @@ pub(crate) fn render_with_transcript_snapshot(
         render_yolo_picker_modal(f, state, input_box_area);
     }
 
+    let selection_area = if let Some(question_area) = question_area {
+        ratatui::layout::Rect::new(
+            chunks[0].x,
+            chunks[0].y,
+            chunks[0].width,
+            question_area.y.saturating_sub(chunks[0].y),
+        )
+    } else {
+        chunks[0]
+    };
     transcript
         .selection
-        .refresh(chunks[0], f.buffer(), &soft_wrap_before);
+        .refresh(selection_area, f.buffer(), &soft_wrap_before);
     transcript.selection.highlight(f.buffer_mut());
 
     (conversation_content_height, input_box_area)
