@@ -1698,6 +1698,36 @@ pub(super) async fn handle_app_event(
                     event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
                     event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
                     _ => {
+                        if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left)
+                            && mouse.modifiers.is_empty()
+                        {
+                            let mut state = app_state.lock().await;
+                            if !state.modal_open()
+                                && state.status != AppStatus::AwaitingQuestion
+                                && state.status != AppStatus::AwaitingToolConfirmation
+                                && let Some(area) = state.input_text_area
+                                && let Some(cursor) = ui::composer_cursor_from_mouse(
+                                    &state.input_buffer,
+                                    state.cursor_position,
+                                    state.get_command_suggestion().as_deref(),
+                                    ratatui::layout::Rect::new(
+                                        area.x,
+                                        area.y,
+                                        area.width,
+                                        area.height,
+                                    ),
+                                    mouse.column,
+                                    mouse.row,
+                                )
+                            {
+                                state.cursor_position = cursor;
+                                state.reset_suggestion_cycle();
+                                state.request_redraw();
+                                transcript_state.selection.clear();
+                                frame_requester.schedule_frame();
+                                return Ok(InputFlow::ContinueIteration);
+                            }
+                        }
                         if let Some(text) = transcript_state.selection.mouse(mouse) {
                             rustcode::clipboard::copy_to_clipboard(&text);
                         }
