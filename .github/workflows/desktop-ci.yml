@@ -1,0 +1,84 @@
+name: Desktop CI
+
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - .github/workflows/desktop-ci.yml
+            - .cargo/**
+            - Cargo.toml
+            - Cargo.lock
+            - rust-toolchain*
+            - rustcode/desktop/Cargo.toml
+            - rustcode/desktop/build.rs
+            - rustcode/desktop/src/**
+            - rustcode/desktop/tests/**
+            - scripts/build-native-app.sh
+            - images/AppIcon.icon/**
+    workflow_dispatch:
+
+concurrency:
+    group: desktop-ci-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+    CARGO_PROFILE_DEV_DEBUG: "0"
+    CARGO_PROFILE_TEST_DEBUG: "0"
+    SCCACHE_GHA_ENABLED: "true"
+    RUSTC_WRAPPER: "sccache"
+
+permissions:
+    contents: read
+
+jobs:
+    changes:
+        runs-on: ubuntu-24.04
+        outputs:
+            build: ${{ steps.filter.outputs.build }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - name: Check whether desktop inputs changed
+              id: filter
+              shell: bash
+              env:
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+              run: |
+                  if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && bash scripts/ci-version-only.sh "$BASE_SHA"; then
+                      echo "build=false" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "build=true" >> "$GITHUB_OUTPUT"
+                  fi
+
+    macos-app:
+        needs: changes
+        if: needs.changes.outputs.build == 'true'
+        name: macOS native app
+        # Tahoe ships Xcode 26, required by Icon Composer for app bundles.
+        runs-on: macos-26
+        timeout-minutes: 30
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: macos-app
+                  env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Test native app
+              run: cargo test --locked -p rustcode-app
+
+            - name: Bundle macOS app
+              # The bundler builds the debug binary itself, then validates
+              # Icon Composer output and Info.plist in the app bundle.
+              run: scripts/build-native-app.sh
