@@ -1,5 +1,5 @@
 use crate::ui::render_snapshot::RenderSnapshot;
-use rustcode::app::TokenUsage;
+use rustcode::controller::TokenUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContextUsageSource {
@@ -109,7 +109,7 @@ mod tests {
             task: "review".to_owned(),
             model: None,
             history: std::sync::Arc::new(vec![child_message]),
-            status: rustcode::app::SubAgentStatus::Completed,
+            status: rustcode::controller::SubAgentStatus::Completed,
             active_turn: false,
             parent_id: None,
             write_access: false,

@@ -40,12 +40,13 @@ rustcode::app::actions
 rustcode::app::suggestion
 rustcode::app::get_completion_len
 rustcode::app::list_project_file_paths
-rustcode::app::sanitize_recap_content
+# sanitize_recap_content converged in #1442 (controller wrapper).
 rustcode::app::build_help_text
 # apply_autocomplete converged in #1442 (composer input lives in runtime/).
 # Turn machinery (route through controller):
+# ui_adapter converged in #1442 (transcript renders the re-exported
+# AgentUiEvent contract type; native TurnUpdate production is endgame work).
 rustcode::network
-rustcode::network::ui_adapter
 # compaction stays for SUMMARY_MARKER only (transcript render protocol,
 # converges with the turn machinery in #1442); token estimation now routes
 # through rustcode::controller (issue #1441).

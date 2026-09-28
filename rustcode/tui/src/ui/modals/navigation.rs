@@ -415,10 +415,10 @@ pub(in crate::ui) fn render_subagent_picker_modal(
     for (index, agent) in state.subagents().iter().enumerate() {
         let is_selected = selected == index + 1;
         let status = match agent.status {
-            rustcode::app::SubAgentStatus::Running => "running",
-            rustcode::app::SubAgentStatus::Completed => "completed",
-            rustcode::app::SubAgentStatus::Failed => "failed",
-            rustcode::app::SubAgentStatus::Cancelled => "cancelled",
+            rustcode::controller::SubAgentStatus::Running => "running",
+            rustcode::controller::SubAgentStatus::Completed => "completed",
+            rustcode::controller::SubAgentStatus::Failed => "failed",
+            rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
         };
         let task = agent.task.chars().take(32).collect::<String>();
         lines.push(agent_picker_line(
@@ -451,10 +451,10 @@ pub(in crate::ui) fn render_subagent_picker_modal(
         "main · root context".to_owned()
     } else if let Some(agent) = state.subagents().get(selected - 1) {
         let status = match agent.status {
-            rustcode::app::SubAgentStatus::Running => "running",
-            rustcode::app::SubAgentStatus::Completed => "completed",
-            rustcode::app::SubAgentStatus::Failed => "failed",
-            rustcode::app::SubAgentStatus::Cancelled => "cancelled",
+            rustcode::controller::SubAgentStatus::Running => "running",
+            rustcode::controller::SubAgentStatus::Completed => "completed",
+            rustcode::controller::SubAgentStatus::Failed => "failed",
+            rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
         };
         format!("{} · {} · {}", agent.name, status, agent.last_message())
     } else {

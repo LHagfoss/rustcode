@@ -371,7 +371,7 @@ pub(super) fn tool_result_cache_key(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &rustcode::app::Verbosity,
+    verbosity: &rustcode::controller::Verbosity,
     show_picker: bool,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -388,7 +388,7 @@ pub(super) fn cached_tool_result(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &rustcode::app::Verbosity,
+    verbosity: &rustcode::controller::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let key = tool_result_cache_key(tool_name, result, width, verbosity, show_picker);
@@ -579,10 +579,10 @@ pub(super) fn tool_result_status(
 pub(super) fn indent_tool_result_body(
     lines: Vec<Line<'static>>,
     tool_name: &str,
-    verbosity: &rustcode::app::Verbosity,
+    verbosity: &rustcode::controller::Verbosity,
     width: u16,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::app::Verbosity::High) {
+    if matches!(verbosity, rustcode::controller::Verbosity::High) {
         return Vec::new();
     }
 
@@ -1100,11 +1100,11 @@ pub(super) fn command_summary_lines(
 
 pub(super) fn indent_generic_tool_body(
     lines: Vec<Line<'static>>,
-    verbosity: &rustcode::app::Verbosity,
+    verbosity: &rustcode::controller::Verbosity,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::app::Verbosity::High) {
+    if matches!(verbosity, rustcode::controller::Verbosity::High) {
         return Vec::new();
     }
 
@@ -1201,7 +1201,7 @@ fn render_tool_result_group_snapshot(
         let homogeneous = whole_batch.iter().all(|entry| entry.kind == kind);
         let group_end = if homogeneous
             && kind == ToolTranscriptKind::Command
-            && matches!(state.verbosity(), rustcode::app::Verbosity::Low)
+            && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
         {
             index + 1
         } else {
@@ -1214,7 +1214,7 @@ fn render_tool_result_group_snapshot(
             lines.push(Line::from(""));
         }
         if include_header && homogeneous && kind == ToolTranscriptKind::Command {
-            if matches!(state.verbosity(), rustcode::app::Verbosity::High) {
+            if matches!(state.verbosity(), rustcode::controller::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
                     lines.extend(command_child_lines(
@@ -1265,7 +1265,7 @@ fn render_tool_result_group_snapshot(
                     let show_hint = expandable
                         && !entry.body.is_empty()
                         && !is_expanded
-                        && matches!(state.verbosity(), rustcode::app::Verbosity::Low);
+                        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Command {
                         let mut child = command_child_lines(entry, first_child, width, show_picker);
                         if show_hint {
@@ -1294,7 +1294,7 @@ fn render_tool_result_group_snapshot(
                     first_child = false;
                     if expandable
                         && is_expanded
-                        && matches!(state.verbosity(), rustcode::app::Verbosity::Low)
+                        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
                     {
                         if entry.kind == ToolTranscriptKind::Command {
                             lines.extend(indent_tool_result_body(
