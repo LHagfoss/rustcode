@@ -29,6 +29,16 @@ type MarkdownCache = LruCache<CacheKey, Vec<Line<'static>>>;
 
 static RENDER_CACHE: OnceLock<Mutex<MarkdownCache>> = OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    static PARSED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_parsed_bytes() -> usize {
+    PARSED_BYTES.with(|bytes| bytes.replace(0))
+}
+
 fn render_cache() -> &'static Mutex<MarkdownCache> {
     RENDER_CACHE.get_or_init(|| Mutex::new(MarkdownCache::new(RENDER_CACHE_CAP)))
 }
@@ -579,6 +589,8 @@ fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> Vec<Line<'static>> {
+    #[cfg(test)]
+    PARSED_BYTES.with(|bytes| bytes.set(bytes.get().saturating_add(content.len())));
     let mut lines = Vec::new();
     let mut paragraph = Vec::<Span<'static>>::new();
     let mut inline = InlineStyle::default();
@@ -768,9 +780,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         }
     };
 
-    let normalized = unwrap_markdown_table_fences(content);
-    let normalized = normalize_table_delimiters(&normalized);
-    let sanitized = sanitize_markdown(&normalized);
+    let sanitized = normalized_markdown(content);
     for event in Parser::new_ext(&sanitized, Options::all()) {
         match event {
             Event::Start(Tag::Paragraph) => {}
@@ -1134,6 +1144,148 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         lines.pop();
     }
     lines
+}
+
+fn normalized_markdown(content: &str) -> String {
+    let normalized = unwrap_markdown_table_fences(content);
+    let normalized = normalize_table_delimiters(&normalized);
+    sanitize_markdown(&normalized).into_owned()
+}
+
+/// One live, non-fenced Markdown run. Completed top-level blocks retain their
+/// styled rows; the final block remains mutable while source is appended.
+#[derive(Default)]
+pub(super) struct StreamingMarkdownCache {
+    source: String,
+    width: usize,
+    show_picker: bool,
+    theme_name: String,
+    stable_source_len: usize,
+    stable_lines: Vec<Line<'static>>,
+    stable_separator: bool,
+    lines: Vec<Line<'static>>,
+    has_reference_definitions: bool,
+    has_table: bool,
+}
+
+impl StreamingMarkdownCache {
+    pub(super) fn render(
+        &mut self,
+        content: &str,
+        width: usize,
+        show_picker: bool,
+    ) -> Vec<Line<'static>> {
+        let normalized = normalized_markdown(content);
+        let theme_name = super::theme::active_palette().name.to_owned();
+        // A delimiter or partial row can reinterpret a preceding table header.
+        // Keep the whole run mutable once it contains a parsed table.
+        let has_table = normalized.contains('|') && markdown_has_table(&normalized);
+        if self.source == normalized
+            && self.width == width
+            && self.show_picker == show_picker
+            && self.theme_name == theme_name
+        {
+            return self.lines.clone();
+        }
+
+        let can_append = !self.source.is_empty()
+            && normalized.starts_with(&self.source)
+            && self.width == width
+            && self.show_picker == show_picker
+            && self.theme_name == theme_name
+            && !self.has_reference_definitions
+            && !self.has_table
+            && !has_table;
+        if !can_append {
+            self.stable_source_len = 0;
+            self.stable_lines.clear();
+            self.stable_separator = false;
+            self.lines = render_markdown_uncached(content, width, show_picker);
+            self.has_reference_definitions = markdown_has_reference_definitions(&normalized);
+        } else {
+            let pending = &normalized[self.stable_source_len..];
+            if markdown_has_reference_definitions(pending) {
+                self.stable_source_len = 0;
+                self.stable_lines.clear();
+                self.stable_separator = false;
+                self.lines = render_markdown_uncached(content, width, show_picker);
+                self.has_reference_definitions = true;
+            } else {
+                let mut pending_lines = render_markdown_uncached(pending, width, show_picker);
+                if let Some(boundary) = last_top_level_block_start(pending) {
+                    let stable_chunk =
+                        render_markdown_uncached(&pending[..boundary], width, show_picker);
+                    let tail = render_markdown_uncached(&pending[boundary..], width, show_picker);
+                    let separator = [false, true].into_iter().find(|separator| {
+                        join_markdown_lines(&stable_chunk, *separator, &tail) == pending_lines
+                    });
+                    if let Some(separator) = separator {
+                        self.stable_lines = join_markdown_lines(
+                            &self.stable_lines,
+                            self.stable_separator,
+                            &stable_chunk,
+                        );
+                        self.stable_source_len += boundary;
+                        self.stable_separator = separator;
+                        pending_lines = tail;
+                    }
+                }
+                self.lines =
+                    join_markdown_lines(&self.stable_lines, self.stable_separator, &pending_lines);
+            }
+        }
+        self.source = normalized;
+        self.width = width;
+        self.show_picker = show_picker;
+        self.theme_name = theme_name;
+        self.has_table = has_table;
+        self.lines.clone()
+    }
+}
+
+fn join_markdown_lines(
+    prefix: &[Line<'static>],
+    separator: bool,
+    tail: &[Line<'static>],
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(prefix.len() + tail.len() + usize::from(separator));
+    lines.extend_from_slice(prefix);
+    if separator && !prefix.is_empty() && !tail.is_empty() {
+        lines.push(Line::default());
+    }
+    lines.extend_from_slice(tail);
+    lines
+}
+
+fn markdown_has_reference_definitions(source: &str) -> bool {
+    Parser::new_ext(source, Options::all())
+        .reference_definitions()
+        .iter()
+        .next()
+        .is_some()
+}
+
+fn markdown_has_table(source: &str) -> bool {
+    Parser::new_ext(source, Options::all())
+        .any(|event| matches!(event, Event::Start(Tag::Table(_))))
+}
+
+fn last_top_level_block_start(source: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut count = 0usize;
+    let mut last = 0usize;
+    for (event, range) in Parser::new_ext(source, Options::all()).into_offset_iter() {
+        if depth == 0 && matches!(&event, Event::Start(_) | Event::Rule | Event::Html(_)) {
+            count += 1;
+            last = range.start;
+        }
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    (count > 1 && last > 0).then_some(last)
 }
 
 #[cfg(test)]
