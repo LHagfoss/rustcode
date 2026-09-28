@@ -11,6 +11,8 @@ fn status_panel_title(content: &str) -> Option<&'static str> {
         Some("Usage")
     } else if lower.starts_with("session status") {
         Some("Status")
+    } else if lower.starts_with("session id") {
+        Some("Session")
     } else if lower == "rustcode info" || lower.starts_with("about rustcode") {
         Some("Info")
     } else if lower.starts_with("available commands")
@@ -164,6 +166,7 @@ pub(super) fn render_status_panel<'a>(
 
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")
+        || lower.starts_with("session id")
         || lower.starts_with("rustcode info")
         || lower.starts_with("about rustcode")
         || lower.starts_with("notice: rustcode")
@@ -445,7 +448,13 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     // the compact rewrite dropped it).
     banner.push(make_row(vec![]));
 
-    if inner_w >= 50 {
+    let wordmark_width = RUSTCODE_WORDMARK
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0);
+    if inner_w >= wordmark_width + 4 {
+        banner.push(make_row(vec![]));
         for wordmark_line in RUSTCODE_WORDMARK.lines() {
             let purple = wordmark_line
                 .chars()
@@ -456,7 +465,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
                 .skip(RUSTCODE_WORDMARK_SPLIT)
                 .collect::<String>();
             banner.push(make_row(vec![
-                Span::raw("  "),
+                Span::raw("    "),
                 Span::styled(
                     purple,
                     Style::default().fg(Color::Rgb(181, 139, 255)).bg(reset_bg),

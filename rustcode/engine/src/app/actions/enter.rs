@@ -282,11 +282,11 @@ async fn handle_enter_inner(
                 }
                 Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
                     s.auto_confirm = true;
-                    s.set_notice("YOLO mode enabled");
+                    s.set_transient_notice("YOLO mode enabled");
                 }
                 Some(&"off") | Some(&"disable") | Some(&"disabled") | Some(&"false") => {
                     s.auto_confirm = false;
-                    s.set_notice("YOLO mode disabled");
+                    s.set_transient_notice("YOLO mode disabled");
                 }
                 Some(&"toggle") => {
                     toggle_auto_confirm(&mut s);

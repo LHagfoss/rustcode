@@ -193,7 +193,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
         height
     };
     let live = render_live_tail_mode(state, width, live_height, transcript, true);
-    if height == 0 || state.selected_subagent().is_some() || state.modal_open() {
+    if height == 0 || state.selected_subagent().is_some() {
         return live;
     }
 
@@ -203,13 +203,31 @@ pub(crate) fn render_visible_conversation_with_transcript(
         .saturating_add(1);
     let mut blocks = Vec::new();
     let mut rows = live.len();
-    for index in (state.history_display_start()..state.history().len()).rev() {
-        if rows >= target_rows {
-            break;
-        }
-        let block = render_committed_history_block_snapshot(state, index, width);
+    let mut index = state.history().len();
+    while index > state.history_display_start() && rows < target_rows {
+        let last = index - 1;
+        let (block, next_index) = if state.history()[last].role == "tool" {
+            let mut first = last;
+            while first > state.history_display_start() && state.history()[first - 1].role == "tool"
+            {
+                first -= 1;
+            }
+            let indices = (first..index).collect::<Vec<_>>();
+            let mut block =
+                render_committed_tool_result_group_snapshot(state, &indices, width, false);
+            if !block.is_empty() {
+                block.push(Line::from(""));
+            }
+            (block, first)
+        } else {
+            (
+                render_committed_history_block_snapshot(state, last, width),
+                last,
+            )
+        };
         rows += block.len();
         blocks.push(block);
+        index = next_index;
     }
     let mut lines = Vec::new();
     for block in blocks.into_iter().rev() {

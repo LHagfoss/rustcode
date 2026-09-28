@@ -29,6 +29,10 @@ async fn escape_preserves_fifo_prompts_until_the_orchestrator_releases() {
     assert!(!cancel_token.is_cancelled());
     assert_eq!(state_after_escape.status, AppStatus::Idle);
     assert_eq!(
+        state_after_escape.active_transient_notice(),
+        Some("Turn stopped")
+    );
+    assert_eq!(
         state_after_escape.pending_queue,
         ["first follow-up", "second follow-up"]
     );
@@ -1037,7 +1041,8 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     {
         let s = state.lock().await;
         assert!(s.auto_confirm);
-        assert_eq!(s.history.last().unwrap().content, "YOLO mode enabled");
+        assert!(s.history.is_empty());
+        assert_eq!(s.active_transient_notice(), Some("YOLO mode enabled"));
     }
 
     state.lock().await.input_buffer = "/yolo off".to_owned();
@@ -1045,7 +1050,8 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     {
         let s = state.lock().await;
         assert!(!s.auto_confirm);
-        assert_eq!(s.history.last().unwrap().content, "YOLO mode disabled");
+        assert!(s.history.is_empty());
+        assert_eq!(s.active_transient_notice(), Some("YOLO mode disabled"));
     }
 
     state.lock().await.input_buffer = "/yolo toggle".to_owned();
@@ -1053,7 +1059,8 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     {
         let s = state.lock().await;
         assert!(s.auto_confirm);
-        assert_eq!(s.history.last().unwrap().content, "YOLO mode enabled");
+        assert!(s.history.is_empty());
+        assert_eq!(s.active_transient_notice(), Some("YOLO mode enabled"));
     }
 }
 

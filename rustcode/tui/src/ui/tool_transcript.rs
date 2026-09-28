@@ -814,6 +814,12 @@ pub(super) fn tool_transcript_entry(
     if message.role != "tool" {
         return None;
     }
+    if message
+        .content
+        .contains("error: intentionally deferred by the scheduler")
+    {
+        return None;
+    }
     let tool_name = resolve_tool_result_name(
         None,
         message
@@ -1466,6 +1472,13 @@ pub(super) fn push_new_chat_separator<'a>(
 
 pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
     content.contains("Loop warning:")
+        || matches!(
+            content.trim(),
+            "YOLO mode enabled"
+                | "YOLO mode disabled"
+                | "Request cancelled by user"
+                | "[harness: turn stopped — cancelled]"
+        )
         || content.contains("tool calls in that response were dropped")
         || content.contains("Oversized response:")
         || is_deferred_tool_batch_notice(content)
@@ -1498,7 +1511,9 @@ fn is_validation_rejection_notice(content: &str) -> bool {
 /// implementation details such as validation schemas, deferred tool names, and
 /// call ids should not expand into a wide, noisy transcript row.
 pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
-    if is_deferred_tool_batch_notice(content) || is_validation_rejection_notice(content) {
+    if is_deferred_tool_batch_notice(content) {
+        None
+    } else if is_validation_rejection_notice(content) {
         Some(COMPACT_TOOL_WARNING)
     } else if is_hidden_system_notice(content) {
         None
@@ -1555,13 +1570,24 @@ mod tests {
     }
 
     #[test]
-    fn deferred_tool_batch_notice_has_a_compact_ui_projection() {
+    fn deferred_tool_batch_notice_does_not_look_like_a_failure() {
         assert_eq!(
             super::system_notice_for_display(
                 "[The model emitted 5 tool calls. 4 were executed this round; the remaining calls (get_status (call_123)) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]"
             ),
-            Some("[Warning, check debug for more info]")
+            None
         );
+    }
+
+    #[test]
+    fn deferred_tool_result_is_not_rendered_as_a_failed_call() {
+        let mut state = rustcode::app::AppState::new();
+        state.history.push(rustcode::app::ChatMessage::new(
+            "tool",
+            "read_email: error: intentionally deferred by the scheduler; reissue it only if still needed after reviewing the executed results",
+        ));
+        let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
+        assert!(super::tool_transcript_entry(&snapshot, 0, 80, false).is_none());
     }
 
     #[test]

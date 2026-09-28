@@ -52,6 +52,7 @@ pub(crate) struct RenderSnapshot {
     delegation_active: bool,
     modal_open: bool,
     last_copy_text: Option<(String, std::time::Instant)>,
+    transient_notice: Option<String>,
     expanded_thoughts: std::collections::HashSet<usize>,
     agent_mode: rustcode::controller::AgentMode,
     subagents: Vec<SubAgentSnapshot>,
@@ -232,6 +233,7 @@ impl RenderSnapshot {
             delegation_active: state.delegation_active,
             modal_open: state.modal_open(),
             last_copy_text: state.last_copy_text.clone(),
+            transient_notice: state.active_transient_notice().map(str::to_owned),
             expanded_thoughts: state.expanded_thoughts.clone(),
             agent_mode: state.agent_mode,
             subagents,
@@ -252,6 +254,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn ctrl_c_exit_armed(&self) -> bool {
         self.ctrl_c_exit_armed
+    }
+    pub(crate) fn transient_notice(&self) -> Option<&str> {
+        self.transient_notice.as_deref()
     }
     pub(crate) fn cursor_position(&self) -> usize {
         self.cursor_position
