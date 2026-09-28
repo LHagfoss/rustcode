@@ -62,7 +62,21 @@ where
         let cursor = backend
             .get_cursor_position()
             .unwrap_or_else(|_| Position::new(0, 0));
-        Ok(Self {
+        Ok(Self::with_size_and_cursor(backend, screen_size, cursor))
+    }
+
+    /// The alternate screen begins at the origin; no cursor report is needed.
+    pub fn new_at_origin(backend: B) -> Result<Self, B::Error> {
+        let screen_size = backend.size()?;
+        Ok(Self::with_size_and_cursor(
+            backend,
+            screen_size,
+            Position::new(0, 0),
+        ))
+    }
+
+    fn with_size_and_cursor(backend: B, screen_size: Size, cursor: Position) -> Self {
+        Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
@@ -72,7 +86,7 @@ where
             last_cursor_position: cursor,
             needs_clear: false,
             clear_from_y: None,
-        })
+        }
     }
 
     pub const fn area(&self) -> Rect {
