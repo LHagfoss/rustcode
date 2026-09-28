@@ -31,6 +31,26 @@ fn is_transcript_navigation(key: crossterm::event::KeyEvent) -> bool {
             && matches!(key.code, KeyCode::Up | KeyCode::Down))
 }
 
+fn is_keyboard_range_key(key: crossterm::event::KeyEvent) -> bool {
+    matches!(
+        key.code,
+        KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+    ) && !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::ALT)
+}
+
+fn selection_owns_key(transcript: &TranscriptState, key: crossterm::event::KeyEvent) -> bool {
+    let has_range_or_mode =
+        transcript.selection.has_selection() || transcript.selection.is_keyboard_mode();
+    has_range_or_mode
+        && (key.code == KeyCode::Esc
+            || (matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                && key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)))
+}
+
 fn clear_selection_for_composer_key(
     transcript: &mut TranscriptState,
     key: crossterm::event::KeyEvent,
@@ -142,19 +162,33 @@ pub(super) async fn handle_app_event(
                 let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                 let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
-                if transcript_state.selection.has_selection() {
+                if is_ctrl && key.code == KeyCode::Char(' ') && !app_state.lock().await.modal_open()
+                {
+                    let snapshot = {
+                        let state = app_state.lock().await;
+                        ui::render_snapshot::render_snapshot(&state)
+                    };
+                    transcript_state
+                        .selection
+                        .begin_keyboard_with_snapshot(snapshot, transcript_state.scroll_rows());
+                    return Ok(InputFlow::ContinueIteration);
+                }
+                if transcript_state.selection.is_keyboard_mode() {
+                    if is_keyboard_range_key(key) {
+                        transcript_state.selection.move_keyboard(key.code);
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                }
+
+                if selection_owns_key(transcript_state, key) {
                     if key.code == KeyCode::Esc {
                         transcript_state.selection.clear();
                         return Ok(InputFlow::ContinueIteration);
                     }
-                    if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
-                        && (is_ctrl || is_cmd)
-                    {
-                        if let Some(text) = transcript_state.selection.selected_text() {
-                            rustcode::clipboard::copy_to_clipboard(&text);
-                        }
-                        return Ok(InputFlow::ContinueIteration);
+                    if let Some(text) = transcript_state.selection.selected_text() {
+                        rustcode::clipboard::copy_to_clipboard(&text);
                     }
+                    return Ok(InputFlow::ContinueIteration);
                 }
 
                 let transcript_navigation = is_transcript_navigation(key);
@@ -1765,6 +1799,8 @@ pub(super) async fn handle_app_event(
                         }
                         let selected = if mouse.kind
                             == event::MouseEventKind::Down(event::MouseButton::Left)
+                            && !(mouse.modifiers.contains(KeyModifiers::SHIFT)
+                                && transcript_state.selection.has_selection())
                         {
                             let snapshot = {
                                 let state = app_state.lock().await;
@@ -1857,8 +1893,8 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_selection_for_composer_key, is_shift_tab, is_transcript_navigation,
-        return_to_latest_for_key,
+        clear_selection_for_composer_key, is_keyboard_range_key, is_shift_tab,
+        is_transcript_navigation, return_to_latest_for_key, selection_owns_key,
     };
     use crate::ui::TranscriptState;
     use crossterm::event::{
@@ -1881,6 +1917,62 @@ mod tests {
             KeyCode::Tab,
             KeyModifiers::NONE
         )));
+    }
+
+    #[test]
+    fn keyboard_range_only_owns_unmodified_or_shifted_arrows() {
+        assert!(is_keyboard_range_key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::NONE
+        )));
+        assert!(is_keyboard_range_key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SHIFT
+        )));
+        assert!(!is_keyboard_range_key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::ALT
+        )));
+        assert!(!is_keyboard_range_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE
+        )));
+    }
+
+    #[test]
+    fn ordinary_composer_key_exits_keyboard_range_mode() {
+        let mut transcript = TranscriptState::default();
+        let area = Rect::new(0, 0, 8, 1);
+        transcript
+            .selection
+            .refresh(area, &Buffer::empty(area), &[false]);
+        transcript.selection.begin_keyboard_with_snapshot(
+            crate::ui::render_snapshot::render_snapshot(&AppState::new()),
+            0,
+        );
+        assert!(transcript.selection.is_keyboard_mode());
+        assert!(selection_owns_key(
+            &transcript,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        ));
+        assert!(selection_owns_key(
+            &transcript,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ));
+        assert!(selection_owns_key(
+            &transcript,
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SUPER)
+        ));
+        assert!(!selection_owns_key(
+            &transcript,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)
+        ));
+        clear_selection_for_composer_key(
+            &mut transcript,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert!(!transcript.selection.is_keyboard_mode());
+        assert!(!transcript.selection.is_active());
     }
 
     #[test]

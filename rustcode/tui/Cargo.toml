@@ -30,6 +30,7 @@ toml = "0.8.19"
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 unicode-width = "0.2.2"
+unicode-segmentation = "1.12"
 
 [dev-dependencies]
 ctor = "1.0.13"
