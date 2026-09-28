@@ -69,6 +69,7 @@ mod tests;
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
+pub use exec::BackgroundStopResult;
 pub use exec::background_task_manager;
 pub use exec::stop_background_tasks;
 pub(crate) use exec::{

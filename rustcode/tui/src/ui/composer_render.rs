@@ -198,17 +198,18 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
     const COMMAND_LABEL_CHARS: usize = 36;
 
     let mut tasks = state.background_tasks().iter().collect::<Vec<_>>();
-    tasks.sort_by_key(|task| task.start_time);
+    tasks.sort_by_key(|task| task.started_at);
     let count = tasks.len();
     let elapsed = tasks
         .iter()
-        .map(|task| task.start_time)
+        .map(|task| task.started_at)
         .next()
         .map(|started| fmt_elapsed_compact(started.elapsed().as_secs()))
         .unwrap_or_else(|| "0s".to_string());
     let mut parts = vec![format!("{count} running ({elapsed})")];
     parts.extend(tasks.iter().take(MAX_VISIBLE_COMMANDS).map(|task| {
-        let label = rustcode::tools::background_command_label(&task.command, COMMAND_LABEL_CHARS);
+        let label =
+            rustcode::controller::background_command_label(&task.command, COMMAND_LABEL_CHARS);
         if label.is_empty() {
             format!("task {}", task.id)
         } else {
@@ -230,7 +231,7 @@ pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'stat
         .iter()
         .take(MAX_VISIBLE_COMMANDS)
         .map(|task| {
-            let command = rustcode::tools::background_command_label(&task.command, 240);
+            let command = rustcode::controller::background_command_label(&task.command, 240);
             Line::from(Span::styled(format!("  └ {command}"), style))
         })
         .collect::<Vec<_>>();

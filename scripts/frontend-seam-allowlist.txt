@@ -47,16 +47,13 @@ rustcode::app::apply_autocomplete
 rustcode::network
 rustcode::network::ui_adapter
 rustcode::network::compaction
-# Background-task observation:
-rustcode::tools
-rustcode::tools::background_command_label
+# Background-task observation now routes through rustcode::controller
+# (TaskDisplay, background_task_snapshots, background_command_label,
+# stop_background_tasks, Command::StopBackgroundTask — issue #1439).
 # Test-only direct manager use (tui test helper spawns real tasks).
 rustcode::tools::background_task_manager
-rustcode::tools::stop_background_tasks
-rustcode::tools::spawn_background_task_for_test
 rustcode::tools::tool_system_prompt
 rustcode::tools::mcp_tool_display_name
-rustcode::tools::background_task_snapshots
 # Config mutation:
 rustcode::config
 rustcode::config::save_entire_config
