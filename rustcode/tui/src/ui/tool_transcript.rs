@@ -1248,7 +1248,11 @@ fn render_tool_result_group_snapshot(
                 } else if kind == ToolTranscriptKind::Explored {
                     "Explored"
                 } else if kind == ToolTranscriptKind::Edit {
-                    "Edited"
+                    if group.iter().all(|entry| entry.action == "Write") {
+                        "Wrote"
+                    } else {
+                        "Edited"
+                    }
                 } else if kind == ToolTranscriptKind::Tool {
                     "Ran"
                 } else {
