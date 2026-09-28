@@ -12,6 +12,7 @@ pub(super) struct InputContext<'a> {
     pub(super) client: &'a reqwest::Client,
     pub(super) current_cancel_token: &'a mut CancellationToken,
     pub(super) needs_redraw: &'a mut bool,
+    pub(super) frame_requester: &'a FrameRequester,
     pub(super) terminal_focused: &'a mut bool,
     pub(super) transcript_state: &'a mut TranscriptState,
     pub(super) app_event_sender: &'a AppEventSender,
@@ -24,6 +25,14 @@ fn is_shift_tab(key: crossterm::event::KeyEvent) -> bool {
         || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
 }
 
+fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
+    if transcript.scroll_rows() == 0 {
+        return false;
+    }
+    transcript.scroll_down(usize::MAX);
+    key == KeyCode::Esc
+}
+
 pub(super) async fn handle_app_event(
     app_event: AppEvent,
     ctx: InputContext<'_>,
@@ -34,6 +43,7 @@ pub(super) async fn handle_app_event(
         client,
         current_cancel_token,
         needs_redraw,
+        frame_requester,
         terminal_focused,
         transcript_state,
         app_event_sender,
@@ -661,7 +671,7 @@ pub(super) async fn handle_app_event(
                                 let enable = s.modal_picker_index == 0;
                                 s.auto_confirm = enable;
                                 let status = if enable { "enabled" } else { "disabled" };
-                                s.set_notice(format!("YOLO mode {status}"));
+                                s.set_transient_notice(format!("YOLO mode {status}"));
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -1349,6 +1359,10 @@ pub(super) async fn handle_app_event(
                     }
                     return Ok(InputFlow::ContinueIteration);
                 }
+                // Escape closes transcript browsing without discarding a draft.
+                if return_to_latest_for_key(transcript_state, key.code) {
+                    return Ok(InputFlow::ContinueIteration);
+                }
                 match {
                     let mut state = app_state.lock().await;
                     composer.handle_key(&mut state, key)
@@ -1670,7 +1684,8 @@ pub(super) async fn handle_app_event(
                     event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
                     _ => return Ok(InputFlow::ContinueIteration),
                 }
-                *needs_redraw = true;
+                // Accumulate queued wheel steps before painting the next frame.
+                frame_requester.schedule_frame();
                 return Ok(InputFlow::ContinueIteration);
             }
             TuiEvent::FocusGained => {
@@ -1682,6 +1697,7 @@ pub(super) async fn handle_app_event(
                 *needs_redraw = true;
             }
             TuiEvent::Paste(text) => {
+                transcript_state.scroll_down(usize::MAX);
                 app_state.lock().await.mark_user_activity();
                 // Terminals with bracketed paste enabled deliver Cmd+V through
                 // this event instead of the Char('v') key handler. When the
@@ -1738,7 +1754,8 @@ pub(super) async fn handle_app_event(
 
 #[cfg(test)]
 mod tests {
-    use super::is_shift_tab;
+    use super::{is_shift_tab, return_to_latest_for_key};
+    use crate::ui::TranscriptState;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -1755,5 +1772,20 @@ mod tests {
             KeyCode::Tab,
             KeyModifiers::NONE
         )));
+    }
+
+    #[test]
+    fn composer_keys_return_scrolled_transcript_to_latest_without_eating_text() {
+        let mut transcript = TranscriptState::default();
+        transcript.scroll_up(3);
+        assert!(!return_to_latest_for_key(
+            &mut transcript,
+            KeyCode::Char('x')
+        ));
+        assert_eq!(transcript.scroll_rows(), 0);
+
+        transcript.scroll_up(2);
+        assert!(return_to_latest_for_key(&mut transcript, KeyCode::Esc));
+        assert_eq!(transcript.scroll_rows(), 0);
     }
 }
