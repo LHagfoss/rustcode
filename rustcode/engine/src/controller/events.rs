@@ -1,6 +1,7 @@
 use super::{ApprovalBatchPrompt, ApprovalPrompt, ControllerSnapshot, PendingPrompt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApprovalChoice {
     Approve,
     Deny,
@@ -14,6 +15,36 @@ pub enum ControllerError {
     Model(String),
     Provider(String),
     ChannelClosed,
+}
+
+impl ControllerError {
+    /// Stable snake_case wire code plus a human-readable message. Owned by
+    /// the contract (not a transport) so every surface that reports a
+    /// controller error uses the same code vocabulary.
+    pub fn wire(&self) -> (&'static str, String) {
+        match self {
+            Self::NoActiveSession => ("no_active_session", "no active session".to_owned()),
+            Self::InvalidWorkspace(detail) => ("invalid_workspace", detail.clone()),
+            Self::Session(detail) => ("session", detail.clone()),
+            Self::Model(detail) => ("model", detail.clone()),
+            Self::Provider(detail) => ("provider", detail.clone()),
+            Self::ChannelClosed => ("channel_closed", "session worker gone".to_owned()),
+        }
+    }
+}
+
+/// Stable wire codes for [`ControllerError`]. Every variant — including the
+/// string payloads, which serde cannot flatten into a tagged envelope —
+/// becomes a `{code, message}` record so clients see one shape.
+impl serde::Serialize for ControllerError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let (code, message) = self.wire();
+        let mut error = serializer.serialize_struct("ControllerError", 2)?;
+        error.serialize_field("code", code)?;
+        error.serialize_field("message", &message)?;
+        error.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +72,64 @@ pub enum TurnUpdate {
     Cancelled,
 }
 
+/// Stable wire encoding for [`TurnUpdate`]. A derived implementation would
+/// mix external tagging with bare strings (`TurnFinished` has no payload),
+/// which mobile codegen cannot consume uniformly — and it would fail at
+/// runtime inside tagged envelopes. Every variant is a flat tagged map.
+impl serde::Serialize for TurnUpdate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut update = serializer.serialize_struct("TurnUpdate", 8)?;
+        match self {
+            Self::PromptStarted(prompt) => {
+                update.serialize_field("type", "prompt_started")?;
+                update.serialize_field("prompt", prompt)?;
+            }
+            Self::TextDelta(text) => {
+                update.serialize_field("type", "text_delta")?;
+                update.serialize_field("text", text)?;
+            }
+            Self::ToolStarted { id, name, detail } => {
+                update.serialize_field("type", "tool_started")?;
+                update.serialize_field("id", id)?;
+                update.serialize_field("name", name)?;
+                update.serialize_field("detail", detail)?;
+            }
+            Self::ToolFinished {
+                id,
+                content,
+                success,
+                pending,
+            } => {
+                update.serialize_field("type", "tool_finished")?;
+                update.serialize_field("id", id)?;
+                update.serialize_field("content", content)?;
+                update.serialize_field("success", success)?;
+                update.serialize_field("pending", pending)?;
+            }
+            Self::ApprovalRequested(prompts) => {
+                update.serialize_field("type", "approval_requested")?;
+                update.serialize_field("prompts", prompts)?;
+            }
+            Self::ApprovalBatchRequested(batch) => {
+                update.serialize_field("type", "approval_batch_requested")?;
+                update.serialize_field("batch", batch)?;
+            }
+            Self::QuestionRequested(question) => {
+                update.serialize_field("type", "question_requested")?;
+                update.serialize_field("question", question)?;
+            }
+            Self::TurnFinished => {
+                update.serialize_field("type", "turn_finished")?;
+            }
+            Self::Cancelled => {
+                update.serialize_field("type", "cancelled")?;
+            }
+        }
+        update.end()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControllerUpdate {
     Snapshot(ControllerSnapshot),
@@ -49,7 +138,52 @@ pub enum ControllerUpdate {
     Error(ControllerError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Flat tagged maps on the wire: `{"type":"snapshot",…}`, turn updates
+/// inline their own tag (`{"type":"text_delta","text":…}`), errors carry
+/// stable codes. Built through JSON values so the tag can never collide
+/// with or duplicate payload fields.
+impl serde::Serialize for ControllerUpdate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+        fn tagged(
+            kind: &str,
+            value: serde_json::Value,
+        ) -> Result<serde_json::Value, serde_json::Error> {
+            let mut map = match value {
+                serde_json::Value::Object(map) => map,
+                other => {
+                    let mut map = serde_json::Map::new();
+                    map.insert("value".to_owned(), other);
+                    map
+                }
+            };
+            map.insert("type".to_owned(), kind.into());
+            Ok(serde_json::Value::Object(map))
+        }
+        let value = match self {
+            Self::Snapshot(snapshot) => tagged(
+                "snapshot",
+                serde_json::to_value(snapshot).map_err(S::Error::custom)?,
+            )
+            .map_err(S::Error::custom)?,
+            Self::PromptRestored(prompt) => tagged(
+                "prompt_restored",
+                serde_json::to_value(prompt).map_err(S::Error::custom)?,
+            )
+            .map_err(S::Error::custom)?,
+            // Already a tagged map; forward unchanged.
+            Self::Turn(update) => serde_json::to_value(update).map_err(S::Error::custom)?,
+            Self::Error(error) => tagged(
+                "error",
+                serde_json::to_value(error).map_err(S::Error::custom)?,
+            )
+            .map_err(S::Error::custom)?,
+        };
+        value.serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ControllerEvent {
     pub generation: u64,
     pub update: ControllerUpdate,
@@ -133,7 +267,38 @@ pub(crate) fn from_agent_ui_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{ControllerUpdate, TurnUpdate, from_agent_ui_event};
+    use super::{
+        ControllerError, ControllerSnapshot, ControllerUpdate, TurnUpdate, from_agent_ui_event,
+    };
+
+    #[test]
+    fn wire_encoding_is_flat_tagged_maps() {
+        let turn = serde_json::to_value(ControllerUpdate::Turn(TurnUpdate::TextDelta(
+            "hello".to_owned(),
+        )))
+        .unwrap();
+        assert_eq!(turn["type"], "text_delta");
+        assert_eq!(turn["text"], "hello");
+
+        let finished =
+            serde_json::to_value(ControllerUpdate::Turn(TurnUpdate::TurnFinished)).unwrap();
+        assert_eq!(finished, serde_json::json!({"type": "turn_finished"}));
+
+        let error = serde_json::to_value(ControllerUpdate::Error(ControllerError::Session(
+            "changed".to_owned(),
+        )))
+        .unwrap();
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "session");
+        assert_eq!(error["message"], "changed");
+
+        let snapshot = serde_json::to_value(ControllerUpdate::Snapshot(
+            ControllerSnapshot::from_state(1, &crate::app::AppState::new()),
+        ))
+        .unwrap();
+        assert_eq!(snapshot["type"], "snapshot");
+        assert!(snapshot["transcript"].is_array());
+    }
 
     #[test]
     fn approval_requests_are_observable_and_tagged_with_the_generation() {

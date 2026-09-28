@@ -236,6 +236,21 @@ terminate another session's process. Cancellation terminates the complete
 process group on Unix and the process tree on Windows, including descendants.
 See [docs/background-tasks.md](docs/background-tasks.md) for exact behavior.
 
+## Remote frontends (experimental)
+
+`rustcode serve` exposes the active session over TCP for remote frontends
+(mobile is remote-only by decision):
+
+```bash
+rustcode serve --port 17878
+```
+
+It prints the address and a per-launch token (pass `--token` to fix it).
+Binding defaults to loopback; LAN binds need `--allow-remote` (never
+`0.0.0.0` without it). The protocol is newline-delimited JSON in the daemon
+framing style; see [docs/mobile.md](docs/mobile.md) for the message schema.
+No TLS, no multi-session routing yet — loopback or trusted LAN only.
+
 ## Configuration
 
 ### Configuration files
