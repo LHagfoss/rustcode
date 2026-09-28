@@ -532,7 +532,7 @@ impl SubAgentSnapshot {
         let history_tokens = agent
             .history
             .iter()
-            .map(rustcode::network::compaction::estimate_message_tokens)
+            .map(rustcode::controller::estimate_message_tokens)
             .sum();
         Self {
             id: agent.id,
