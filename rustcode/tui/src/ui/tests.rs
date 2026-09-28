@@ -5209,7 +5209,7 @@ fn selected_subagent_context_usage_and_categories_use_child_history() {
     let breakdown = modals::calculate_context_breakdown(&snapshot);
     assert_eq!(
         breakdown.user_tokens,
-        rustcode::network::compaction::estimate_tokens("child task")
+        rustcode::controller::estimate_tokens("child task")
     );
     assert_eq!(breakdown.assistant_tokens, 0);
     assert_eq!(breakdown.subagent_tokens, 0);

@@ -3,6 +3,7 @@
 mod apply;
 mod attachments;
 mod config;
+mod context;
 mod events;
 mod native_commands;
 mod snapshot;
@@ -33,6 +34,7 @@ pub use attachments::save_image_attachment;
 pub use config::{
     AgentMode, AppConfig, ModelProfile, SessionMeta, ToolProtocol, config_dir, save_config,
 };
+pub use context::{SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens};
 pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,
     accepts_generation,
