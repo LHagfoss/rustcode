@@ -162,19 +162,20 @@ pub(super) fn format_token_count(tokens: u32) -> String {
 }
 
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
-    let base_activity = classify_activity(&state.status(), &state.running_tools());
-    let activity = if base_activity.kind == ActivityKind::ActionRequired {
+    let base_activity =
+        rustcode::controller::classify_activity(&state.status(), &state.running_tools());
+    let activity = if base_activity.kind == rustcode::controller::ActivityKind::ActionRequired {
         base_activity
     } else {
-        classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
+        rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
     };
-    if activity.kind == ActivityKind::ActionRequired {
+    if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
         return "Action Required".to_string();
     }
-    if activity.kind == ActivityKind::Queued {
+    if activity.kind == rustcode::controller::ActivityKind::Queued {
         return "Queued".to_string();
     }
-    if activity.kind == ActivityKind::Ready {
+    if activity.kind == rustcode::controller::ActivityKind::Ready {
         return "Idle".to_string();
     }
     if state.current_thought_started_at().is_some() {
@@ -327,11 +328,12 @@ fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
 }
 
 pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) -> Line<'static> {
-    let base_activity = classify_activity(&state.status(), &state.running_tools());
-    let activity = if base_activity.kind == ActivityKind::ActionRequired {
+    let base_activity =
+        rustcode::controller::classify_activity(&state.status(), &state.running_tools());
+    let activity = if base_activity.kind == rustcode::controller::ActivityKind::ActionRequired {
         base_activity
     } else {
-        classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
+        rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
     };
     let action_detail = state
         .pending_tool_confirmation()
@@ -348,13 +350,13 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     let mut spans = vec![Span::raw(" ")];
 
     let bullet_symbol = match activity.kind {
-        ActivityKind::ActionRequired => "!",
-        ActivityKind::Ready => "◦",
+        rustcode::controller::ActivityKind::ActionRequired => "!",
+        rustcode::controller::ActivityKind::Ready => "◦",
         _ => "•",
     };
     let bullet_color = match activity.kind {
-        ActivityKind::ActionRequired => Color::Yellow,
-        ActivityKind::Ready => COLOR_MUTED(),
+        rustcode::controller::ActivityKind::ActionRequired => Color::Yellow,
+        rustcode::controller::ActivityKind::Ready => COLOR_MUTED(),
         _ => COLOR_PRIMARY(),
     };
     spans.push(Span::styled(
@@ -366,16 +368,17 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     let label_text = activity_status_label(state);
     if matches!(
         activity.kind,
-        ActivityKind::Working | ActivityKind::RunningTool
+        rustcode::controller::ActivityKind::Working
+            | rustcode::controller::ActivityKind::RunningTool
     ) {
         spans.extend(shimmer_spans(&label_text, show_picker));
     } else {
         spans.push(Span::styled(
             label_text,
             get_themed_style(
-                if activity.kind == ActivityKind::ActionRequired {
+                if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
                     Color::Yellow
-                } else if activity.kind == ActivityKind::Ready {
+                } else if activity.kind == rustcode::controller::ActivityKind::Ready {
                     COLOR_MUTED()
                 } else {
                     COLOR_PRIMARY()
@@ -387,7 +390,7 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         ));
     }
 
-    if activity.kind == ActivityKind::ActionRequired {
+    if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
         if let Some(detail) = action_detail {
             spans.push(Span::styled(
                 format!(" · {detail}"),
@@ -398,7 +401,8 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
 
     if matches!(
         activity.kind,
-        ActivityKind::Working | ActivityKind::RunningTool
+        rustcode::controller::ActivityKind::Working
+            | rustcode::controller::ActivityKind::RunningTool
     ) && let Some(started) = state.generation_start_time()
     {
         spans.push(Span::styled(
@@ -416,7 +420,8 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
 
     if matches!(
         activity.kind,
-        ActivityKind::Working | ActivityKind::RunningTool
+        rustcode::controller::ActivityKind::Working
+            | rustcode::controller::ActivityKind::RunningTool
     ) {
         // Esc only interrupts the model stream; background terminals survive
         // it (issue #1223). Say so when a background job is actually running.
@@ -439,8 +444,8 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
 
     if state.show_steer_mode_hint() {
         let hint = match state.draft_submit_mode() {
-            rustcode::app::state::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
-            rustcode::app::state::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
+            rustcode::controller::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
+            rustcode::controller::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
         };
         spans.push(Span::styled(
             hint,

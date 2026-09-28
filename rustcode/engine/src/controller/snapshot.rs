@@ -7,6 +7,10 @@ use crate::app::{AppState, AppStatus};
 /// [`QuestionPrompt`].
 pub use crate::app::PendingQuestion;
 
+/// Draft submit mode the composer displays. Re-exported so render code
+/// names the contract instead of reaching into `app::state`.
+pub use crate::app::state::DraftSubmitMode;
+
 use super::{ApprovalChoice, ControllerError, TaskDisplay};
 
 /// Commands a frontend can send to the session controller.
