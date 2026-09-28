@@ -152,7 +152,7 @@ fn render_live_tail_mode(
     let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
         || !state.running_tools().is_empty()
         || !state.background_tasks().is_empty();
-    if activity_visible {
+    if activity_visible && !full_viewport {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
@@ -161,6 +161,9 @@ fn render_live_tail_mode(
         lines.push(Line::from(""));
     }
 
+    if height == 0 && full_viewport {
+        return Vec::new();
+    }
     if height > 0 && lines.len() > height as usize {
         let visible_start = lines.len() - height as usize;
         lines = lines.split_off(visible_start);
