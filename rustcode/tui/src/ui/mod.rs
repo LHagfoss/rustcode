@@ -69,7 +69,6 @@ use ratatui::{
 use render_snapshot::RenderSnapshot;
 #[cfg(test)]
 use rustcode::app::AppState;
-use rustcode::app::activity::{ActivityKind, classify_activity, classify_live_tools};
 use rustcode::app::{AppStatus, ChatMessage};
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
@@ -182,7 +181,7 @@ pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
 }
 
-pub use rustcode::app::suggestion::CommandInfo;
+pub use rustcode::controller::CommandInfo;
 
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool) -> Style {
     Style::default().fg(fg).bg(bg).add_modifier(modifier)

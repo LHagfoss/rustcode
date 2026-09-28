@@ -21,7 +21,7 @@ pub(crate) struct RenderSnapshot {
     model_quota_remaining: Option<f32>,
     pending_queue: Vec<String>,
     pending_steers: Vec<String>,
-    draft_submit_mode: rustcode::app::state::DraftSubmitMode,
+    draft_submit_mode: rustcode::controller::DraftSubmitMode,
     steering_interruptible: bool,
     steering_escape_will_interrupt: bool,
     status: AppStatus,
@@ -297,7 +297,7 @@ impl RenderSnapshot {
     pub(crate) fn pending_steers(&self) -> &[String] {
         &self.pending_steers
     }
-    pub(crate) fn draft_submit_mode(&self) -> rustcode::app::state::DraftSubmitMode {
+    pub(crate) fn draft_submit_mode(&self) -> rustcode::controller::DraftSubmitMode {
         self.draft_submit_mode
     }
     pub(crate) fn steering_interruptible(&self) -> bool {
@@ -309,7 +309,8 @@ impl RenderSnapshot {
     pub(crate) fn show_steer_mode_hint(&self) -> bool {
         self.steering_interruptible
             && !self.input_buffer.trim().is_empty()
-            && rustcode::app::get_completion_len(&self.input_buffer, self.cursor_position) == 0
+            && rustcode::controller::get_completion_len(&self.input_buffer, self.cursor_position)
+                == 0
     }
     pub(crate) fn status(&self) -> &AppStatus {
         &self.status
@@ -492,7 +493,7 @@ impl RenderSnapshot {
         if self.auto_confirm { "ON" } else { "OFF" }
     }
     pub(crate) fn completion_identity(&self) -> Option<String> {
-        if let Some(command) = rustcode::app::suggestion::command_token(&self.input_buffer) {
+        if let Some(command) = rustcode::controller::command_token(&self.input_buffer) {
             return Some(format!("command:{command}"));
         }
         rustcode_core::input::get_at_word_query(&self.input_buffer, self.cursor_position)
@@ -708,7 +709,7 @@ mod tests {
                 text: "second steer".to_owned(),
             },
         ];
-        state.draft_submit_mode = rustcode::app::state::DraftSubmitMode::Queue;
+        state.draft_submit_mode = rustcode::controller::DraftSubmitMode::Queue;
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
         std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
@@ -737,7 +738,7 @@ mod tests {
         assert_eq!(snapshot.pending_steers(), ["first steer", "second steer"]);
         assert_eq!(
             snapshot.draft_submit_mode(),
-            rustcode::app::state::DraftSubmitMode::Queue
+            rustcode::controller::DraftSubmitMode::Queue
         );
         assert!(!snapshot.steering_interruptible());
         assert_eq!(snapshot.dismissed_completion(), Some("command:/help"));
@@ -961,7 +962,7 @@ mod tests {
 
         state.input_buffer = "/he".to_owned();
         let autocomplete_revision = render_snapshot(&state).revision();
-        rustcode::app::actions::apply_autocomplete(&mut state);
+        state.insert_char('l');
         assert!(!state.publish_render_metrics(autocomplete_revision, 1, UiRect::default()));
     }
 }
