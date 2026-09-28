@@ -699,15 +699,20 @@ fn print_exit_summary(summary: &ExitSummary) {
     } else {
         vec!["RustCode"]
     };
-    for (index, line) in wordmark.into_iter().enumerate() {
+    for line in wordmark {
         if color {
-            let (r, g, b) = match index {
-                0 => (119, 151, 184),
-                1 => (145, 166, 192),
-                2 => (180, 188, 207),
-                _ => (218, 212, 222),
-            };
-            let _ = writeln!(out, "\x1b[38;2;{r};{g};{b}m{line}\x1b[0m");
+            let purple = line
+                .chars()
+                .take(crate::ui::RUSTCODE_WORDMARK_SPLIT)
+                .collect::<String>();
+            let white = line
+                .chars()
+                .skip(crate::ui::RUSTCODE_WORDMARK_SPLIT)
+                .collect::<String>();
+            let _ = writeln!(
+                out,
+                "\x1b[38;2;181;139;255m{purple}\x1b[38;2;255;255;255m{white}\x1b[0m"
+            );
         } else {
             let _ = writeln!(out, "{line}");
         }
@@ -758,8 +763,8 @@ mod tests {
     #[test]
     fn exit_wordmark_is_bundled_for_the_terminal_handoff() {
         let lines: Vec<_> = crate::ui::RUSTCODE_WORDMARK.lines().collect();
-        assert_eq!(lines.len(), 5);
-        assert!(lines.iter().all(|line| line.contains('█')));
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|line| line.contains('▀')));
     }
 
     #[test]
