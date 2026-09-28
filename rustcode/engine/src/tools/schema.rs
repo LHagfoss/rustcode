@@ -1010,6 +1010,9 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
             .map(str::to_ascii_lowercase)
         {
             if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
+                if matches!(token.as_str(), "mail" | "mails") {
+                    terms.insert("email".to_string());
+                }
                 terms.insert(token);
             }
         }
