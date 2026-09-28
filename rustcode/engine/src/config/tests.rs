@@ -177,6 +177,21 @@ fn discord_rich_presence_defaults_enabled_and_round_trips() {
 }
 
 #[test]
+fn fullscreen_defaults_off_and_round_trips_in_toml() {
+    assert!(!AppConfig::default().fullscreen);
+
+    let dir = TempDir::new().unwrap();
+    let mut config = AppConfig::default();
+    config.fullscreen = true;
+    save_config_to_result(dir.path(), &config).unwrap();
+
+    let (_, _, loaded) = load_config_from(dir.path());
+    assert!(loaded.fullscreen);
+    let saved = fs::read_to_string(dir.path().join(CONFIG_TOML_FILE)).unwrap();
+    assert!(saved.contains("fullscreen = true"));
+}
+
+#[test]
 fn test_default_profile_is_source_of_truth() {
     let dir = temp_dir("latest");
     let config = AppConfig {
