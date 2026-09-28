@@ -1003,6 +1003,9 @@ pub struct AppConfig {
     /// client when available. This never contains Discord credentials.
     #[serde(default = "default_true")]
     pub discord_rpc_enabled: bool,
+    /// Opt in to the interactive TUI's full-terminal mode.
+    #[serde(default)]
+    pub fullscreen: bool,
     /// Opaque legacy values retained through config rewrites, but never read
     /// by runtime behavior or written to the JSON compatibility config.
     #[doc(hidden)]
@@ -1062,6 +1065,8 @@ struct RuntimeConfig {
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
     #[serde(default)]
+    fullscreen: bool,
+    #[serde(default)]
     agent_mode: AgentMode,
     #[serde(default)]
     verbosity: crate::app::state::Verbosity,
@@ -1111,6 +1116,8 @@ struct TomlConfig {
     audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discord_rpc_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fullscreen: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
     /// delete user data left by the removed Laya sidecar.
     #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
@@ -1258,6 +1265,7 @@ impl Default for AppConfig {
             sandbox_mode: SandboxMode::default(),
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
+            fullscreen: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1497,6 +1505,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.start_time = runtime.start_time;
                     config.audio = runtime.audio;
                     config.discord_rpc_enabled = runtime.discord_rpc_enabled;
+                    config.fullscreen = runtime.fullscreen;
                 }
                 None => {
                     eprintln!(
@@ -1580,6 +1589,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         sandbox_mode: Some(config.sandbox_mode),
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
+        fullscreen: Some(config.fullscreen),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
@@ -1660,6 +1670,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(enabled) = file.discord_rpc_enabled {
         config.discord_rpc_enabled = enabled;
+    }
+    if let Some(fullscreen) = file.fullscreen {
+        config.fullscreen = fullscreen;
     }
     if file.legacy_laya.is_some() {
         config.legacy_laya = file.legacy_laya;
@@ -1793,6 +1806,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         sandbox_mode: None,
         audio: None,
         discord_rpc_enabled: None,
+        fullscreen: None,
         legacy_laya: None,
         agent_mode: None,
         verbosity: None,

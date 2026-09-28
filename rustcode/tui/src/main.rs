@@ -2,6 +2,7 @@ mod cli;
 mod inline_terminal;
 mod run;
 mod runtime;
+mod terminal_probe;
 mod ui;
 
 #[cfg(test)]

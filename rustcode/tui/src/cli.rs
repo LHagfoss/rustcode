@@ -39,6 +39,10 @@ pub struct Cli {
     #[arg(long = "yolo")]
     pub yolo: bool,
 
+    /// Use the full terminal screen for the interactive UI
+    #[arg(long = "fullscreen")]
+    pub fullscreen: bool,
+
     /// Create a project-local .rustcode/config.toml from global defaults
     #[arg(long = "init")]
     pub init: bool,
@@ -318,6 +322,16 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn fullscreen_is_opt_in() {
+        assert!(!Cli::try_parse_from(["rustcode"]).unwrap().fullscreen);
+        assert!(
+            Cli::try_parse_from(["rustcode", "--fullscreen"])
+                .unwrap()
+                .fullscreen
+        );
     }
 
     #[test]
