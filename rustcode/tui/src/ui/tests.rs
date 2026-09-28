@@ -533,7 +533,7 @@ fn inline_command_selection_is_distinct_from_typed_input() {
             "typed slash command should use normal weight"
         );
 
-        let filtered_cmds = rustcode::app::suggestion::filtered_commands(input);
+        let filtered_cmds = rustcode::controller::filtered_commands(input);
         let snapshot = render_snapshot(&state);
         let mut popup_terminal = Terminal::new(TestBackend::new(100, 2)).unwrap();
         popup_terminal
@@ -563,7 +563,7 @@ fn inline_command_recommendations_style_unselected_rows_as_default_text() {
     state.cursor_position = 1;
     state.active_suggestion_index = Some(1);
 
-    let filtered_cmds = rustcode::app::suggestion::filtered_commands(&state.input_buffer);
+    let filtered_cmds = rustcode::controller::filtered_commands(&state.input_buffer);
     let snapshot = render_snapshot(&state);
     let mut terminal = Terminal::new(TestBackend::new(100, 2)).unwrap();
     terminal
@@ -595,7 +595,7 @@ fn inline_command_popup_marks_selection_and_clips_descriptions_to_width() {
     let mut state = AppState::new();
     state.input_buffer = "/".to_owned();
     state.active_suggestion_index = Some(0);
-    let commands = rustcode::app::suggestion::filtered_commands("/");
+    let commands = rustcode::controller::filtered_commands("/");
     let snapshot = render_snapshot(&state);
     let mut terminal = Terminal::new(TestBackend::new(32, 1)).unwrap();
     terminal
@@ -2705,7 +2705,7 @@ fn status_panels_render_minimal_inline() {
 fn status_panel_help_box_lines_have_uniform_width() {
     use super::render_status_panel;
 
-    let help_text = rustcode::app::actions::build_help_text();
+    let help_text = rustcode::controller::build_help_text();
     let mut lines = Vec::new();
     let total_width = 100u16;
     render_status_panel(&help_text, total_width, false, &mut lines);
@@ -3536,7 +3536,7 @@ fn live_audio_generation_cell_shows_running_heading_and_output_path() {
         "output_path": "assets/audio/balloon-pop.wav"
     });
     let (action, target) =
-        rustcode::app::activity::summarize_tool_call("generate_sound_effect", &arguments);
+        rustcode::controller::summarize_tool_call("generate_sound_effect", &arguments);
     let call =
         rustcode::app::LiveToolCall::new("local:1", None, "generate_sound_effect", action, target);
 
