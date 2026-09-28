@@ -28,6 +28,20 @@ impl TaskDisplay {
     }
 }
 
+/// Wire form: `Instant` has no portable encoding, so snapshots carry how
+/// long the task has been running instead of when it started.
+impl serde::Serialize for TaskDisplay {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut task = serializer.serialize_struct("TaskDisplay", 4)?;
+        task.serialize_field("id", &self.id)?;
+        task.serialize_field("command", &self.command)?;
+        task.serialize_field("elapsed_secs", &self.started_at.elapsed().as_secs())?;
+        task.serialize_field("child_pid", &self.child_pid)?;
+        task.end()
+    }
+}
+
 impl From<crate::tools::BackgroundTaskSnapshot> for TaskDisplay {
     fn from(snapshot: crate::tools::BackgroundTaskSnapshot) -> Self {
         Self {
