@@ -360,7 +360,7 @@ fn desired_height_keeps_the_composer_at_the_terminal_bottom() {
 }
 
 #[test]
-fn short_live_reply_starts_at_the_top_of_the_chat_area() {
+fn short_live_reply_follows_the_welcome_cell() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
@@ -375,7 +375,11 @@ fn short_live_reply_starts_at_the_top_of_the_chat_area() {
         .iter()
         .position(|line| line.contains("Ask RustCode to do anything"))
         .unwrap();
-    assert!(reply_row < 3, "rendered: {rendered:?}");
+    let welcome_bottom = lines
+        .iter()
+        .position(|line| line.contains('╰'))
+        .expect("welcome cell bottom border");
+    assert!(reply_row > welcome_bottom, "rendered: {rendered:?}");
     assert!(composer_row > 18, "rendered: {rendered:?}");
 }
 
@@ -1093,22 +1097,50 @@ fn welcome_banner_omits_hints_that_do_not_fit() {
 }
 
 #[test]
-fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
+fn first_message_keeps_the_welcome_cell_in_the_transcript() {
     let mut state = AppState::new();
     state
         .history
-        .push(ChatMessage::new("system", "YOLO mode enabled"));
+        .push(ChatMessage::new("user", "hello from the first turn"));
 
-    let lines = super::render_live_tail(&state, 100, 28);
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    let lines =
+        super::render_visible_conversation_with_transcript(&snapshot, 100, 28, &mut transcript);
     assert!(
-        !lines
+        lines
             .iter()
             .any(|line| line.to_string().contains("directory:")),
-        "the welcome banner must not be rendered again after a transcript notice"
+        "the welcome banner should remain above the first message"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.to_string().contains("hello from the first turn"))
     );
 
-    let mut transcript = TranscriptState::default();
     assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 40);
+}
+
+#[test]
+fn welcome_cell_remains_reachable_after_many_messages() {
+    let mut state = AppState::new();
+    for index in 0..40 {
+        state
+            .history
+            .push(ChatMessage::new("user", format!("message {index}")));
+    }
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    transcript.scroll_up(10_000);
+    let lines =
+        super::render_visible_conversation_with_transcript(&snapshot, 80, 20, &mut transcript);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.to_string().contains("directory:")),
+        "scrolling to the top should reach the welcome cell"
+    );
 }
 
 #[test]
@@ -4009,7 +4041,23 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
     assert!(rendered.contains("› 1. Option 1"));
     assert!(rendered.contains("enter to submit answer"));
     assert!(!rendered.contains("Ask RustCode to do anything"));
-    assert!(!rendered.contains('╭') && !rendered.contains('╰'));
+    let rows = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(80)
+        .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>();
+    let question_row = rows
+        .iter()
+        .position(|row| row.contains("Question"))
+        .expect("question panel row");
+    assert!(
+        rows[question_row..]
+            .iter()
+            .all(|row| !row.contains('╭') && !row.contains('╰')),
+        "the question panel should stay borderless while the welcome panel remains in chat"
+    );
 }
 
 #[test]

@@ -127,6 +127,21 @@ pub(super) async fn handle_app_event(
                 let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                 let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
+                if transcript_state.selection.has_selection() {
+                    if key.code == KeyCode::Esc {
+                        transcript_state.selection.clear();
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                    if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                        && (is_ctrl || is_cmd)
+                    {
+                        if let Some(text) = transcript_state.selection.selected_text() {
+                            rustcode::clipboard::copy_to_clipboard(&text);
+                        }
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                }
+
                 if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
                     if rustcode::app::handle_ctrl_c(&app_state).await {
                         return Ok(InputFlow::Exit { update: false });
@@ -1682,7 +1697,13 @@ pub(super) async fn handle_app_event(
                 match mouse.kind {
                     event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
                     event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
-                    _ => return Ok(InputFlow::ContinueIteration),
+                    _ => {
+                        if let Some(text) = transcript_state.selection.mouse(mouse) {
+                            rustcode::clipboard::copy_to_clipboard(&text);
+                        }
+                        frame_requester.schedule_frame();
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                 }
                 // Accumulate queued wheel steps before painting the next frame.
                 frame_requester.schedule_frame();

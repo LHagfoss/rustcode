@@ -12,6 +12,7 @@ mod markdown;
 mod modals;
 mod render;
 pub(crate) mod render_snapshot;
+mod selection;
 mod status_render;
 mod terminal_runtime;
 mod transcript;
