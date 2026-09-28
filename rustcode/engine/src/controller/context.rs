@@ -13,6 +13,8 @@
 
 use std::path::PathBuf;
 
+use crate::config::{AgentMode, ToolProtocol};
+
 /// Owned display data for one discovered skill: the fields frontends
 /// render (picker rows, `/skills` output, context accounting).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +54,16 @@ pub fn estimate_message_tokens(message: &crate::app::ChatMessage) -> usize {
     crate::network::compaction::estimate_message_tokens(message)
 }
 
+/// System-prompt text the context modal accounts for: tool definitions for
+/// `protocol`/`agent_mode`, including agent tools when a delegation is active.
+pub fn tool_system_prompt(
+    delegation_active: bool,
+    protocol: ToolProtocol,
+    agent_mode: AgentMode,
+) -> String {
+    crate::tools::tool_system_prompt(delegation_active, protocol, agent_mode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,7 +87,6 @@ mod tests {
             crate::network::compaction::estimate_message_tokens(&message)
         );
     }
-
     #[test]
     fn skill_discovery_maps_every_engine_skill() {
         let discovered = discover_skills();
@@ -86,5 +97,15 @@ mod tests {
             assert_eq!(info.description, skill.description);
             assert_eq!(info.path, skill.path);
         }
+    }
+
+    #[test]
+    fn system_prompt_matches_the_engine_source() {
+        let prompt = tool_system_prompt(false, ToolProtocol::Json, AgentMode::Build);
+        assert_eq!(
+            prompt,
+            crate::tools::tool_system_prompt(false, ToolProtocol::Json, AgentMode::Build)
+        );
+        assert!(!prompt.is_empty());
     }
 }

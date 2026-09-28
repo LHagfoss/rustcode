@@ -19,6 +19,11 @@ pub fn sanitize_recap_content(content: &str) -> String {
     crate::app::sanitize_recap_content(content)
 }
 
+/// PascalCase display name for an MCP tool, if it follows the prefix convention.
+pub fn mcp_tool_display_name(name: &str) -> Option<String> {
+    crate::tools::mcp_tool_display_name(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
