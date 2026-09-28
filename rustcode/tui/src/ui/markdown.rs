@@ -4,7 +4,7 @@
 //! at a time. This keeps nested emphasis, links, lists, blockquotes, and
 //! escaped text from leaking their syntax into the chat viewport.
 
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -129,6 +129,26 @@ impl MarkdownTableCell {
             return;
         }
         self.spans.push(Span::styled(text.to_owned(), style));
+    }
+
+    fn push_capped_text(&mut self, text: &str, style: ratatui::style::Style) {
+        const MAX_CONTENT_BYTES: usize = 400;
+        let remaining = MAX_CONTENT_BYTES.saturating_sub(self.plain_text().len());
+        let end = text
+            .char_indices()
+            .take_while(|(index, character)| index + character.len_utf8() <= remaining)
+            .map(|(index, character)| index + character.len_utf8())
+            .last()
+            .unwrap_or(0);
+        self.push_text(&text[..end], style);
+        if end < text.len()
+            && !self
+                .spans
+                .last()
+                .is_some_and(|span| span.content.ends_with('…'))
+        {
+            self.push_text("…", style);
+        }
     }
 
     fn plain_text(&self) -> String {
@@ -562,6 +582,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut lines = Vec::new();
     let mut paragraph = Vec::<Span<'static>>::new();
     let mut inline = InlineStyle::default();
+    let mut active_link: Option<(String, usize, bool)> = None;
     let mut heading: Option<HeadingLevel> = None;
     let mut quote_depth = 0usize;
     let mut list_depth = 0usize;
@@ -906,8 +927,46 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     ));
                 }
             }
-            Event::Start(Tag::Link { .. }) => inline.link = true,
-            Event::End(TagEnd::Link) => inline.link = false,
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            }) => {
+                inline.link = true;
+                let destination = dest_url.chars().filter(|c| !c.is_control()).collect();
+                let first_span = if in_table {
+                    current_cell.spans.len()
+                } else {
+                    paragraph.len()
+                };
+                let is_autolink = matches!(link_type, LinkType::Autolink | LinkType::Email);
+                active_link = Some((destination, first_span, is_autolink));
+            }
+            Event::End(TagEnd::Link) => {
+                if let Some((destination, first_span, is_autolink)) = active_link.take() {
+                    let label = if in_table {
+                        current_cell.spans.get(first_span..)
+                    } else {
+                        paragraph.get(first_span..)
+                    }
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                    if !destination.is_empty() && !is_autolink && label.trim() != destination {
+                        // Keep the target visible in every terminal so transcript selection
+                        // can copy it even where OSC 8 hyperlinks are unavailable.
+                        let fallback = format!(" ({destination})");
+                        let style = text_style(inline, show_picker);
+                        if in_table {
+                            current_cell.push_capped_text(&fallback, style);
+                        } else {
+                            paragraph.push(Span::styled(fallback, style));
+                        }
+                    }
+                }
+                inline.link = false;
+            }
             Event::Text(text) | Event::InlineHtml(text) => {
                 if in_table {
                     // Cap per-cell content so a large command result cannot become an
@@ -918,21 +977,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     } else {
                         text_style(inline, show_picker)
                     };
-                    let current_len = current_cell.plain_text().len();
-                    let remaining = 400usize.saturating_sub(current_len);
-                    if remaining > 0 {
-                        let end = text
-                            .char_indices()
-                            .take_while(|(index, _)| *index < remaining)
-                            .map(|(index, character)| index + character.len_utf8())
-                            .last()
-                            .unwrap_or(0)
-                            .min(text.len());
-                        current_cell.push_text(&text[..end], style);
-                        if end < text.len() {
-                            current_cell.push_text("…", style);
-                        }
-                    }
+                    current_cell.push_capped_text(&text, style);
                     continue;
                 }
                 let mut style = inline;
@@ -1096,6 +1141,114 @@ mod tests {
     use super::{COLOR_PRIMARY, MarkdownCache, cache_key, render_cache, render_markdown};
     use ratatui::style::Modifier;
     use ratatui::text::Line;
+
+    #[test]
+    fn descriptive_markdown_link_keeps_a_copyable_destination() {
+        let lines = render_markdown(
+            "Read [the guide](https://example.com/docs) now.",
+            100,
+            false,
+            false,
+        );
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("the guide (https://example.com/docs)"),
+            "rendered: {rendered:?}"
+        );
+        let label = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("guide"))
+            .expect("link label");
+        assert!(label.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn autolink_does_not_repeat_its_destination() {
+        let rendered = render_markdown("<https://example.com/docs>", 100, false, false)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches("https://example.com/docs").count(), 1);
+    }
+
+    #[test]
+    fn table_link_keeps_destination_in_the_cell() {
+        let rendered = render_markdown(
+            "| Resource |\n|---|\n| [guide](https://example.com/docs) |",
+            100,
+            false,
+            false,
+        )
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            rendered.contains("guide (https://example.com/docs)"),
+            "rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn local_links_with_unicode_labels_keep_their_paths() {
+        let rendered = render_markdown(
+            "See [Café 指南](./docs/guide.md) and [源文件](file:///tmp/source.rs).",
+            100,
+            false,
+            false,
+        )
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            rendered.contains("Café 指南 (./docs/guide.md)"),
+            "rendered: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("源文件 (file:///tmp/source.rs)"),
+            "rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn narrow_table_wraps_a_link_without_losing_the_destination() {
+        let lines = render_markdown(
+            "| Resource |\n|---|\n| [guide](https://example.com/docs) |",
+            26,
+            false,
+            false,
+        );
+        let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert!(rendered.iter().all(|line| line.chars().count() <= 26));
+        let copyable = rendered.join("").replace(char::is_whitespace, "");
+        assert!(
+            copyable.contains("https://example.com/docs"),
+            "rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn long_table_link_destination_is_utf8_safe_and_visibly_truncated() {
+        let destination = format!("https://example.com/{}", "é".repeat(1_000));
+        let markdown = format!("| Resource |\n|---|\n| [guide]({destination}) |");
+        let rendered = render_markdown(&markdown, 80, false, false)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains('…'), "rendered: {rendered:?}");
+        assert!(
+            rendered.matches('é').count() <= 200,
+            "table cell exceeded its 400-byte content cap"
+        );
+    }
 
     #[test]
     fn renders_markdown_tables_with_column_separators() {
