@@ -264,7 +264,7 @@ hover_bg = "#253754"
 ];
 
 pub fn get_themes_dir() -> Option<PathBuf> {
-    let config_dir = rustcode::config::get_config_dir()?;
+    let config_dir = rustcode::controller::config_dir()?;
     Some(config_dir.join("themes"))
 }
 

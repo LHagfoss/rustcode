@@ -1736,3 +1736,41 @@ async fn stop_background_task_command_clears_session_tasks() {
     );
     handle.send(Command::Shutdown).expect("shutdown");
 }
+
+#[tokio::test]
+async fn save_config_command_persists_the_active_session_config() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let session_id = started.session_id.expect("session id");
+
+    handle.send(Command::SaveConfig).expect("save config");
+    // `#[cfg(test)]` isolates the config dir per thread, so this never
+    // touches the real user config.
+    let saved = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = updates.recv().await {
+            if let ControllerUpdate::Snapshot(snapshot) = event.update
+                && snapshot.session_id.as_deref() == Some(session_id.as_str())
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("save snapshot timeout");
+    assert!(saved);
+    let dir = super::config_dir().expect("test config dir");
+    assert!(dir.join("config.toml").exists());
+    handle.send(Command::Shutdown).expect("shutdown");
+}

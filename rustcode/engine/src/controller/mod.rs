@@ -2,6 +2,7 @@
 
 mod apply;
 mod attachments;
+mod config;
 mod events;
 mod native_commands;
 mod snapshot;
@@ -29,6 +30,9 @@ pub use apply::{
     apply_question_answer, spawn_observed_orchestrator,
 };
 pub use attachments::save_image_attachment;
+pub use config::{
+    AgentMode, AppConfig, ModelProfile, SessionMeta, ToolProtocol, config_dir, save_config,
+};
 pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,
     accepts_generation,

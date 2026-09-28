@@ -210,7 +210,7 @@ fn render_snapshot_preserves_existing_ui_output() {
     states[0].active_session_id = "session-test-123".to_owned();
 
     for state in &mut states {
-        state.config = rustcode::config::AppConfig::default();
+        state.config = rustcode::controller::AppConfig::default();
         state.model_name = "gemini-3.6-flash".to_owned();
         state.api_base_url = "http://localhost:3000/v1/chat/completions".to_owned();
         state.cwd_and_branch = "/repo:main".to_owned();
@@ -385,7 +385,7 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
 
     let mut state = AppState::new();
     state.config.models = (1..=5)
-        .map(|number| rustcode::config::ModelProfile {
+        .map(|number| rustcode::controller::ModelProfile {
             name: format!("model-{number}"),
             url: format!("http://localhost/{number}"),
             model: format!("model-{number}"),
@@ -664,7 +664,7 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
     let mut state = AppState::new();
     state.api_base_url = "http://localhost/test".to_string();
     state.model_name = "test-model".to_string();
-    state.config.models = vec![rustcode::config::ModelProfile {
+    state.config.models = vec![rustcode::controller::ModelProfile {
         name: "test-profile".to_string(),
         url: state.api_base_url.clone(),
         model: state.model_name.clone(),
@@ -4693,7 +4693,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "test prompt"));
     state.config.models = vec![
-        rustcode::config::ModelProfile {
+        rustcode::controller::ModelProfile {
             name: "model-a".to_string(),
             url: "http://localhost/a".to_string(),
             model: "model-a".to_string(),
@@ -4708,7 +4708,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
             supports_vision: None,
             ..Default::default()
         },
-        rustcode::config::ModelProfile {
+        rustcode::controller::ModelProfile {
             name: "model-b".to_string(),
             url: "http://localhost/b".to_string(),
             model: "model-b".to_string(),
@@ -5124,7 +5124,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
 #[test]
 fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     let mut state = AppState::new();
-    let mut profile = rustcode::config::ModelProfile::default();
+    let mut profile = rustcode::controller::ModelProfile::default();
     profile.name = state.model_name.clone();
     profile.model = state.model_name.clone();
     profile.url = state.api_base_url.clone();

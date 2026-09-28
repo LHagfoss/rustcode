@@ -501,7 +501,7 @@ pub(super) async fn handle_app_event(
                                 };
                                 s.verbosity = new_verbosity.clone();
                                 s.config.verbosity = new_verbosity;
-                                rustcode::config::save_entire_config(&s.config);
+                                rustcode::controller::save_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -538,7 +538,7 @@ pub(super) async fn handle_app_event(
                                 {
                                     profile.enable_thinking = value;
                                 }
-                                rustcode::config::save_entire_config(&s.config);
+                                rustcode::controller::save_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -576,7 +576,7 @@ pub(super) async fn handle_app_event(
                                 {
                                     profile.reasoning_effort = value;
                                 }
-                                rustcode::config::save_entire_config(&s.config);
+                                rustcode::controller::save_config(&s.config);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {
@@ -624,7 +624,7 @@ pub(super) async fn handle_app_event(
                                 } else {
                                     s.config.tool_protocol = protocol;
                                 }
-                                rustcode::config::save_entire_config(&s.config);
+                                rustcode::controller::save_config(&s.config);
                                 let active_model = s.model_name.clone();
                                 s.history.push(ChatMessage::new(
                                     "system",
@@ -906,7 +906,7 @@ pub(super) async fn handle_app_event(
                                         }
                                     }
 
-                                    rustcode::config::save_entire_config(&s.config);
+                                    rustcode::controller::save_config(&s.config);
 
                                     let name_clone = name.clone();
                                     tokio::spawn(async move {
@@ -973,7 +973,7 @@ pub(super) async fn handle_app_event(
                                 let idx = s.mcp_picker_index;
                                 if idx < s.config.mcp_servers.len() {
                                     let removed = s.config.mcp_servers.remove(idx);
-                                    rustcode::config::save_entire_config(&s.config);
+                                    rustcode::controller::save_config(&s.config);
                                     let name_clone = removed.name.clone();
                                     tokio::spawn(async move {
                                         rustcode::mcp::shutdown_server(&name_clone).await;
@@ -991,7 +991,7 @@ pub(super) async fn handle_app_event(
                                     srv.enabled = !srv.enabled;
                                     let name_clone = srv.name.clone();
                                     let enabled = srv.enabled;
-                                    rustcode::config::save_entire_config(&s.config);
+                                    rustcode::controller::save_config(&s.config);
                                     tokio::spawn(async move {
                                         if enabled {
                                             let _ =
@@ -1094,7 +1094,7 @@ pub(super) async fn handle_app_event(
                                 .clone();
                             s.config.theme = selected.clone();
                             s.show_theme_picker = false;
-                            rustcode::config::save_entire_config(&s.config);
+                            rustcode::controller::save_config(&s.config);
                             s.set_notice(format!("Theme set to '{}'", selected));
                         }
                         _ => {}

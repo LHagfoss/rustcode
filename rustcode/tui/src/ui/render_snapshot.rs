@@ -27,7 +27,7 @@ pub(crate) struct RenderSnapshot {
     status: AppStatus,
     active_suggestion_index: Option<usize>,
     dismissed_completion: Option<String>,
-    config: rustcode::config::AppConfig,
+    config: rustcode::controller::AppConfig,
     model_name: String,
     api_base_url: String,
     active_session_id: String,
@@ -53,12 +53,12 @@ pub(crate) struct RenderSnapshot {
     modal_open: bool,
     last_copy_text: Option<(String, std::time::Instant)>,
     expanded_thoughts: std::collections::HashSet<usize>,
-    agent_mode: rustcode::config::AgentMode,
+    agent_mode: rustcode::controller::AgentMode,
     subagents: Vec<SubAgentSnapshot>,
     selected_subagent_id: Option<u32>,
     active_context_window: u32,
-    active_model_profile: Option<rustcode::config::ModelProfile>,
-    active_tool_protocol: rustcode::config::ToolProtocol,
+    active_model_profile: Option<rustcode::controller::ModelProfile>,
+    active_tool_protocol: rustcode::controller::ToolProtocol,
     command_suggestion: Option<String>,
     selected_subagent: Option<SelectedSubagentSnapshot>,
 }
@@ -86,7 +86,7 @@ struct OverlaySnapshot {
     command_picker_search: String,
     show_history_picker: bool,
     history_picker_index: usize,
-    history_picker_sessions: Vec<rustcode::config::SessionMeta>,
+    history_picker_sessions: Vec<rustcode::controller::SessionMeta>,
     history_picker_truncated: bool,
     pending_delete_session_idx: Option<usize>,
     show_subagent_picker: bool,
@@ -320,7 +320,7 @@ impl RenderSnapshot {
     pub(crate) fn dismissed_completion(&self) -> Option<&str> {
         self.dismissed_completion.as_deref()
     }
-    pub(crate) fn config(&self) -> &rustcode::config::AppConfig {
+    pub(crate) fn config(&self) -> &rustcode::controller::AppConfig {
         &self.config
     }
     pub(crate) fn model_name(&self) -> &str {
@@ -401,7 +401,7 @@ impl RenderSnapshot {
     pub(crate) fn history_picker_index(&self) -> usize {
         self.overlay.history_picker_index
     }
-    pub(crate) fn history_picker_sessions(&self) -> &[rustcode::config::SessionMeta] {
+    pub(crate) fn history_picker_sessions(&self) -> &[rustcode::controller::SessionMeta] {
         &self.overlay.history_picker_sessions
     }
     pub(crate) fn history_picker_truncated(&self) -> bool {
@@ -470,7 +470,7 @@ impl RenderSnapshot {
     pub(crate) fn expanded_thoughts(&self) -> &std::collections::HashSet<usize> {
         &self.expanded_thoughts
     }
-    pub(crate) fn agent_mode(&self) -> rustcode::config::AgentMode {
+    pub(crate) fn agent_mode(&self) -> rustcode::controller::AgentMode {
         self.agent_mode
     }
     pub(crate) fn subagents(&self) -> &[SubAgentSnapshot] {
@@ -482,10 +482,10 @@ impl RenderSnapshot {
     pub(crate) fn active_context_window(&self) -> u32 {
         self.active_context_window
     }
-    pub(crate) fn active_model_profile(&self) -> Option<&rustcode::config::ModelProfile> {
+    pub(crate) fn active_model_profile(&self) -> Option<&rustcode::controller::ModelProfile> {
         self.active_model_profile.as_ref()
     }
-    pub(crate) fn active_tool_protocol(&self) -> rustcode::config::ToolProtocol {
+    pub(crate) fn active_tool_protocol(&self) -> rustcode::controller::ToolProtocol {
         self.active_tool_protocol
     }
     pub(crate) fn auto_confirm_status_text(&self) -> &'static str {
@@ -884,7 +884,7 @@ mod tests {
         let mut state = AppState::new();
         state
             .history_picker_sessions
-            .push(rustcode::config::SessionMeta {
+            .push(rustcode::controller::SessionMeta {
                 path: std::path::PathBuf::from("session.json"),
                 title: "A session title".to_owned(),
                 message_count: 3,
@@ -913,7 +913,7 @@ mod tests {
         state.show_mcp_config = true;
         state
             .history_picker_sessions
-            .push(rustcode::config::SessionMeta {
+            .push(rustcode::controller::SessionMeta {
                 path: std::path::PathBuf::from("session.json"),
                 title: "A session title".to_owned(),
                 message_count: 3,
