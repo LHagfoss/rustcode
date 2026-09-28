@@ -84,7 +84,6 @@ impl TranscriptSelection {
         scroll_rows: usize,
     ) {
         let geometry_changed = self.area != area;
-        let previous_rows = &self.rows;
         let rows = (area.y..area.bottom())
             .map(|y| {
                 let mut continuation = 0;
@@ -105,27 +104,12 @@ impl TranscriptSelection {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        if self.snapshot.is_some() && scroll_rows != self.viewport_scroll {
-            let old_count = previous_rows.len().min(self.soft_wrap_before.len());
-            let new_count = rows.len().min(soft_wrap_before.len());
-            let old = &previous_rows[..old_count];
-            let new = &rows[..new_count];
-            let scroll_up = scroll_rows > self.viewport_scroll;
-            let minimum_shift = scroll_rows.abs_diff(self.viewport_scroll);
-            let max_overlap = old_count.min(new_count);
-            let overlap = (1..=max_overlap).rev().find(|&count| {
-                if scroll_up {
-                    new_count - count >= minimum_shift && old[..count] == new[new_count - count..]
-                } else {
-                    old_count - count >= minimum_shift && old[old_count - count..] == new[..count]
-                }
-            });
-            let advanced = if scroll_up {
-                new_count - overlap.unwrap_or(0)
-            } else {
-                old_count - overlap.unwrap_or(0)
-            } as i64;
-            self.viewport_top_key += if scroll_up { -advanced } else { advanced };
+        if self.snapshot.is_some() {
+            // Scroll offsets count pre-wrapped visual Lines. The selected view
+            // stays bottom-anchored when its height changes.
+            self.viewport_top_key += self.viewport_scroll as i64 - scroll_rows as i64
+                + self.area.height as i64
+                - area.height as i64;
         }
         if self.snapshot.is_none()
             && (self.area != area || self.rows != rows || self.soft_wrap_before != soft_wrap_before)
