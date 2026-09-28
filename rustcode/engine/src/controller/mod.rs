@@ -35,20 +35,25 @@ pub use attachments::save_image_attachment;
 pub use config::{
     AgentMode, AppConfig, ModelProfile, SessionMeta, ToolProtocol, config_dir, save_config,
 };
-pub use context::{SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens};
+pub use context::{
+    SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,
+};
 pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,
     accepts_generation,
 };
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
-    ControllerSnapshot, ModelChoice, PendingPrompt, PendingPromptKind, PromptSubmitMode,
-    QuestionPrompt, SessionChoice, TranscriptItem,
+    ControllerSnapshot, ModelChoice, PendingPrompt, PendingPromptKind, PendingQuestion,
+    PromptSubmitMode, QuestionPrompt, SessionChoice, TranscriptItem,
 };
 pub use tasks::{
     TaskDisplay, background_command_label, background_task_snapshots, has_background_tasks,
     stop_background_tasks,
 };
-pub use transcript::{AgentUiEvent, SubAgentStatus, TokenUsage, Verbosity, sanitize_recap_content};
+pub use transcript::{
+    AgentUiEvent, SubAgentStatus, TokenUsage, Verbosity, mcp_tool_display_name,
+    sanitize_recap_content,
+};
 
 pub use worker::InteractiveController;

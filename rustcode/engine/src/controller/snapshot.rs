@@ -2,6 +2,11 @@ use std::path::PathBuf;
 
 use crate::app::{AppState, AppStatus};
 
+/// Source shape for the question modal. Frontends render this until the
+/// builder endgame migrates the modal to the snapshot-owned
+/// [`QuestionPrompt`].
+pub use crate::app::PendingQuestion;
+
 use super::{ApprovalChoice, ControllerError, TaskDisplay};
 
 /// Commands a frontend can send to the session controller.
