@@ -632,7 +632,7 @@ fn settings_picker_uses_unified_modal_picker_style() {
 }
 
 #[test]
-fn picker_uses_full_terminal_viewport() {
+fn picker_panel_is_bounded_above_the_composer() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let state = AppState::new();
     terminal
@@ -641,8 +641,28 @@ fn picker_uses_full_terminal_viewport() {
         })
         .unwrap();
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer[(0, 0)].bg, COLOR_PANEL());
+    // The panel stops at its own max height instead of taking the viewport,
+    // so the transcript above it stays visible.
+    assert_ne!(buffer[(0, 0)].bg, COLOR_PANEL());
+    assert_ne!(buffer[(0, 9)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(0, 10)].bg, COLOR_PANEL());
     assert_eq!(buffer[(79, 19)].bg, COLOR_PANEL());
+}
+
+#[test]
+fn picker_panel_never_exceeds_the_space_above_the_composer() {
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let state = AppState::new();
+    // Only six rows sit above the composer, fewer than the panel's max height,
+    // so the panel is clamped to what is available instead of overflowing.
+    terminal
+        .draw(|frame| {
+            render_verbosity_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 6, 80, 3))
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(0, 0)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(79, 5)].bg, COLOR_PANEL());
 }
 
 #[test]

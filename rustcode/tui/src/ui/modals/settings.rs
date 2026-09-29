@@ -5,7 +5,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 10);
+    let modal_area = input_anchor_rect(f, input_area, VERBOSITY_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -127,7 +127,7 @@ pub(in crate::ui) fn render_yolo_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 10);
+    let modal_area = input_anchor_rect(f, input_area, YOLO_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),

@@ -771,6 +771,45 @@ fn status_screen_uses_the_viewport_above_the_composer() {
 }
 
 #[test]
+fn slash_command_modal_leaves_the_transcript_visible_above_it() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let row_of = |rendered: &str, needle: &str| {
+        rendered
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle:?} in {rendered:?}"))
+    };
+
+    let cases: [(fn(&mut AppState), &str); 3] = [
+        (
+            |state: &mut AppState| state.show_status_modal = true,
+            "Session status",
+        ),
+        (
+            |state: &mut AppState| state.show_model_picker = true,
+            "Select model",
+        ),
+        (
+            |state: &mut AppState| state.show_context_modal = true,
+            "context usage",
+        ),
+    ];
+
+    for (open_modal, modal_title) in cases {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(ChatMessage::new("system", "transcript stays above"));
+        open_modal(&mut state);
+        let rendered = render_state_to_text(&mut state, 80, 24);
+        assert!(
+            row_of(&rendered, "transcript stays above") < row_of(&rendered, modal_title),
+            "modal covers the transcript: {rendered:?}"
+        );
+    }
+}
+
+#[test]
 fn inline_command_selection_is_distinct_from_typed_input() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
