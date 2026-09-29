@@ -43,8 +43,22 @@ pub(crate) struct TranscriptState {
     history_revision: Option<u64>,
     model: super::TranscriptModel,
     scroll_rows: usize,
+    pub(super) reading_anchor: Option<ReadingAnchor>,
     pub(crate) selection: super::selection::TranscriptSelection,
     committed_cache: Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Vec<Line<'static>>>>,
+}
+
+/// The committed tail at the last painted reading viewport. A fixed offset
+/// from the bottom would move the reader when new rows arrive below them.
+#[derive(Clone, Copy)]
+pub(super) struct ReadingAnchor {
+    pub(super) width: u16,
+    pub(super) height: u16,
+    pub(super) display_start: usize,
+    pub(super) history_revision: u64,
+    pub(super) history_len: usize,
+    pub(super) tail_start: usize,
+    pub(super) tail_rows: usize,
 }
 
 impl TranscriptState {
@@ -54,6 +68,9 @@ impl TranscriptState {
 
     pub(crate) fn scroll_down(&mut self, rows: usize) {
         self.scroll_rows = self.scroll_rows.saturating_sub(rows);
+        if self.scroll_rows == 0 {
+            self.reading_anchor = None;
+        }
     }
 
     /// Advance at most one selected row before painting so every crossed row is cached.
@@ -80,7 +97,18 @@ impl TranscriptState {
 
     pub(crate) fn clamp_scroll_rows(&mut self, maximum: usize) -> usize {
         self.scroll_rows = self.scroll_rows.min(maximum);
+        if self.scroll_rows == 0 {
+            self.reading_anchor = None;
+        }
         self.scroll_rows
+    }
+
+    pub(super) fn shift_reading_offset(&mut self, delta: isize) {
+        self.scroll_rows = if delta >= 0 {
+            self.scroll_rows.saturating_add(delta as usize)
+        } else {
+            self.scroll_rows.saturating_sub(delta.unsigned_abs())
+        };
     }
 
     pub(crate) fn reset(&mut self) {

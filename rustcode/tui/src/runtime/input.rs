@@ -61,11 +61,11 @@ fn clear_selection_for_composer_key(
 }
 
 fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
-    if transcript.scroll_rows() == 0 {
+    if key != KeyCode::Esc || transcript.scroll_rows() == 0 {
         return false;
     }
     transcript.scroll_down(usize::MAX);
-    key == KeyCode::Esc
+    true
 }
 
 pub(super) async fn handle_app_event(
@@ -1837,7 +1837,6 @@ pub(super) async fn handle_app_event(
             }
             TuiEvent::Paste(text) => {
                 transcript_state.selection.clear();
-                transcript_state.scroll_down(usize::MAX);
                 app_state.lock().await.mark_user_activity();
                 // Terminals with bracketed paste enabled deliver Cmd+V through
                 // this event instead of the Char('v') key handler. When the
@@ -1976,14 +1975,14 @@ mod tests {
     }
 
     #[test]
-    fn composer_keys_return_scrolled_transcript_to_latest_without_eating_text() {
+    fn composer_keys_keep_reading_position_and_escape_returns_to_latest() {
         let mut transcript = TranscriptState::default();
         transcript.scroll_up(3);
         assert!(!return_to_latest_for_key(
             &mut transcript,
             KeyCode::Char('x')
         ));
-        assert_eq!(transcript.scroll_rows(), 0);
+        assert_eq!(transcript.scroll_rows(), 3);
 
         transcript.scroll_up(2);
         assert!(return_to_latest_for_key(&mut transcript, KeyCode::Esc));

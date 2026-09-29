@@ -191,6 +191,28 @@ pub(crate) fn render_visible_conversation_with_transcript(
     height: u16,
     transcript: &mut TranscriptState,
 ) -> Vec<Line<'static>> {
+    let history_len = state.history().len();
+    let history_revision = state.history().revision();
+    let display_start = state.history_display_start().min(history_len);
+    let mut measured_tail = None;
+    if height > 0
+        && transcript.scroll_rows() > 0
+        && let Some(anchor) = transcript.reading_anchor
+        && anchor.width == width
+        && anchor.display_start == display_start
+        && anchor.history_len <= history_len
+        && anchor.tail_start >= display_start
+    {
+        let tail_rows = if anchor.history_revision == history_revision {
+            anchor.tail_rows
+        } else {
+            committed_suffix_rows(state, width, transcript, anchor.tail_start)
+        };
+        measured_tail = Some((anchor.tail_start, tail_rows));
+        let added_rows = tail_rows as isize - anchor.tail_rows as isize;
+        let height_change = anchor.height as isize - height as isize;
+        transcript.shift_reading_offset(added_rows.saturating_add(height_change));
+    }
     let live_height = if transcript.scroll_rows() > 0 && !state.history().is_empty() {
         0
     } else {
@@ -247,11 +269,67 @@ pub(crate) fn render_visible_conversation_with_transcript(
     lines.extend(live);
     let max_scroll = lines.len().saturating_sub(capacity);
     let scroll = transcript.clamp_scroll_rows(max_scroll);
+    if scroll > 0 {
+        let tail_start = committed_tail_start(state, display_start);
+        let tail_rows = measured_tail
+            .filter(|(start, _)| *start == tail_start)
+            .map(|(_, rows)| rows)
+            .unwrap_or_else(|| committed_suffix_rows(state, width, transcript, tail_start));
+        transcript.reading_anchor = Some(super::history_cell::ReadingAnchor {
+            width,
+            height,
+            display_start,
+            history_revision,
+            history_len,
+            tail_start,
+            tail_rows,
+        });
+    }
     let end = lines.len().saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
     lines.truncate(end);
     lines.drain(..start);
     lines
+}
+
+fn committed_tail_start(state: &RenderSnapshot, display_start: usize) -> usize {
+    let history = state.history();
+    let mut start = history.len();
+    if start > display_start {
+        start -= 1;
+        if history[start].role == "tool" {
+            while start > display_start && history[start - 1].role == "tool" {
+                start -= 1;
+            }
+        }
+    }
+    start
+}
+
+fn committed_suffix_rows(
+    state: &RenderSnapshot,
+    width: u16,
+    transcript: &mut TranscriptState,
+    start: usize,
+) -> usize {
+    let history = state.history();
+    let mut rows = 0;
+    let mut index = start;
+    while index < history.len() {
+        if history[index].role == "tool" {
+            let first = index;
+            while index < history.len() && history[index].role == "tool" {
+                index += 1;
+            }
+            let indices = (first..index).collect::<Vec<_>>();
+            let block = render_committed_tool_result_group_snapshot(state, &indices, width, false);
+            rows += block.len() + usize::from(!block.is_empty());
+        } else {
+            rows += transcript.committed_block(state, index, width).len();
+            index += 1;
+        }
+    }
+    rows
 }
 
 pub(super) fn render_selected_subagent_context(
