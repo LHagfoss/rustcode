@@ -304,7 +304,7 @@ async fn handle_enter_inner(
                     None => s.history.push(ChatMessage::new(
                         "system",
                         format!(
-                            "OS sandbox mode: {} ({})\nUse /sandbox read_only, /sandbox workspace_write, or /sandbox workspace_write_network.",
+                            "OS sandbox mode: {} ({})\nUse /sandbox read_only, /sandbox workspace_write, /sandbox workspace_write_network, or /sandbox trusted (explicit opt-in, no OS sandbox).",
                             current.description(),
                             current.effective_description()
                         ),
@@ -336,9 +336,20 @@ async fn handle_enter_inner(
                             format!("OS sandbox mode set to workspace_write_network ({effective})"),
                         ));
                     }
+                    Some("trusted" | "unrestricted") => {
+                        s.config.sandbox_mode = crate::config::SandboxMode::Trusted;
+                        crate::config::save_entire_config(&s.config);
+                        let effective = s.config.sandbox_mode.effective_description();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "OS sandbox mode set to trusted ({effective}). Commands run with RustCode process permissions; shell approval policy still applies separately."
+                            ),
+                        ));
+                    }
                     Some(_) => s.history.push(ChatMessage::new(
                         "system",
-                        "Invalid option. Use read_only, workspace_write, or workspace_write_network.",
+                        "Invalid option. Use read_only, workspace_write, workspace_write_network, or trusted.",
                     )),
                 }
             }
