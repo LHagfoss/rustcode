@@ -350,13 +350,16 @@ fn working_status_is_fixed_immediately_above_the_composer() {
     let rendered = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
     let composer_y = state.input_text_area.expect("composer area").y as usize;
     let rows = rendered.lines().collect::<Vec<_>>();
-    assert!(rows[composer_y - 1].contains("Working"));
+    // #1494: live activity keeps one row of breathing room above the composer.
+    assert!(rows[composer_y - 2].contains("Working"));
+    assert!(rows[composer_y - 1].trim().is_empty());
     assert_eq!(rendered.matches("Working").count(), 1);
 
     transcript.scroll_up(4);
     let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
     let rows = scrolled.lines().collect::<Vec<_>>();
-    assert!(rows[composer_y - 1].contains("Working"));
+    assert!(rows[composer_y - 2].contains("Working"));
+    assert!(rows[composer_y - 1].trim().is_empty());
     assert_eq!(scrolled.matches("Working").count(), 1);
 }
 
@@ -5051,6 +5054,36 @@ fn active_turn_uses_only_the_history_separator_above_working() {
         super::live_surface_padding(&render_snapshot(&state)),
         (0, 1)
     );
+}
+
+#[test]
+fn activity_spacing_adds_gaps_only_when_active_and_tall_enough() {
+    // Idle never gains a gap.
+    assert_eq!(super::activity_spacing(false, 24, 10, 3), (0, 0));
+    // Active with ample height gets one row above and below.
+    assert_eq!(super::activity_spacing(true, 24, 10, 3), (1, 1));
+    // Short terminals drop the optional gaps first.
+    assert_eq!(super::activity_spacing(true, 10, 9, 3), (0, 0));
+    assert_eq!(super::activity_spacing(true, 12, 10, 3), (0, 0));
+}
+
+#[test]
+fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
+    let mut idle = AppState::new();
+    let idle_text = render_state_to_text(&mut idle, 80, 20);
+    assert!(idle_text.contains("context left"));
+
+    let mut streaming = AppState::new();
+    streaming.status = AppStatus::Streaming;
+    let streaming_text = render_state_to_text(&mut streaming, 80, 20);
+    assert!(streaming_text.contains("esc interrupt"));
+    assert!(streaming_text.contains("context left"));
+
+    // Constrained height must not clip composer/footer for spacing.
+    let mut short = AppState::new();
+    short.status = AppStatus::Streaming;
+    let short_text = render_state_to_text(&mut short, 80, 8);
+    assert!(short_text.contains("context left"));
 }
 
 #[test]
