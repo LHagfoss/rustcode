@@ -1540,6 +1540,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
                 dbg_log!("Deferred tool-call diagnostic: {notice}");
                 s.history.push(ChatMessage::new("system", notice));
+                // Deferred calls never adopt their speculative projections;
+                // drop them so they cannot linger under an active group (#1495).
+                s.clear_speculative_live_tool_calls();
             }
 
             if let Some((fingerprint, dependency, streak)) = infrastructure_stop {
