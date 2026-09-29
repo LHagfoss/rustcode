@@ -1836,6 +1836,9 @@ pub(super) async fn handle_app_event(
                         } else {
                             transcript_state.selection.mouse(mouse)
                         };
+                        // `mouse()` returns `Some` only for the explicit
+                        // right-click copy action; left-button release keeps
+                        // the highlight and copies via Ctrl/Cmd+C (#1492).
                         if let Some(text) = selected {
                             report_selection_copy(
                                 app_state,

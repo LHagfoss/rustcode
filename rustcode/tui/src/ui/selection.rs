@@ -674,8 +674,9 @@ impl TranscriptSelection {
         self.last_edge_attempt = Some((direction, scroll_rows));
     }
 
-    /// Returns text to copy when a drag is released or an existing selection
-    /// is right-clicked. The highlight stays in place until another action.
+    /// Returns text to copy only for the explicit right-click copy action.
+    /// Left-button release keeps the highlight visible without touching the
+    /// clipboard; copy requires Ctrl/Cmd+C or right-click on the selection.
     pub(crate) fn mouse(&mut self, event: MouseEvent) -> Option<String> {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -749,7 +750,9 @@ impl TranscriptSelection {
                 if !self.has_selection() {
                     self.clear();
                 }
-                return self.selected_text();
+                // Keep the highlight but do not copy: copying requires an
+                // explicit Ctrl/Cmd+C or right-click. See #1492.
+                return None;
             }
             MouseEventKind::Down(MouseButton::Right) if self.inside(event.column, event.row) => {
                 return self.selected_text();
@@ -1049,9 +1052,10 @@ mod tests {
         selection.refresh(area, &buffer, &[false, false]);
         selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
         selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 3));
+        // Left release must keep the highlight without copying (#1492).
         assert_eq!(
             selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 3)),
-            Some("é🙂".to_owned())
+            None
         );
         selection.highlight(&mut buffer);
         assert!(
@@ -1095,10 +1099,55 @@ mod tests {
         selection.refresh(area, &buffer, &[false, true, false]);
         selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
         selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 2));
+        // Left release keeps the highlight; explicit copy reads selected_text().
         assert_eq!(
             selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 2)),
-            Some("helloworld\nagain".to_owned())
+            None
         );
+        assert_eq!(
+            selection.selected_text().as_deref(),
+            Some("helloworld\nagain")
+        );
+    }
+
+    #[test]
+    fn left_release_does_not_copy_while_right_click_does() {
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false]);
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3, 0));
+        assert_eq!(
+            selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 0)),
+            None
+        );
+        // Highlight remains after release for explicit Ctrl/Cmd+C.
+        assert_eq!(selection.selected_text().as_deref(), Some("hell"));
+        // Right-click on the selection is the explicit mouse copy action.
+        assert_eq!(
+            selection.mouse(mouse(MouseEventKind::Down(MouseButton::Right), 1, 0)),
+            Some("hell".to_owned())
+        );
+        assert_eq!(selection.selected_text().as_deref(), Some("hell"));
+    }
+
+    #[test]
+    fn double_click_release_keeps_word_without_copying() {
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "one two three", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false]);
+        for _ in 0..2 {
+            selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
+            assert_eq!(
+                selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 0)),
+                None
+            );
+        }
+        assert_eq!(selection.selected_text().as_deref(), Some("two"));
     }
 
     #[test]
@@ -1187,18 +1236,22 @@ mod tests {
             area.y,
         ));
         assert!(transcript.selection.selected_text().unwrap().len() > after.len());
-        let copied = transcript.selection.mouse(mouse(
-            MouseEventKind::Up(MouseButton::Left),
-            area.x + 2,
-            area.y,
-        ));
-        assert_eq!(copied, transcript.selection.selected_text());
+        // Left release keeps the highlight without returning copy text (#1492).
+        assert_eq!(
+            transcript.selection.mouse(mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                area.x + 2,
+                area.y,
+            )),
+            None
+        );
+        let kept = transcript.selection.selected_text();
 
         state
             .history
             .push(ChatMessage::new("assistant", "new streamed response"));
         let _ = rendered_transcript(&state, &mut transcript);
-        assert_eq!(copied, transcript.selection.selected_text());
+        assert_eq!(kept, transcript.selection.selected_text());
     }
 
     #[test]
