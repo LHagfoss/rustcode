@@ -717,9 +717,53 @@ fn inline_command_suggestions_render_above_the_composer() {
         popup_row < composer_row,
         "popup should be above the composer: composer={composer_row}, popup={popup_row}"
     );
+    let hint_row = (0..20)
+        .find(|row| row_text(*row).contains("navigate"))
+        .expect("completion navigation hint should be visible under the composer");
     assert!(
-        !(0..20).any(|row| row_text(row).contains("context left")),
-        "the footer should be hidden while completions are visible"
+        hint_row > composer_row,
+        "the hint belongs under the composer: composer={composer_row}, hint={hint_row}"
+    );
+    assert!(
+        row_text(hint_row).contains("enter select"),
+        "the hint should name the keys that select a command: {:?}",
+        row_text(hint_row)
+    );
+}
+
+#[test]
+fn completion_footer_hint_replaces_session_metadata() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.input_buffer = "/".to_owned();
+    state.cursor_position = 1;
+    state.active_suggestion_index = Some(0);
+    let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let row_text = |row: u16| {
+        (0..120)
+            .map(|column| buffer[(column, row)].symbol())
+            .collect::<String>()
+    };
+    let hint_row = (0..20)
+        .find(|row| row_text(*row).contains("navigate"))
+        .expect("completion hint should be rendered");
+    let location = super::composer_render::footer_location(&render_snapshot(&state));
+    assert!(
+        !row_text(hint_row).contains(location.trim()),
+        "the hint replaces the session location on the left: {:?}",
+        row_text(hint_row)
+    );
+    assert!(
+        (0..20).any(|row| row_text(row).contains("esc dismiss")),
+        "the hint should say how to dismiss the popup"
     );
 }
 
@@ -778,7 +822,7 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
             .unwrap_or_else(|| panic!("missing {needle:?} in {rendered:?}"))
     };
 
-    let cases: [(fn(&mut AppState), &str); 3] = [
+    let cases: [(fn(&mut AppState), &str); 5] = [
         (
             |state: &mut AppState| state.show_status_modal = true,
             "Session status",
@@ -790,6 +834,14 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
         (
             |state: &mut AppState| state.show_context_modal = true,
             "context usage",
+        ),
+        (
+            |state: &mut AppState| state.show_stats_modal = true,
+            "Token usage",
+        ),
+        (
+            |state: &mut AppState| state.show_session_modal = true,
+            "Session",
         ),
     ];
 
@@ -805,6 +857,32 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
             "modal covers the transcript: {rendered:?}"
         );
     }
+}
+
+#[test]
+fn stats_and_session_panels_render_their_details_without_touching_the_transcript() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.show_stats_modal = true;
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(rendered.contains("Token usage"), "{rendered:?}");
+    assert!(rendered.contains("no token data yet"), "{rendered:?}");
+    assert!(rendered.contains("esc to close"), "{rendered:?}");
+
+    let mut state = AppState::new();
+    state.show_session_modal = true;
+    state.active_session_id = "session-test".to_owned();
+    state
+        .history
+        .push(ChatMessage::new("user", "one user turn"));
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(rendered.contains("session-test"), "{rendered:?}");
+    assert!(rendered.contains("1 user"), "{rendered:?}");
+    assert_eq!(
+        rendered.matches("one user turn").count(),
+        1,
+        "the panel summarises the turn instead of repeating it: {rendered:?}"
+    );
 }
 
 #[test]
@@ -865,7 +943,7 @@ fn inline_command_selection_is_distinct_from_typed_input() {
             })
             .unwrap();
         let selected_cell = &popup_terminal.backend().buffer()[(2, 0)];
-        assert_eq!(selected_cell.fg, ratatui::style::Color::White);
+        assert_eq!(selected_cell.fg, ratatui::style::Color::Black);
         assert_eq!(selected_cell.bg, COLOR_PRIMARY());
         assert!(selected_cell.modifier.contains(Modifier::BOLD));
         assert_eq!(popup_terminal.backend().buffer()[(0, 0)].symbol(), "›");
@@ -899,6 +977,11 @@ fn inline_command_recommendations_style_unselected_rows_as_default_text() {
     let buffer = terminal.backend().buffer();
     let unselected_cell = &buffer[(2, 0)];
     assert_eq!(unselected_cell.fg, COLOR_TEXT());
+    assert_eq!(
+        unselected_cell.bg,
+        COLOR_PANEL(),
+        "unselected rows should sit on the panel background, not the transcript"
+    );
     assert!(!unselected_cell.modifier.contains(Modifier::BOLD));
     assert_eq!(
         unselected_cell.symbol(),

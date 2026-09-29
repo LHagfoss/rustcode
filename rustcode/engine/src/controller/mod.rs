@@ -34,7 +34,8 @@ pub use apply::{
 };
 pub use attachments::save_image_attachment;
 pub use config::{
-    AgentMode, AppConfig, ModelProfile, SessionMeta, ToolProtocol, config_dir, save_config,
+    AgentMode, AppConfig, ModelProfile, MonthlyUsage, SessionMeta, ToolProtocol, config_dir,
+    save_config,
 };
 pub use context::{
     SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,

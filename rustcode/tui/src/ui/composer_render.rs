@@ -990,12 +990,19 @@ pub(crate) fn render_input(
     input_margin
 }
 
-pub(super) fn composer_footer_visible(
-    state: &RenderSnapshot,
-    has_command_completions: bool,
-    has_file_completions: bool,
-) -> bool {
-    !state.modal_open() && !has_command_completions && !has_file_completions
+pub(super) fn composer_footer_visible(state: &RenderSnapshot) -> bool {
+    !state.modal_open()
+}
+
+/// Hint shown under the composer while an inline completion popup is open. The
+/// footer row is reserved even when its text is replaced, so the composer does
+/// not jump as the popup opens and closes.
+pub(super) fn completion_footer_hint(has_command_completions: bool) -> &'static str {
+    if has_command_completions {
+        "  ↑/↓ navigate · enter select · tab complete · esc dismiss"
+    } else {
+        "  ↑/↓ navigate · enter select · esc dismiss"
+    }
 }
 
 pub(super) fn footer_location(state: &RenderSnapshot) -> String {
@@ -1013,6 +1020,7 @@ pub(super) fn render_composer_footer(
     f: &mut Frame,
     area: ratatui::layout::Rect,
     state: &RenderSnapshot,
+    popup_hint: Option<&'static str>,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1022,7 +1030,14 @@ pub(super) fn render_composer_footer(
     let window = state.active_context_window().max(1);
     let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
-    let (left_content, left_style) = if state.ctrl_c_exit_armed() {
+    let (left_content, left_style) = if let Some(hint) = popup_hint {
+        // The completion popup owns the selection, so the hint replaces the
+        // session metadata rather than competing with it for the same row.
+        (
+            hint.to_owned(),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        )
+    } else if state.ctrl_c_exit_armed() {
         (
             "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),

@@ -186,6 +186,11 @@ pub struct AppState {
     pub subagent_picker_index: usize,
     pub show_context_modal: bool,
     pub show_status_modal: bool,
+    pub show_stats_modal: bool,
+    pub show_session_modal: bool,
+    /// Monthly usage captured when the stats panel is opened, so rendering the
+    /// panel does not reread the usage file on every frame.
+    pub stats_usage_history: std::collections::BTreeMap<String, crate::config::MonthlyUsage>,
     pub active_session_id: String,
     /// Whether the current logical turn may set the title of a new session.
     pub session_title_tool_available: bool,
@@ -1111,6 +1116,9 @@ impl AppState {
             subagent_picker_index: 0,
             show_context_modal: false,
             show_status_modal: false,
+            show_stats_modal: false,
+            show_session_modal: false,
+            stats_usage_history: std::collections::BTreeMap::new(),
             session_title_tool_available: false,
             show_mcp_config: false,
             mcp_picker_index: 0,
@@ -1185,6 +1193,13 @@ impl AppState {
         self.exit_warnings.push(warning.into());
     }
 
+    /// Open the read-only usage panel, snapshotting monthly usage so the panel
+    /// does not reread the usage file on every frame while it stays open.
+    pub fn open_stats_modal(&mut self) {
+        self.stats_usage_history = crate::config::get_usage_history();
+        self.show_stats_modal = true;
+    }
+
     /// True when any modal overlay is open (pickers or tool confirmation);
     /// the background content renders dimmed.
     pub fn modal_open(&self) -> bool {
@@ -1195,6 +1210,8 @@ impl AppState {
             || self.show_subagent_picker
             || self.show_context_modal
             || self.show_status_modal
+            || self.show_stats_modal
+            || self.show_session_modal
             || self.show_update_prompt
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation

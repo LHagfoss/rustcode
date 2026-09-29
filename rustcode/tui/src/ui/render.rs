@@ -177,10 +177,14 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         0
     };
-    let footer_visible =
-        composer_footer_visible(state, !filtered_cmds.is_empty(), !at_files.is_empty());
-    // Reserve the footer row while completion hides its text so the composer
-    // does not jump when the popup opens or closes.
+    let popup_hint = if !filtered_cmds.is_empty() || !at_files.is_empty() {
+        Some(completion_footer_hint(!filtered_cmds.is_empty()))
+    } else {
+        None
+    };
+    let footer_visible = composer_footer_visible(state);
+    // Reserve the footer row even while a completion popup replaces its text so
+    // the composer does not jump when the popup opens or closes.
     let footer_height = 1;
     let (top_padding, bottom_padding) = live_surface_padding(state);
     let vertical_padding = top_padding.saturating_add(bottom_padding);
@@ -368,7 +372,7 @@ pub(crate) fn render_with_transcript_snapshot(
         Composer::default().render(f, &composer_chunks, state)
     };
     if footer_visible {
-        render_composer_footer(f, chunks[8], state);
+        render_composer_footer(f, chunks[8], state, popup_hint);
     }
 
     if !filtered_cmds.is_empty() {
@@ -419,6 +423,14 @@ pub(crate) fn render_with_transcript_snapshot(
 
     if state.show_status_modal() {
         render_status_modal(f, state, input_box_area);
+    }
+
+    if state.show_stats_modal() {
+        render_stats_modal(f, state, input_box_area);
+    }
+
+    if state.show_session_modal() {
+        render_session_modal(f, state, input_box_area);
     }
 
     if state.show_update_prompt() {

@@ -13,7 +13,9 @@
 
 use std::path::PathBuf;
 
-pub use crate::config::{AgentMode, AppConfig, ModelProfile, SessionMeta, ToolProtocol};
+pub use crate::config::{
+    AgentMode, AppConfig, ModelProfile, MonthlyUsage, SessionMeta, ToolProtocol,
+};
 
 /// Persist `config` to disk, preserving project overrides like the
 /// settings and MCP flows expect. No-op for invalid configs.

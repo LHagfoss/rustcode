@@ -1232,6 +1232,33 @@ async fn status_command_opens_screen_without_adding_chat_history() {
 }
 
 #[tokio::test]
+async fn stats_and_session_commands_open_panels_without_adding_chat_history() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    for command in ["/stats", "/usage", "/session"] {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        state.lock().await.input_buffer = command.to_owned();
+        let client = reqwest::Client::new();
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let trigger = super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
+        assert!(!trigger, "{command} should not start a turn");
+        let state = state.lock().await;
+        assert!(state.modal_open(), "{command} should open a panel");
+        assert!(
+            state.show_stats_modal || state.show_session_modal,
+            "{command} should raise one of the info panels"
+        );
+        assert!(
+            state.history.is_empty(),
+            "{command} should not append to the transcript"
+        );
+    }
+}
+
+#[tokio::test]
 async fn update_command_initiates_check_and_sets_notice() {
     use crate::app::state::AppState;
     use std::sync::Arc;
