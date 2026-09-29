@@ -42,49 +42,93 @@ fn clipboard_copy_log_summary(byte_count: usize) -> String {
     format!("[CLIPBOARD] Copying {byte_count} bytes to system clipboard")
 }
 
-pub fn copy_to_clipboard(text: &str) -> bool {
+/// A native clipboard write is confirmed; OSC 52 only confirms that the
+/// terminal request was sent, since terminals do not acknowledge delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardCopyStatus {
+    Confirmed,
+    Requested,
+    Failed,
+}
+
+pub fn copy_to_clipboard(text: &str) -> ClipboardCopyStatus {
     use std::io::Write;
+    copy_to_clipboard_with(
+        text,
+        |clean| {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(clean.as_bytes());
+            let osc52 = format!("\x1b]52;c;{b64}\x07");
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(osc52.as_bytes()).is_ok() && stdout.flush().is_ok()
+        },
+        |clean| {
+            let Ok(mut child) = std::process::Command::new("pbcopy")
+                .env("LANG", "en_US.UTF-8")
+                .env("LC_CTYPE", "en_US.UTF-8")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            else {
+                dbg_log!("[CLIPBOARD] Failed to spawn pbcopy process");
+                return false;
+            };
+            let wrote = child
+                .stdin
+                .take()
+                .is_some_and(|mut stdin| stdin.write_all(clean.as_bytes()).is_ok());
+            let status = child.wait();
+            dbg_log!("[CLIPBOARD] pbcopy wait result: {:?}", status);
+            wrote && status.is_ok_and(|status| status.success())
+        },
+    )
+}
+
+fn copy_to_clipboard_with(
+    text: &str,
+    send_terminal: impl FnOnce(&str) -> bool,
+    write_native: impl FnOnce(&str) -> bool,
+) -> ClipboardCopyStatus {
     let clean: String = text
         .chars()
         .filter(|&c| c != '\0' && c != '\u{feff}')
         .collect();
-
     if clean.trim().is_empty() {
         dbg_log!("[CLIPBOARD] Ignored copy request: text is empty or whitespace only");
-        return false;
+        return ClipboardCopyStatus::Failed;
     }
-
     dbg_log!("{}", clipboard_copy_log_summary(clean.len()));
-
-    // 1. Emit OSC 52 ANSI sequence to terminal (supported natively by iTerm2, Terminal.app, Alacritty, Kitty, WezTerm, Tmux)
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(clean.as_bytes());
-    let osc52 = format!("\x1b]52;c;{}\x07", b64);
-    let _ = std::io::stdout().write_all(osc52.as_bytes());
-    let _ = std::io::stdout().flush();
-
-    // 2. Also pass clean text to system clipboard utility (pbcopy on Mac)
-    if let Ok(mut child) = std::process::Command::new("pbcopy")
-        .env("LANG", "en_US.UTF-8")
-        .env("LC_CTYPE", "en_US.UTF-8")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(clean.as_bytes());
-        }
-        let status = child.wait();
-        dbg_log!("[CLIPBOARD] pbcopy wait result: {:?}", status);
-        return true;
-    } else {
-        dbg_log!("[CLIPBOARD] Failed to spawn pbcopy process");
+    let terminal_sent = send_terminal(&clean);
+    let native_copied = write_native(&clean);
+    match (native_copied, terminal_sent) {
+        (true, _) => ClipboardCopyStatus::Confirmed,
+        (false, true) => ClipboardCopyStatus::Requested,
+        (false, false) => ClipboardCopyStatus::Failed,
     }
-    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::clipboard_copy_log_summary;
+    use super::{ClipboardCopyStatus, clipboard_copy_log_summary, copy_to_clipboard_with};
+
+    #[test]
+    fn clipboard_status_distinguishes_native_terminal_and_failure() {
+        let confirmed = copy_to_clipboard_with("text", |_| true, |_| true);
+        let requested = copy_to_clipboard_with("text", |_| true, |_| false);
+        let failed = copy_to_clipboard_with("text", |_| false, |_| false);
+        assert_eq!(confirmed, ClipboardCopyStatus::Confirmed);
+        assert_eq!(requested, ClipboardCopyStatus::Requested);
+        assert_eq!(failed, ClipboardCopyStatus::Failed);
+    }
+
+    #[test]
+    fn empty_copy_does_not_touch_either_backend() {
+        let result = copy_to_clipboard_with(
+            " \0\u{feff} ",
+            |_| panic!("terminal backend must not be called"),
+            |_| panic!("native backend must not be called"),
+        );
+        assert_eq!(result, ClipboardCopyStatus::Failed);
+    }
 
     #[test]
     fn clipboard_copy_log_summary_contains_only_byte_count() {
