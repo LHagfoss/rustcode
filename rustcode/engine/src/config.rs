@@ -1017,6 +1017,11 @@ pub struct AppConfig {
     /// Opt in to the interactive TUI's full-terminal mode.
     #[serde(default)]
     pub fullscreen: bool,
+    /// Render the activity line without the animated shimmer sweep, for
+    /// users who find continuous motion distracting. Purely presentational,
+    /// so project config may set it like `theme` and `fullscreen`.
+    #[serde(default)]
+    pub reduced_motion: bool,
     /// Opaque legacy values retained through config rewrites, but never read
     /// by runtime behavior or written to the JSON compatibility config.
     #[doc(hidden)]
@@ -1083,6 +1088,8 @@ struct RuntimeConfig {
     #[serde(default)]
     fullscreen: bool,
     #[serde(default)]
+    reduced_motion: bool,
+    #[serde(default)]
     agent_mode: AgentMode,
     #[serde(default)]
     verbosity: crate::app::state::Verbosity,
@@ -1134,6 +1141,8 @@ struct TomlConfig {
     discord_rpc_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fullscreen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reduced_motion: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
     /// delete user data left by the removed Laya sidecar.
     #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
@@ -1284,6 +1293,7 @@ impl Default for AppConfig {
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             fullscreen: false,
+            reduced_motion: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1525,6 +1535,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.audio = runtime.audio;
                     config.discord_rpc_enabled = runtime.discord_rpc_enabled;
                     config.fullscreen = runtime.fullscreen;
+                    config.reduced_motion = runtime.reduced_motion;
                 }
                 None => {
                     eprintln!(
@@ -1609,6 +1620,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         fullscreen: Some(config.fullscreen),
+        reduced_motion: Some(config.reduced_motion),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
@@ -1693,6 +1705,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(fullscreen) = file.fullscreen {
         config.fullscreen = fullscreen;
+    }
+    if let Some(reduced_motion) = file.reduced_motion {
+        config.reduced_motion = reduced_motion;
     }
     if file.legacy_laya.is_some() {
         config.legacy_laya = file.legacy_laya;
@@ -1836,6 +1851,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         audio: None,
         discord_rpc_enabled: None,
         fullscreen: None,
+        reduced_motion: None,
         legacy_laya: None,
         agent_mode: None,
         verbosity: None,
