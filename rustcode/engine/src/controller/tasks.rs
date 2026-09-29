@@ -1,10 +1,18 @@
-//! Background-task observation for frontends (issue #1439).
+//! Background-task and subagent observation for frontends (issues #1439, #1442).
 //!
-//! The task system itself lives in `crate::tools` (backed by
-//! `rustcode-tasks`); this module is the frontend-facing contract over it.
-//! Every frontend — TUI, desktop, and the future `serve` transport —
-//! observes and stops background tasks through these items instead of
-//! reaching into `crate::tools` directly.
+//! The task and subagent systems live in `crate::tools` / `crate::app`
+//! (the latter backed by `rustcode-tasks`); these modules are the
+//! frontend-facing contract over them. Every frontend — TUI, desktop, and the
+//! future `serve` transport — observes and stops background tasks, and drives
+//! subagents, through these items instead of reaching into the engine
+//! directly.
+
+/// Subagent process manager frontends spawn through.
+pub use crate::app::SubagentController;
+/// Per-session turn context a frontend attaches while background work is
+/// running, so the engine drives those turns with the same limits as the
+/// foreground session.
+pub use crate::network::TurnContext;
 
 /// Owned display data for one live background task.
 ///

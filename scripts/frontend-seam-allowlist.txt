@@ -31,23 +31,21 @@ rustcode_tool_protocol::find_closing_tool_fence
 rustcode_tool_protocol::resolve_tool_calls
 
 # --- Convergence targets. Each entry removed = one step toward #1431. ---
-# Shared state access (route through controller snapshots):
+# Shared state access: the render layer's only remaining `rustcode::app`
+# reference is `AppState` itself — the snapshot bridge (render_snapshot.rs)
+# plus the tests that construct one. Converging it means a narrow controller
+# view in place of the 79 fields the bridge reads today, which is the
+# remaining step for #1442 step 1. Every shared *type* (AppStatus, ChatMessage,
+# History, LiveToolCall, StreamTracker, SubAgent, ToolConfirmation, McpEditState,
+# UiRect, ApprovalDecision, QuestionAnswer, ToolCallRef, ToolResultRecord,
+# PendingSteer) is already re-exported by rustcode::controller.
 rustcode::app
-rustcode::app::state
 # Composer assistance + activity display converge in #1442 (controller/input:
 # classify_*, ActivityKind/Snapshot, suggestion, completion, file mentions,
 # help text; input driving already lives in runtime/).
-# Turn machinery (route through controller):
-# ui_adapter converged in #1442 (transcript renders the re-exported
-# AgentUiEvent contract type; native TurnUpdate production is endgame work).
-rustcode::network
-# compaction stays for SUMMARY_MARKER only (transcript render protocol,
-# converges with the turn machinery in #1442); token estimation now routes
-# through rustcode::controller (issue #1441).
-rustcode::network::compaction
-# Background-task observation now routes through rustcode::controller
-# (TaskDisplay, background_task_snapshots, background_command_label,
-# stop_background_tasks, Command::StopBackgroundTask — issue #1439).
+# Background tasks (TaskDisplay, background_task_snapshots, StopBackgroundTask,
+# TurnContext) and subagents (SubagentController) route through
+# rustcode::controller (issues #1439, #1442).
 # Test-only direct manager use (tui test helper spawns real tasks).
 rustcode::tools::background_task_manager
 # Config read/mutate now routes through rustcode::controller (AppConfig,
@@ -60,3 +58,7 @@ rustcode::tools::background_task_manager
 rustcode::update::current_version
 # Skills discovery now routes through rustcode::controller (SkillInfo,
 # discover_skills — issue #1441).
+# Turn machinery converged in #1442: the transcript renders the re-exported
+# AgentUiEvent contract type and classifies compaction summaries through
+# `controller::is_compaction_summary` instead of the network marker literal.
+# Native TurnUpdate production for TUI-driven turns is endgame work.

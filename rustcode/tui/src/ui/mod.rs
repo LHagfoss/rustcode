@@ -75,7 +75,7 @@ use ratatui::{
 use render_snapshot::RenderSnapshot;
 #[cfg(test)]
 use rustcode::app::AppState;
-use rustcode::app::{AppStatus, ChatMessage};
+use rustcode::controller::{AppStatus, ChatMessage};
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::OnceLock;

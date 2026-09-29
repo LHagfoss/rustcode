@@ -687,7 +687,7 @@ pub(super) fn render_committed_assistant_text_with_metrics(
 #[cfg(test)]
 mod projection_tests {
     use super::*;
-    use rustcode::app::ChatMessage;
+    use rustcode::controller::ChatMessage;
 
     #[test]
     fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
