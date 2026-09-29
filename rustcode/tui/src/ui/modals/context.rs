@@ -5,7 +5,7 @@ pub(in crate::ui) fn render_status_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let area = input_anchor_rect(f, input_area, 0);
+    let area = input_anchor_rect(f, input_area, STATUS_MODAL_HEIGHT);
     f.render_widget(Clear, area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -60,7 +60,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 12);
+    let modal_area = input_anchor_rect(f, input_area, THEME_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -296,7 +296,7 @@ pub(in crate::ui) fn render_context_modal(
 ) {
     // The stats column needs twelve content rows. Reserve one row above the
     // header, then size the panel so the content reaches its bottom edge.
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, CONTEXT_MODAL_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
