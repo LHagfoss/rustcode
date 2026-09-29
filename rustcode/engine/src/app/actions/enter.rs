@@ -561,20 +561,10 @@ async fn handle_enter_inner(
             }
             "/skills" => {
                 let skills = crate::skills::discover_skills();
-                if skills.is_empty() {
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "No skills discovered.\nPlace SKILL.md files in .rustcode/skills/ or ~/.config/rustcode/skills/",
-                    ));
-                } else {
-                    let mut out = format!("📦 Discovered Skills ({}):\n\n", skills.len());
-                    for skill in &skills {
-                        out.push_str(&format!("  • {}\n", skill.name));
-                        out.push_str(&format!("    Description: {}\n", skill.description));
-                        out.push_str(&format!("    Path: {}\n\n", skill.path.display()));
-                    }
-                    s.history.push(ChatMessage::new("system", out));
-                }
+                s.history.push(ChatMessage::new(
+                    "system",
+                    crate::skills::format_skill_catalog(&skills),
+                ));
             }
             "/changelog" => {
                 let log_text = build_latest_changelog();

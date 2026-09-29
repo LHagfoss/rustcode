@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -21,43 +21,195 @@ pub struct SkillMetadata {
 }
 
 pub fn discover_skills() -> Vec<SkillMetadata> {
-    let mut skills = Vec::new();
+    discover_skills_in(current_root_inputs())
+}
 
-    // rustcode's own skill locations. We deliberately do NOT scan `.claude/skills`
-    // anymore: that is Claude Code's directory, and inheriting it dumped unrelated
-    // plugin skills (Cloudflare Workers, etc.) into every prompt — which derailed
-    // agents into believing this project was something it isn't. Users who really
-    // want to share those can opt in via RUSTCODE_EXTRA_SKILL_DIRS (using the
-    // platform's native path-list separator).
-    let local_dirs = [".rustcode/skills", ".agents/skills"];
-
-    let home = match std::env::var("HOME") {
-        Ok(h) => PathBuf::from(h),
-        Err(_) => return skills,
-    };
-
-    let global_dirs = [
-        home.join(".config/rustcode/skills"),
-        home.join(".agents/skills"),
-    ];
-
-    let extra_dirs = std::env::var_os("RUSTCODE_EXTRA_SKILL_DIRS")
+/// The roots this process should search, read from the workspace, the
+/// environment and the user config.
+fn current_root_inputs() -> SkillRootInputs {
+    let config_dir = crate::config::get_config_dir();
+    // `load_config_from` reads the user config only, so a checked-out project
+    // config can never widen skill discovery.
+    let extra_dirs = config_dir
         .as_deref()
-        .map(split_skill_dirs)
+        .map(|dir| crate::config::load_config_from(dir).2.extra_skill_dirs)
         .unwrap_or_default();
+    SkillRootInputs {
+        // Prefer the explicit workspace the tool call is running against; fall
+        // back to the process CWD when no session has established one.
+        workspace: crate::tools::active_workspace_root().or_else(|| std::env::current_dir().ok()),
+        config_dir,
+        home: std::env::var_os("HOME").map(PathBuf::from),
+        extra_dirs,
+        extra_dirs_env: std::env::var_os("RUSTCODE_EXTRA_SKILL_DIRS"),
+    }
+}
 
-    for dir in local_dirs
-        .iter()
-        .map(PathBuf::from)
-        .chain(global_dirs)
-        .chain(extra_dirs)
-    {
-        scan_skill_dir(&dir, &mut skills);
+/// Discovery over explicit roots. Roots are scanned in the order
+/// [`skill_roots_from`] returns and the first definition of a name wins, so
+/// project roots override user-level ones.
+pub fn discover_skills_in(inputs: SkillRootInputs) -> Vec<SkillMetadata> {
+    let mut skills: Vec<SkillMetadata> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for root in skill_roots_from(&inputs) {
+        let mut found = Vec::new();
+        scan_skill_dir(&root.path, &mut found);
+        for skill in found {
+            if seen.insert(skill.name.clone()) {
+                skills.push(skill);
+            }
+        }
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    skills
+}
+
+/// Where a skill root came from. Used by `rustcode doctor` and the `/skills`
+/// report so a user can tell which directory a skill was picked up from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillRootKind {
+    /// `.rustcode/skills` or `.agents/skills` inside the workspace.
+    Workspace,
+    /// The tool-agnostic root shared with other agents (`~/.agents/skills`).
+    Universal,
+    /// RustCode's own root inside its config directory.
+    Rustcode,
+    /// `extra_skill_dirs` / `RUSTCODE_EXTRA_SKILL_DIRS`.
+    Configured,
+}
+
+impl SkillRootKind {
+    /// RustCode creates only the roots it owns; shared and workspace roots
+    /// belong to whoever put them there.
+    pub fn is_rustcode_owned(self) -> bool {
+        matches!(self, Self::Rustcode)
     }
 
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills.dedup_by(|a, b| a.name == b.name);
-    skills
+    /// Stable check name used by `rustcode doctor`, which keys its report on
+    /// `&'static str`.
+    pub fn check_name(self) -> &'static str {
+        match self {
+            Self::Workspace => "project-skills",
+            Self::Universal => "skills-dir[universal]",
+            Self::Rustcode => "skills-dir",
+            Self::Configured => "skills-dir[configured]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRoot {
+    pub path: PathBuf,
+    pub kind: SkillRootKind,
+}
+
+/// Everything [`skill_roots_from`] needs, so root resolution stays pure and
+/// testable without touching the process environment.
+#[derive(Debug, Clone, Default)]
+pub struct SkillRootInputs {
+    /// Workspace root holding `.rustcode/skills` and `.agents/skills`.
+    pub workspace: Option<PathBuf>,
+    /// RustCode's own config directory, normally [`crate::config::get_config_dir`].
+    pub config_dir: Option<PathBuf>,
+    /// The user's home directory, when it is known.
+    pub home: Option<PathBuf>,
+    /// `extra_skill_dirs` from the global config.
+    pub extra_dirs: Vec<PathBuf>,
+    /// `RUSTCODE_EXTRA_SKILL_DIRS`, using the platform path-list separator.
+    pub extra_dirs_env: Option<OsString>,
+}
+
+/// Assembles every skill root in precedence order, highest first.
+///
+/// Explicit roots (`extra_skill_dirs`, `RUSTCODE_EXTRA_SKILL_DIRS`) override
+/// everything, then project-local roots override user-level ones. We
+/// deliberately do *not* scan `.claude/skills`: that is Claude Code's
+/// directory, and inheriting it dumped unrelated plugin skills (Cloudflare
+/// Workers, etc.) into every prompt. Users who really want to share those can
+/// add the directory to `extra_skill_dirs`.
+pub fn skill_roots_from(inputs: &SkillRootInputs) -> Vec<SkillRoot> {
+    let mut roots: Vec<SkillRoot> = Vec::new();
+    let mut push = |path: PathBuf, kind: SkillRootKind| {
+        if !path.as_os_str().is_empty() && !roots.iter().any(|root| root.path == path) {
+            roots.push(SkillRoot { path, kind });
+        }
+    };
+
+    for dir in &inputs.extra_dirs {
+        push(dir.clone(), SkillRootKind::Configured);
+    }
+    if let Some(value) = inputs.extra_dirs_env.as_deref() {
+        for dir in split_skill_dirs(value) {
+            push(dir, SkillRootKind::Configured);
+        }
+    }
+
+    if let Some(workspace) = &inputs.workspace {
+        push(workspace.join(".rustcode/skills"), SkillRootKind::Workspace);
+        push(workspace.join(".agents/skills"), SkillRootKind::Workspace);
+    }
+
+    if let Some(home) = &inputs.home {
+        push(home.join(".agents/skills"), SkillRootKind::Universal);
+    }
+    if let Some(config_dir) = &inputs.config_dir {
+        push(config_dir.join("skills"), SkillRootKind::Rustcode);
+    }
+
+    roots
+}
+
+/// The skill roots searched by [`discover_skills`], resolved from the running
+/// process.
+pub fn skill_roots() -> Vec<SkillRoot> {
+    skill_roots_from(&current_root_inputs())
+}
+
+/// The roots actually searched, formatted once so `list_skills`, both
+/// `/skills` handlers and `rustcode doctor` cannot drift from discovery.
+pub fn format_skill_roots(roots: &[SkillRoot]) -> String {
+    let mut out = String::from("Skill roots searched (highest priority first):");
+    if roots.is_empty() {
+        out.push_str("\n  (none)");
+    }
+    for (index, root) in roots.iter().enumerate() {
+        let exists = if root.path.is_dir() {
+            ""
+        } else {
+            "  (missing)"
+        };
+        out.push_str(&format!(
+            "\n  {}. {}{exists}",
+            index + 1,
+            root.path.display()
+        ));
+    }
+    out
+}
+
+/// Message shown when no skills were found: what was searched, and where to
+/// put new ones.
+pub fn no_skills_message() -> String {
+    format!(
+        "No skills discovered.\nPut `SKILL.md` files in `<root>/<name>/SKILL.md` under any of:\n{}",
+        format_skill_roots(&skill_roots())
+    )
+}
+
+/// `/skills` report, shared by the engine and TUI slash-command handlers so
+/// the wording and the root list cannot drift between frontends.
+pub fn format_skill_catalog(skills: &[SkillMetadata]) -> String {
+    if skills.is_empty() {
+        return no_skills_message();
+    }
+    let mut out = format!("📦 Discovered Skills ({}):\n\n", skills.len());
+    for skill in skills {
+        out.push_str(&format!("  • {}\n", skill.name));
+        out.push_str(&format!("    Description: {}\n", skill.description));
+        out.push_str(&format!("    Path: {}\n\n", skill.path.display()));
+    }
+    out.push_str(&format_skill_roots(&skill_roots()));
+    out
 }
 
 fn is_skill_name_char(c: char) -> bool {
@@ -232,6 +384,9 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
             }
         }
     }
+    // `read_dir` order is filesystem-defined; sort so discovery is stable
+    // across runs and a single root resolves duplicate names predictably.
+    skills.sort_by(|a, b| a.path.cmp(&b.path));
 }
 
 fn read_frontmatter(path: &Path) -> std::io::Result<String> {
@@ -390,6 +545,50 @@ pub fn list_skill_files(skill_dir: &Path) -> Vec<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static FIXTURE_ID: AtomicU32 = AtomicU32::new(0);
+
+    /// A throwaway directory tree for root-resolution tests. Removed on drop so
+    /// a failing assertion cannot leak skills into later runs.
+    struct Fixture {
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "rustcode_skills_{name}_{}_{id}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            Fixture { root }
+        }
+
+        fn path(&self, relative: &str) -> PathBuf {
+            self.root.join(relative)
+        }
+
+        /// Write `<root>/<relative>/SKILL.md` with the given frontmatter name.
+        fn skill(&self, relative: &str, name: &str, description: &str) -> PathBuf {
+            let dir = self.path(relative);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {description}\n---\nBody"),
+            )
+            .unwrap();
+            dir
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -518,6 +717,215 @@ mod tests {
         let files = list_skill_files(&base);
         assert!(files.contains(&"SKILL.md".to_string()));
         assert!(files.contains(&"helper.sh".to_string()));
+    }
+
+    #[test]
+    fn skill_roots_are_ordered_from_explicit_overrides_to_the_owned_root() {
+        let fixture = Fixture::new("root_order");
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![fixture.path("configured")],
+            extra_dirs_env: None,
+        };
+
+        let roots = skill_roots_from(&inputs);
+
+        assert_eq!(
+            roots.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+            vec![
+                fixture.path("configured"),
+                fixture.path("workspace/.rustcode/skills"),
+                fixture.path("workspace/.agents/skills"),
+                fixture.path("home/.agents/skills"),
+                fixture.path("config/skills"),
+            ]
+        );
+        assert_eq!(roots[0].kind, SkillRootKind::Configured);
+        assert_eq!(roots[1].kind, SkillRootKind::Workspace);
+        assert_eq!(roots[3].kind, SkillRootKind::Universal);
+        assert_eq!(roots[4].kind, SkillRootKind::Rustcode);
+    }
+
+    #[test]
+    fn skill_roots_read_extra_dirs_from_the_environment_variable() {
+        let fixture = Fixture::new("root_env");
+        let first = fixture.path("first");
+        let second = fixture.path("second");
+        let inputs = SkillRootInputs {
+            workspace: None,
+            config_dir: None,
+            home: None,
+            extra_dirs: vec![first.clone()],
+            extra_dirs_env: Some(std::env::join_paths([first.clone(), second.clone()]).unwrap()),
+        };
+
+        let roots = skill_roots_from(&inputs);
+
+        // Duplicates collapse and the env var extends, it does not replace.
+        assert_eq!(
+            roots,
+            vec![
+                SkillRoot {
+                    path: first,
+                    kind: SkillRootKind::Configured
+                },
+                SkillRoot {
+                    path: second,
+                    kind: SkillRootKind::Configured
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn skill_roots_resolve_project_and_configured_roots_without_home() {
+        let fixture = Fixture::new("root_no_home");
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: None,
+            extra_dirs: vec![fixture.path("configured")],
+            extra_dirs_env: None,
+        };
+
+        let roots = skill_roots_from(&inputs);
+        let paths: Vec<PathBuf> = roots.iter().map(|r| r.path.clone()).collect();
+
+        assert!(paths.contains(&fixture.path("workspace/.rustcode/skills")));
+        assert!(paths.contains(&fixture.path("workspace/.agents/skills")));
+        assert!(paths.contains(&fixture.path("config/skills")));
+        assert!(!roots.contains(&SkillRoot {
+            path: fixture.path("home/.agents/skills"),
+            kind: SkillRootKind::Universal,
+        }));
+    }
+
+    #[test]
+    fn discover_skills_scans_every_root_including_the_universal_one() {
+        let fixture = Fixture::new("discover_all");
+        fixture.skill(
+            "workspace/.rustcode/skills/from-project",
+            "project",
+            "Project root",
+        );
+        fixture.skill(
+            "workspace/.agents/skills/from-agents",
+            "agents",
+            "Project agents root",
+        );
+        fixture.skill(
+            "home/.agents/skills/from-universal",
+            "universal",
+            "Shared root",
+        );
+        fixture.skill("config/skills/from-config", "owned", "RustCode root");
+        fixture.skill("configured/from-extra", "extra", "Configured root");
+
+        let skills = discover_skills_in(SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![fixture.path("configured")],
+            extra_dirs_env: None,
+        });
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["agents", "extra", "owned", "project", "universal"]);
+    }
+
+    #[test]
+    fn discover_skills_prefers_the_project_definition_over_the_user_one() {
+        let fixture = Fixture::new("discover_precedence");
+        let project_dir = fixture.skill("workspace/.rustcode/skills/shared", "shared", "Project");
+        fixture.skill("home/.agents/skills/shared", "shared", "Universal");
+        fixture.skill("config/skills/shared", "shared", "RustCode");
+
+        let skills = discover_skills_in(SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+        });
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].path, project_dir);
+        assert_eq!(skills[0].description, "Project");
+    }
+
+    #[test]
+    fn discover_skills_lets_an_explicit_extra_dir_override_the_project_root() {
+        let fixture = Fixture::new("discover_extra_override");
+        let extra_dir = fixture.skill("configured/shared", "shared", "Configured");
+
+        let skills = discover_skills_in(SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: None,
+            extra_dirs: vec![fixture.path("configured")],
+            extra_dirs_env: None,
+        });
+        assert_eq!(skills[0].path, extra_dir);
+
+        // The same root added through the environment variable also wins.
+        let via_env = discover_skills_in(SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: None,
+            home: None,
+            extra_dirs: vec![],
+            extra_dirs_env: Some(std::env::join_paths([fixture.path("configured")]).unwrap()),
+        });
+        assert_eq!(via_env[0].path, extra_dir);
+    }
+
+    #[test]
+    fn discover_skills_still_finds_project_skills_without_home_or_config() {
+        let fixture = Fixture::new("discover_minimal");
+        let project_dir = fixture.skill("workspace/.rustcode/skills/local", "local", "Local only");
+
+        let skills = discover_skills_in(SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: None,
+            home: None,
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+        });
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].path, project_dir);
+    }
+
+    #[test]
+    fn only_the_rustcode_owned_root_is_created_by_fix() {
+        assert!(SkillRootKind::Rustcode.is_rustcode_owned());
+        assert!(!SkillRootKind::Universal.is_rustcode_owned());
+        assert!(!SkillRootKind::Workspace.is_rustcode_owned());
+        assert!(!SkillRootKind::Configured.is_rustcode_owned());
+    }
+
+    #[test]
+    fn format_skill_roots_lists_every_root_and_marks_missing_ones() {
+        let fixture = Fixture::new("format_roots");
+        fs::create_dir_all(fixture.path("present")).unwrap();
+        let roots = vec![
+            SkillRoot {
+                path: fixture.path("present"),
+                kind: SkillRootKind::Universal,
+            },
+            SkillRoot {
+                path: fixture.path("absent"),
+                kind: SkillRootKind::Rustcode,
+            },
+        ];
+
+        let rendered = format_skill_roots(&roots);
+
+        assert!(rendered.contains("1. "));
+        assert!(rendered.contains(&fixture.path("present").display().to_string()));
+        assert!(!rendered.contains(&format!("{}(missing)", fixture.path("present").display())));
+        assert!(rendered.contains("(missing)"));
     }
 
     #[test]

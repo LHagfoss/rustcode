@@ -912,6 +912,10 @@ pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
     }
 }
 
+pub(crate) fn active_workspace_root() -> Option<PathBuf> {
+    ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().clone())
+}
+
 pub(crate) fn active_task_working_directory() -> Option<PathBuf> {
     ACTIVE_TASK_WORKING_DIRECTORY.with(|current| current.borrow().clone())
 }

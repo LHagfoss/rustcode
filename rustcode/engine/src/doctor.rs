@@ -189,40 +189,47 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
         "install tmux for background tasks: `brew install tmux`",
     ));
 
-    // Skill directories (informational; --fix creates the global one).
-    let home = std::env::var("HOME").map(PathBuf::from).ok();
-    if let Some(home) = home {
-        let global = home.join(".config/rustcode/skills");
-        if global.is_dir() {
-            checks.push(DoctorCheck::pass(
-                "skills-dir",
-                global.display().to_string(),
-            ));
-        } else if fix && ensure_dir(&global) {
-            checks.push(DoctorCheck::pass(
-                "skills-dir",
-                format!("{} (created by --fix)", global.display()),
-            ));
+    // Skill directories (informational; --fix creates only the one RustCode
+    // owns, never the shared or workspace roots).
+    for root in crate::skills::skill_roots() {
+        let name = root.kind.check_name();
+        if root.path.is_dir() {
+            checks.push(DoctorCheck::pass(name, root.path.display().to_string()));
+        } else if root.kind.is_rustcode_owned() {
+            if fix && ensure_dir(&root.path) {
+                checks.push(DoctorCheck::pass(
+                    name,
+                    format!("{} (created by --fix)", root.path.display()),
+                ));
+            } else {
+                checks.push(DoctorCheck::fail(
+                    name,
+                    format!("missing: {}", root.path.display()),
+                    Some("run `rustcode doctor --fix` to create it".to_string()),
+                ));
+            }
         } else {
-            checks.push(DoctorCheck::fail(
-                "skills-dir",
-                format!("missing: {}", global.display()),
-                Some("run `rustcode doctor --fix` to create it".to_string()),
+            // Shared and workspace roots belong to whoever put them there.
+            checks.push(DoctorCheck::pass(
+                &name,
+                format!("{} (not present, optional)", root.path.display()),
             ));
         }
-        let local = workspace.join(".rustcode/skills");
-        if local.is_dir() {
-            checks.push(DoctorCheck::pass(
-                "project-skills",
-                local.display().to_string(),
-            ));
-        } else {
-            // Missing project skills is fine — most repos don't have one.
-            checks.push(DoctorCheck::pass(
-                "project-skills",
-                "no .rustcode/skills in this workspace (optional)".to_string(),
-            ));
-        }
+    }
+    // Skills outside the config dir are not covered by `rustcode sync`, which
+    // stages `<config dir>/skills` only. Warn rather than silently implying
+    // they are synced.
+    if crate::skills::discover_skills().iter().any(|skill| {
+        !crate::config::get_config_dir()
+            .map(|dir| skill.path.starts_with(dir.join("skills")))
+            .unwrap_or(false)
+    }) {
+        checks.push(DoctorCheck::pass(
+            "skills-sync",
+            "some skills live outside the config dir; `rustcode sync` covers \
+             `<config dir>/skills` only"
+                .to_string(),
+        ));
     }
 
     checks
