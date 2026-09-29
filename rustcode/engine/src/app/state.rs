@@ -938,6 +938,17 @@ impl AppState {
         }
     }
 
+    /// Drop not-yet-started projections (e.g. scheduler-deferred calls) so a
+    /// completed or rescheduled batch cannot linger under an active group.
+    /// Executing calls are left untouched (#1495).
+    pub fn clear_speculative_live_tool_calls(&mut self) {
+        let before = self.live_tool_calls.len();
+        Arc::make_mut(&mut self.live_tool_calls).retain(|call| call.execution_started);
+        if self.live_tool_calls.len() != before {
+            self.request_redraw();
+        }
+    }
+
     /// Clear all render-only state left by a cancelled or interrupted turn.
     pub fn clear_active_turn_projection(&mut self) {
         self.clear_current_response();

@@ -3848,7 +3848,7 @@ fn speculative_live_tools_are_nested_under_preparing_heading() {
     assert_eq!(
         rendered,
         [
-            "• Preparing",
+            "• Queued",
             "  └ UseSkill release-automation",
             "    Bash $ cargo test"
         ]
@@ -3871,7 +3871,36 @@ fn speculative_file_write_uses_preparing_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Preparing", "  └ Writing src/main.js"]);
+    assert_eq!(rendered, ["• Queued", "  └ Writing src/main.js"]);
+}
+
+#[test]
+fn deferred_speculative_projections_are_dropped_while_running_calls_remain() {
+    let mut state = AppState::new();
+    state.update_speculative_live_tool_call(
+        Some("call-a"),
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    state.update_speculative_live_tool_call(
+        Some("call-b"),
+        "run_command",
+        &serde_json::json!({"command": "cargo lint"}),
+    );
+    // Adopt one call; the other represents a scheduler-deferred projection.
+    state.begin_live_tool_call(
+        Some("call-a"),
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    assert_eq!(state.live_tool_calls.len(), 2);
+    state.clear_speculative_live_tool_calls();
+    assert_eq!(state.live_tool_calls.len(), 1);
+    assert!(state.live_tool_calls[0].execution_started);
+    assert_eq!(
+        state.live_tool_calls[0].provider_call_id.as_deref(),
+        Some("call-a")
+    );
 }
 
 #[test]
@@ -3896,7 +3925,7 @@ fn native_speculative_exploration_without_target_uses_preparing_heading() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("• Preparing"), "rendered: {text:?}");
+    assert!(text.contains("• Queued"), "rendered: {text:?}");
     assert!(text.contains("Calling grep"), "rendered: {text:?}");
     assert!(!text.contains("[TOOL_CALLS]"), "rendered: {text:?}");
 }
