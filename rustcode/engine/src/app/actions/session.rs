@@ -204,6 +204,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.stream_tracker = None;
     s.show_context_modal = false;
     s.show_status_modal = false;
+    s.show_stats_modal = false;
+    s.show_session_modal = false;
     s.modal_scroll_row = 0;
     s.tool_confirmation_selected = 0;
     s.history_picker_index = 0;

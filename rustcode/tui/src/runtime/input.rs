@@ -856,6 +856,28 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                if s.show_stats_modal {
+                    if matches!(
+                        key.code,
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q')
+                    ) {
+                        s.show_stats_modal = false;
+                    }
+                    drop(s);
+                    return Ok(InputFlow::ContinueIteration);
+                }
+
+                if s.show_session_modal {
+                    if matches!(
+                        key.code,
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q')
+                    ) {
+                        s.show_session_modal = false;
+                    }
+                    drop(s);
+                    return Ok(InputFlow::ContinueIteration);
+                }
+
                 if s.show_history_picker {
                     // Ctrl+D triggers delete confirmation overlay
                     if key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -1398,10 +1420,10 @@ pub(super) async fn handle_app_event(
                                         s.show_status_modal = true;
                                     }
                                     "/stats" | "/usage" => {
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            "Token usage data will appear after your next message",
-                                        ));
+                                        s.open_stats_modal();
+                                    }
+                                    "/session" => {
+                                        s.show_session_modal = true;
                                     }
                                     "/memory" => {
                                         rustcode::app::check_memory_usage(&mut s);
