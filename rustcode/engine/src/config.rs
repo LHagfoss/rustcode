@@ -17,6 +17,11 @@ pub enum SandboxMode {
     WorkspaceWrite,
     /// Workspace writes with network access enabled.
     WorkspaceWriteNetwork,
+    /// Explicit user opt-in: run shell commands with the RustCode process's
+    /// own filesystem and network permissions, bypassing OS sandbox wrapping
+    /// on supported platforms. Persisted only in user config; project files
+    /// must never enable it. Shell approval policy still applies separately.
+    Trusted,
 }
 
 impl SandboxMode {
@@ -25,7 +30,12 @@ impl SandboxMode {
     }
 
     pub fn allows_network(self) -> bool {
-        matches!(self, Self::WorkspaceWriteNetwork)
+        matches!(self, Self::WorkspaceWriteNetwork | Self::Trusted)
+    }
+
+    /// True only for the explicit opt-in unrestricted mode (#1496).
+    pub fn is_trusted(self) -> bool {
+        matches!(self, Self::Trusted)
     }
 
     pub fn description(self) -> &'static str {
@@ -33,6 +43,7 @@ impl SandboxMode {
             Self::ReadOnly => "read-only host; no network",
             Self::WorkspaceWrite => "workspace/session writes; no network",
             Self::WorkspaceWriteNetwork => "workspace/session writes; network",
+            Self::Trusted => "trusted process permissions; no OS sandbox",
         }
     }
 

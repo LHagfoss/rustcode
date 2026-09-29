@@ -42,11 +42,15 @@ forbid rule.
 The `/sandbox` command and `sandbox_mode` setting in
 `~/.config/rustcode/config.toml` control
 effective shell permissions on Linux and macOS. Its values are
-`read_only`, `workspace_write` (the default), and
-`workspace_write_network`. The startup banner shows the effective mode
+`read_only`, `workspace_write` (the default),
+`workspace_write_network`, and `trusted` (explicit opt-in, also accepted as
+`unrestricted`). The startup banner and `/status` show the effective mode
 separately from the command approval mode. Project config files cannot change
-this user-level security setting. `/sandbox` with no argument shows the current
-effective permissions; pass one of the mode names to change and persist it.
+this user-level security setting, including `trusted`. `/sandbox` with no
+argument shows the current effective permissions; pass one of the mode names
+to change and persist it. `trusted` runs shell commands with the RustCode
+process's own filesystem and network permissions, bypassing OS sandbox
+wrapping; shell approval/deny policy still applies separately.
 
 On Linux, shell commands run through bubblewrap with the host filesystem
 read-only and, in `workspace_write` modes, the active workspace and session
@@ -94,6 +98,31 @@ including in YOLO mode; saved command approvals do not grant filesystem
 access. On Linux and macOS, that directory is the only additional writable
 root for the command, so read-only mode continues to protect the workspace
 and other paths.
+
+Isolated task worktrees are first-class execution roots without per-command
+grants. A user-authorized task worktree outside the original checkout — set
+via the ACP/CLI task context or `/workspace create <base_sha> [branch]
+[name]` (then `/workspace status`, `/workspace archive`) — stays writable
+for the task/session lifetime in sandboxed modes, alongside the workspace
+and session scratch. The original checkout stays on its original branch and
+untouched by worktree setup. Resuming a session reuses its recorded
+worktree; unrelated sessions never inherit it, and worktrees with
+uncommitted or unpushed work are never deleted automatically. This is the
+recommended way to do routine Git/CI/PR work (including `git push` and `gh`)
+in a restricted mode: authorize the worktree once, then create, edit,
+build, and commit there without repeated path grants. A normal GitHub
+workflow can alternatively request one-shot `network_access: true` in a
+constrained mode, or use explicit `trusted` mode.
+
+Failure attribution: OS sandbox denials, missing writable roots, and
+approval denials are reported before the command runs. Once a command runs,
+its stderr is the command's own result — GitHub authentication, SSH
+(`No user exists for uid`, key lookup), certificate validation, and network
+errors are credential/environment failures, not sandbox failures, even when
+they occur inside a sandbox. When a remote command fails, check the smallest
+fix first: approval denied, then missing writable root or cwd, then network
+access for the mode, then credentials/certs/SSH, before assuming OS
+sandboxing is at fault.
 
 Windows does not yet have an operating-system sandbox backend. Shell commands
 continue to run with the RustCode process permissions there, and the startup

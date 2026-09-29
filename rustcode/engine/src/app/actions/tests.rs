@@ -1083,6 +1083,24 @@ async fn sandbox_command_shows_and_sets_the_effective_mode() {
 }
 
 #[tokio::test]
+async fn sandbox_trusted_mode_is_explicit_opt_in() {
+    use crate::config::SandboxMode;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/sandbox trusted".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    let s = state.lock().await;
+    assert_eq!(s.config.sandbox_mode, SandboxMode::Trusted);
+    assert!(s.history.last().unwrap().content.contains("trusted"));
+}
+
+#[tokio::test]
 async fn test_theme_command_flow() {
     use crate::app::state::AppState;
     use std::sync::Arc;

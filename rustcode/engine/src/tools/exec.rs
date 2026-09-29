@@ -664,6 +664,16 @@ fn run_command_output_inner(
     let mut writable_roots = workspace_root.iter().cloned().collect::<Vec<_>>();
     let session_scratch_roots = session_scratch.iter().cloned().collect::<Vec<_>>();
     writable_roots.extend(session_scratch_roots.iter().cloned());
+    // A user-authorized task worktree outside the original checkout stays
+    // writable for the task/session lifetime (#1496). It is part of the
+    // active tool context (set by ACP, CLI workspace, or /workspace), not a
+    // per-command one-shot grant, and unrelated sessions do not inherit it.
+    if let Some(task_dir) = context.task_working_directory.clone()
+        && task_dir.is_dir()
+        && !writable_roots.iter().any(|root| root == &task_dir)
+    {
+        writable_roots.push(task_dir);
+    }
     let sandbox_mode = super::active_sandbox_mode();
     let one_shot_network_access = args
         .get("network_access")
@@ -685,18 +695,28 @@ fn run_command_output_inner(
     } else {
         Vec::new()
     };
-    let sandboxed = sandbox::command(
-        &shell_command,
-        sandbox::SandboxPolicy {
-            command_cwd: resolved_cwd.as_deref(),
-            workspace_root: workspace_root.as_deref(),
-            writable_roots: &writable_roots,
-            session_scratch_roots: &session_scratch_roots,
-            one_shot_writable_roots: &one_shot_writable_roots,
-            write_access: sandbox_mode.allows_workspace_write(),
-            network_access: sandbox_mode.allows_network() || one_shot_network_access,
-        },
-    )?;
+    // Trusted mode bypasses OS sandbox wrapping and runs with the RustCode
+    // process's own permissions (#1496). It is explicit user opt-in via
+    // user config or `/sandbox trusted`; project files cannot enable it and
+    // shell approval policy still applies. Command failures (GitHub auth,
+    // SSH, certificates, network) surface as tool results and must not be
+    // misattributed to sandbox denial.
+    let sandboxed = if sandbox_mode.is_trusted() {
+        sandbox::passthrough_command(&shell_command)
+    } else {
+        sandbox::command(
+            &shell_command,
+            sandbox::SandboxPolicy {
+                command_cwd: resolved_cwd.as_deref(),
+                workspace_root: workspace_root.as_deref(),
+                writable_roots: &writable_roots,
+                session_scratch_roots: &session_scratch_roots,
+                one_shot_writable_roots: &one_shot_writable_roots,
+                write_access: sandbox_mode.allows_workspace_write(),
+                network_access: sandbox_mode.allows_network() || one_shot_network_access,
+            },
+        )?
+    };
     let command_request = rustcode_command::CommandRequest {
         command: sandboxed.command,
         status_command: Some(command_str.to_owned()),

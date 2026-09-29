@@ -11,6 +11,7 @@ fn sandbox_modes_round_trip_and_default_to_workspace_write() {
             "workspace_write_network",
             SandboxMode::WorkspaceWriteNetwork,
         ),
+        ("trusted", SandboxMode::Trusted),
     ] {
         let decoded: SandboxMode = serde_json::from_str(&format!("\"{serialized}\"")).unwrap();
         assert_eq!(decoded, expected);
@@ -19,6 +20,28 @@ fn sandbox_modes_round_trip_and_default_to_workspace_write() {
             format!("\"{serialized}\"")
         );
     }
+}
+
+#[test]
+fn trusted_mode_allows_writes_and_network_without_os_sandbox() {
+    assert!(SandboxMode::Trusted.allows_workspace_write());
+    assert!(SandboxMode::Trusted.allows_network());
+    assert!(SandboxMode::Trusted.is_trusted());
+    assert!(!SandboxMode::WorkspaceWrite.is_trusted());
+    assert_eq!(
+        SandboxMode::Trusted.description(),
+        "trusted process permissions; no OS sandbox"
+    );
+}
+
+#[test]
+fn project_config_cannot_enable_any_sandbox_mode() {
+    let mut config = AppConfig::default();
+    assert_ne!(config.sandbox_mode, SandboxMode::Trusted);
+    let file: TomlConfig = toml::from_str("sandbox_mode = \"trusted\"").unwrap();
+    assert_eq!(file.sandbox_mode, Some(SandboxMode::Trusted));
+    apply_project_toml_config(&mut config, file);
+    assert_eq!(config.sandbox_mode, SandboxMode::default());
 }
 
 fn temp_dir(name: &str) -> PathBuf {
