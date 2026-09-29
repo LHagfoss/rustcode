@@ -5381,6 +5381,55 @@ fn codex_shimmer_moves_a_visible_gradient_across_working() {
 }
 
 #[test]
+fn reduced_motion_renders_the_activity_label_without_a_sweep() {
+    let animated = super::shimmer_spans("Working", false, false);
+    let still = super::shimmer_spans("Working", false, true);
+    assert_ne!(animated.len(), 1, "the default label still animates");
+
+    let still_text: String = still.iter().map(|span| span.to_string()).collect();
+    assert_eq!(still_text, "Working");
+    assert!(
+        still.iter().all(|span| span.style.fg == still[0].style.fg),
+        "a reduced-motion label must not encode a gradient: {still:?}"
+    );
+}
+
+#[test]
+fn reduced_motion_is_read_from_the_active_config() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    state.status = rustcode::controller::AppStatus::Streaming;
+    state.running_tools = vec!["run_command".to_owned()];
+    state.replace_current_response("partial");
+
+    // The animated label emits one span per character; the reduced-motion one
+    // is a single flat span. Span shape, not color, is what proves the config
+    // reached the render path (the sweep is time-driven and frozen in tests).
+    let label_spans = |line: &ratatui::text::Line<'static>| {
+        line.spans
+            .iter()
+            .filter(|span| span.content.chars().all(|ch| ch.is_alphabetic()))
+            .map(|span| (span.content.to_string(), span.style.fg))
+            .collect::<Vec<_>>()
+    };
+    let animated = activity_status_line(&render_snapshot(&state), false);
+    state.config.reduced_motion = true;
+    let still = activity_status_line(&render_snapshot(&state), false);
+
+    assert_eq!(animated.to_string(), still.to_string());
+    assert_eq!(label_spans(&animated).len(), "Working".len());
+    let still_spans = label_spans(&still);
+    assert_eq!(still_spans.len(), 1, "one flat label span: {still_spans:?}");
+    assert_eq!(still_spans[0].0, "Working");
+    assert!(
+        still_spans
+            .iter()
+            .all(|(_, color)| *color == still_spans[0].1),
+        "a reduced-motion label must not encode a gradient: {still_spans:?}"
+    );
+}
+
+#[test]
 fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
     cursor.commit_stable_stream("stable\n\n");

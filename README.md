@@ -321,7 +321,6 @@ Legacy `[laya]` config tables are ignored and can be removed from user or
 project config files.
 
 ### Skills
-
 Skills are plain Markdown: `<root>/<name>/SKILL.md`, scanned exactly one level
 deep. RustCode reads them from these roots, highest precedence first, and the
 first definition of a skill name wins:
@@ -348,6 +347,19 @@ Run `/skills` (or the `list_skills` tool) to see every root that was actually
 searched, and `rustcode doctor` to see which ones exist. `rustcode doctor
 --fix` creates only the RustCode-owned root, never the universal or workspace
 roots.
+
+### Reduced motion
+
+The activity line above the composer animates a highlight sweep while RustCode
+is working. Set `reduced_motion = true` in `config.toml` to render it as plain
+static text instead:
+
+```toml
+reduced_motion = true
+```
+
+The default is off, so the sweep is unchanged unless you opt in. This is purely
+presentational, so a project `.rustcode/config.toml` may set it.
 
 ### Syncing config, skills, and themes
 

@@ -594,7 +594,22 @@ pub(super) fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'stati
         .collect()
 }
 
-pub(super) fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
+/// Plain muted label used when the animated sweep is turned off.
+pub(super) fn static_spans(text: &str, show_picker: bool) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        text.to_string(),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    )]
+}
+
+pub(super) fn shimmer_spans(
+    text: &str,
+    show_picker: bool,
+    reduced_motion: bool,
+) -> Vec<Span<'static>> {
+    if reduced_motion {
+        return static_spans(text, show_picker);
+    }
     #[cfg(test)]
     let elapsed = Duration::ZERO;
     #[cfg(not(test))]
@@ -658,7 +673,11 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         rustcode::controller::ActivityKind::Working
             | rustcode::controller::ActivityKind::RunningTool
     ) {
-        spans.extend(shimmer_spans(&label_text, show_picker));
+        spans.extend(shimmer_spans(
+            &label_text,
+            show_picker,
+            state.config().reduced_motion,
+        ));
     } else {
         spans.push(Span::styled(
             label_text,
