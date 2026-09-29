@@ -209,6 +209,9 @@ pub fn classify_live_tools(calls: &[LiveToolCall]) -> Option<ActivitySnapshot> {
     if calls.is_empty() {
         return None;
     }
+    // Not-yet-started projections are queued, not running. Show Running or
+    // Exploring only after actual execution starts (#1495).
+    let all_speculative = calls.iter().all(|call| !call.execution_started);
     let all_exploration = calls
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
@@ -234,6 +237,14 @@ pub fn classify_live_tools(calls: &[LiveToolCall]) -> Option<ActivitySnapshot> {
             .collect::<Vec<_>>();
         (!details.is_empty()).then(|| details.join(", "))
     };
+    if all_speculative {
+        return Some(ActivitySnapshot {
+            kind: ActivityKind::Queued,
+            label: "Queued".to_owned(),
+            detail,
+            animated: true,
+        });
+    }
     let label = if all_exploration {
         "Exploring".to_owned()
     } else {
@@ -613,6 +624,16 @@ mod tests {
 
         assert_eq!(activity.label, "Running");
         assert_eq!(activity.detail.as_deref(), Some("SearchEmails query=\"*\""));
+    }
+
+    #[test]
+    fn speculative_live_tools_are_queued_until_execution_starts() {
+        let mut queued = LiveToolCall::new("call-1", None, "run_command", "Bash", "cargo test");
+        queued.execution_started = false;
+        let activity = classify_live_tools(&[queued]).expect("live activity");
+
+        assert_eq!(activity.kind, ActivityKind::Queued);
+        assert_eq!(activity.label, "Queued");
     }
 
     #[test]

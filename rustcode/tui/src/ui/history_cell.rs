@@ -598,7 +598,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         let title = if call.execution_started {
             "Running"
         } else {
-            "Preparing"
+            "Queued"
         };
         let mut lines = vec![
             Line::from(vec![
@@ -642,9 +642,11 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
+    // Queued projections have visible targets but no execution yet; show
+    // Running/Exploring only after at least one call starts (#1495).
     let all_speculative = calls.iter().all(|call| !call.execution_started);
     let label = if all_speculative {
-        "Preparing"
+        "Queued"
     } else if all_exploration {
         "Exploring"
     } else {
