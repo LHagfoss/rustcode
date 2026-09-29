@@ -1389,4 +1389,67 @@ mod tests {
         assert!(selected.contains("history row"));
         assert_eq!(transcript.selection.viewport_top_key, -3);
     }
+
+    #[test]
+    #[ignore = "manual transcript scroll benchmark"]
+    fn bench_long_selection_scroll() {
+        let mut state = AppState::new();
+        let text = (0..50_000)
+            .map(|row| format!("history row {row:05} with a few words"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.history.push(ChatMessage::new("assistant", text));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let start = std::time::Instant::now();
+        let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        eprintln!("first paint: {:?}", start.elapsed());
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            assert!(transcript.step_selection_scroll());
+            let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        }
+        eprintln!("10 edge frames: {:?}", start.elapsed());
+        transcript.selection.queue_scroll(1, 10);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            assert!(transcript.step_selection_scroll());
+            let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        }
+        eprintln!("10 wheel frames: {:?}", start.elapsed());
+
+        transcript.selection.clear();
+        transcript.scroll_up(10);
+        let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 2, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.bottom() - 1,
+        ));
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            assert!(transcript.step_selection_scroll());
+            let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        }
+        eprintln!("10 downward edge frames: {:?}", start.elapsed());
+    }
 }
