@@ -5,7 +5,7 @@ pub(in crate::ui) fn render_thinking_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 10);
+    let modal_area = input_anchor_rect(f, input_area, THINKING_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -131,7 +131,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 11);
+    let modal_area = input_anchor_rect(f, input_area, EFFORT_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -254,7 +254,7 @@ pub(in crate::ui) fn render_protocol_picker_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 10);
+    let modal_area = input_anchor_rect(f, input_area, PROTOCOL_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -384,7 +384,7 @@ pub(in crate::ui) fn render_update_prompt_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, UPDATE_PROMPT_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
