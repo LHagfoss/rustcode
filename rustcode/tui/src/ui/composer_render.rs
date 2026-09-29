@@ -278,6 +278,30 @@ mod mouse_tests {
             Some(8)
         );
     }
+
+    #[test]
+    fn byte_range_maps_plain_text_char_precisely() {
+        let input = "héllo world";
+        // "h" (1) + "é" (2 bytes) => byte 3 is after "hé".
+        assert_eq!(composer_byte_range_to_display(input, 0, 1), Some((0, 1)));
+        assert_eq!(composer_byte_range_to_display(input, 0, 3), Some((0, 2)));
+        assert_eq!(composer_byte_range_to_display(input, 3, 4), Some((2, 3)));
+        assert_eq!(composer_byte_range_to_display(input, 5, 5), None);
+    }
+
+    #[test]
+    fn byte_range_treats_collapsed_markers_as_atomic() {
+        let input = "a![image](file:///tmp/a.png)b";
+        let marker_start = 1;
+        // Partial overlap of the marker selects the whole "[Image #1]" label.
+        let (display_start, display_end) =
+            composer_byte_range_to_display(input, marker_start, marker_start + 1)
+                .expect("marker overlap");
+        assert!(display_end - display_start >= "[Image #1]".len());
+        // Full input range covers leading char, marker label, and trailing char.
+        let full = composer_byte_range_to_display(input, 0, input.len()).expect("full");
+        assert!(full.1 > full.0);
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +320,66 @@ pub(super) fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
         .len() as u16
 }
 
+/// Map a byte range in `input` to display char indices in the collapsed
+/// view (#1493). Collapsed image/paste markers are atomic: any overlap
+/// selects the whole displayed label. Plain text maps char-precisely,
+/// preserving grapheme/char boundaries established by mouse/keyboard.
+pub(crate) fn composer_byte_range_to_display(
+    input: &str,
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    if start >= end || input.is_empty() {
+        return None;
+    }
+    let mut raw_offset = 0usize;
+    let mut display_offset = 0usize;
+    let mut display_start: Option<usize> = None;
+    let mut display_end: Option<usize> = None;
+    for (segment, marker) in collapsed_marker_segments(input) {
+        let displayed_len = segment.chars().count();
+        let raw_end = match marker {
+            None => raw_offset + segment.len(),
+            Some(CollapsedMarker::Image) => {
+                let after_prefix = &input[raw_offset + "![image](file://".len()..];
+                raw_offset + "![image](file://".len() + after_prefix.find(')').unwrap_or(0) + 1
+            }
+            Some(CollapsedMarker::PastedText) => {
+                rustcode_core::paste::parse_at(input, raw_offset).map_or(input.len(), |m| m.end)
+            }
+        };
+        let overlaps = raw_offset < end && raw_end > start;
+        if overlaps {
+            match marker {
+                Some(_) => {
+                    // Atomic placeholder: include the whole label.
+                    display_start = Some(display_start.unwrap_or(display_offset));
+                    display_end = Some(display_offset + displayed_len);
+                }
+                None => {
+                    // Char-precise slice within plain text.
+                    let mut char_raw = raw_offset;
+                    for (char_idx, ch) in segment.chars().enumerate() {
+                        let char_end = char_raw + ch.len_utf8();
+                        if char_raw < end && char_end > start {
+                            display_start =
+                                Some(display_start.unwrap_or(display_offset + char_idx));
+                            display_end = Some(display_offset + char_idx + 1);
+                        }
+                        char_raw = char_end;
+                    }
+                }
+            }
+        }
+        display_offset += displayed_len;
+        raw_offset = raw_end;
+    }
+    match (display_start, display_end) {
+        (Some(s), Some(e)) if s < e => Some((s, e)),
+        _ => None,
+    }
+}
+
 fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, Style)> {
     let text_style = get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker);
     let marker_style =
@@ -308,6 +392,18 @@ fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, S
             text_style
         };
         styled_chars.extend(segment.chars().map(|character| (character, style)));
+    }
+    // Highlight the composer selection (#1493). REVERSED mirrors transcript
+    // selection; it applies only to input text, never placeholder/suggestion.
+    if let Some((start, end)) = state
+        .composer_selection_range()
+        .and_then(|(s, e)| composer_byte_range_to_display(&state.input_buffer(), s, e))
+    {
+        let len = styled_chars.len();
+        let (start, end) = (start.min(len), end.min(len));
+        for (_, style) in styled_chars.iter_mut().take(end).skip(start) {
+            *style = style.add_modifier(Modifier::REVERSED);
+        }
     }
 
     if state.input_buffer().is_empty() && state.get_command_suggestion().is_none() {

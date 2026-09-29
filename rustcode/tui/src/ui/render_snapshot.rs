@@ -11,6 +11,7 @@ pub(crate) struct RenderSnapshot {
     input_buffer: String,
     ctrl_c_exit_armed: bool,
     cursor_position: usize,
+    composer_selection_anchor: Option<usize>,
     history: History,
     history_display_start: usize,
     current_response: Arc<String>,
@@ -184,6 +185,7 @@ impl RenderSnapshot {
             input_buffer: state.input_buffer.clone(),
             ctrl_c_exit_armed: state.ctrl_c_exit_armed(),
             cursor_position: state.cursor_position,
+            composer_selection_anchor: state.composer_selection_anchor,
             history: state.history.snapshot(),
             history_display_start: state.history_display_start,
             current_response: Arc::clone(&state.current_response),
@@ -260,6 +262,22 @@ impl RenderSnapshot {
     }
     pub(crate) fn cursor_position(&self) -> usize {
         self.cursor_position
+    }
+    pub(crate) fn composer_selection_range(&self) -> Option<(usize, usize)> {
+        let mut anchor = self.composer_selection_anchor?.min(self.input_buffer.len());
+        while !self.input_buffer.is_char_boundary(anchor) && anchor > 0 {
+            anchor -= 1;
+        }
+        let mut cursor = self.cursor_position.min(self.input_buffer.len());
+        while !self.input_buffer.is_char_boundary(cursor) && cursor > 0 {
+            cursor -= 1;
+        }
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+        (start < end).then_some((start, end))
     }
     pub(crate) fn history(&self) -> &History {
         &self.history
