@@ -8,25 +8,47 @@ instructions for work in this repository.
 
 ## Workflow
 
-- Start from current `main` in an isolated task worktree on a `feature/...` or
-  `fix/...` branch.
-- Never create or switch a task branch in the active user checkout. This
-  includes `git branch`, `git switch -c`, `git checkout -b`, `git checkout -B`,
-  and `git switch -C`. Keep the active checkout on its original branch
-  throughout the task. Create and switch task branches only in an isolated
-  worktree (`git worktree add /tmp/...`). If a generic skill or workflow says
-  to create a branch with `git switch -c`, use `git worktree add` instead.
-- Never move the user's checkout: no `rebase` or `reset --hard` in the active
-  working tree. Branch and merge work belongs in an isolated worktree.
+- Work in the active checkout on a task branch, and leave it synced and clean
+  when you finish. This is the default, not the exception.
+- Create the task branch in the active checkout (`git switch -c <type>/<scope>-<slug>`).
+  Do not use a separate worktree unless it is genuinely called for: subagents or
+  other concurrent work, or an active checkout holding unrelated dirty work.
+- When a worktree is used, build it under `/tmp` with `git worktree add`, and
+  clean it up as soon as its branch is pushed and merged: `git worktree remove`,
+  `git worktree prune`, then `git branch -d`. Never leave a worktree or task
+  branch behind. Before deleting, confirm nothing unique is lost with
+  `git cherry main <branch>` (a squash-merged branch legitimately shows
+  commits that are not ancestors of `main`; verify the content matches).
+- Never discard the user's work: no `git rebase`, `git reset --hard`, or
+  force-push in the active checkout, and never stash or drop their changes. If
+  the working tree is dirty with unrelated work, say so and work around it.
+- **Keep the active checkout synced.** At the start of a task and again when you
+  finish, run `git pull --ff-only` so it never drifts behind `origin/main`, and
+  return it to its original branch. Fast-forward only, never a plain `git pull`
+  (it can create a merge commit) and never forced. If the working tree is dirty,
+  leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
 - Run `cargo check --tests` and `cargo test`.
-- Commit, push, PR to `main`, and merge from the isolated task worktree. After
-  merge, never checkout or pull `main` by moving the original active checkout;
-  the original active checkout remains on its original branch. If a local
-  checkout needs to be updated to `main`, do so only in a separate clone or
-  isolated checkout.
 - For releases, load `~/.config/rustcode/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth.
+
+## Naming
+
+Use Conventional Commits consistently for branch names, commit messages, and
+PR titles:
+
+- Branch: `<type>/<scope>-<short-slug>` in lowercase, e.g.
+  `fix/tui-composer-selection`, `feat/workspace-task-flow`.
+- Commit and PR title: `<type>(<scope>): <summary in the imperative mood>`, e.g.
+  `fix(tui): keep transcript selection after drag`.
+- Reuse the exact same title for the commit and its PR.
+
+Accepted `type` values: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
+`chore`, `ci`, `build`. Keep `scope` to the area touched; reuse an existing
+scope (`tui`, `workspace`, `sandbox`, `engine`, `mcp`, `ci`) rather than
+inventing near-duplicates. No period at the end. Write the summary in the
+imperative ("add", not "added"), under ~72 characters. Do not prefix with
+`wip:` on a PR; use a draft PR instead.
 
 ## Search
 
