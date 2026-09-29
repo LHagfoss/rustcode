@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::ui::scrollback::TranscriptCursor;
 use ratatui::text::Line;
-use rustcode::app::{ChatMessage, TokenUsage};
+use rustcode::controller::{ChatMessage, TokenUsage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HistoryCell {
@@ -204,7 +204,7 @@ impl TranscriptModel {
 #[cfg(test)]
 mod tests {
     use super::{HistoryCell, TranscriptEvent, TranscriptModel};
-    use rustcode::app::ChatMessage;
+    use rustcode::controller::ChatMessage;
 
     #[test]
     fn history_converts_to_owned_cells_and_keeps_roles() {

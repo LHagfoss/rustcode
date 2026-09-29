@@ -11,8 +11,28 @@
 //! TUI-driven turns is turn-machinery endgame work; until then the render
 //! side converges on the contract event type.
 
+/// Session status the composer, status line, and footer render against.
+pub use crate::app::AppStatus;
+/// Subagent records the subagent picker and context modal list.
+pub use crate::app::SubAgent;
+/// Queued steer draft rendered by the composer.
+pub use crate::app::state::PendingSteer;
+/// Live turn shapes: in-flight tool calls, their output chunks, and the
+/// token/thought stream tracker.
+pub use crate::app::{LiveToolCall, LiveToolOutputChunk, StreamTracker};
 pub use crate::app::{SubAgentStatus, TokenUsage, Verbosity};
 pub use crate::network::ui_adapter::AgentUiEvent;
+/// Persisted conversation and tool-record shapes the transcript renders.
+pub use rustcode_core::{ChatMessage, History, ToolCallRef, ToolResultRecord};
+
+/// True when `content` is a compaction summary: engine-internal history
+/// bookkeeping that the transcript must not render as user-facing text.
+///
+/// Frontends get the classification, not the marker literal, so the render
+/// protocol cannot drift from what compaction actually writes.
+pub fn is_compaction_summary(content: &str) -> bool {
+    content.starts_with(crate::network::compaction::SUMMARY_MARKER)
+}
 
 /// Strip recap framing to the plain text a history cell renders.
 pub fn sanitize_recap_content(content: &str) -> String {

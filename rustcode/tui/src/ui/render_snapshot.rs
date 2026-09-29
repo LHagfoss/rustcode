@@ -1,4 +1,4 @@
-use rustcode::app::{
+use rustcode::controller::{
     AppStatus, ChatMessage, History, LiveToolCall, McpEditState, PendingQuestion, StreamTracker,
     SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
 };
@@ -620,7 +620,8 @@ impl SelectedSubagentSnapshot {
 #[cfg(test)]
 mod tests {
     use super::render_snapshot;
-    use rustcode::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
+    use rustcode::app::AppState;
+    use rustcode::controller::{AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
     use std::sync::Arc;
 
     #[test]
@@ -728,11 +729,11 @@ mod tests {
         state.status = AppStatus::Streaming;
         state.active_turn_steerable_session = Some(state.active_session_id.clone());
         state.pending_steers = vec![
-            rustcode::app::state::PendingSteer {
+            rustcode::controller::PendingSteer {
                 session_id: state.active_session_id.clone(),
                 text: "first steer".to_owned(),
             },
-            rustcode::app::state::PendingSteer {
+            rustcode::controller::PendingSteer {
                 session_id: state.active_session_id.clone(),
                 text: "second steer".to_owned(),
             },
@@ -741,11 +742,17 @@ mod tests {
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
         std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-            rustcode::app::LiveToolCall::new("live", None, "run_command", "Ran", "cargo test"),
+            rustcode::controller::LiveToolCall::new(
+                "live",
+                None,
+                "run_command",
+                "Ran",
+                "cargo test",
+            ),
         );
         state.current_thought_time_ms = 42;
         state.current_thought_tokens = 7;
-        state.pending_tool_confirmation = Some(vec![rustcode::app::ToolConfirmation {
+        state.pending_tool_confirmation = Some(vec![rustcode::controller::ToolConfirmation {
             request_id: None,
             tool_name: "run_command".to_owned(),
             path: "cargo test".to_owned(),
@@ -754,7 +761,7 @@ mod tests {
             rememberable_prefix: None,
             forbidden_prefix: None,
         }]);
-        state.pending_question = Some(rustcode::app::PendingQuestion::new(
+        state.pending_question = Some(rustcode::controller::PendingQuestion::new(
             "Proceed?".to_owned(),
             vec!["yes".to_owned()],
             false,
@@ -810,7 +817,13 @@ mod tests {
         });
         state.selected_subagent_id = Some(7);
         std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-            rustcode::app::LiveToolCall::new("live", None, "run_command", "Ran", "cargo test"),
+            rustcode::controller::LiveToolCall::new(
+                "live",
+                None,
+                "run_command",
+                "Ran",
+                "cargo test",
+            ),
         );
 
         let snapshot = render_snapshot(&state);
@@ -919,7 +932,7 @@ mod tests {
                 message_count: 3,
                 when: "now".to_owned(),
             });
-        state.mcp_edit_state = Some(rustcode::app::McpEditState {
+        state.mcp_edit_state = Some(rustcode::controller::McpEditState {
             is_add: true,
             edit_index: None,
             name_input: "server".to_owned(),
@@ -948,7 +961,7 @@ mod tests {
                 message_count: 3,
                 when: "now".to_owned(),
             });
-        state.mcp_edit_state = Some(rustcode::app::McpEditState {
+        state.mcp_edit_state = Some(rustcode::controller::McpEditState {
             is_add: true,
             edit_index: None,
             name_input: "server".to_owned(),

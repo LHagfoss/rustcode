@@ -9,7 +9,7 @@ use ratatui::{
     style::Modifier,
     text::{Line, Span},
 };
-use rustcode::app::{History, LiveToolCall, Verbosity};
+use rustcode::controller::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -725,10 +725,15 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 #[cfg(test)]
 mod tests {
     use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
-    use rustcode::app::state::{ChatMessage, History};
+    use rustcode::controller::{ChatMessage, History};
 
     #[test]
     fn committed_history_cache_shares_large_block_and_projects_only_viewport() {
+        // The cache key mixes in the process-global active theme, so a
+        // concurrent theme test would change it between the two lookups.
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
         let mut state = rustcode::app::AppState::new();
         state.history.push(ChatMessage::new(
             "assistant",

@@ -3,7 +3,7 @@ use crate::inline_terminal::InlineTerminal as Terminal;
 use crate::ui::render_snapshot::render_snapshot;
 use crate::ui::tests::THEME_TEST_LOCK;
 use ratatui::{backend::TestBackend, layout::Rect};
-use rustcode::app::ToolConfirmation;
+use rustcode::controller::ToolConfirmation;
 
 #[test]
 fn single_command_confirmation_uses_codex_command_prompt() {
