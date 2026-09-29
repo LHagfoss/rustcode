@@ -147,13 +147,13 @@ if [ "$TARGET_OS" = "macos" ]; then
     if [ "$TARGET_ARCH" = "aarch64" ]; then
         ASSET_NAME="rustcode-macos-aarch64.tar.gz"
     else
-        error "Intel macOS is not distributed via prebuilt binaries. Please build with cargo install."
+        error "Intel macOS is not distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/tui"
     fi
 elif [ "$TARGET_OS" = "linux" ]; then
     if [ "$TARGET_ARCH" = "x86_64" ]; then
         ASSET_NAME="rustcode-linux-x86_64.tar.gz"
     else
-        error "Linux $ARCH is not yet distributed via prebuilt binaries. Please build with cargo install."
+        error "Linux $ARCH is not yet distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/tui"
     fi
 fi
 

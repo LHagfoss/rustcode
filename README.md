@@ -74,11 +74,23 @@ targets, but those targets are not covered by release CI.
 
 ### From Source (Rust / Cargo)
 
+The `rustcode` binary lives in the `rustcode-tui` package; the repository root
+is the engine library and has no binary target.
+
 ```bash
 # Clone and build
 git clone https://github.com/lhagfoss/rustcode.git
 cd rustcode
-cargo install --path .
+cargo install --path rustcode/tui
+```
+
+`cargo install` writes to `~/.cargo/bin`. If a prebuilt `rustcode` from
+`install.sh` is already on your `PATH` (it installs to `~/.local/bin`, or
+`/usr/local/bin` when writable), remove it or ensure `~/.cargo/bin` comes
+first — otherwise the older binary keeps winning:
+
+```bash
+rustcode --version   # check this resolves to the build you just made
 ```
 
 ### Native desktop app
