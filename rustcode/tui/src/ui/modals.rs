@@ -41,7 +41,8 @@ pub(in crate::ui) use confirmation::{question_height, render_tool_confirmation_m
 #[cfg(test)]
 pub(super) use context::calculate_context_breakdown;
 pub(in crate::ui) use context::{
-    render_context_modal, render_status_modal, render_theme_picker_modal,
+    render_context_modal, render_session_modal, render_stats_modal, render_status_modal,
+    render_theme_picker_modal,
 };
 pub use navigation::{PALETTE_ITEMS, PaletteItem};
 pub(in crate::ui) use navigation::{
@@ -154,14 +155,14 @@ pub(super) fn render_popup_menu(
         let background = if is_selected {
             COLOR_PRIMARY()
         } else {
-            COLOR_BG()
+            COLOR_PANEL()
         };
         let line = Line::from(vec![
             Span::styled(
                 left_text,
                 Style::default()
                     .fg(if is_selected {
-                        Color::White
+                        Color::Black
                     } else {
                         COLOR_TEXT()
                     })
@@ -176,7 +177,7 @@ pub(super) fn render_popup_menu(
                 desc_text,
                 Style::default()
                     .fg(if is_selected {
-                        Color::White
+                        Color::Black
                     } else {
                         COLOR_MUTED()
                     })
@@ -192,7 +193,7 @@ pub(super) fn render_popup_menu(
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
 }
@@ -248,14 +249,14 @@ pub(super) fn render_at_popup_menu(
         let background = if is_selected {
             COLOR_PRIMARY()
         } else {
-            COLOR_BG()
+            COLOR_PANEL()
         };
         let line = Line::from(vec![
             Span::styled(
                 left_text,
                 Style::default()
                     .fg(if is_selected {
-                        Color::White
+                        Color::Black
                     } else {
                         COLOR_TEXT()
                     })
@@ -271,7 +272,7 @@ pub(super) fn render_at_popup_menu(
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
 }
@@ -328,6 +329,12 @@ pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 14;
 /// Header, blank row, model/session/messages, an optional token line and the
 /// one-row padding above and below the panel.
 pub(super) const STATUS_MODAL_HEIGHT: u16 = 8;
+/// Header, blank row, last-turn tokens, optional latency, a blank row, the
+/// monthly heading and up to three months of totals, plus panel padding.
+pub(super) const STATS_MODAL_HEIGHT: u16 = 12;
+/// Header, blank row, id/model/messages and the one-row padding above and
+/// below the panel.
+pub(super) const SESSION_MODAL_HEIGHT: u16 = 8;
 pub(super) const UPDATE_PROMPT_HEIGHT: u16 = 14;
 pub(super) const VERBOSITY_PICKER_HEIGHT: u16 = 10;
 pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;
@@ -361,6 +368,10 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
         CONTEXT_MODAL_HEIGHT
     } else if state.show_status_modal() {
         STATUS_MODAL_HEIGHT
+    } else if state.show_stats_modal() {
+        STATS_MODAL_HEIGHT
+    } else if state.show_session_modal() {
+        SESSION_MODAL_HEIGHT
     } else if state.show_update_prompt() {
         UPDATE_PROMPT_HEIGHT
     } else if state.show_mcp_config() {

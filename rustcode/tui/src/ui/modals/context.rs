@@ -27,15 +27,7 @@ pub(in crate::ui) fn render_status_modal(
         .count();
     let tool_count = state.history().iter().filter(|m| m.role == "tool").count();
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Session status",
-                Style::default()
-                    .fg(COLOR_TEXT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  ·  esc to close", Style::default().fg(COLOR_MUTED())),
-        ]),
+        modal_header("Session status"),
         Line::default(),
         Line::from(format!("Model       {}", state.model_name())),
         Line::from(format!("Session     {}", state.active_session_id())),
@@ -49,10 +41,135 @@ pub(in crate::ui) fn render_status_modal(
             usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
         )));
     }
+    render_modal_body(f, lines, inner);
+}
+
+pub(in crate::ui) fn render_stats_modal(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let area = input_anchor_rect(f, input_area, STATS_MODAL_HEIGHT);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let mut lines = vec![modal_header("Token usage")];
+    match state.current_token_usage() {
+        Some(usage) => {
+            lines.push(Line::from(format!(
+                "Last turn   {} prompt + {} completion = {} tokens",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            )));
+        }
+        None => lines.push(Line::from("Last turn   no token data yet")),
+    }
+    if let Some(rt) = state.response_time() {
+        lines.push(Line::from(format!(
+            "Latency     {:.1}s last response",
+            rt.as_secs_f32()
+        )));
+    }
+    let usage_history = state.stats_usage_history();
+    if usage_history.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(
+            "Monthly usage appears after your first request.",
+        ));
+    } else {
+        lines.push(Line::default());
+        lines.push(Line::from("Monthly usage"));
+        for (month, stats) in usage_history.iter().rev().take(4) {
+            lines.push(Line::from(format!(
+                "  {month}   {} total tokens · {} calls",
+                thousands(stats.total_tokens),
+                thousands(stats.calls)
+            )));
+        }
+    }
+
+    render_modal_body(f, lines, inner);
+}
+
+pub(in crate::ui) fn render_session_modal(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let area = input_anchor_rect(f, input_area, SESSION_MODAL_HEIGHT);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let user_count = state.history().iter().filter(|m| m.role == "user").count();
+    let assistant_count = state
+        .history()
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .count();
+    let lines = vec![
+        modal_header("Session"),
+        Line::default(),
+        Line::from(format!("ID         {}", state.active_session_id())),
+        Line::from(format!("Model      {}", state.model_name())),
+        Line::from(format!(
+            "Messages   {user_count} user · {assistant_count} assistant"
+        )),
+    ];
+
+    render_modal_body(f, lines, inner);
+}
+
+/// Title row shared by the read-only info modals: bold title plus the key that
+/// dismisses the panel.
+pub(in crate::ui) fn modal_header(title: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            title.to_owned(),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  esc to close", Style::default().fg(COLOR_MUTED())),
+    ])
+}
+
+fn render_modal_body(f: &mut Frame, lines: Vec<Line<'static>>, inner: ratatui::layout::Rect) {
     f.render_widget(
         Paragraph::new(lines).style(Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
         inner,
     );
+}
+
+/// Thousands separators, so large monthly token counts stay readable.
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 pub(in crate::ui) fn render_theme_picker_modal(

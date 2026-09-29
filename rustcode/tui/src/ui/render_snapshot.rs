@@ -16,6 +16,7 @@ pub(crate) struct RenderSnapshot {
     history_display_start: usize,
     current_response: Arc<String>,
     current_token_usage: Option<TokenUsage>,
+    response_time: Option<std::time::Duration>,
     current_thought_time_ms: u64,
     current_thought_tokens: u32,
     current_thought_started_at: Option<std::time::Instant>,
@@ -95,6 +96,9 @@ struct OverlaySnapshot {
     subagent_picker_index: usize,
     show_context_modal: bool,
     show_status_modal: bool,
+    show_stats_modal: bool,
+    show_session_modal: bool,
+    stats_usage_history: std::collections::BTreeMap<String, rustcode::config::MonthlyUsage>,
     show_update_prompt: bool,
     update_check: rustcode_core::update::UpdateState,
     update_prompt_index: usize,
@@ -139,6 +143,12 @@ impl OverlaySnapshot {
             subagent_picker_index: state.subagent_picker_index,
             show_context_modal: state.show_context_modal,
             show_status_modal: state.show_status_modal,
+            show_stats_modal: state.show_stats_modal,
+            show_session_modal: state.show_session_modal,
+            stats_usage_history: state
+                .show_stats_modal
+                .then(|| state.stats_usage_history.clone())
+                .unwrap_or_default(),
             show_update_prompt: state.show_update_prompt,
             update_check: state.update_check,
             update_prompt_index: state.update_prompt_index,
@@ -190,6 +200,7 @@ impl RenderSnapshot {
             history_display_start: state.history_display_start,
             current_response: Arc::clone(&state.current_response),
             current_token_usage: state.current_token_usage.clone(),
+            response_time: state.response_time,
             current_thought_time_ms: state.current_thought_time_ms,
             current_thought_tokens: state.current_thought_tokens,
             current_thought_started_at: state.current_thought_started_at,
@@ -303,6 +314,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn current_token_usage(&self) -> Option<&TokenUsage> {
         self.current_token_usage.as_ref()
+    }
+    pub(crate) fn response_time(&self) -> Option<std::time::Duration> {
+        self.response_time
     }
     pub(crate) fn current_thought_time_ms(&self) -> u64 {
         self.current_thought_time_ms
@@ -447,6 +461,17 @@ impl RenderSnapshot {
     }
     pub(crate) fn show_status_modal(&self) -> bool {
         self.overlay.show_status_modal
+    }
+    pub(crate) fn show_stats_modal(&self) -> bool {
+        self.overlay.show_stats_modal
+    }
+    pub(crate) fn show_session_modal(&self) -> bool {
+        self.overlay.show_session_modal
+    }
+    pub(crate) fn stats_usage_history(
+        &self,
+    ) -> &std::collections::BTreeMap<String, rustcode::config::MonthlyUsage> {
+        &self.overlay.stats_usage_history
     }
     pub(crate) fn show_update_prompt(&self) -> bool {
         self.overlay.show_update_prompt

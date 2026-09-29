@@ -13,6 +13,8 @@ pub struct OverlayState<'a> {
     show_subagent_picker: &'a mut bool,
     show_context_modal: &'a mut bool,
     show_status_modal: &'a mut bool,
+    show_stats_modal: &'a mut bool,
+    show_session_modal: &'a mut bool,
     show_mcp_config: &'a mut bool,
     pending_delete_session_idx: &'a mut Option<usize>,
     mcp_edit_state: &'a mut Option<crate::app::state::McpEditState>,
@@ -38,6 +40,8 @@ impl<'a> OverlayState<'a> {
             show_subagent_picker: &mut state.show_subagent_picker,
             show_context_modal: &mut state.show_context_modal,
             show_status_modal: &mut state.show_status_modal,
+            show_stats_modal: &mut state.show_stats_modal,
+            show_session_modal: &mut state.show_session_modal,
             show_mcp_config: &mut state.show_mcp_config,
             pending_delete_session_idx: &mut state.pending_delete_session_idx,
             mcp_edit_state: &mut state.mcp_edit_state,
@@ -59,6 +63,8 @@ impl<'a> OverlayState<'a> {
             || *self.show_subagent_picker
             || *self.show_context_modal
             || *self.show_status_modal
+            || *self.show_stats_modal
+            || *self.show_session_modal
             || *self.show_mcp_config
             || self.pending_delete_session_idx.is_some()
             || self.mcp_edit_state.is_some()
@@ -82,6 +88,8 @@ impl<'a> OverlayState<'a> {
         *self.show_subagent_picker = false;
         *self.show_context_modal = false;
         *self.show_status_modal = false;
+        *self.show_stats_modal = false;
+        *self.show_session_modal = false;
         *self.show_mcp_config = false;
         *self.pending_delete_session_idx = None;
         *self.mcp_edit_state = None;

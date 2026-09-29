@@ -654,77 +654,11 @@ async fn handle_enter_inner(
                 s.show_status_modal = true;
             }
             "/usage" | "/stats" => {
-                let mut text = String::from("Session usage:");
-                let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
-                let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
-                let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
-                text.push_str(&format!(
-                    "\nMessages: {} user · {} assistant · {} tool calls",
-                    user_msgs, assistant_msgs, tool_calls
-                ));
-                match &s.current_token_usage {
-                    Some(u) => {
-                        text.push_str(&format!(
-                            "\n  last exchange: {} prompt + {} completion = {} tokens",
-                            u.prompt_tokens, u.completion_tokens, u.total_tokens
-                        ));
-                        if s.model_name == "system" {
-                            let pct = (u.total_tokens as f32
-                                / crate::config::MAX_CONTEXT_TOKENS as f32)
-                                * 100.0;
-                            text.push_str(&format!(
-                                "\n  context: {} / {} tokens ({:.0}%, apple-fm limit)",
-                                u.total_tokens,
-                                crate::config::MAX_CONTEXT_TOKENS,
-                                pct
-                            ));
-                        }
-                    }
-                    None => {
-                        text.push_str("\n  no token data yet - send a message first");
-                    }
-                }
-                if let Some(rt) = s.response_time {
-                    text.push_str(&format!("\n  last response time: {:.1}s", rt.as_secs_f32()));
-                }
-
-                let format_commas = |n: u64| -> String {
-                    let s = n.to_string();
-                    let mut result = String::new();
-                    let len = s.len();
-                    for (i, c) in s.chars().enumerate() {
-                        if i > 0 && (len - i).is_multiple_of(3) {
-                            result.push(',');
-                        }
-                        result.push(c);
-                    }
-                    result
-                };
-
-                let usage_history = crate::config::get_usage_history();
-                if !usage_history.is_empty() {
-                    text.push_str("\n\nMonthly usage statistics:");
-                    for (month, stats) in usage_history {
-                        text.push_str(&format!(
-                            "\n  {}: {} prompt + {} completion = {} tokens ({} calls)",
-                            month,
-                            format_commas(stats.prompt_tokens),
-                            format_commas(stats.completion_tokens),
-                            format_commas(stats.total_tokens),
-                            format_commas(stats.calls)
-                        ));
-                    }
-                }
-
-                s.history.push(ChatMessage::new("system", text));
+                s.open_stats_modal();
             }
 
             "/session" => {
-                let session_info = format!(
-                    "Session ID: {}\nActive model: {}",
-                    s.active_session_id, s.model_name
-                );
-                s.history.push(ChatMessage::new("system", session_info));
+                s.show_session_modal = true;
             }
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
