@@ -442,6 +442,13 @@ pub fn extract_code_blocks_or_content(content: &str) -> String {
 }
 
 pub fn copy_last_reply(s: &mut AppState) {
+    copy_last_reply_with(s, crate::clipboard::copy_to_clipboard);
+}
+
+fn copy_last_reply_with(
+    s: &mut AppState,
+    copy: impl FnOnce(&str) -> crate::clipboard::ClipboardCopyStatus,
+) {
     let last_reply = s
         .history
         .iter()
@@ -451,20 +458,66 @@ pub fn copy_last_reply(s: &mut AppState) {
 
     if let Some(content) = last_reply {
         let clean_text = extract_code_blocks_or_content(&content);
-        if crate::clipboard::copy_to_clipboard(&clean_text) {
-            s.last_copy_text = Some((clean_text.clone(), std::time::Instant::now()));
-            s.history.push(ChatMessage::new(
-                "system",
-                "Copied code/reply to clipboard ✅",
-            ));
-        } else {
-            s.history
-                .push(ChatMessage::new("system", "Failed to copy to clipboard"));
+        match copy(&clean_text) {
+            crate::clipboard::ClipboardCopyStatus::Confirmed => {
+                s.last_copy_text = Some((clean_text.clone(), std::time::Instant::now()));
+                s.set_transient_notice("Copied code/reply to clipboard");
+            }
+            crate::clipboard::ClipboardCopyStatus::Requested => {
+                s.set_transient_notice("Copy sent to terminal; paste to verify");
+            }
+            crate::clipboard::ClipboardCopyStatus::Failed => {
+                s.set_transient_notice("Copy failed; try again");
+            }
         }
     } else {
-        s.history.push(ChatMessage::new(
-            "system",
-            "No assistant reply found to copy",
-        ));
+        s.set_transient_notice("No assistant reply found to copy");
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{AppState, ChatMessage, copy_last_reply_with};
+    use crate::clipboard::ClipboardCopyStatus;
+
+    #[test]
+    fn copy_command_uses_footer_notice_without_adding_history() {
+        for (result, expected) in [
+            (
+                ClipboardCopyStatus::Confirmed,
+                "Copied code/reply to clipboard",
+            ),
+            (
+                ClipboardCopyStatus::Requested,
+                "Copy sent to terminal; paste to verify",
+            ),
+            (ClipboardCopyStatus::Failed, "Copy failed; try again"),
+        ] {
+            let mut state = AppState::new();
+            state
+                .history
+                .push(ChatMessage::new("assistant", "response"));
+            copy_last_reply_with(&mut state, |text| {
+                assert_eq!(text, "response");
+                result
+            });
+            assert_eq!(state.active_transient_notice(), Some(expected));
+            assert_eq!(state.history.len(), 1);
+            assert_eq!(
+                state.last_copy_text.is_some(),
+                result == ClipboardCopyStatus::Confirmed
+            );
+        }
+    }
+
+    #[test]
+    fn copy_command_without_reply_uses_footer_notice() {
+        let mut state = AppState::new();
+        copy_last_reply_with(&mut state, |_| panic!("no clipboard request expected"));
+        assert_eq!(
+            state.active_transient_notice(),
+            Some("No assistant reply found to copy")
+        );
+        assert!(state.history.is_empty());
     }
 }
