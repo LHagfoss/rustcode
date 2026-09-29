@@ -12,7 +12,7 @@ pub(in crate::ui) fn render_model_picker_modal(
         .model_picker_index()
         .min(filtered_items.len().saturating_sub(1));
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, MODEL_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -138,7 +138,7 @@ pub(in crate::ui) fn render_history_picker_modal(
 ) {
     // Confirmation overlay for delete (Ctrl+D)
     if let Some(del_idx) = state.pending_delete_session_idx() {
-        let modal_area = input_anchor_rect(f, input_area, 10);
+        let modal_area = input_anchor_rect(f, input_area, HISTORY_CONFIRM_HEIGHT);
         f.render_widget(Clear, modal_area);
         f.render_widget(
             Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -229,7 +229,7 @@ pub(in crate::ui) fn render_history_picker_modal(
         .history_picker_index()
         .min(sessions.len().saturating_sub(1));
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, HISTORY_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -355,7 +355,7 @@ pub(in crate::ui) fn render_subagent_picker_modal(
 ) {
     let total = state.subagents().len() + 1;
     let selected = state.subagent_picker_index().min(total.saturating_sub(1));
-    let modal_area = input_anchor_rect(f, input_area, 18);
+    let modal_area = input_anchor_rect(f, input_area, SUBAGENT_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -500,7 +500,7 @@ pub(in crate::ui) fn render_mcp_config_modal(
     let servers = &state.config().mcp_servers;
     let selected_idx = state.mcp_picker_index();
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, MCP_CONFIG_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -908,7 +908,7 @@ pub(in crate::ui) fn render_command_picker_modal(
         .command_picker_index()
         .min(filtered_items.len().saturating_sub(1));
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let modal_area = input_anchor_rect(f, input_area, COMMAND_PICKER_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),

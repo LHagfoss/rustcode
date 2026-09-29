@@ -257,6 +257,11 @@ pub(crate) fn render_with_transcript_snapshot(
         .saturating_sub(activity_gaps)
         .saturating_sub(footer_height)
         .saturating_sub(popup_height);
+    // Slash-command modals render as a bounded panel above the composer.
+    // Reserve their rows so the transcript keeps the space above the panel
+    // instead of being painted over.
+    let modal_height = open_modal_max_height(state).min(max_chat_height);
+    let chat_height = max_chat_height.saturating_sub(modal_height);
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
 
     let pinned = transcript.selection.pinned_snapshot();
@@ -265,7 +270,7 @@ pub(crate) fn render_with_transcript_snapshot(
     let lines = render_visible_conversation_with_transcript(
         display_state,
         layout_width,
-        max_chat_height,
+        chat_height,
         transcript,
     );
     let soft_wrap_before = lines
@@ -277,18 +282,18 @@ pub(crate) fn render_with_transcript_snapshot(
                 .max(1);
             std::iter::once(false).chain(std::iter::repeat_n(true, count.saturating_sub(1)))
         })
-        .take(max_chat_height as usize)
+        .take(chat_height as usize)
         .collect::<Vec<_>>();
     let conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(layout_width) as u16;
 
-    let chat_height = max_chat_height;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(0)
         .constraints([
             Constraint::Length(chat_height),
+            Constraint::Length(modal_height),
             Constraint::Length(queue_block_height),
             Constraint::Length(popup_height),
             Constraint::Length(activity_gap_top),
@@ -301,7 +306,9 @@ pub(crate) fn render_with_transcript_snapshot(
 
     render_live_conversation(f, chunks[0], lines, layout_width);
 
-    let composer_chunks = [chunks[0], chunks[1], chunks[2], chunks[6], chunks[7]];
+    // The composer indexes these as [chat, queue, popup, input, footer]; the
+    // reserved modal rows sit between the chat and the queue.
+    let composer_chunks = [chunks[0], chunks[2], chunks[3], chunks[7], chunks[8]];
     render_queue_line(f, &composer_chunks, state);
     // Optional breathing room around live activity (#1494). Gaps are empty
     // background rows; they are omitted when activity is absent or the
@@ -309,19 +316,19 @@ pub(crate) fn render_with_transcript_snapshot(
     if activity_gap_top > 0 {
         f.render_widget(
             Paragraph::new("").style(Style::default().bg(COLOR_BG())),
-            chunks[3],
+            chunks[4],
         );
     }
     if activity_height > 0 {
         f.render_widget(
             Paragraph::new(activity_lines).style(Style::default().bg(COLOR_BG())),
-            chunks[4],
+            chunks[5],
         );
     }
     if activity_gap_bottom > 0 {
         f.render_widget(
             Paragraph::new("").style(Style::default().bg(COLOR_BG())),
-            chunks[5],
+            chunks[6],
         );
     }
     let question_area = if question_active && !question_in_bottom_pane {
@@ -331,22 +338,22 @@ pub(crate) fn render_with_transcript_snapshot(
             layout_area.height.saturating_sub(footer_height),
         );
         Some(ratatui::layout::Rect::new(
-            chunks[6].x,
-            chunks[6].bottom().saturating_sub(height),
-            chunks[6].width,
+            chunks[7].x,
+            chunks[7].bottom().saturating_sub(height),
+            chunks[7].width,
             height,
         ))
     } else {
         None
     };
     let input_margin = if approval_active {
-        render_tool_confirmation_modal(f, state, chunks[6]);
+        render_tool_confirmation_modal(f, state, chunks[7]);
         Margin {
             vertical: 0,
             horizontal: 0,
         }
     } else if question_in_bottom_pane {
-        render_question_modal(f, state, chunks[6]);
+        render_question_modal(f, state, chunks[7]);
         Margin {
             vertical: 0,
             horizontal: 0,
@@ -361,30 +368,30 @@ pub(crate) fn render_with_transcript_snapshot(
         Composer::default().render(f, &composer_chunks, state)
     };
     if footer_visible {
-        render_composer_footer(f, chunks[7], state);
+        render_composer_footer(f, chunks[8], state);
     }
 
     if !filtered_cmds.is_empty() {
-        let input_inner = chunks[6].inner(input_margin);
+        let input_inner = chunks[7].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[2].y,
+            chunks[3].y,
             input_inner.width,
-            chunks[2].height,
+            chunks[3].height,
         );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
-        let input_inner = chunks[6].inner(input_margin);
+        let input_inner = chunks[7].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[2].y,
+            chunks[3].y,
             input_inner.width,
-            chunks[2].height,
+            chunks[3].height,
         );
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 
-    let input_box_area = question_area.unwrap_or(chunks[6]);
+    let input_box_area = question_area.unwrap_or(chunks[7]);
 
     if state.show_model_picker() {
         render_model_picker_modal(f, state, input_box_area);

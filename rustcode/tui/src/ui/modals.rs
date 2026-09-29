@@ -314,19 +314,88 @@ pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
         .collect()
 }
 
-/// Picker surface fills the viewport above the bottom-anchored composer.
+/// Panel heights for the inline modals anchored above the composer. Each
+/// modal renders within its own bound; `open_modal_max_height` reserves the
+/// same number of rows so the transcript stays visible above the panel.
+pub(super) const MODEL_PICKER_HEIGHT: u16 = 14;
+pub(super) const HISTORY_PICKER_HEIGHT: u16 = 14;
+pub(super) const HISTORY_CONFIRM_HEIGHT: u16 = 10;
+pub(super) const SUBAGENT_PICKER_HEIGHT: u16 = 18;
+pub(super) const MCP_CONFIG_HEIGHT: u16 = 14;
+pub(super) const COMMAND_PICKER_HEIGHT: u16 = 14;
+pub(super) const THEME_PICKER_HEIGHT: u16 = 12;
+pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 14;
+/// Header, blank row, model/session/messages, an optional token line and the
+/// one-row padding above and below the panel.
+pub(super) const STATUS_MODAL_HEIGHT: u16 = 8;
+pub(super) const UPDATE_PROMPT_HEIGHT: u16 = 14;
+pub(super) const VERBOSITY_PICKER_HEIGHT: u16 = 10;
+pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;
+pub(super) const THINKING_PICKER_HEIGHT: u16 = 10;
+pub(super) const EFFORT_PICKER_HEIGHT: u16 = 11;
+pub(super) const PROTOCOL_PICKER_HEIGHT: u16 = 10;
+
+/// Smallest usable panel, so a modal never collapses to a title bar when the
+/// terminal is short.
+const MIN_MODAL_HEIGHT: u16 = 4;
+
+/// Panel height the currently open modal claims above the composer. Callers
+/// reserve these rows in the chat area so the panel overlays blank space
+/// instead of painting over transcript text.
+pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
+    let height = if state.show_model_picker() {
+        MODEL_PICKER_HEIGHT
+    } else if state.show_theme_picker() {
+        THEME_PICKER_HEIGHT
+    } else if state.show_command_picker() {
+        COMMAND_PICKER_HEIGHT
+    } else if state.show_history_picker() {
+        if state.pending_delete_session_idx().is_some() {
+            HISTORY_CONFIRM_HEIGHT
+        } else {
+            HISTORY_PICKER_HEIGHT
+        }
+    } else if state.show_subagent_picker() {
+        SUBAGENT_PICKER_HEIGHT
+    } else if state.show_context_modal() {
+        CONTEXT_MODAL_HEIGHT
+    } else if state.show_status_modal() {
+        STATUS_MODAL_HEIGHT
+    } else if state.show_update_prompt() {
+        UPDATE_PROMPT_HEIGHT
+    } else if state.show_mcp_config() {
+        MCP_CONFIG_HEIGHT
+    } else {
+        match state.status() {
+            AppStatus::VerbosityPicker => VERBOSITY_PICKER_HEIGHT,
+            AppStatus::ThinkingPicker => THINKING_PICKER_HEIGHT,
+            AppStatus::EffortPicker => EFFORT_PICKER_HEIGHT,
+            AppStatus::ProtocolPicker => PROTOCOL_PICKER_HEIGHT,
+            AppStatus::YoloPicker => YOLO_PICKER_HEIGHT,
+            _ => return 0,
+        }
+    };
+    height.max(MIN_MODAL_HEIGHT)
+}
+
+/// Bounded panel for an inline modal, anchored directly above the chat input
+/// box (`input_area`) and never taller than the space available there.
 pub(super) fn input_anchor_rect(
     f: &Frame,
     input_area: ratatui::layout::Rect,
-    _max_height: u16,
+    max_height: u16,
 ) -> ratatui::layout::Rect {
     let viewport = f.area();
-    ratatui::layout::Rect::new(
-        viewport.x,
-        viewport.y,
-        viewport.width,
-        input_area.y.saturating_sub(viewport.y),
-    )
+    let width = input_area
+        .width
+        .min(viewport.width.saturating_sub(input_area.x));
+    let available_h = input_area.y.saturating_sub(viewport.y);
+    let height = max_height
+        .min(available_h)
+        .max(MIN_MODAL_HEIGHT.min(available_h));
+    let x = input_area.x;
+    let y = input_area.y.saturating_sub(height);
+    ratatui::layout::Rect::new(x, y, width, height)
 }
 
 #[allow(dead_code)]
