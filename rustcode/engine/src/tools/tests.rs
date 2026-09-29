@@ -3081,20 +3081,22 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
         .find(|tool| tool.name == "run_command")
         .expect("tool exists");
 
-    // Issue #1229: task branches must never be created or checked out in the
-    // active user checkout, and repository instructions outrank generic skills.
+    // Hard safety rails stay: no rebase/reset/force-push in the active
+    // checkout, and no discarding the user's uncommitted work. The worktree is
+    // now conditional rather than mandatory, and repository instructions still
+    // outrank generic skills.
     for required_guidance in [
-        "git branch",
-        "git switch -c",
-        "git checkout -b",
-        "checkout -B",
-        "switch -C",
         "git rebase",
         "reset --hard",
+        "force-push",
+        "uncommitted work",
+        "AGENTS.md",
+        "outranks generic workflow skills",
         "git worktree add",
-        "repository `AGENTS.md` instructions apply",
-        "they outrank generic workflow skills",
-        "original branch throughout the task",
+        "only when it is genuinely required",
+        "git worktree remove",
+        "git worktree prune",
+        "git pull --ff-only",
     ] {
         assert!(
             spec.description.contains(required_guidance),
@@ -3113,30 +3115,32 @@ fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checko
         .expect("tool exists")
         .description;
 
-    // Reproduce the conflict that caused issue #1229: a generic workflow
-    // recipe recommends `git switch -c`, while this repository requires an
-    // isolated worktree. The repository rule must win, including after merge.
-    assert!(
-        repository_policy.contains("If a generic skill or workflow says"),
-        "repository policy must name the conflicting generic recipe"
-    );
+    // The repository policy defines when a worktree is required; the tool spec
+    // must defer to it rather than prescribing one recipe for every repo, and
+    // must still refuse to move or discard the user's checkout.
     assert!(
         repository_policy
-            .contains("to create a branch with `git switch -c`, use `git worktree add` instead"),
-        "repository policy must resolve that conflict in favor of worktrees"
+            .contains("Do not use a separate worktree unless it is genuinely called for"),
+        "repository policy must make worktree use conditional"
     );
     assert!(
-        repository_policy.contains("the original active checkout remains on its original branch"),
-        "the post-merge workflow must preserve the active checkout's branch"
+        repository_policy.contains("no `git rebase`, `git reset --hard`, or")
+            && repository_policy.contains("force-push in the active checkout"),
+        "repository policy must keep the hard safety rails"
     );
     assert!(
-        repository_policy.contains("do so only in a separate clone or")
-            && repository_policy.contains("isolated checkout"),
-        "the post-merge main update must happen outside the active checkout"
+        repository_policy.contains("`git pull --ff-only`"),
+        "repository policy must sync the active checkout"
     );
     assert!(
-        run_command_spec.contains("repository `AGENTS.md` instructions apply, they outrank generic workflow skills; if a generic recipe says to create a task branch with `git switch -c`, use `git worktree add` instead"),
-        "run_command must enforce the repository policy over conflicting generic recipes"
+        repository_policy.contains("git worktree remove")
+            && repository_policy.contains("git worktree prune"),
+        "worktrees must be cleaned up after push and merge"
+    );
+    assert!(
+        run_command_spec
+            .contains("follows the repository `AGENTS.md`, which outranks generic workflow skills"),
+        "run_command must defer to the repository policy"
     );
 }
 
