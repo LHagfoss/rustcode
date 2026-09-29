@@ -1017,6 +1017,26 @@ fn welcome_wordmark_has_room_above_and_to_its_left() {
 }
 
 #[test]
+fn welcome_wordmark_colors_the_whole_c_white() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 100, 28);
+    let glyph_row = lines
+        .iter()
+        .find(|line| line.to_string().contains("▄▀▀▀ █   █"))
+        .expect("wordmark glyph row is visible");
+    assert_eq!(
+        glyph_row.spans[2].style.fg,
+        Some(ratatui::style::Color::Rgb(181, 139, 255))
+    );
+    assert_eq!(
+        glyph_row.spans[3].style.fg,
+        Some(ratatui::style::Color::White)
+    );
+    assert_eq!(glyph_row.spans[3].content.chars().next(), Some('▄'));
+    assert!(glyph_row.spans[3].content.starts_with("▄▀▀▀▀"));
+}
+
+#[test]
 fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
     let state = AppState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
@@ -4223,6 +4243,145 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
         .collect::<Vec<_>>();
     assert_ne!(after, before, "wheel step should move the transcript");
     assert_eq!(after[2..], before[1..before.len() - 1]);
+}
+
+#[test]
+fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    for index in 0..24 {
+        state
+            .history
+            .push(ChatMessage::new("user", format!("reading item {index:02}")));
+    }
+    let mut transcript = TranscriptState::default();
+    let visible = |state: &AppState, transcript: &mut TranscriptState, height| {
+        let snapshot = render_snapshot(state);
+        super::conversation_render::render_visible_conversation_with_transcript(
+            &snapshot, 64, height, transcript,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+    };
+    let _ = visible(&state, &mut transcript, 8);
+    transcript.scroll_up(6);
+    let before = visible(&state, &mut transcript, 8);
+    state.replace_current_response("partial streaming answer");
+    assert_eq!(visible(&state, &mut transcript, 8), before);
+    state.replace_current_response("partial streaming answer with more text");
+    assert_eq!(visible(&state, &mut transcript, 8), before);
+    state.clear_current_response();
+    state
+        .history
+        .push(ChatMessage::new("tool", "new tool result"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "new committed output"));
+    let after = visible(&state, &mut transcript, 8);
+    assert_eq!(
+        after, before,
+        "appended output must not move the reading viewport"
+    );
+
+    let _ = visible(&state, &mut transcript, 0);
+    state
+        .history
+        .push(ChatMessage::new("assistant", "output while hidden"));
+    assert_eq!(visible(&state, &mut transcript, 8), before);
+
+    transcript.scroll_down(usize::MAX);
+    let _ = visible(&state, &mut transcript, 8);
+    state
+        .history
+        .push(ChatMessage::new("assistant", "newer committed output"));
+    let following = visible(&state, &mut transcript, 8).join("\n");
+    assert!(following.contains("newer committed output"));
+}
+
+#[test]
+fn first_committed_response_keeps_scrolled_welcome_until_follow_resumes() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    let mut transcript = TranscriptState::default();
+    let visible = |state: &AppState, transcript: &mut TranscriptState| {
+        let snapshot = render_snapshot(state);
+        super::conversation_render::render_visible_conversation_with_transcript(
+            &snapshot, 64, 8, transcript,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+    let _ = visible(&state, &mut transcript);
+    transcript.scroll_up(3);
+    let before = visible(&state, &mut transcript);
+    assert!(transcript.scroll_rows() > 0);
+    state
+        .history
+        .push(ChatMessage::new("assistant", "first committed response"));
+    let after = visible(&state, &mut transcript);
+    assert_eq!(
+        after, before,
+        "first response should not move the welcome reading position"
+    );
+    transcript.scroll_down(usize::MAX);
+    assert!(visible(&state, &mut transcript).contains("first committed response"));
+}
+
+#[test]
+fn scrolled_transcript_keeps_top_row_when_viewport_shrinks() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = AppState::new();
+    for index in 0..24 {
+        state
+            .history
+            .push(ChatMessage::new("user", format!("reading item {index:02}")));
+    }
+    let mut transcript = TranscriptState::default();
+    let snapshot = render_snapshot(&state);
+    let _ = super::conversation_render::render_visible_conversation_with_transcript(
+        &snapshot,
+        64,
+        8,
+        &mut transcript,
+    );
+    transcript.scroll_up(6);
+    let before = super::conversation_render::render_visible_conversation_with_transcript(
+        &snapshot,
+        64,
+        8,
+        &mut transcript,
+    );
+    let after = super::conversation_render::render_visible_conversation_with_transcript(
+        &snapshot,
+        64,
+        6,
+        &mut transcript,
+    );
+    let text = |lines: Vec<ratatui::text::Line<'static>>| {
+        lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(text(after), text(before)[..6]);
 }
 
 #[test]
