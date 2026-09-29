@@ -5344,12 +5344,27 @@ async fn view_file_reports_structured_truncation_only_when_content_is_omitted() 
 
 #[tokio::test]
 async fn control_plane_tool_does_not_stall_while_reading_workspace_root() {
+    // A workspace-local skill root keeps this hermetic: discovery no longer
+    // reads the developer's real home skill directory.
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let skill_dir = workspace.path().join(".rustcode/skills/stall-check");
+    std::fs::create_dir_all(&skill_dir).expect("skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: stall-check\ndescription: Skill load timing check\n---\nBody",
+    )
+    .expect("skill file");
+    let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+        workspace.path(),
+        None,
+    )));
+
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        run_one_tool(test_tool_call(
-            "use_skill",
-            serde_json::json!({"name": "release-automation"}),
-        )),
+        run_one_tool_with_state(
+            &state,
+            test_tool_call("use_skill", serde_json::json!({"name": "stall-check"})),
+        ),
     )
     .await
     .expect("use_skill execution stalled while resolving workspace root");

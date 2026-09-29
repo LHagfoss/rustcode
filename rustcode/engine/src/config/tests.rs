@@ -35,6 +35,32 @@ fn trusted_mode_allows_writes_and_network_without_os_sandbox() {
 }
 
 #[test]
+fn extra_skill_dirs_round_trip_through_the_global_config() {
+    let dir = temp_dir("extra-skill-dirs");
+    let mut config = AppConfig::default();
+    config.extra_skill_dirs = vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")];
+
+    save_config_to_result(&dir, &config).unwrap();
+
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert_eq!(reloaded.extra_skill_dirs, config.extra_skill_dirs);
+}
+
+#[test]
+fn project_config_cannot_widen_skill_discovery() {
+    let mut config = AppConfig::default();
+    let file: TomlConfig = toml::from_str("extra_skill_dirs = [\"/tmp/attacker\"]").unwrap();
+    assert_eq!(
+        file.extra_skill_dirs,
+        Some(vec![PathBuf::from("/tmp/attacker")])
+    );
+
+    apply_project_toml_config(&mut config, file);
+
+    assert!(config.extra_skill_dirs.is_empty());
+}
+
+#[test]
 fn project_config_cannot_enable_any_sandbox_mode() {
     let mut config = AppConfig::default();
     assert_ne!(config.sandbox_mode, SandboxMode::Trusted);

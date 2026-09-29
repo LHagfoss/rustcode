@@ -518,21 +518,25 @@ pub fn list_skills(args: &Value) -> Result<String, String> {
 
     let mut skills = crate::skills::discover_skills();
     if skills.is_empty() {
-        return Ok("No skills discovered. Place SKILL.md files in .rustcode/skills/ or ~/.config/rustcode/skills/.".to_string());
+        return Ok(crate::skills::no_skills_message());
     }
     // Higher-priority skills first so the model sees the most relevant ones.
     skills.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.name.cmp(&b.name)));
 
     let mut out = format!("<available_skills count=\"{}\">\n", skills.len());
-    for skill in skills {
+    for skill in &skills {
         out.push_str(&format!(
             "  <skill><name>{}</name><description>{}</description><priority>{}</priority></skill>\n",
             skill.name, skill.description, skill.priority
         ));
     }
+    out.push_str("</available_skills>\n");
     out.push_str(
-        "</available_skills>\nCall use_skill with the exact name of a matching skill to load its instructions.",
+        "Call use_skill with the exact name of a matching skill to load its instructions.\n",
     );
+    out.push_str(&crate::skills::format_skill_roots(
+        &crate::skills::skill_roots(),
+    ));
     Ok(out)
 }
 

@@ -320,10 +320,39 @@ lower-precedence layer.
 Legacy `[laya]` config tables are ignored and can be removed from user or
 project config files.
 
+### Skills
+
+Skills are plain Markdown: `<root>/<name>/SKILL.md`, scanned exactly one level
+deep. RustCode reads them from these roots, highest precedence first, and the
+first definition of a skill name wins:
+
+1. `extra_skill_dirs` from the global `config.toml` (explicit override)
+2. `RUSTCODE_EXTRA_SKILL_DIRS`, using the platform path-list separator
+3. `<workspace>/.rustcode/skills`
+4. `<workspace>/.agents/skills`
+5. `~/.agents/skills` — the universal root, shared with other agents
+6. `<config dir>/skills` — RustCode's own root (see *Configuration files*)
+
+So a project can override a user-level skill, and an explicitly configured
+root can override both. `.claude/skills` is deliberately **not** scanned; add
+it to `extra_skill_dirs` if you really want Claude Code's skills.
+
+Extra roots are a global-only setting — a checked-out `.rustcode/config.toml`
+cannot widen skill discovery:
+
+```toml
+extra_skill_dirs = ["~/work/team-skills", "/opt/shared/skills"]
+```
+
+Run `/skills` (or the `list_skills` tool) to see every root that was actually
+searched, and `rustcode doctor` to see which ones exist. `rustcode doctor
+--fix` creates only the RustCode-owned root, never the universal or workspace
+roots.
+
 ### Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a
-direction explicitly or run the default pull-then-push sync:
+direction explicitly or run the default pull-then-pull sync:
 
 ```bash
 rustcode sync init <remote-git-url>
@@ -333,6 +362,14 @@ rustcode sync              # pull, then push
 ```
 
 `--pull` and `--push` cannot be used together.
+
+`rustcode sync` stages only files inside the RustCode config directory:
+`.gitignore`, `config.toml`, `skills/`, and `themes/`. Skills in
+`~/.agents/skills`, a workspace `.rustcode/skills`, or any
+`extra_skill_dirs` entry are **not** synced — the universal root is shared
+with other agents, and pushing one agent's skills into it would conflict with
+them. Version those skills separately, or point `extra_skill_dirs` at a
+directory you sync yourself.
 
 ### Optional local audio generation (Apple Silicon)
 
