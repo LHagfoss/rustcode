@@ -2,8 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
-    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceManager,
-    WorkspaceRequest,
+    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceDescriptor,
+    WorkspaceManager, WorkspaceRequest,
 };
 use std::collections::HashMap;
 use std::io::Write;

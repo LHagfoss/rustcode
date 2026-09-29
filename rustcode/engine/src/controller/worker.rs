@@ -724,11 +724,16 @@ async fn start_pending_turn(
 }
 
 fn persist_session_workspace(session_id: &str, workspace: &std::path::Path) {
+    // Preserve an already-recorded task worktree: this record refreshes the
+    // cwd, it must not erase the session's isolated task workspace (#1496).
+    let task_workspace_id = crate::config::load_session_workspace(session_id)
+        .and_then(|previous| previous.task_workspace_id);
     let _ = crate::config::save_session_workspace(
         session_id,
         &rustcode_session::SessionWorkspace {
             cwd: workspace.to_path_buf(),
             additional_directories: Vec::new(),
+            task_workspace_id,
         },
     );
 }
