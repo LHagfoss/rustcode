@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(test)]
 use crate::ui::render_snapshot::render_snapshot;
+use std::sync::Arc;
 
 pub(super) fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
     if available_height == 0 {
@@ -222,7 +223,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
             if !block.is_empty() {
                 block.push(Line::from(""));
             }
-            (block, first)
+            (Arc::new(block), first)
         } else {
             (transcript.committed_block(state, last, width), last)
         };
@@ -234,23 +235,33 @@ pub(crate) fn render_visible_conversation_with_transcript(
     // also committed to terminal scrollback, but the full-height viewport
     // must include it so a notice or turn cannot make it disappear.
     if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
-        blocks.push(build_claude_startup_banner_snapshot(
-            state,
-            width as usize,
-            height as usize,
-        ));
+        let banner = build_claude_startup_banner_snapshot(state, width as usize, height as usize);
+        rows += banner.len();
+        blocks.push(Arc::new(banner));
     }
-    let mut lines = Vec::new();
-    for block in blocks.into_iter().rev() {
-        lines.extend(block);
-    }
-    lines.extend(live);
-    let max_scroll = lines.len().saturating_sub(capacity);
+    let max_scroll = rows.saturating_sub(capacity);
     let scroll = transcript.clamp_scroll_rows(max_scroll);
-    let end = lines.len().saturating_sub(scroll);
+    let end = rows.saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
-    lines.truncate(end);
-    lines.drain(..start);
+    let mut lines = Vec::with_capacity(capacity);
+    let mut offset = 0;
+    for block in blocks.into_iter().rev() {
+        let block_end = offset + block.len();
+        let from = start.saturating_sub(offset).min(block.len());
+        let through = end.saturating_sub(offset).min(block.len());
+        if from < through {
+            lines.extend_from_slice(&block[from..through]);
+        }
+        offset = block_end;
+        if offset >= end {
+            return lines;
+        }
+    }
+    let from = start.saturating_sub(offset).min(live.len());
+    let through = end.saturating_sub(offset).min(live.len());
+    if from < through {
+        lines.extend_from_slice(&live[from..through]);
+    }
     lines
 }
 
@@ -593,4 +604,72 @@ pub(super) fn render_committed_assistant_text_with_metrics(
         },
     );
     lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use rustcode::app::ChatMessage;
+
+    #[test]
+    fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(ChatMessage::new("user", "first request"));
+        state.history.push(ChatMessage::new(
+            "assistant",
+            (0..30)
+                .map(|row| format!("first answer row {row:02}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
+        state
+            .history
+            .push(ChatMessage::new("user", "second request"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "last answer"));
+        state.replace_current_response("live first line\nlive second line");
+        let snapshot = render_snapshot(&state);
+        let width = 42;
+        let height = 14;
+
+        for requested_scroll in [0, 1, 8, 25, 60, 200] {
+            let mut transcript = TranscriptState::default();
+            transcript.scroll_up(requested_scroll);
+            let actual = render_visible_conversation_with_transcript(
+                &snapshot,
+                width,
+                height,
+                &mut transcript,
+            );
+
+            let mut reference_transcript = TranscriptState::default();
+            reference_transcript.scroll_up(requested_scroll);
+            let live_height = if requested_scroll > 0 { 0 } else { height };
+            let live = render_live_tail_mode(
+                &snapshot,
+                width,
+                live_height,
+                &mut reference_transcript,
+                true,
+            );
+            let mut full =
+                build_claude_startup_banner_snapshot(&snapshot, width as usize, height as usize);
+            for index in 0..snapshot.history().len() {
+                full.extend(render_committed_history_block_snapshot(
+                    &snapshot, index, width,
+                ));
+            }
+            full.extend(live);
+            let max_scroll = full.len().saturating_sub(height as usize);
+            let scroll = requested_scroll.min(max_scroll);
+            let end = full.len() - scroll;
+            let start = end.saturating_sub(height as usize);
+            let expected = full[start..end].to_vec();
+
+            assert_eq!(actual, expected, "scroll={requested_scroll}");
+        }
+    }
 }
