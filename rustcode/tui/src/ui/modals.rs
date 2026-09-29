@@ -20,7 +20,7 @@ use ratatui::{
 };
 #[cfg(test)]
 use rustcode::app::AppState;
-use rustcode::app::{ApprovalDecision, PendingQuestion, QuestionAnswer};
+use rustcode::controller::{ApprovalDecision, PendingQuestion, QuestionAnswer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod advanced_settings;

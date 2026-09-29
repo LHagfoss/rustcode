@@ -11,6 +11,14 @@ pub use crate::app::PendingQuestion;
 /// names the contract instead of reaching into `app::state`.
 pub use crate::app::state::DraftSubmitMode;
 
+/// Geometry `publish_render_metrics` receives from the render loop.
+pub use crate::app::geometry::UiRect;
+/// Answers the modal key handlers return.
+pub use crate::app::{ApprovalDecision, QuestionAnswer};
+/// Pending tool confirmation the approval modal renders, and the editable
+/// MCP server buffer the MCP config modal renders.
+pub use crate::app::{McpEditState, ToolConfirmation};
+
 use super::{ApprovalChoice, ControllerError, TaskDisplay};
 
 /// Commands a frontend can send to the session controller.

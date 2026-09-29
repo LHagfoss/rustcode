@@ -1486,7 +1486,7 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("tool calls in that response were dropped")
         || content.contains("Oversized response:")
         || is_deferred_tool_batch_notice(content)
-        || content.starts_with(rustcode::network::compaction::SUMMARY_MARKER)
+        || rustcode::controller::is_compaction_summary(content)
         || content.starts_with("[harness: stopped after ")
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
@@ -1587,7 +1587,7 @@ mod tests {
     #[test]
     fn deferred_tool_result_is_not_rendered_as_a_failed_call() {
         let mut state = rustcode::app::AppState::new();
-        state.history.push(rustcode::app::ChatMessage::new(
+        state.history.push(rustcode::controller::ChatMessage::new(
             "tool",
             "read_email: error: intentionally deferred by the scheduler; reissue it only if still needed after reviewing the executed results",
         ));
@@ -1606,17 +1606,19 @@ mod tests {
     }
 
     fn tool_message_with_record(
-        record: rustcode::app::ToolResultRecord,
-    ) -> rustcode::app::ChatMessage {
-        let mut message =
-            rustcode::app::ChatMessage::new("tool", "run_command: Task started in background.");
+        record: rustcode::controller::ToolResultRecord,
+    ) -> rustcode::controller::ChatMessage {
+        let mut message = rustcode::controller::ChatMessage::new(
+            "tool",
+            "run_command: Task started in background.",
+        );
         message.tool_result = Some(record);
         message
     }
 
     #[test]
     fn pending_background_launch_renders_running_not_failed() {
-        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
             tool_name: "run_command".to_owned(),
             success: false,
             pending: true,
@@ -1630,7 +1632,7 @@ mod tests {
 
     #[test]
     fn cancelled_background_task_renders_cancelled_not_failed() {
-        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
             tool_name: "background_task".to_owned(),
             success: false,
             error_kind: Some("Cancelled".to_owned()),
@@ -1644,7 +1646,7 @@ mod tests {
 
     #[test]
     fn completed_exit_zero_still_renders_exit_status() {
-        let message = tool_message_with_record(rustcode::app::ToolResultRecord {
+        let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),

@@ -27,11 +27,17 @@ for controlling and observing a session: `InteractiveController`,
 is the reference implementation.
 
 The terminal UI lives in its own crate but still drives core internals
-directly (turn control, `network::ui_adapter`) alongside `controller`.
-Converging the render layer onto `controller` (issue #1431, enforced by
+directly (its `AppState` snapshot bridge) alongside `controller`. Converging
+the render layer onto `controller` (issue #1431, enforced by
 `scripts/check-frontend-seam.sh`) keeps shrinking that surface; the TUI's
 event loop moves with the frontend by design. Treat `controller` as the
 stable seam for anything new.
+
+`controller` also re-exports the shared domain types a frontend renders —
+session status, chat history and tool records, live tool calls, subagents,
+pending confirmations, approval/question answers, and `UiRect` — so render
+code names the contract instead of `rustcode::app`. Prefer extending that
+list over re-introducing an `app` path.
 
 ## Rules
 

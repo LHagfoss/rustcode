@@ -49,17 +49,19 @@ pub use input::{
     list_project_file_paths, summarize_tool_call,
 };
 pub use snapshot::{
-    ApprovalAction, ApprovalBatchPrompt, ApprovalPrompt, Command, ControllerHandle,
-    ControllerSnapshot, DraftSubmitMode, ModelChoice, PendingPrompt, PendingPromptKind,
-    PendingQuestion, PromptSubmitMode, QuestionPrompt, SessionChoice, TranscriptItem,
+    ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command,
+    ControllerHandle, ControllerSnapshot, DraftSubmitMode, McpEditState, ModelChoice,
+    PendingPrompt, PendingPromptKind, PendingQuestion, PromptSubmitMode, QuestionAnswer,
+    QuestionPrompt, SessionChoice, ToolConfirmation, TranscriptItem, UiRect,
 };
 pub use tasks::{
-    TaskDisplay, background_command_label, background_task_snapshots, has_background_tasks,
-    stop_background_tasks,
+    SubagentController, TaskDisplay, TurnContext, background_command_label,
+    background_task_snapshots, has_background_tasks, stop_background_tasks,
 };
 pub use transcript::{
-    AgentUiEvent, SubAgentStatus, TokenUsage, Verbosity, mcp_tool_display_name,
-    sanitize_recap_content,
+    AgentUiEvent, AppStatus, ChatMessage, History, LiveToolCall, LiveToolOutputChunk, PendingSteer,
+    StreamTracker, SubAgent, SubAgentStatus, TokenUsage, ToolCallRef, ToolResultRecord, Verbosity,
+    is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
 };
 
 pub use worker::InteractiveController;

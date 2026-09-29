@@ -103,7 +103,7 @@ mod tests {
             total_tokens: 7,
             ..Default::default()
         });
-        state.subagents.push(rustcode::app::SubAgent {
+        state.subagents.push(rustcode::controller::SubAgent {
             id: 7,
             name: "reviewer".to_owned(),
             task: "review".to_owned(),

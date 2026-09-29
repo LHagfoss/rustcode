@@ -42,7 +42,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     state.publish_render_metrics(
         revision,
         content_height,
-        rustcode::app::UiRect::new(
+        rustcode::controller::UiRect::new(
             input_area.x,
             input_area.y,
             input_area.width,
@@ -482,7 +482,7 @@ pub fn render_with_transcript(
     state.publish_render_metrics(
         revision,
         content_height,
-        rustcode::app::UiRect::new(
+        rustcode::controller::UiRect::new(
             input_area.x,
             input_area.y,
             input_area.width,
