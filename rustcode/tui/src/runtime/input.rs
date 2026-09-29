@@ -68,6 +68,21 @@ fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> b
     key == KeyCode::Esc
 }
 
+async fn report_selection_copy(
+    app_state: &Arc<Mutex<AppState>>,
+    text: &str,
+    copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
+) {
+    let notice = match copy(text) {
+        rustcode::clipboard::ClipboardCopyStatus::Confirmed => "Copied selection to clipboard",
+        rustcode::clipboard::ClipboardCopyStatus::Requested => {
+            "Copy sent to terminal; paste to verify"
+        }
+        rustcode::clipboard::ClipboardCopyStatus::Failed => "Copy failed; try again",
+    };
+    app_state.lock().await.set_transient_notice(notice);
+}
+
 pub(super) async fn handle_app_event(
     app_event: AppEvent,
     ctx: InputContext<'_>,
@@ -186,7 +201,12 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                     if let Some(text) = transcript_state.selection.selected_text() {
-                        rustcode::clipboard::copy_to_clipboard(&text);
+                        report_selection_copy(
+                            app_state,
+                            &text,
+                            rustcode::clipboard::copy_to_clipboard,
+                        )
+                        .await;
                     }
                     return Ok(InputFlow::ContinueIteration);
                 }
@@ -1817,7 +1837,12 @@ pub(super) async fn handle_app_event(
                             transcript_state.selection.mouse(mouse)
                         };
                         if let Some(text) = selected {
-                            rustcode::clipboard::copy_to_clipboard(&text);
+                            report_selection_copy(
+                                app_state,
+                                &text,
+                                rustcode::clipboard::copy_to_clipboard,
+                            )
+                            .await;
                         }
                         frame_requester.schedule_frame();
                         return Ok(InputFlow::ContinueIteration);
@@ -1894,7 +1919,8 @@ pub(super) async fn handle_app_event(
 mod tests {
     use super::{
         clear_selection_for_composer_key, is_keyboard_range_key, is_shift_tab,
-        is_transcript_navigation, return_to_latest_for_key, selection_owns_key,
+        is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
+        selection_owns_key,
     };
     use crate::ui::TranscriptState;
     use crossterm::event::{
@@ -1902,6 +1928,34 @@ mod tests {
     };
     use ratatui::{buffer::Buffer, layout::Rect};
     use rustcode::app::AppState;
+    use rustcode::clipboard::ClipboardCopyStatus;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn selection_copy_feedback_reports_backend_result_without_chat_message() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        for (result, expected) in [
+            (
+                ClipboardCopyStatus::Confirmed,
+                "Copied selection to clipboard",
+            ),
+            (
+                ClipboardCopyStatus::Requested,
+                "Copy sent to terminal; paste to verify",
+            ),
+            (ClipboardCopyStatus::Failed, "Copy failed; try again"),
+        ] {
+            report_selection_copy(&state, "selected text", |text| {
+                assert_eq!(text, "selected text");
+                result
+            })
+            .await;
+            let state = state.lock().await;
+            assert_eq!(state.active_transient_notice(), Some(expected));
+            assert!(state.history.is_empty());
+        }
+    }
 
     #[test]
     fn shift_tab_is_normalized_from_supported_terminal_events() {
