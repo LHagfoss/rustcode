@@ -1,6 +1,6 @@
 use rustcode::controller::{
-    AppStatus, ChatMessage, History, LiveToolCall, McpEditState, PendingQuestion, StreamTracker,
-    SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
+    AppStatus, ChatMessage, History, LiveToolCall, McpEditState, MonthlyUsage, PendingQuestion,
+    StreamTracker, SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
 };
 use std::sync::Arc;
 
@@ -98,7 +98,7 @@ struct OverlaySnapshot {
     show_status_modal: bool,
     show_stats_modal: bool,
     show_session_modal: bool,
-    stats_usage_history: std::collections::BTreeMap<String, rustcode::config::MonthlyUsage>,
+    stats_usage_history: std::collections::BTreeMap<String, MonthlyUsage>,
     show_update_prompt: bool,
     update_check: rustcode_core::update::UpdateState,
     update_prompt_index: usize,
@@ -468,9 +468,7 @@ impl RenderSnapshot {
     pub(crate) fn show_session_modal(&self) -> bool {
         self.overlay.show_session_modal
     }
-    pub(crate) fn stats_usage_history(
-        &self,
-    ) -> &std::collections::BTreeMap<String, rustcode::config::MonthlyUsage> {
+    pub(crate) fn stats_usage_history(&self) -> &std::collections::BTreeMap<String, MonthlyUsage> {
         &self.overlay.stats_usage_history
     }
     pub(crate) fn show_update_prompt(&self) -> bool {
