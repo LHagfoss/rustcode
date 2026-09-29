@@ -203,12 +203,8 @@ pub(crate) fn render_with_transcript_snapshot(
         .saturating_add(footer_height)
         .saturating_add(activity_lines.len() as u16)
         .saturating_add(popup_rows);
-    let (activity_gap_top, activity_gap_bottom) = activity_spacing(
-        activity_visible,
-        f.area().height,
-        reserved_without_gaps,
-        3,
-    );
+    let (activity_gap_top, activity_gap_bottom) =
+        activity_spacing(activity_visible, f.area().height, reserved_without_gaps, 3);
     let activity_gaps = activity_gap_top.saturating_add(activity_gap_bottom);
     let activity_height = (activity_lines.len() as u16).min(
         f.area()
