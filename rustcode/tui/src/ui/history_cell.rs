@@ -12,6 +12,7 @@ use ratatui::{
 use rustcode::app::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
@@ -44,7 +45,8 @@ pub(crate) struct TranscriptState {
     model: super::TranscriptModel,
     scroll_rows: usize,
     pub(crate) selection: super::selection::TranscriptSelection,
-    committed_cache: Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Vec<Line<'static>>>>,
+    committed_cache:
+        Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Arc<Vec<Line<'static>>>>>,
 }
 
 impl TranscriptState {
@@ -118,7 +120,7 @@ impl TranscriptState {
         state: &super::RenderSnapshot,
         index: usize,
         width: u16,
-    ) -> Vec<Line<'static>> {
+    ) -> Arc<Vec<Line<'static>>> {
         let mut theme_hash = std::collections::hash_map::DefaultHasher::new();
         super::theme::active_palette().name.hash(&mut theme_hash);
         let mut session_hash = std::collections::hash_map::DefaultHasher::new();
@@ -134,10 +136,12 @@ impl TranscriptState {
             .committed_cache
             .get_or_insert_with(|| super::lru::LruCache::new(4));
         if let Some(lines) = cache.get(&key) {
-            return lines.clone();
+            return Arc::clone(lines);
         }
-        let lines = super::render_committed_history_block_snapshot(state, index, width);
-        cache.insert(key, lines.clone());
+        let lines = Arc::new(super::render_committed_history_block_snapshot(
+            state, index, width,
+        ));
+        cache.insert(key, Arc::clone(&lines));
         lines
     }
 
@@ -692,6 +696,34 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 mod tests {
     use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
     use rustcode::app::state::{ChatMessage, History};
+
+    #[test]
+    fn committed_history_cache_shares_large_block_and_projects_only_viewport() {
+        let mut state = rustcode::app::AppState::new();
+        state.history.push(ChatMessage::new(
+            "assistant",
+            (0..1_000)
+                .map(|row| format!("history row {row:04}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+        let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
+        let mut transcript = TranscriptState::default();
+
+        let first = transcript.committed_block(&snapshot, 0, 80);
+        let second = transcript.committed_block(&snapshot, 0, 80);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(first.len() > 200, "rendered lines: {}", first.len());
+
+        let visible = crate::ui::render_visible_conversation_with_transcript(
+            &snapshot,
+            80,
+            30,
+            &mut transcript,
+        );
+        assert_eq!(visible.len(), 30);
+        assert!(visible.iter().any(|line| line.to_string().contains("0999")));
+    }
 
     #[test]
     fn transcript_sync_tracks_history_revision_and_reuses_unchanged_projection() {
