@@ -1017,6 +1017,26 @@ fn welcome_wordmark_has_room_above_and_to_its_left() {
 }
 
 #[test]
+fn welcome_wordmark_colors_the_whole_c_white() {
+    let state = AppState::new();
+    let lines = super::build_claude_startup_banner(&state, 100, 28);
+    let glyph_row = lines
+        .iter()
+        .find(|line| line.to_string().contains("▄▀▀▀ █   █"))
+        .expect("wordmark glyph row is visible");
+    assert_eq!(
+        glyph_row.spans[2].style.fg,
+        Some(ratatui::style::Color::Rgb(181, 139, 255))
+    );
+    assert_eq!(
+        glyph_row.spans[3].style.fg,
+        Some(ratatui::style::Color::White)
+    );
+    assert_eq!(glyph_row.spans[3].content.chars().next(), Some('▄'));
+    assert!(glyph_row.spans[3].content.starts_with("▄▀▀▀▀"));
+}
+
+#[test]
 fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
     let state = AppState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
