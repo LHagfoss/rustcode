@@ -521,6 +521,18 @@ pub(crate) fn command(
     })
 }
 
+/// Explicit trusted-mode execution (#1496): no OS sandbox wrapping. The
+/// command runs with RustCode process permissions on all platforms. Only
+/// reachable via user-level opt-in (`/sandbox trusted`); shell approvals
+/// still apply and command stderr (auth/SSH/certs/network) is reported as
+/// a tool result, never as a sandbox denial.
+pub(crate) fn passthrough_command(command: &str) -> SandboxedCommand {
+    SandboxedCommand {
+        command: command.to_string(),
+        inherited_fds: Vec::new(),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn create_network_filter() -> Result<std::fs::File, String> {
     use std::io::{Seek, SeekFrom, Write};
@@ -859,6 +871,13 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_passthrough_runs_without_os_sandbox_wrapping() {
+        let wrapped = passthrough_command("git push origin main");
+        assert_eq!(wrapped.command, "git push origin main");
+        assert!(wrapped.inherited_fds.is_empty());
+    }
 
     #[test]
     fn scoped_writable_root_requires_a_canonical_directory_outside_workspace() {
