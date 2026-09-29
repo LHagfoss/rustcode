@@ -211,6 +211,30 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                // Composer selection owns Ctrl/Cmd+C and Esc (#1493).
+                // Copy keeps the highlight; Esc dismisses it.
+                if app_state.lock().await.has_composer_selection() {
+                    if key.code == KeyCode::Esc {
+                        app_state.lock().await.clear_composer_selection();
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                    if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                        && key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+                    {
+                        if let Some(text) = app_state.lock().await.composer_selected_text() {
+                            report_selection_copy(
+                                app_state,
+                                &text,
+                                rustcode::clipboard::copy_to_clipboard,
+                            )
+                            .await;
+                        }
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                }
+
                 let transcript_navigation = is_transcript_navigation(key);
                 clear_selection_for_composer_key(transcript_state, key);
 
@@ -1582,6 +1606,10 @@ pub(super) async fn handle_app_event(
                     }
                     KeyCode::Left => {
                         let mut s = app_state.lock().await;
+                        let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        if shift && s.composer_selection_anchor.is_none() {
+                            s.composer_selection_anchor = Some(s.cursor_position);
+                        }
                         let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                             || key.modifiers.contains(event::KeyModifiers::META);
                         if alt {
@@ -1589,9 +1617,18 @@ pub(super) async fn handle_app_event(
                         } else {
                             s.move_cursor_left();
                         }
+                        if !shift {
+                            s.composer_selection_anchor = None;
+                        } else if s.composer_selection_anchor == Some(s.cursor_position) {
+                            s.composer_selection_anchor = None;
+                        }
                     }
                     KeyCode::Right => {
                         let mut s = app_state.lock().await;
+                        let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        if shift && s.composer_selection_anchor.is_none() {
+                            s.composer_selection_anchor = Some(s.cursor_position);
+                        }
                         let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                             || key.modifiers.contains(event::KeyModifiers::META);
                         if alt {
@@ -1599,12 +1636,37 @@ pub(super) async fn handle_app_event(
                         } else {
                             s.move_cursor_right();
                         }
+                        if !shift {
+                            s.composer_selection_anchor = None;
+                        } else if s.composer_selection_anchor == Some(s.cursor_position) {
+                            s.composer_selection_anchor = None;
+                        }
                     }
                     KeyCode::Home => {
-                        app_state.lock().await.move_cursor_to_start();
+                        let mut s = app_state.lock().await;
+                        let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        if shift && s.composer_selection_anchor.is_none() {
+                            s.composer_selection_anchor = Some(s.cursor_position);
+                        }
+                        s.move_cursor_to_start();
+                        if !shift {
+                            s.composer_selection_anchor = None;
+                        } else if s.composer_selection_anchor == Some(s.cursor_position) {
+                            s.composer_selection_anchor = None;
+                        }
                     }
                     KeyCode::End => {
-                        app_state.lock().await.move_cursor_to_end();
+                        let mut s = app_state.lock().await;
+                        let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        if shift && s.composer_selection_anchor.is_none() {
+                            s.composer_selection_anchor = Some(s.cursor_position);
+                        }
+                        s.move_cursor_to_end();
+                        if !shift {
+                            s.composer_selection_anchor = None;
+                        } else if s.composer_selection_anchor == Some(s.cursor_position) {
+                            s.composer_selection_anchor = None;
+                        }
                     }
                     KeyCode::Char('l') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                         terminal_runtime.terminal().clear()?;
@@ -1787,34 +1849,104 @@ pub(super) async fn handle_app_event(
                     event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
                     event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
                     _ => {
-                        if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left)
-                            && mouse.modifiers.is_empty()
-                        {
+                        // Composer drag selection (#1493). Down starts a
+                        // selection, Drag extends it, Up keeps the highlight.
+                        // While composer-selecting, events never reach the
+                        // transcript path.
+                        if matches!(
+                            mouse.kind,
+                            event::MouseEventKind::Down(event::MouseButton::Left)
+                                | event::MouseEventKind::Drag(event::MouseButton::Left)
+                                | event::MouseEventKind::Up(event::MouseButton::Left)
+                        ) {
                             let mut state = app_state.lock().await;
-                            if !state.modal_open()
+                            let in_composer = !state.modal_open()
                                 && state.status != AppStatus::AwaitingQuestion
                                 && state.status != AppStatus::AwaitingToolConfirmation
-                                && let Some(area) = state.input_text_area
-                                && let Some(cursor) = ui::composer_cursor_from_mouse(
+                                && state.input_text_area.is_some();
+                            if in_composer {
+                                let area = state.input_text_area.expect("checked");
+                                let rect = ratatui::layout::Rect::new(
+                                    area.x,
+                                    area.y,
+                                    area.width,
+                                    area.height,
+                                );
+                                let cursor_opt = ui::composer_cursor_from_mouse(
                                     &state.input_buffer,
                                     state.cursor_position,
                                     state.get_command_suggestion().as_deref(),
-                                    ratatui::layout::Rect::new(
-                                        area.x,
-                                        area.y,
-                                        area.width,
-                                        area.height,
-                                    ),
+                                    rect,
                                     mouse.column,
                                     mouse.row,
-                                )
+                                );
+                                // Clamp drags outside the composer to its
+                                // bounds so selections extend without
+                                // scrolling the transcript.
+                                let clamped = cursor_opt.or_else(|| {
+                                    if mouse.row < area.y {
+                                        Some(0)
+                                    } else if mouse.row >= area.y.saturating_add(area.height) {
+                                        Some(state.input_buffer.len())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                match mouse.kind {
+                                    event::MouseEventKind::Down(event::MouseButton::Left)
+                                        if mouse.modifiers.is_empty() =>
+                                    {
+                                        if let Some(cursor) = cursor_opt {
+                                            state.cursor_position = cursor;
+                                            state.composer_selection_anchor = Some(cursor);
+                                            state.composer_selecting = true;
+                                            state.reset_suggestion_cycle();
+                                            state.request_redraw();
+                                            transcript_state.selection.clear();
+                                            frame_requester.schedule_frame();
+                                            return Ok(InputFlow::ContinueIteration);
+                                        }
+                                    }
+                                    event::MouseEventKind::Drag(event::MouseButton::Left)
+                                        if state.composer_selecting =>
+                                    {
+                                        if let Some(cursor) = clamped {
+                                            state.cursor_position = cursor;
+                                            state.request_redraw();
+                                            frame_requester.schedule_frame();
+                                            return Ok(InputFlow::ContinueIteration);
+                                        }
+                                        frame_requester.schedule_frame();
+                                        return Ok(InputFlow::ContinueIteration);
+                                    }
+                                    event::MouseEventKind::Up(event::MouseButton::Left)
+                                        if state.composer_selecting =>
+                                    {
+                                        if let Some(cursor) = clamped {
+                                            state.cursor_position = cursor;
+                                        }
+                                        state.composer_selecting = false;
+                                        // Click without drag clears; drag
+                                        // keeps the highlight for explicit copy.
+                                        if state.composer_selection_anchor
+                                            == Some(state.cursor_position)
+                                        {
+                                            state.composer_selection_anchor = None;
+                                        }
+                                        state.request_redraw();
+                                        frame_requester.schedule_frame();
+                                        return Ok(InputFlow::ContinueIteration);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // A composer selection is dismissed by clicking
+                            // elsewhere, matching normal editor behavior.
+                            if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left)
+                                && mouse.modifiers.is_empty()
+                                && state.has_composer_selection()
                             {
-                                state.cursor_position = cursor;
-                                state.reset_suggestion_cycle();
-                                state.request_redraw();
-                                transcript_state.selection.clear();
-                                frame_requester.schedule_frame();
-                                return Ok(InputFlow::ContinueIteration);
+                                state.clear_composer_selection();
                             }
                         }
                         let selected = if mouse.kind

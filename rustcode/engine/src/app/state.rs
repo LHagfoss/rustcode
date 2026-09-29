@@ -112,6 +112,13 @@ pub struct AppState {
     /// A changed conversation is required before the idle timer can summarize again.
     pub(crate) last_summary_history_len: Option<usize>,
     pub cursor_position: usize,
+    /// Anchor byte offset for composer text selection (#1493). When `Some`,
+    /// the selected range is `anchor..cursor_position` (ordered). `None`
+    /// means no composer selection.
+    pub composer_selection_anchor: Option<usize>,
+    /// True while a left-button drag inside the composer is extending the
+    /// selection. Prevents drag/up events from reaching transcript selection.
+    pub composer_selecting: bool,
 
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
     pub response_time: Option<std::time::Duration>,
@@ -1059,6 +1066,8 @@ impl AppState {
             summary_in_flight: false,
             last_summary_history_len: None,
             cursor_position: 0,
+            composer_selection_anchor: None,
+            composer_selecting: false,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
             history_index: None,
@@ -1287,6 +1296,56 @@ impl AppState {
         }
     }
 
+    /// Ordered composer selection byte range, if any (#1493).
+    /// Bounds are clamped to char boundaries so stale anchors after submit
+    /// or history recall cannot panic or paint spuriously.
+    pub fn composer_selection_range(&self) -> Option<(usize, usize)> {
+        let mut anchor = self.composer_selection_anchor?.min(self.input_buffer.len());
+        while !self.input_buffer.is_char_boundary(anchor) && anchor > 0 {
+            anchor -= 1;
+        }
+        let mut cursor = self.cursor_position.min(self.input_buffer.len());
+        while !self.input_buffer.is_char_boundary(cursor) && cursor > 0 {
+            cursor -= 1;
+        }
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+        (start < end).then_some((start, end))
+    }
+
+    pub fn has_composer_selection(&self) -> bool {
+        self.composer_selection_range().is_some()
+    }
+
+    pub fn composer_selected_text(&self) -> Option<String> {
+        self.composer_selection_range()
+            .map(|(start, end)| self.input_buffer[start..end].to_owned())
+    }
+
+    pub fn clear_composer_selection(&mut self) {
+        self.composer_selection_anchor = None;
+        self.composer_selecting = false;
+    }
+
+    /// Delete the selected range, placing the cursor at its start.
+    /// Returns true when a selection was removed.
+    pub fn delete_composer_selection(&mut self) -> bool {
+        if let Some((start, end)) = self.composer_selection_range() {
+            self.input_buffer.replace_range(start..end, "");
+            self.cursor_position = start;
+            self.clear_composer_selection();
+            self.history_index = None;
+            self.reset_suggestion_index();
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
+    }
+
     fn char_len_before_cursor(&self) -> Option<usize> {
         self.input_buffer[..self.cursor_position]
             .chars()
@@ -1297,6 +1356,10 @@ impl AppState {
     pub fn insert_char(&mut self, c: char) {
         self.history_index = None;
         self.clamp_cursor();
+        // Typing replaces the selected range (#1493).
+        if self.delete_composer_selection() {
+            self.clamp_cursor();
+        }
         self.input_buffer.insert(self.cursor_position, c);
         self.cursor_position += c.len_utf8();
         self.reset_suggestion_index();
@@ -1306,6 +1369,10 @@ impl AppState {
     pub fn delete_char_backspace(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
+        // Backspace deletes the selected range first (#1493).
+        if self.delete_composer_selection() {
+            return;
+        }
         if let Some(len) = self.char_len_before_cursor() {
             self.cursor_position -= len;
             self.input_buffer.remove(self.cursor_position);
@@ -1317,6 +1384,10 @@ impl AppState {
     pub fn delete_char_delete(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
+        // Delete removes the selected range first (#1493).
+        if self.delete_composer_selection() {
+            return;
+        }
         if self.cursor_position < self.input_buffer.len() {
             self.input_buffer.remove(self.cursor_position);
         }
@@ -1327,6 +1398,9 @@ impl AppState {
     pub fn delete_word_backspace(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
+        if self.delete_composer_selection() {
+            return;
+        }
         let end = self.cursor_position;
         self.move_cursor_word_left();
         let start = self.cursor_position;
@@ -1340,6 +1414,9 @@ impl AppState {
     pub fn delete_word_forward(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
+        if self.delete_composer_selection() {
+            return;
+        }
         let start = self.cursor_position;
         self.move_cursor_word_right();
         let end = self.cursor_position;
@@ -1354,6 +1431,9 @@ impl AppState {
     pub fn kill_line_to_start(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
+        if self.delete_composer_selection() {
+            return;
+        }
         let end = self.cursor_position;
         let start = self.input_buffer[..end].rfind('\n').map_or(0, |i| i + 1);
         if start < end {
@@ -1897,6 +1977,9 @@ impl AppState {
 #[cfg(test)]
 #[path = "state/chat_message_tests.rs"]
 mod chat_message_tests;
+#[cfg(test)]
+#[path = "state/composer_selection_tests.rs"]
+mod composer_selection_tests;
 #[cfg(test)]
 #[path = "state/history_tests.rs"]
 mod history_tests;
