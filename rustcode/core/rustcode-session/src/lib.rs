@@ -261,6 +261,11 @@ pub struct SessionWorkspace {
     pub cwd: PathBuf,
     #[serde(default)]
     pub additional_directories: Vec<PathBuf>,
+    /// Id of the isolated task worktree this session created, if any. Resuming
+    /// the session reattaches to this worktree instead of creating a new one
+    /// (#1496). Sessions without a task worktree leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_workspace_id: Option<String>,
 }
 
 /// Versioned information stored alongside a canonical session transcript.
@@ -1189,6 +1194,7 @@ mod tests {
         let workspace = SessionWorkspace {
             cwd: PathBuf::from("/workspace/project"),
             additional_directories: vec![PathBuf::from("/workspace/shared")],
+            task_workspace_id: Some("task-1".to_string()),
         };
         store.save_session_workspace("123", &workspace).unwrap();
         assert_eq!(store.load_session_workspace("123"), Some(workspace));
@@ -1273,6 +1279,7 @@ mod tests {
                     &SessionWorkspace {
                         cwd: PathBuf::from(cwd),
                         additional_directories: Vec::new(),
+                        task_workspace_id: None,
                     },
                 )
                 .unwrap();
