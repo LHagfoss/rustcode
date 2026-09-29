@@ -245,6 +245,17 @@ pub(crate) fn build_loaded_app_state(
     let mut state = crate::app::AppState::new_with_workspace_session(cwd, Some(session_id));
     state.task_working_directory = Some(cwd.to_path_buf());
     state.workspace_root = Some(cwd.to_path_buf());
+    // Reattach the session's recorded task worktree so resume reuses its
+    // writable roots and cwd instead of starting over in the source checkout
+    // (#1496). A missing or foreign worktree falls back to `cwd`.
+    if let Some(workspace) = crate::config::load_session_workspace(session_id)
+        && let Some(descriptor_id) = workspace.task_workspace_id
+        && let Some(manager) = crate::config::workspace_manager()
+        && let Ok(descriptor) = manager.resume(&descriptor_id)
+    {
+        state.workspace_root = Some(descriptor.workspace_path.clone());
+        state.task_working_directory = Some(descriptor.workspace_path.clone());
+    }
     state.history.replace(history);
     state
 }
@@ -275,6 +286,7 @@ fn session_workspace(
     rustcode_session::SessionWorkspace {
         cwd,
         additional_directories,
+        task_workspace_id: None,
     }
 }
 
@@ -1087,6 +1099,7 @@ mod tests {
                     &rustcode_session::SessionWorkspace {
                         cwd: cwd.path().to_path_buf(),
                         additional_directories: Vec::new(),
+                        task_workspace_id: None,
                     },
                 )
                 .unwrap();

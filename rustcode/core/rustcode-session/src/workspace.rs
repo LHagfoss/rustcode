@@ -541,9 +541,52 @@ impl WorkspaceManager {
         task_id: &str,
         name: &str,
     ) -> Result<Option<WorkspaceDescriptor>, WorkspaceError> {
-        let Ok(entries) = fs::read_dir(self.workspace_metadata_root()) else {
+        Ok(self.owned_descriptors()?.into_iter().find(|descriptor| {
+            descriptor.id == workspace_id(repository_root, session_id, task_id, name)
+                && descriptor.repository_root == repository_root
+                && descriptor.owner_session_id == session_id
+                && descriptor.owner_task_id == task_id
+        }))
+    }
+
+    /// Find a live workspace this manager owns for `repository_root` on
+    /// `branch`. A follow-up task reuses its existing worktree instead of
+    /// creating a duplicate for the same branch (#1496). Removed and archived
+    /// descriptors are ignored so a fresh task starts clean.
+    pub fn find_active_by_branch(
+        &self,
+        repository_root: &Path,
+        branch: &str,
+    ) -> Result<Option<WorkspaceDescriptor>, WorkspaceError> {
+        if branch.is_empty() {
             return Ok(None);
+        }
+        // Descriptors record the canonicalized repository root, but callers may
+        // pass a symlinked path (for example `/var` vs `/private/var` on
+        // macOS). Compare canonical paths so a follow-up still finds its worktree.
+        let requested_root = repository_root
+            .canonicalize()
+            .unwrap_or_else(|_| repository_root.to_path_buf());
+        Ok(self.owned_descriptors()?.into_iter().find(|descriptor| {
+            descriptor.repository_root == requested_root
+                && descriptor.branch == branch
+                && matches!(
+                    descriptor.lifecycle,
+                    WorkspaceLifecycle::Creating
+                        | WorkspaceLifecycle::Ready
+                        | WorkspaceLifecycle::Running
+                        | WorkspaceLifecycle::Failed
+                )
+        }))
+    }
+
+    /// Every descriptor this manager owns, in a stable id order. Unreadable or
+    /// foreign descriptor files are skipped rather than failing the lookup.
+    fn owned_descriptors(&self) -> Result<Vec<WorkspaceDescriptor>, WorkspaceError> {
+        let Ok(entries) = fs::read_dir(self.workspace_metadata_root()) else {
+            return Ok(Vec::new());
         };
+        let mut descriptors = Vec::new();
         for entry in entries.filter_map(Result::ok) {
             if entry
                 .path()
@@ -559,15 +602,10 @@ impl WorkspaceManager {
             let Ok(descriptor) = serde_json::from_str::<WorkspaceDescriptor>(&content) else {
                 continue;
             };
-            if descriptor.id == workspace_id(repository_root, session_id, task_id, name)
-                && descriptor.repository_root == repository_root
-                && descriptor.owner_session_id == session_id
-                && descriptor.owner_task_id == task_id
-            {
-                return Ok(Some(descriptor));
-            }
+            descriptors.push(descriptor);
         }
-        Ok(None)
+        descriptors.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(descriptors)
     }
 
     pub fn status(&self, id: &str) -> Result<WorkspaceStatus, WorkspaceError> {
@@ -1350,6 +1388,140 @@ mod tests {
         assert!(linked.linked_worktree);
         assert_eq!(linked.common_git_dir, regular.common_git_dir);
         assert_eq!(linked.repository_root, regular.repository_root);
+    }
+
+    #[test]
+    fn finds_the_same_task_worktree_by_branch_for_follow_up_tasks() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let mut request = WorkspaceRequest::for_task(
+            root.path(),
+            "follow-up",
+            &base,
+            "rustcode",
+            "session",
+            "follow-up",
+        );
+        request.branch = Some("feature/shared".to_string());
+        let first = manager.create(&request).expect("workspace");
+
+        // A second task naming the same branch reuses the same worktree
+        // instead of creating a duplicate (#1496).
+        let found = manager
+            .find_active_by_branch(root.path(), "feature/shared")
+            .expect("lookup")
+            .expect("existing worktree");
+        assert_eq!(found.id, first.id);
+        assert_eq!(found.workspace_path, first.workspace_path);
+
+        // Unrelated branches and empty lookups do not match.
+        assert!(
+            manager
+                .find_active_by_branch(root.path(), "feature/other")
+                .expect("lookup")
+                .is_none()
+        );
+        assert!(
+            manager
+                .find_active_by_branch(root.path(), "")
+                .expect("lookup")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn archived_workspaces_do_not_block_a_fresh_task_on_the_same_branch() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let mut request = WorkspaceRequest::for_task(
+            root.path(),
+            "archived",
+            &base,
+            "rustcode",
+            "session",
+            "archived",
+        );
+        request.branch = Some("feature/recycled".to_string());
+        let descriptor = manager.create(&request).expect("workspace");
+        manager
+            .cleanup(&descriptor.id, CleanupAction::Archive, false)
+            .expect("archive");
+
+        assert!(
+            manager
+                .find_active_by_branch(root.path(), "feature/recycled")
+                .expect("lookup")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resumed_worktree_is_reported_by_workspace_path() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let descriptor = manager
+            .create(&WorkspaceRequest::for_task(
+                root.path(),
+                "resumable",
+                &base,
+                "rustcode",
+                "session",
+                "resumable",
+            ))
+            .expect("workspace");
+
+        // Simulate a restart: a fresh manager instance resumes by recorded id.
+        let restarted = WorkspaceManager::new(persistence.path());
+        let resumed = restarted.resume(&descriptor.id).expect("resume");
+        assert_eq!(resumed.workspace_path, descriptor.workspace_path);
+        assert!(resumed.workspace_path.is_dir());
+        assert_eq!(
+            restarted
+                .find_by_workspace_path(&resumed.workspace_path)
+                .expect("lookup")
+                .map(|found| found.id),
+            Some(descriptor.id.clone())
+        );
+    }
+
+    #[test]
+    fn unrelated_repository_does_not_see_another_tasks_worktree() {
+        let (root, persistence) = repo();
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"])
+            .expect("head")
+            .trim()
+            .to_string();
+        let manager = WorkspaceManager::new(persistence.path());
+        let mut request = WorkspaceRequest::for_task(
+            root.path(),
+            "scoped",
+            &base,
+            "rustcode",
+            "session",
+            "scoped",
+        );
+        request.branch = Some("feature/scoped".to_string());
+        manager.create(&request).expect("workspace");
+
+        let (other_root, _other_persistence) = repo();
+        assert!(
+            manager
+                .find_active_by_branch(other_root.path(), "feature/scoped")
+                .expect("lookup")
+                .is_none()
+        );
     }
 
     #[test]

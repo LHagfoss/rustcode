@@ -1135,6 +1135,39 @@ async fn handle_enter_inner(
     false
 }
 
+/// Point the session at an isolated task worktree.
+///
+/// The worktree becomes both the sandbox boundary and the default task scope,
+/// so shell, file, search, and Git execution all run inside it without
+/// repeated one-command write grants. The original checkout keeps its own
+/// branch and files (#1496). The descriptor id is recorded with the session so
+/// resuming reattaches to this worktree instead of creating another.
+fn activate_task_workspace(
+    s: &mut AppState,
+    descriptor: &crate::config::WorkspaceDescriptor,
+    action: &str,
+) {
+    s.workspace_root = Some(descriptor.workspace_path.clone());
+    s.task_working_directory = Some(descriptor.workspace_path.clone());
+    let _ = crate::config::save_session_workspace(
+        &s.active_session_id,
+        &rustcode_session::SessionWorkspace {
+            cwd: descriptor.workspace_path.clone(),
+            additional_directories: Vec::new(),
+            task_workspace_id: Some(descriptor.id.clone()),
+        },
+    );
+    s.history.push(ChatMessage::new(
+        "system",
+        format!(
+            "Task worktree {action}: {} on branch {} from base {}. Shell, file, and search tools now default to it; the source checkout is unchanged.",
+            descriptor.workspace_path.display(),
+            descriptor.branch,
+            descriptor.base_sha
+        ),
+    ));
+}
+
 fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
     let Some(action) = tokens.get(1).copied() else {
         s.history.push(ChatMessage::new(
@@ -1168,6 +1201,26 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
                 return;
             };
             let name = tokens.get(4).copied().unwrap_or("main-task");
+            let branch = tokens.get(3).map(|value| (*value).to_string());
+            // A follow-up on the same branch attaches to the existing task
+            // worktree instead of creating a duplicate (#1496).
+            if let Some(branch) = branch.as_deref()
+                && !branch.is_empty()
+                && let Ok(Some(existing)) = manager.find_active_by_branch(&source, branch)
+            {
+                let descriptor = match manager.resume(&existing.id) {
+                    Ok(descriptor) => descriptor,
+                    Err(error) => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("Unable to reattach to the task worktree: {error}"),
+                        ));
+                        return;
+                    }
+                };
+                activate_task_workspace(s, &descriptor, "reused");
+                return;
+            }
             let mut request = crate::config::WorkspaceRequest::for_task(
                 source,
                 name,
@@ -1176,19 +1229,10 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
                 s.active_session_id.clone(),
                 "main",
             );
-            request.branch = tokens.get(3).map(|value| (*value).to_string());
+            request.branch = branch;
             match manager.create(&request) {
                 Ok(descriptor) => {
-                    s.workspace_root = Some(descriptor.workspace_path.clone());
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!(
-                            "Isolated workspace active at {} on branch {} from base {}.",
-                            descriptor.workspace_path.display(),
-                            descriptor.branch,
-                            descriptor.base_sha
-                        ),
-                    ));
+                    activate_task_workspace(s, &descriptor, "created");
                 }
                 Err(error) => s.history.push(ChatMessage::new(
                     "system",
@@ -1281,6 +1325,17 @@ fn handle_workspace_cleanup(
         ) {
             Ok(_) => {
                 s.workspace_root = None;
+                s.task_working_directory = None;
+                if let Some(previous) = crate::config::load_session_workspace(&s.active_session_id)
+                {
+                    let _ = crate::config::save_session_workspace(
+                        &s.active_session_id,
+                        &rustcode_session::SessionWorkspace {
+                            task_workspace_id: None,
+                            ..previous
+                        },
+                    );
+                }
                 s.history.push(ChatMessage::new(
                     "system",
                     "Isolated workspace removed. Source checkout was not changed.",
@@ -1389,6 +1444,105 @@ mod workspace_cleanup_tests {
                 .contains(&source.path().display().to_string()),
             "command did not use the source after cleanup: {}",
             output.content
+        );
+    }
+
+    /// `/workspace create` binds the worktree as both the sandbox root and the
+    /// default task scope, and a follow-up on the same branch reuses it.
+    #[tokio::test]
+    async fn workspace_create_binds_task_scope_and_reuses_worktree_on_follow_up() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
+
+        let source = tempfile::tempdir().unwrap();
+        git(source.path(), &["init", "-b", "main"]);
+        git(
+            source.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        git(source.path(), &["config", "user.name", "Test"]);
+        std::fs::write(source.path().join("README.md"), "base\n").unwrap();
+        git(source.path(), &["add", "."]);
+        git(source.path(), &["commit", "-m", "base"]);
+        let base_sha = git(source.path(), &["rev-parse", "HEAD"]);
+        let persistence = tempfile::tempdir().unwrap();
+        let manager = WorkspaceManager::new(persistence.path());
+        let source_canonical = source.path().canonicalize().unwrap();
+
+        let mut state = AppState::new_with_workspace_session(&source_canonical, None);
+        state.active_session_id = "task-flow-session".to_owned();
+
+        let create = [
+            "/workspace",
+            "create",
+            base_sha.as_str(),
+            "feature/shared-branch",
+            "shared-task",
+        ];
+        super::handle_workspace_command(&mut state, &create);
+
+        let first_path = state
+            .workspace_root
+            .clone()
+            .expect("create should activate a worktree");
+        // The worktree is the default navigation scope for file/search/shell.
+        assert_eq!(state.task_working_directory, Some(first_path.clone()));
+        assert_ne!(first_path, source_canonical);
+        assert!(
+            state
+                .history
+                .iter()
+                .any(|message| message.content.contains("Task worktree created"))
+        );
+        // The source checkout keeps its own branch and files.
+        assert_eq!(
+            git(source.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "main"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.path().join("README.md")).unwrap(),
+            "base\n"
+        );
+
+        // A follow-up naming the same branch attaches instead of duplicating.
+        let mut follow_up = state;
+        follow_up.workspace_root = Some(source_canonical.clone());
+        follow_up.task_working_directory = Some(source_canonical.clone());
+        super::handle_workspace_command(&mut follow_up, &create);
+
+        assert_eq!(
+            follow_up.workspace_root,
+            Some(first_path.clone()),
+            "follow-up should reuse the existing worktree"
+        );
+        assert_eq!(follow_up.task_working_directory, Some(first_path.clone()));
+        assert!(
+            follow_up
+                .history
+                .iter()
+                .any(|message| message.content.contains("Task worktree reused")),
+            "history: {:?}",
+            follow_up
+                .history
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+        );
+        // Exactly one worktree checkout exists for the branch.
+        let worktrees = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(source.path())
+            .output()
+            .expect("git worktree list");
+        let listed = String::from_utf8_lossy(&worktrees.stdout);
+        assert_eq!(
+            listed
+                .lines()
+                .filter(|line| line.contains("feature/shared-branch"))
+                .count(),
+            1,
+            "follow-up created a duplicate worktree: {listed}"
         );
     }
 }
