@@ -29,7 +29,7 @@ instructions for work in this repository.
   leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
 - Run `cargo check --tests` and `cargo test`.
-- For releases, load `~/.config/rustcode/skills/release-automation/SKILL.md`;
+- For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth.
 
 ## Naming

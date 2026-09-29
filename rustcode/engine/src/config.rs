@@ -1036,6 +1036,11 @@ pub struct AppConfig {
     pub debug_verbose_network_logging: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Extra directories scanned for skills, in addition to the project,
+    /// universal (`~/.agents/skills`) and RustCode-owned roots. Global config
+    /// only: a checked-out project must not be able to widen discovery.
+    #[serde(default)]
+    pub extra_skill_dirs: Vec<PathBuf>,
     #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
@@ -1141,6 +1146,8 @@ struct TomlConfig {
     debug_verbose_network_logging: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_skill_dirs: Option<Vec<PathBuf>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1282,6 +1289,7 @@ impl Default for AppConfig {
             verbosity: crate::app::state::Verbosity::default(),
             debug_verbose_network_logging: false,
             theme: default_theme(),
+            extra_skill_dirs: Vec::new(),
             start_time: None,
             is_valid: true,
         }
@@ -1606,6 +1614,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
         theme: Some(config.theme.clone()),
+        extra_skill_dirs: Some(config.extra_skill_dirs.clone()),
         start_time: config.start_time,
     };
 
@@ -1700,6 +1709,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(theme) = file.theme {
         config.theme = theme;
     }
+    if let Some(dirs) = file.extra_skill_dirs {
+        config.extra_skill_dirs = dirs;
+    }
     if file.start_time.is_some() {
         config.start_time = file.start_time;
     }
@@ -1733,6 +1745,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Legacy user data should remain attached to the global config, never a
     // checked-out project file.
     file.legacy_laya = None;
+    // Skill roots widen what a prompt can see; only the user config may add
+    // them, mirroring how project files cannot widen command permissions.
+    file.extra_skill_dirs = None;
     apply_toml_config(config, file);
 }
 
@@ -1782,6 +1797,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.theme.is_some() {
         persisted.theme = global.theme.clone();
     }
+    if file.extra_skill_dirs.is_some() {
+        persisted.extra_skill_dirs = global.extra_skill_dirs.clone();
+    }
 }
 
 /// Create a small project override from global model selection. Deliberately
@@ -1823,6 +1841,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         verbosity: None,
         debug_verbose_network_logging: None,
         theme: None,
+        extra_skill_dirs: None,
         start_time: None,
     };
     let contents = toml::to_string_pretty(&file)
