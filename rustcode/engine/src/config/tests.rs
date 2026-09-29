@@ -35,6 +35,19 @@ fn trusted_mode_allows_writes_and_network_without_os_sandbox() {
 }
 
 #[test]
+fn reduced_motion_round_trips_and_defaults_to_off() {
+    assert!(!AppConfig::default().reduced_motion);
+
+    let dir = temp_dir("reduced-motion");
+    let mut config = AppConfig::default();
+    config.reduced_motion = true;
+    save_config_to_result(&dir, &config).unwrap();
+
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert!(reloaded.reduced_motion);
+}
+
+#[test]
 fn extra_skill_dirs_round_trip_through_the_global_config() {
     let dir = temp_dir("extra-skill-dirs");
     let mut config = AppConfig::default();
