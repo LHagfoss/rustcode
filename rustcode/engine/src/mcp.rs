@@ -36,6 +36,7 @@ struct RemoteState {
     session_id: Option<String>,
     legacy_endpoint: Option<String>,
     auth: Option<OAuthToken>,
+    client_id: Option<String>,
 }
 
 /// Cloned-out remote connection state so a request can be sent without
@@ -296,34 +297,17 @@ fn metadata_strings(meta: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Scopes to request, derived from the live metadata instead of hardcoded.
-///
-/// The protected-resource document (RFC 9728) and the authorization-server
-/// document (RFC 8414) both advertise `scopes_supported`; request the
-/// resource's subset of the server's. `offline_access` is always added when
-/// the server advertises it, because that is what makes a server issue a
-/// refresh token — without one, the token cannot survive a restart or an
-/// expiry (see #1536). `None` means "omit the parameter": an empty `scope=`
-/// is a different thing entirely and is never sent.
+/// Request the protected resource's scopes, without filtering by the AS's
+/// potentially incomplete discovery list. Add `offline_access` when the AS
+/// advertises it to request a refresh token. Omit an empty scope parameter.
 fn requested_scopes(resource_meta: Option<&Value>, server_meta: &Value) -> Option<String> {
     let server_scopes = metadata_strings(server_meta, "scopes_supported");
     let resource_scopes = resource_meta
         .map(|meta| metadata_strings(meta, "scopes_supported"))
         .unwrap_or_default();
-    // An authorization server is the authority on what it will issue, so a
-    // resource that declares no scopes (or none at all) falls back to the
-    // server's own list rather than silently requesting nothing.
-    let mut scopes: Vec<String> = if server_scopes.is_empty() {
-        Vec::new()
-    } else if resource_scopes.is_empty() {
-        server_scopes.clone()
-    } else {
-        resource_scopes
-            .iter()
-            .filter(|scope| server_scopes.contains(scope))
-            .cloned()
-            .collect()
-    };
+    // Resource metadata describes the permissions this MCP server needs. AS
+    // discovery may omit supported scopes (RFC 8414); it is not an allowlist.
+    let mut scopes = resource_scopes;
     if server_scopes.iter().any(|scope| scope == "offline_access")
         && !scopes.iter().any(|scope| scope == "offline_access")
     {
@@ -346,8 +330,6 @@ fn loopback_response_mode(server_meta: &Value) -> Option<&'static str> {
     }
     if modes.iter().any(|mode| mode == "query") {
         Some("query")
-    } else if modes.iter().any(|mode| mode == "fragment") {
-        Some("fragment")
     } else {
         None
     }
@@ -370,29 +352,49 @@ fn device_grant_supported(server_meta: &Value) -> bool {
 /// How the authorization code (or its device equivalent) will be delivered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OAuthFlow {
-    /// Loopback redirect with an explicit response mode the server advertises.
-    Loopback(&'static str),
+    /// Loopback redirect, optionally naming an advertised query mode.
+    Loopback(Option<&'static str>),
     /// RFC 8628 device authorization grant.
     Device,
 }
 
-/// Pick the flow the server can actually complete. A server whose only
-/// advertised response mode is `web_message.opener` (Vercel, as captured in
-/// the fixtures) can never reach a loopback listener, so the device grant is
-/// the only correct-by-construction option.
+/// Prefer a query redirect or device grant; allow a plain code redirect
+/// without an explicit response mode when those are unavailable.
 fn select_oauth_flow(server_meta: &Value) -> Result<OAuthFlow, String> {
-    if let Some(mode) = loopback_response_mode(server_meta) {
-        return Ok(OAuthFlow::Loopback(mode));
+    select_registered_oauth_flow(server_meta, None)
+}
+
+fn select_registered_oauth_flow(
+    server_meta: &Value,
+    registration: Option<&Value>,
+) -> Result<OAuthFlow, String> {
+    // A registration response is authoritative for this client's grants. A
+    // supported server-wide grant is not necessarily enabled for the client.
+    let granted = registration.filter(|meta| meta.get("grant_types").is_some());
+    let grants = if let Some(registered) = granted {
+        metadata_strings(registered, "grant_types")
+    } else {
+        metadata_strings(server_meta, "grant_types_supported")
+    };
+    let code = grants.iter().any(|grant| grant == "authorization_code")
+        || (granted.is_none() && grants.is_empty());
+    if code && let Some(mode) = loopback_response_mode(server_meta) {
+        return Ok(OAuthFlow::Loopback(Some(mode)));
     }
-    if device_grant_supported(server_meta) {
+    if device_grant_supported(server_meta)
+        && (granted.is_none() || grants.iter().any(|grant| grant == DEVICE_CODE_GRANT))
+    {
         return Ok(OAuthFlow::Device);
     }
-    let modes = metadata_strings(server_meta, "response_modes_supported").join(", ");
-    Err(format!(
-        "the authorization server advertises only the response mode(s) {modes}, \
-         which cannot deliver a code to a local redirect, and it offers no \
-         device authorization endpoint"
-    ))
+    // Some providers advertise only web_message but accept a plain code
+    // redirect when response_mode is omitted. Never send an unsupported mode.
+    if code {
+        return Ok(OAuthFlow::Loopback(None));
+    }
+    Err(
+        "the registered client has no usable authorization-code or device authorization grant"
+            .into(),
+    )
 }
 
 /// The login this client will actually run, derived entirely from the
@@ -412,10 +414,19 @@ fn plan_oauth_login(
     server_meta: &Value,
 ) -> Result<OAuthPlan, String> {
     let flow = select_oauth_flow(server_meta)?;
-    let registration_grants = match flow {
-        OAuthFlow::Loopback(_) => vec!["authorization_code", "refresh_token"],
-        OAuthFlow::Device => vec![DEVICE_CODE_GRANT, "refresh_token"],
-    };
+    // Register both usable flows so rejection of the device grant can fall
+    // back to a code redirect without using an unregistered grant.
+    let advertised = metadata_strings(server_meta, "grant_types_supported");
+    let mut registration_grants = Vec::new();
+    if advertised.is_empty() || advertised.iter().any(|grant| grant == "authorization_code") {
+        registration_grants.push("authorization_code");
+    }
+    if device_grant_supported(server_meta) {
+        registration_grants.push(DEVICE_CODE_GRANT);
+    }
+    if advertised.is_empty() || advertised.iter().any(|grant| grant == "refresh_token") {
+        registration_grants.push("refresh_token");
+    }
     Ok(OAuthPlan {
         flow,
         scope: requested_scopes(resource_meta, server_meta),
@@ -423,15 +434,15 @@ fn plan_oauth_login(
     })
 }
 
-/// Parameters of an authorization request. `response_mode` is always sent
-/// explicitly, and `scope` only when the metadata yields one.
+/// Parameters of an authorization request. Omit `response_mode` for the
+/// authorization-code fallback and `scope` when discovery yields no scopes.
 struct AuthorizationRequest<'a> {
     authorization_endpoint: &'a str,
     client_id: Option<&'a str>,
     redirect_uri: &'a str,
     code_challenge: &'a str,
     state: &'a str,
-    response_mode: &'a str,
+    response_mode: Option<&'a str>,
     scope: Option<&'a str>,
     resource: &'a str,
 }
@@ -452,10 +463,9 @@ fn build_authorization_url(request: &AuthorizationRequest<'_>) -> String {
     if let Some(scope) = request.scope {
         url.push_str(&format!("&scope={}", urlencoding::encode(scope)));
     }
-    url.push_str(&format!(
-        "&response_mode={}",
-        urlencoding::encode(request.response_mode)
-    ));
+    if let Some(mode) = request.response_mode {
+        url.push_str(&format!("&response_mode={}", urlencoding::encode(mode)));
+    }
     url.push_str(&format!("&state={}", urlencoding::encode(request.state)));
     url.push_str(&format!(
         "&resource={}",
@@ -840,6 +850,15 @@ impl McpClient {
         url: String,
         headers: HashMap<String, String>,
     ) -> Result<Arc<Self>, String> {
+        Self::start_remote_configured(name, url, headers, None).await
+    }
+
+    async fn start_remote_configured(
+        name: String,
+        url: String,
+        headers: HashMap<String, String>,
+        client_id: Option<String>,
+    ) -> Result<Arc<Self>, String> {
         let url = url.trim().to_string();
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(format!(
@@ -862,6 +881,7 @@ impl McpClient {
                     session_id: None,
                     legacy_endpoint: None,
                     auth,
+                    client_id,
                 })),
             },
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -1103,7 +1123,11 @@ impl McpClient {
                 && !auth_retried
             {
                 auth_retried = true;
-                match self.ensure_remote_auth().await {
+                let challenge = resp
+                    .headers()
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok());
+                match self.ensure_remote_auth(challenge).await {
                     Ok(true) => continue,
                     Ok(false) => {
                         return Err(auth_required_error(
@@ -1259,7 +1283,16 @@ impl McpClient {
     /// Ensure a usable OAuth token is stored, running the refresh or browser
     /// flow when needed. Returns `true` when the caller should retry the
     /// request, `false` when no token can be obtained non-interactively.
-    async fn ensure_remote_auth(&self) -> Result<bool, String> {
+    async fn ensure_remote_auth(&self, challenge: Option<&str>) -> Result<bool, String> {
+        self.ensure_remote_auth_with(&launch_oauth_browser, challenge)
+            .await
+    }
+
+    async fn ensure_remote_auth_with(
+        &self,
+        on_login_url: &(dyn Fn(&str) + Send + Sync),
+        challenge: Option<&str>,
+    ) -> Result<bool, String> {
         let name = self.name.clone();
         let (http, stored) = match &self.transport {
             Transport::Remote { state } => {
@@ -1285,10 +1318,10 @@ impl McpClient {
                 return Ok(true);
             }
         }
-        if browser_launch_suppressed() {
-            return Ok(false);
-        }
-        match self.run_oauth_flow(&http).await {
+        match self
+            .run_oauth_flow_with(&http, on_login_url, challenge)
+            .await
+        {
             Ok(token) => {
                 self.store_auth_token(&token).await;
                 if let Err(error) = save_oauth_token(&name, &token) {
@@ -1310,28 +1343,43 @@ impl McpClient {
 
     /// Full OAuth 2.1 login: protected-resource discovery, server metadata,
     /// dynamic client registration, then whichever grant the server can
-    /// actually complete — a loopback authorization code with an explicit
-    /// response mode, or the RFC 8628 device grant when no redirect-capable
+    /// actually complete — a loopback authorization code, or the RFC 8628
+    /// device grant when no query redirect
     /// response mode is advertised. Tokens are returned to the caller for
     /// durable storage outside `config.toml`.
+    #[cfg(test)]
     async fn run_oauth_flow(&self, http: &reqwest::Client) -> Result<OAuthToken, String> {
+        self.run_oauth_flow_with(http, &launch_oauth_browser, None)
+            .await
+    }
+
+    async fn run_oauth_flow_with(
+        &self,
+        http: &reqwest::Client,
+        on_login_url: &(dyn Fn(&str) + Send + Sync),
+        challenge: Option<&str>,
+    ) -> Result<OAuthToken, String> {
         let name = self.name.clone();
         let mcp_url = match &self.transport {
             Transport::Remote { state } => state.lock().await.url.clone(),
             Transport::Stdio { .. } => return Err("MCP client is not a remote client".to_string()),
         };
-        let probe = http
-            .get(&mcp_url)
-            .header("Accept", "application/json, text/event-stream")
-            .send()
-            .await
-            .map_err(|e| remote_connect_error(&name, &mcp_url, &e))?;
-        let www_auth = probe
-            .headers()
-            .get("www-authenticate")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
+        let www_auth = if let Some(challenge) = challenge {
+            challenge.to_string()
+        } else {
+            let probe = http
+                .get(&mcp_url)
+                .header("Accept", "application/json, text/event-stream")
+                .send()
+                .await
+                .map_err(|error| remote_connect_error(&name, &mcp_url, &error))?;
+            probe
+                .headers()
+                .get("www-authenticate")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        };
 
         let mut auth_server_bases: Vec<String> = Vec::new();
         let mut resource_meta: Option<Value> = None;
@@ -1401,8 +1449,18 @@ impl McpClient {
         // refresh token that makes the login reusable across restarts.
         let plan = plan_oauth_login(resource_meta.as_ref(), &meta)
             .map_err(|detail| auth_required_error(&name, &mcp_url, &detail))?;
-        let flow = plan.flow;
-        let scope = plan.scope;
+        let mut flow = plan.flow;
+        let challenged_scopes = parse_challenge_param(&www_auth, "scope");
+        let scope = if let Some(challenged) = challenged_scopes {
+            requested_scopes(
+                Some(
+                    &json!({"scopes_supported": challenged.split_whitespace().collect::<Vec<_>>() }),
+                ),
+                &meta,
+            )
+        } else {
+            plan.scope
+        };
 
         // The listener is bound for both flows: the device grant does not use
         // it, but registering a client with a loopback redirect URI keeps
@@ -1418,46 +1476,91 @@ impl McpClient {
             .port();
         let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 
-        let mut client_id: Option<String> = None;
-        if let Some(registration_endpoint) = registration_endpoint {
-            let registration = json!({
+        let mut client_id = match &self.transport {
+            Transport::Remote { state } => state.lock().await.client_id.clone(),
+            Transport::Stdio { .. } => None,
+        }
+        .filter(|id| !id.trim().is_empty());
+        let mut code_granted = plan.registration_grants.contains(&"authorization_code");
+        if client_id.is_none() {
+            let endpoint = registration_endpoint.ok_or_else(|| auth_required_error(
+                &name, &mcp_url, "configure a pre-registered `client_id`; the server offers no dynamic registration endpoint",
+            ))?;
+            let mut registration = json!({
                 "redirect_uris": [redirect_uri],
                 "client_name": "rustcode",
+                "application_type": "native",
                 "grant_types": plan.registration_grants,
-                "response_types": ["code"],
+                "response_types": if plan.registration_grants.contains(&"authorization_code") { vec!["code"] } else { vec![] },
                 "token_endpoint_auth_method": "none",
             });
-            if let Ok(resp) = http
-                .post(&registration_endpoint)
+            if let Some(scope) = &scope {
+                registration["scope"] = json!(scope);
+            }
+            let resp = http
+                .post(&endpoint)
                 .json(&registration)
                 .send()
                 .await
-                && resp.status().is_success()
-                && let Ok(body) = resp.json::<Value>().await
-                && let Some(id) = body.get("client_id").and_then(Value::as_str)
+                .map_err(|error| {
+                    format!("MCP OAuth for '{name}': client registration failed: {error}")
+                })?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|error| {
+                format!("MCP OAuth for '{name}': client registration response failed: {error}")
+            })?;
+            if !status.is_success() {
+                return Err(format!(
+                    "MCP OAuth for '{name}': client registration failed (HTTP {status}): {}",
+                    truncate_snippet(&text, 300)
+                ));
+            }
+            let registered: Value = serde_json::from_str(&text).map_err(|error| {
+                format!("MCP OAuth for '{name}': invalid client registration response: {error}")
+            })?;
+            client_id = Some(
+                registered
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        format!("MCP OAuth for '{name}': client registration returned no client_id")
+                    })?
+                    .to_string(),
+            );
+            flow = select_registered_oauth_flow(&meta, Some(&registered))
+                .map_err(|detail| auth_required_error(&name, &mcp_url, &detail))?;
+            code_granted = registered.get("grant_types").is_none()
+                || metadata_strings(&registered, "grant_types")
+                    .iter()
+                    .any(|grant| grant == "authorization_code");
+        }
+        if flow == OAuthFlow::Device {
+            match run_device_grant(
+                http,
+                &name,
+                meta["device_authorization_endpoint"]
+                    .as_str()
+                    .unwrap_or_default(),
+                &token_endpoint,
+                client_id.as_deref(),
+                scope.as_deref(),
+                on_login_url,
+            )
+            .await
             {
-                client_id = Some(id.to_string());
+                Ok(token) => return Ok(token),
+                Err(DeviceGrantError::Unavailable(error)) if code_granted => {
+                    crate::dbg_log!(
+                        "[mcp:{name}] device grant unavailable, falling back to authorization code: {error}"
+                    );
+                    flow = OAuthFlow::Loopback(None);
+                }
+                Err(error) => return Err(error.into_string()),
             }
         }
-
-        let response_mode = match flow {
-            OAuthFlow::Device => {
-                let device_endpoint = meta
-                    .get("device_authorization_endpoint")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                return run_device_grant(
-                    http,
-                    &name,
-                    &device_endpoint,
-                    &token_endpoint,
-                    client_id.as_deref(),
-                    scope.as_deref(),
-                )
-                .await;
-            }
-            OAuthFlow::Loopback(mode) => mode,
+        let OAuthFlow::Loopback(response_mode) = flow else {
+            unreachable!("device flow returned above")
         };
         let (verifier, challenge) = pkce_pair();
         let flow_state = format!("{:032x}", rand::random::<u128>());
@@ -1475,11 +1578,9 @@ impl McpClient {
         eprintln!(
             "[mcp] OAuth login required for '{name}': open this URL in your browser:\n{auth_url}"
         );
-        if !browser_launch_suppressed() {
-            open_browser(&auth_url);
-        }
+        on_login_url(&auth_url);
 
-        let (code, returned_state) = wait_for_oauth_code(listener, &name, response_mode).await?;
+        let (code, returned_state) = wait_for_oauth_code(listener, &name).await?;
         if returned_state != flow_state {
             return Err(format!(
                 "MCP OAuth for '{name}': state mismatch; the login response was not for this attempt"
@@ -1494,6 +1595,7 @@ impl McpClient {
                 ("code", code),
                 ("redirect_uri", redirect_uri),
                 ("code_verifier", verifier),
+                ("resource", mcp_url),
             ]
             .into_iter()
             .chain(client_id.map(|id| ("client_id", id)))
@@ -1617,6 +1719,28 @@ async fn refresh_access_token(
     Ok(token)
 }
 
+enum DeviceGrantError {
+    Unavailable(String),
+    Failed(String),
+}
+impl DeviceGrantError {
+    fn into_string(self) -> String {
+        match self {
+            Self::Unavailable(error) | Self::Failed(error) => error,
+        }
+    }
+}
+impl From<String> for DeviceGrantError {
+    fn from(error: String) -> Self {
+        Self::Failed(error)
+    }
+}
+fn launch_oauth_browser(url: &str) {
+    if !browser_launch_suppressed() {
+        open_browser(url);
+    }
+}
+
 /// RFC 8628 device authorization grant: no redirect URI and no browser
 /// callback reaching a local listener, so it works against a server whose
 /// only advertised response mode is `web_message.opener`.
@@ -1627,14 +1751,28 @@ async fn run_device_grant(
     token_endpoint: &str,
     client_id: Option<&str>,
     scope: Option<&str>,
-) -> Result<OAuthToken, String> {
+    on_login_url: &(dyn Fn(&str) + Send + Sync),
+) -> Result<OAuthToken, DeviceGrantError> {
     let device_params = device_authorization_params(client_id, scope);
     let (status, body, text) = post_oauth_form_raw(http, device_endpoint, &device_params).await?;
     if !status.is_success() {
         let snippet = truncate_snippet(&text, 300);
-        return Err(format!(
+        let error = format!(
             "MCP OAuth for '{name}': device authorization request failed (HTTP {status}): {snippet}"
-        ));
+        );
+        return Err(
+            if status.as_u16() == 404
+                || status.as_u16() == 405
+                || matches!(
+                    body.get("error").and_then(Value::as_str),
+                    Some("unauthorized_client" | "unsupported_grant_type" | "invalid_client")
+                )
+            {
+                DeviceGrantError::Unavailable(error)
+            } else {
+                DeviceGrantError::Failed(error)
+            },
+        );
     }
     let device = parse_device_authorization(&body, name)?;
 
@@ -1644,12 +1782,12 @@ async fn run_device_grant(
          Visit {} and enter code: {}",
         device.verification_uri, device.user_code
     );
-    if !browser_launch_suppressed() {
+    {
         let openable = device
             .verification_uri_complete
             .clone()
             .unwrap_or_else(|| device.verification_uri.clone());
-        open_browser(&openable);
+        on_login_url(&openable);
     }
 
     let token = poll_device_token(
@@ -1750,12 +1888,10 @@ fn device_token_params(client_id: Option<&str>, device_code: &str) -> Vec<(&'sta
 }
 
 /// Wait for the OAuth authorization server to redirect back to the loopback
-/// listener, and return the `(code, state)` pair from the query string, or
-/// from the fragment for a server that only advertises `fragment`.
+/// listener, and return the `(code, state)` pair from the query string.
 async fn wait_for_oauth_code(
     listener: tokio::net::TcpListener,
     name: &str,
-    response_mode: &str,
 ) -> Result<(String, String), String> {
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(300), listener.accept())
         .await
@@ -1784,14 +1920,11 @@ async fn wait_for_oauth_code(
     let head = String::from_utf8_lossy(&buf);
     let request_line = head.lines().next().unwrap_or_default();
     let target = request_line.split_whitespace().nth(1).unwrap_or_default();
-    // `fragment` responses never reach the server in a real redirect, but a
-    // loopback listener is the one place a client can still receive them.
-    let params = if response_mode == "fragment" {
-        target.split_once('#').map(|(_, fragment)| fragment)
-    } else {
-        target.split_once('?').map(|(_, query)| query)
-    }
-    .unwrap_or_default();
+    // Browsers do not transmit URL fragments to an HTTP listener.
+    let params = target
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or_default();
     let mut code: Option<String> = None;
     let mut state: Option<String> = None;
     for pair in params.split('&') {
@@ -1847,7 +1980,12 @@ pub(crate) async fn start_owned_server(
         let name = name.clone();
         return tokio::time::timeout(
             Duration::from_secs(10),
-            McpClient::start_remote(name.clone(), url, headers),
+            McpClient::start_remote_configured(
+                name.clone(),
+                url,
+                headers,
+                server.client_id.clone(),
+            ),
         )
         .await
         .map_err(|_| format!("MCP server '{name}' startup timed out"))?;
@@ -1920,10 +2058,11 @@ pub async fn start_server_by_name_in_workspace(
         shutdown_server(name).await;
 
         let client = if srv_config.is_remote() {
-            McpClient::start_remote(
+            McpClient::start_remote_configured(
                 srv_config.name.clone(),
                 srv_config.url.clone().unwrap_or_default(),
                 srv_config.headers.clone(),
+                srv_config.client_id.clone(),
             )
             .await?
         } else {
@@ -2007,6 +2146,7 @@ mod tests {
             env: HashMap::new(),
             url: None,
             headers: HashMap::new(),
+            client_id: None,
             enabled: true,
             always_include: false,
         }
@@ -2022,6 +2162,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: HashMap::new(),
+                client_id: None,
                 enabled: true,
                 always_include: false,
             },
@@ -2032,6 +2173,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: HashMap::new(),
+                client_id: None,
                 enabled: false,
                 always_include: false,
             },
@@ -2042,6 +2184,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: HashMap::new(),
+                client_id: None,
                 enabled: true,
                 always_include: false,
             },
@@ -2080,6 +2223,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: HashMap::new(),
+                client_id: None,
                 enabled: true,
                 always_include: false,
             },
@@ -2090,6 +2234,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: HashMap::new(),
+                client_id: None,
                 enabled: true,
                 always_include: false,
             },
@@ -2658,17 +2803,8 @@ mod tests {
 
     #[tokio::test]
     async fn remote_http_auth_required_without_a_browser_flow() {
-        // SAFETY: only the OAuth path in this module reads this variable, and
-        // no other test in this module triggers an OAuth flow concurrently
-        // with this test (all other remote tests use non-401 mocks).
-        unsafe {
-            std::env::set_var("RUSTCODE_MCP_NO_BROWSER", "1");
-        }
         let (url, _server) = spawn_mock_http_mcp(MockHttpMode::Unauthorized).await;
         let result = McpClient::start_remote("http-auth".to_string(), url, HashMap::new()).await;
-        unsafe {
-            std::env::remove_var("RUSTCODE_MCP_NO_BROWSER");
-        }
         let error = match result {
             Err(error) => error,
             Ok(_) => panic!("401-only server must fail without a browser flow"),
@@ -2735,6 +2871,7 @@ mod tests {
             env: HashMap::new(),
             url: Some("http://127.0.0.1:9/mcp".to_string()),
             headers: HashMap::new(),
+            client_id: None,
             enabled: false,
             always_include: false,
         };
@@ -2757,6 +2894,7 @@ mod tests {
             env: HashMap::new(),
             url: Some(url),
             headers: HashMap::new(),
+            client_id: None,
             enabled: true,
             always_include: false,
         };
@@ -2787,7 +2925,7 @@ mod tests {
     }
 
     #[test]
-    fn live_vercel_scope_intersects_resource_and_server_metadata() {
+    fn live_vercel_scope_requests_resource_permissions_and_refresh() {
         let resource_meta = vercel_resource_meta();
         let server_meta = vercel_server_meta();
         // The resource only advertises `openid`; the AS also knows
@@ -2804,11 +2942,11 @@ mod tests {
         let bare = json!({"authorization_endpoint": "https://as.example/authorize"});
         assert_eq!(requested_scopes(None, &bare), None);
         assert_eq!(requested_scopes(Some(&json!({})), &bare), None);
-        // An AS that advertises no resource-specific scopes still gets the
-        // scopes it says it supports.
+        // With no resource scopes, request only refresh access, rather than
+        // all permissions advertised for unrelated resources by the AS.
         assert_eq!(
             requested_scopes(None, &server_meta).as_deref(),
-            Some("openid email profile offline_access")
+            Some("offline_access")
         );
     }
 
@@ -2824,7 +2962,7 @@ mod tests {
         assert_eq!(plan.scope.as_deref(), Some("openid offline_access"));
         assert_eq!(
             plan.registration_grants,
-            [DEVICE_CODE_GRANT, "refresh_token"],
+            ["authorization_code", DEVICE_CODE_GRANT, "refresh_token"],
             "registration must offer the grant actually being used"
         );
         // A server that does support the default `query` mode keeps the
@@ -2832,10 +2970,10 @@ mod tests {
         let mut with_query = vercel_server_meta();
         with_query["response_modes_supported"] = json!(["query", "fragment"]);
         let plan = plan_oauth_login(Some(&vercel_resource_meta()), &with_query).expect("plan");
-        assert_eq!(plan.flow, OAuthFlow::Loopback("query"));
+        assert_eq!(plan.flow, OAuthFlow::Loopback(Some("query")));
         assert_eq!(
             plan.registration_grants,
-            ["authorization_code", "refresh_token"]
+            ["authorization_code", DEVICE_CODE_GRANT, "refresh_token"]
         );
     }
 
@@ -2854,19 +2992,19 @@ mod tests {
         let fragment_only = json!({"response_modes_supported": ["fragment"]});
         assert_eq!(
             select_oauth_flow(&fragment_only),
-            Ok(OAuthFlow::Loopback("fragment"))
+            Ok(OAuthFlow::Loopback(None))
         );
         // No `response_modes_supported` at all: RFC 6749 defaults to `query`.
         assert_eq!(
             select_oauth_flow(&json!({})),
-            Ok(OAuthFlow::Loopback("query"))
+            Ok(OAuthFlow::Loopback(Some("query")))
         );
         // Redirect-incapable *and* no device grant: an actionable error, not
         // a silently broken login.
-        let unusable = json!({"response_modes_supported": ["web_message.opener"]});
+        let unusable = json!({"response_modes_supported": ["web_message.opener"], "grant_types_supported": ["client_credentials"]});
         assert!(!device_grant_supported(&unusable));
         let error = plan_oauth_login(Some(&json!({})), &unusable).expect_err("no viable grant");
-        assert!(error.contains("web_message.opener"), "unexpected: {error}");
+        assert!(error.contains("no usable"), "unexpected: {error}");
         assert!(
             error.contains("device authorization"),
             "unexpected: {error}"
@@ -2875,8 +3013,8 @@ mod tests {
 
     #[test]
     fn authorization_request_built_for_live_vercel_names_scope_and_response_mode() {
-        // The same captured Vercel endpoints and scope, with a response mode
-        // the AS would also accept, to pin the authorization request shape.
+        // Test a server advertising query mode, using the captured endpoints
+        // and scopes. This does not establish Vercel's acceptance of query.
         let mut server_meta = vercel_server_meta();
         server_meta["response_modes_supported"] = json!(["query"]);
         let plan = plan_oauth_login(Some(&vercel_resource_meta()), &server_meta).expect("plan");
@@ -2931,7 +3069,7 @@ mod tests {
             redirect_uri: "http://127.0.0.1:1/cb",
             code_challenge: "c",
             state: "s",
-            response_mode: "query",
+            response_mode: Some("query"),
             scope: None,
             resource: "https://mcp.example",
         });
@@ -3059,40 +3197,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loopback_callback_reads_query_or_fragment_per_response_mode() {
-        for (mode, target) in [
-            ("query", "/callback?code=abc&state=xyz"),
-            ("fragment", "/callback#code=abc&state=xyz"),
-        ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind callback");
-            let addr = listener.local_addr().expect("addr");
-            // Stand in for the browser: hit the loopback redirect with the
-            // shape the advertised response mode produces.
+    async fn loopback_callback_requires_query_parameters_from_real_http_clients() {
+        for fragment in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
             let sender = tokio::spawn(async move {
-                let mut stream = None;
-                for _ in 0..50 {
-                    match tokio::net::TcpStream::connect(addr).await {
-                        Ok(socket) => {
-                            stream = Some(socket);
-                            break;
-                        }
-                        Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-                    }
-                }
-                let mut socket = stream.expect("redirect callback connection");
-                use tokio::io::AsyncWriteExt as _;
-                let request = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n");
-                socket.write_all(request.as_bytes()).await.ok();
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            });
-            let (code, state) = wait_for_oauth_code(listener, "vercel", mode)
+                let separator = if fragment { '#' } else { '?' };
+                reqwest::get(format!(
+                    "http://{addr}/callback{separator}code=abc&state=xyz"
+                ))
                 .await
-                .expect("callback");
-            sender.await.ok();
-            assert_eq!(code, "abc", "unexpected code for {mode}");
-            assert_eq!(state, "xyz", "unexpected state for {mode}");
+                .unwrap();
+            });
+            let result = wait_for_oauth_code(listener, "stub").await;
+            sender.await.unwrap();
+            if fragment {
+                assert!(result.unwrap_err().contains("no authorization code"));
+            } else {
+                assert_eq!(result.unwrap(), ("abc".into(), "xyz".into()));
+            }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mcp/oauth_tests.rs"]
+mod oauth_tests;

@@ -299,6 +299,7 @@ mod tests {
             )]),
             url: None,
             headers: std::collections::HashMap::new(),
+            client_id: Some("public-client-id".into()),
             enabled: true,
             always_include: false,
         });
@@ -314,6 +315,7 @@ mod tests {
         assert!(json.contains("<redacted>"));
         assert!(!json.contains("model-secret"));
         assert!(!json.contains("mcp-secret"));
+        assert!(json.contains("public-client-id"));
         assert!(!json.contains("last_active_session_id"));
     }
 }
