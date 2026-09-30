@@ -138,7 +138,7 @@ pub(super) fn render_popup_menu(
         .map(|command| command.name.width())
         .max()
         .unwrap_or(0)
-        .min((area.width as usize).saturating_sub(4));
+        .min(picker_column_budget(area.width as usize, 0));
     for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index()
@@ -146,10 +146,12 @@ pub(super) fn render_popup_menu(
             .unwrap_or(false);
 
         // The command and description share a row, with the whole selected row
-        // highlighted like Codex's completion menu.
+        // highlighted like Codex's completion menu. The gap between the two
+        // columns is the shared picker gap, so this menu measures its rows with
+        // the same rule as the inline pickers (#1528).
         let marker = if is_selected { "› " } else { "  " };
         let left_text = truncate_to_width(
-            &format!("{marker}{:<name_width$}  ", cmd.name),
+            &format!("{marker}{:<name_width$}   ", cmd.name),
             area.width as usize,
         );
         let description_width = (area.width as usize).saturating_sub(left_text.width());
@@ -347,7 +349,54 @@ pub(super) const PROTOCOL_PICKER_HEIGHT: u16 = 10;
 
 /// Smallest usable panel, so a modal never collapses to a title bar when the
 /// terminal is short.
-const MIN_MODAL_HEIGHT: u16 = 4;
+pub(super) const MIN_MODAL_HEIGHT: u16 = 4;
+
+/// Cells a picker row spends on the `› ` / `  ` selection marker.
+const PICKER_MARKER_WIDTH: usize = 2;
+
+/// Cells between the primary (name) and secondary (description) column of a
+/// picker row. Every inline picker uses this gap, so the two columns line up
+/// across the whole picker family (#1528).
+const PICKER_COLUMN_GAP: usize = 3;
+
+/// Column budget for a picker row whose secondary column needs `secondary`
+/// cells, given the frame width the row must fit inside.
+///
+/// The primary column is truncated to this budget rather than wrapped, so a row
+/// never outgrows its frame no matter how long the name or description is.
+/// Single owner of the marker-plus-gap reservation: the inline pickers and the
+/// popup menu all derive their name column from here (#1528).
+pub(super) fn picker_column_budget(frame_width: usize, secondary: usize) -> usize {
+    frame_width.saturating_sub(secondary + PICKER_MARKER_WIDTH + PICKER_COLUMN_GAP)
+}
+
+/// Cells between the title and the right-hand hint on a picker header row.
+/// Saturates to zero when the pair already fills the row, so a header is never
+/// built wider than its frame.
+pub(super) fn picker_header_padding(frame_width: usize, title: &str, right: &str) -> usize {
+    frame_width.saturating_sub(title.width() + right.width())
+}
+
+/// Cells between the primary and secondary halves of a picker row. Saturates to
+/// zero when the two halves already fill the row.
+pub(super) fn picker_row_padding(frame_width: usize, primary: &str, secondary: &str) -> usize {
+    frame_width.saturating_sub(primary.width() + secondary.width())
+}
+
+/// First row of the `list_height`-row window that keeps `selected` visible.
+///
+/// Aims a third of a screen above the selection so the rows below stay legible
+/// without hiding the selection itself. Single owner of the list-window rule:
+/// every scrollable inline picker scrolls by this (#1528).
+pub(super) fn picker_list_window(selected: usize, total: usize, list_height: usize) -> u16 {
+    if total <= list_height {
+        return 0;
+    }
+    let ideal = selected.saturating_sub(list_height / 3);
+    let lo = selected.saturating_sub(list_height.saturating_sub(1));
+    let hi = selected.min(total - list_height);
+    ideal.clamp(lo, hi) as u16
+}
 
 /// Panel height the currently open modal claims above the composer. Callers
 /// reserve these rows in the chat area so the panel overlays blank space

@@ -45,8 +45,7 @@ pub(in crate::ui) fn render_model_picker_modal(
     } else {
         "esc"
     };
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -65,12 +64,11 @@ pub(in crate::ui) fn render_model_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let max_name_width = (inner_area.width as usize).saturating_sub(item.desc.width() + 5);
+        let max_name_width = picker_column_budget(inner_area.width as usize, item.desc.width());
         let name_display = truncate_middle_to_width(&item.name, max_name_width);
         let line = if is_selected {
             let left_text = format!("› {}", name_display);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &item.desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -90,8 +88,7 @@ pub(in crate::ui) fn render_model_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", name_display);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &item.desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -103,14 +100,7 @@ pub(in crate::ui) fn render_model_picker_modal(
 
     let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
-    let scroll_y: u16 = if total_lines <= list_height {
-        0
-    } else {
-        let ideal = selected_idx.saturating_sub(list_height / 3);
-        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
-        let hi = selected_idx.min(total_lines - list_height);
-        ideal.clamp(lo, hi)
-    } as u16;
+    let scroll_y = picker_list_window(selected_idx, total_lines, list_height);
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
@@ -253,8 +243,7 @@ pub(in crate::ui) fn render_history_picker_modal(
 
     let title_text = "Resume session";
     let right_esc = "esc";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -286,12 +275,11 @@ pub(in crate::ui) fn render_history_picker_modal(
             session.message_count, session.when, workspace_label
         );
         let is_selected = selected_idx == idx;
-        let max_title_width = (inner_area.width as usize).saturating_sub(desc.width() + 5);
+        let max_title_width = picker_column_budget(inner_area.width as usize, desc.width());
         let title_display = truncate_middle_to_width(&session.title, max_title_width);
         let line = if is_selected {
             let left_text = format!("› {}", title_display);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -308,8 +296,7 @@ pub(in crate::ui) fn render_history_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", title_display);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -321,14 +308,7 @@ pub(in crate::ui) fn render_history_picker_modal(
 
     let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
-    let scroll_y: u16 = if total_lines <= list_height {
-        0
-    } else {
-        let ideal = selected_idx.saturating_sub(list_height / 3);
-        let lo = selected_idx.saturating_sub(list_height - 1);
-        let hi = selected_idx.min(total_lines - list_height);
-        ideal.clamp(lo, hi)
-    } as u16;
+    let scroll_y = picker_list_window(selected_idx, total_lines, list_height);
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
@@ -389,8 +369,7 @@ pub(in crate::ui) fn render_subagent_picker_modal(
         .split(inner);
     let title_text = "Agent contexts";
     let right_esc = "esc";
-    let padding_header =
-        (inner.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner.width as usize, title_text, right_esc);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -635,7 +614,7 @@ pub(in crate::ui) fn render_mcp_config_modal(
         let title_text = "MCP Servers Configuration";
         let right_esc = "esc";
         let padding_header =
-            (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+            picker_header_padding(inner_area.width as usize, title_text, right_esc);
         let header_line = Line::from(vec![
             Span::styled(
                 title_text,
@@ -666,8 +645,8 @@ pub(in crate::ui) fn render_mcp_config_modal(
             let line = if is_selected {
                 let left_text = format!("› {}", srv.name);
                 let right_text = format!(" [{}] {}", status, cmd_text);
-                let padding_len = (inner_area.width as usize)
-                    .saturating_sub(left_text.width() + right_text.width());
+                let padding_len =
+                    picker_row_padding(inner_area.width as usize, &left_text, &right_text);
 
                 Line::from(vec![
                     Span::styled(
@@ -953,8 +932,7 @@ pub(in crate::ui) fn render_command_picker_modal(
     } else {
         "esc"
     };
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -975,8 +953,8 @@ pub(in crate::ui) fn render_command_picker_modal(
         let is_selected = selected_idx == idx;
         let line = if is_selected {
             let left_text = format!("› {}", item.name);
-            let padding_len = (inner_area.width as usize)
-                .saturating_sub(left_text.width() + item.shortcut.width());
+            let padding_len =
+                picker_row_padding(inner_area.width as usize, &left_text, &item.shortcut);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -996,8 +974,8 @@ pub(in crate::ui) fn render_command_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", item.name);
-            let padding_len = (inner_area.width as usize)
-                .saturating_sub(left_text.width() + item.shortcut.width());
+            let padding_len =
+                picker_row_padding(inner_area.width as usize, &left_text, &item.shortcut);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -1012,14 +990,7 @@ pub(in crate::ui) fn render_command_picker_modal(
 
     let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
-    let scroll_y: u16 = if total_lines <= list_height {
-        0
-    } else {
-        let ideal = selected_idx.saturating_sub(list_height / 3);
-        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
-        let hi = selected_idx.min(total_lines - list_height);
-        ideal.clamp(lo, hi)
-    } as u16;
+    let scroll_y = picker_list_window(selected_idx, total_lines, list_height);
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));

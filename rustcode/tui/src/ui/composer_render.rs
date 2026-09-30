@@ -629,7 +629,11 @@ fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
     (tokens_per_second >= 0.05).then(|| format!("Tokens/s: {tokens_per_second:.1}"))
 }
 
-pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) -> Line<'static> {
+pub(super) fn activity_status_line(
+    state: &RenderSnapshot,
+    show_picker: bool,
+    width: usize,
+) -> Line<'static> {
     let base_activity =
         rustcode::controller::classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == rustcode::controller::ActivityKind::ActionRequired {
@@ -724,6 +728,18 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         ));
     }
 
+    // The esc and steer-mode hints follow the same drop-don't-clip rule as the
+    // footer hint: a clause that does not fit the row is omitted whole, so the
+    // line never ends mid-affordance (#1529).
+    let hint_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
+    let mut used: usize = spans.iter().map(|span| span.content.width()).sum();
+    let mut push_hint = |spans: &mut Vec<Span<'static>>, clauses: &[&'static str]| {
+        if let Some(hint) = fit_hint_clauses(HINT_SEPARATOR, clauses, width.saturating_sub(used)) {
+            used += hint.width();
+            spans.push(Span::styled(hint, hint_style));
+        }
+    };
+
     if matches!(
         activity.kind,
         rustcode::controller::ActivityKind::Working
@@ -731,32 +747,29 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     ) {
         // Esc only interrupts the model stream; background terminals survive
         // it (issue #1223). Say so when a background job is actually running.
-        let hint = if state.steering_escape_will_interrupt() && !state.pending_steers().is_empty() {
-            " · esc interrupt and apply now"
-        } else if !state.pending_steers().is_empty() {
-            ""
-        } else if state.background_tasks().is_empty() {
-            " · esc interrupt"
-        } else {
-            " · esc interrupts stream only"
-        };
-        if !hint.is_empty() {
-            spans.push(Span::styled(
-                hint,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
+        let clauses: &[&'static str] =
+            if state.steering_escape_will_interrupt() && !state.pending_steers().is_empty() {
+                &["esc interrupt and apply now"]
+            } else if !state.pending_steers().is_empty() {
+                &[]
+            } else if state.background_tasks().is_empty() {
+                &["esc interrupt"]
+            } else {
+                &["esc interrupts stream only"]
+            };
+        push_hint(&mut spans, clauses);
     }
 
     if state.show_steer_mode_hint() {
-        let hint = match state.draft_submit_mode() {
-            rustcode::controller::DraftSubmitMode::Steer => " · Steer · Tab switches to Queue",
-            rustcode::controller::DraftSubmitMode::Queue => " · Queue · Tab switches to Steer",
-        };
-        spans.push(Span::styled(
-            hint,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
+        // The mode names what a keystroke will do, so it outlives the key that
+        // flips it.
+        push_hint(
+            &mut spans,
+            match state.draft_submit_mode() {
+                rustcode::controller::DraftSubmitMode::Steer => &["Steer", "Tab switches to Queue"],
+                rustcode::controller::DraftSubmitMode::Queue => &["Queue", "Tab switches to Steer"],
+            },
+        );
     }
 
     spans.push(Span::raw(" "));
@@ -995,14 +1008,54 @@ pub(super) fn composer_footer_visible(state: &RenderSnapshot) -> bool {
 }
 
 /// Hint shown under the composer while an inline completion popup is open. The
-/// footer row is reserved even when its text is replaced, so the composer does
-/// not jump as the popup opens and closes.
-pub(super) fn completion_footer_hint(has_command_completions: bool) -> &'static str {
+/// clauses are ordered by how much the user needs them: the keys that move and
+/// select the suggestion come first, the trailing affordances come last. The
+/// footer row is reserved even when every clause is dropped, so the composer
+/// does not jump as the popup opens and closes.
+pub(super) const COMPLETION_HINT_CLAUSES: [&str; 3] =
+    ["↑/↓ navigate", "enter select", "esc dismiss"];
+pub(super) const COMMAND_COMPLETION_HINT_CLAUSES: [&str; 4] = [
+    "↑/↓ navigate",
+    "enter select",
+    "tab complete",
+    "esc dismiss",
+];
+
+/// Separator between hint clauses, matching the `·` the footer used to render.
+const HINT_SEPARATOR: &str = " · ";
+
+pub(super) fn completion_footer_hint_clauses(
+    has_command_completions: bool,
+) -> &'static [&'static str] {
     if has_command_completions {
-        "  ↑/↓ navigate · enter select · tab complete · esc dismiss"
+        &COMMAND_COMPLETION_HINT_CLAUSES
     } else {
-        "  ↑/↓ navigate · enter select · esc dismiss"
+        &COMPLETION_HINT_CLAUSES
     }
+}
+
+/// Longest prefix of `clauses` whose text, prefixed by `prefix`, fits `width`,
+/// or `None` when not even the first clause fits.
+///
+/// Hints degrade by content, never by character position: a clause that does
+/// not fit is dropped whole instead of being clipped mid-affordance, which is
+/// the rule the welcome banner already follows (`#1529`).
+pub(super) fn fit_hint_clauses(
+    prefix: &str,
+    clauses: &[&'static str],
+    width: usize,
+) -> Option<String> {
+    let mut kept = 0;
+    let mut used = prefix.width();
+    for clause in clauses {
+        let extra = clause.width() + if kept == 0 { 0 } else { HINT_SEPARATOR.width() };
+        if used + extra > width {
+            break;
+        }
+        used += extra;
+        kept += 1;
+    }
+    (kept > 0).then(|| format!("{prefix}{}", clauses[..kept].join(HINT_SEPARATOR)))
 }
 
 pub(super) fn footer_location(state: &RenderSnapshot) -> String {
@@ -1020,7 +1073,7 @@ pub(super) fn render_composer_footer(
     f: &mut Frame,
     area: ratatui::layout::Rect,
     state: &RenderSnapshot,
-    popup_hint: Option<&'static str>,
+    popup_hint: Option<&'static [&'static str]>,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1030,22 +1083,25 @@ pub(super) fn render_composer_footer(
     let window = state.active_context_window().max(1);
     let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
-    let (left_content, left_style) = if let Some(hint) = popup_hint {
+    let (left_content, left_style, hint_clauses) = if let Some(clauses) = popup_hint {
         // The completion popup owns the selection, so the hint replaces the
         // session metadata rather than competing with it for the same row.
         (
-            hint.to_owned(),
+            String::new(),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            Some(clauses),
         )
     } else if state.ctrl_c_exit_armed() {
         (
             "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
+            None,
         )
     } else if let Some(notice) = state.transient_notice() {
         (
             format!("  {notice}"),
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+            None,
         )
     } else {
         let mut metadata = Vec::new();
@@ -1060,15 +1116,42 @@ pub(super) fn render_composer_footer(
         (
             format!("  {}", metadata.join(" · ")),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            None,
         )
     };
+    let row_width = area.width as usize;
     let right = format!("{remaining}% context left  ");
     let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let left = fit_to_width(
-        &left_content,
-        (area.width as usize).saturating_sub(right.width()),
-    );
-    let padding = (area.width as usize).saturating_sub(left.width() + right.width());
+    let right_width = right.width();
+    // The hint is the actionable content on this row, so it claims the width
+    // first and the context percentage yields when the two compete: degrade the
+    // hint against the remaining space, and only drop the percentage when even
+    // the leading clause no longer fits beside it (#1529).
+    let (left, keep_right) = match hint_clauses {
+        Some(clauses) => {
+            let beside_right =
+                fit_hint_clauses("  ", clauses, row_width.saturating_sub(right_width));
+            match beside_right {
+                Some(hint) => (hint, true),
+                None => (
+                    fit_hint_clauses("  ", clauses, row_width).unwrap_or_default(),
+                    false,
+                ),
+            }
+        }
+        // Session metadata and one-shot notices stay clipped: they name the
+        // model and workspace rather than offering a key the user can press.
+        None => (
+            fit_to_width(&left_content, row_width.saturating_sub(right_width)),
+            true,
+        ),
+    };
+    let (right, right_width) = if keep_right {
+        (right, right_width)
+    } else {
+        (String::new(), 0)
+    };
+    let padding = row_width.saturating_sub(left.width() + right_width);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(left, left_style),

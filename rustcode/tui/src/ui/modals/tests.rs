@@ -607,6 +607,190 @@ fn settings_picker_uses_unified_modal_picker_style() {
     assert!(rendered.contains("Pure model text output"));
 }
 
+/// Every inline picker measures itself with the same rules, so the whole
+/// picker family agrees on width, height floor and column budget (#1528).
+#[test]
+fn every_inline_picker_shares_the_measurement_rules() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let panel = COLOR_PANEL();
+
+    // Composer row far enough down that every declared height fits above it.
+    const SCREEN_HEIGHT: u16 = 40;
+    const INPUT_ROW: u16 = 30;
+    // Slack columns to the right of the composer. An inline modal is bounded to
+    // the composer width, so a panel that sizes its rows itself would paint into
+    // this slack instead of being clipped away by the viewport.
+    const SLACK: u16 = 24;
+
+    type Picker = (&'static str, fn(&mut Frame, &RenderSnapshot, Rect), u16);
+    let pickers: Vec<Picker> = vec![
+        (
+            "verbosity",
+            render_verbosity_picker_modal,
+            VERBOSITY_PICKER_HEIGHT,
+        ),
+        ("yolo", render_yolo_picker_modal, YOLO_PICKER_HEIGHT),
+        ("theme", render_theme_picker_modal, THEME_PICKER_HEIGHT),
+        (
+            "thinking",
+            render_thinking_picker_modal,
+            THINKING_PICKER_HEIGHT,
+        ),
+        ("effort", render_effort_picker_modal, EFFORT_PICKER_HEIGHT),
+        (
+            "protocol",
+            render_protocol_picker_modal,
+            PROTOCOL_PICKER_HEIGHT,
+        ),
+        ("model", render_model_picker_modal, MODEL_PICKER_HEIGHT),
+        (
+            "history",
+            render_history_picker_modal,
+            HISTORY_PICKER_HEIGHT,
+        ),
+        (
+            "subagent",
+            render_subagent_picker_modal,
+            SUBAGENT_PICKER_HEIGHT,
+        ),
+        (
+            "command",
+            render_command_picker_modal,
+            COMMAND_PICKER_HEIGHT,
+        ),
+        ("mcp", render_mcp_config_modal, MCP_CONFIG_HEIGHT),
+    ];
+
+    for (case, composer_width) in [("wide", 100u16), ("narrow", 40u16)] {
+        let screen_width = composer_width + SLACK;
+        let mut measurements = Vec::new();
+        for (name, render, declared_height) in &pickers {
+            let mut terminal =
+                Terminal::new(TestBackend::new(screen_width, SCREEN_HEIGHT)).unwrap();
+            let state = picker_state();
+            let snapshot = render_snapshot(&state);
+            terminal
+                .draw(|frame| render(frame, &snapshot, Rect::new(0, INPUT_ROW, composer_width, 3)))
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            // The panel background bounds the frame: an inline modal paints its
+            // whole rect and nothing outside it.
+            let painted = |x: u16, y: u16| buffer[(x, y)].bg == panel;
+            let frame_top = (0..INPUT_ROW)
+                .find(|y| (0..screen_width).any(|x| painted(x, *y)))
+                .unwrap_or_else(|| panic!("{case} {name}: picker painted no frame"));
+            let frame_bottom = (frame_top..SCREEN_HEIGHT)
+                .rfind(|y| (0..screen_width).any(|x| painted(x, *y)))
+                .unwrap_or_else(|| panic!("{case} {name}: picker frame has no bottom row"));
+            let left = (0..screen_width)
+                .find(|x| (frame_top..=frame_bottom).any(|y| painted(*x, y)))
+                .unwrap();
+            let right = (0..screen_width)
+                .rfind(|x| (frame_top..=frame_bottom).any(|y| painted(*x, y)))
+                .unwrap();
+            measurements.push((name, right - left + 1, frame_bottom - frame_top + 1));
+
+            assert_eq!(
+                left, 0,
+                "{case} {name}: picker must be left-aligned with the composer"
+            );
+            // The composer width bounds every inline modal, so the panels line
+            // up with the input box at any viewport width.
+            assert_eq!(
+                right,
+                composer_width - 1,
+                "{case} {name}: picker must span the composer width and no more"
+            );
+            assert!(
+                (MIN_MODAL_HEIGHT..=*declared_height).contains(&(frame_bottom - frame_top + 1)),
+                "{case} {name}: height must sit in [MIN_MODAL_HEIGHT, {declared_height}]"
+            );
+            // A picker that sizes its own rows wider than its frame paints past
+            // the panel into the slack, which is what the shared column budget
+            // and the shared anchor prevent.
+            assert!(
+                (frame_top..=frame_bottom)
+                    .all(|y| (right + 1..screen_width).all(|x| !painted(x, y))),
+                "{case} {name}: no row may be wider than the frame"
+            );
+        }
+        let expected_width = measurements[0].1;
+        assert!(
+            measurements.iter().all(|(_, w, _)| *w == expected_width),
+            "{case}: pickers disagree on width: {measurements:?}"
+        );
+        assert_eq!(
+            expected_width, composer_width,
+            "{case}: every picker must measure the same width"
+        );
+    }
+}
+
+/// State the pickers need to have something to list. Each picker reads a
+/// different slice of the view, so the table seeds all of them.
+fn picker_state() -> RenderState {
+    let mut state = RenderState::new();
+    state.modal_picker_index = 0;
+    state.history_picker_index = 0;
+    state.subagent_picker_index = 0;
+    state.command_picker_index = 0;
+    state.mcp_picker_index = 0;
+    state.history_picker_sessions = vec![rustcode::controller::SessionMeta {
+        path: std::path::PathBuf::from("/tmp/picker-sizing.json"),
+        title: "A deliberately long session title that will not fit a narrow frame".to_owned(),
+        message_count: 6,
+        when: "17:35".to_owned(),
+        workspace_cwd: None,
+    }];
+    state
+}
+
+#[test]
+fn picker_column_budget_never_exceeds_the_frame() {
+    for frame_width in [0usize, 4, 8, 20, 40, 100] {
+        for secondary in [0usize, 1, 5, 30, 200] {
+            let budget = picker_column_budget(frame_width, secondary);
+            assert!(
+                budget <= frame_width,
+                "budget {budget} exceeds a {frame_width}-column frame"
+            );
+            assert_eq!(picker_column_budget(frame_width, secondary), budget);
+        }
+    }
+    // `secondary` is the full secondary column, so a frame too narrow for both
+    // columns collapses the primary one to zero rather than underflowing.
+    assert_eq!(picker_column_budget(4, 200), 0);
+}
+
+#[test]
+fn picker_list_window_keeps_the_selection_visible() {
+    // Everything fits: no scrolling.
+    assert_eq!(picker_list_window(3, 2, 10), 0);
+    // A window taller than the list still starts at the top.
+    assert_eq!(picker_list_window(0, 4, 10), 0);
+
+    for total in [5usize, 20, 100] {
+        for list_height in [3usize, 6, 11] {
+            for selected in 0..total {
+                let scroll = picker_list_window(selected, total, list_height) as usize;
+                assert!(
+                    scroll <= selected,
+                    "the window must not scroll past the selection"
+                );
+                assert!(
+                    selected < scroll + list_height,
+                    "the selection must stay inside the {list_height}-row window"
+                );
+                assert!(
+                    scroll + list_height <= total || total <= list_height,
+                    "the window must not run past the end of the list"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn picker_panel_is_bounded_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
