@@ -71,6 +71,12 @@ pub struct ProgressState {
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
     pub consecutive_failed_mutations: usize,
+    /// Corroborated no-progress observations that arm evidence-based recovery
+    /// (see `[loop_guard] evidence_recovery_streak`).
+    pub evidence_recovery_streak: usize,
+    /// Hatch to disable the evidence-recovery injection (`[loop_guard]`
+    /// `evidence_recovery_enabled = false`). Loop warnings still apply.
+    pub evidence_recovery_enabled: bool,
     pub last_reason: Option<loop_detect::ProgressReason>,
     pub changed_paths: BTreeSet<String>,
     pub phase_checkpoint: Option<String>,
@@ -222,6 +228,8 @@ impl TurnContext {
                 failed_mutations: 0,
                 consecutive_no_progress: 0,
                 consecutive_failed_mutations: 0,
+                evidence_recovery_streak: crate::config::DEFAULT_EVIDENCE_RECOVERY_STREAK,
+                evidence_recovery_enabled: true,
                 last_reason: None,
                 changed_paths: BTreeSet::new(),
                 phase_checkpoint: None,
@@ -268,6 +276,17 @@ impl TurnContext {
             shell_assessments: std::collections::HashMap::new(),
             request_prefix_cache: RequestPrefixCache::default(),
         }
+    }
+
+    /// Apply the user's `[loop_guard]` budgets to a fresh turn context.
+    /// Rebuilding the repetition detector is lossless here because no tool
+    /// calls have been observed yet.
+    pub fn apply_loop_guard(&mut self, guard: &crate::config::LoopGuardConfig) {
+        self.recovery.loop_detector = loop_detect::LoopDetector::new(guard.effective_loop_abort());
+        let streak = guard.effective_recovery_streak();
+        self.progress.evidence_recovery_streak = streak;
+        self.progress.ledger.set_recovery_streak(streak);
+        self.progress.evidence_recovery_enabled = guard.evidence_recovery_enabled;
     }
 
     pub(crate) fn segment_rounds(&self) -> usize {
