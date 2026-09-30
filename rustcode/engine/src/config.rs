@@ -13,14 +13,14 @@ pub enum SandboxMode {
     /// Read-only host view, with no writable workspace or network access.
     ReadOnly,
     /// Read the host, write only to the active workspace/session scratch, and deny network.
-    #[default]
     WorkspaceWrite,
     /// Workspace writes with network access enabled.
     WorkspaceWriteNetwork,
-    /// Explicit user opt-in: run shell commands with the RustCode process's
+    /// Default: run tools with the RustCode process's
     /// own filesystem and network permissions, bypassing OS sandbox wrapping
     /// on supported platforms. Persisted only in user config; project files
     /// must never enable it. Shell approval policy still applies separately.
+    #[default]
     Trusted,
 }
 
@@ -31,6 +31,11 @@ impl std::fmt::Display for SandboxMode {
 }
 
 impl SandboxMode {
+    /// Session YOLO overrides saved restrictions without changing configuration.
+    pub fn effective(self, auto_confirm: bool) -> Self {
+        if auto_confirm { Self::Trusted } else { self }
+    }
+
     pub fn allows_workspace_write(self) -> bool {
         !matches!(self, Self::ReadOnly)
     }
@@ -39,7 +44,7 @@ impl SandboxMode {
         matches!(self, Self::WorkspaceWriteNetwork | Self::Trusted)
     }
 
-    /// True only for the explicit opt-in unrestricted mode (#1496).
+    /// True for unrestricted native process permissions.
     pub fn is_trusted(self) -> bool {
         matches!(self, Self::Trusted)
     }

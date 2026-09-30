@@ -1471,6 +1471,26 @@ fn welcome_banner_names_the_effective_sandbox_mode() {
 }
 
 #[test]
+fn welcome_banner_shows_yolo_effective_permissions_instead_of_saved_restrictions() {
+    let mut state = RenderState::new();
+    state.config.sandbox_mode = rustcode::controller::SandboxMode::ReadOnly;
+    state.auto_confirm = true;
+    let rendered = super::build_claude_startup_banner(&state, 100, 28)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("trusted process permissions; no OS sandbox"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("read-only host; no network"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn welcome_banner_shows_active_model_effort_and_context_window() {
     let mut state = RenderState::new();
     state.api_base_url = "http://localhost/test".to_string();

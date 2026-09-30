@@ -67,22 +67,29 @@ impl InteractivePolicy {
                     .clone()
                     .or_else(|| state.effective_workspace_root()),
                 state.effective_workspace_root(),
-                state.config.sandbox_mode,
+                state.effective_sandbox_mode(),
             )
         };
         let approved_command_prefixes = state.lock().await.config.approved_command_prefixes.clone();
         let denied_command_prefixes = state.lock().await.config.denied_command_prefixes.clone();
 
-        let has_one_shot_permission_request = tool_calls.iter().any(|call| {
-            call.name == "run_command"
-                && (call
-                    .arguments
-                    .get("network_access")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-                    || call.arguments.get("filesystem_write_path").is_some())
-        });
-        if !auto_confirm || has_one_shot_permission_request {
+        // Auto-confirm bypasses prompts, never capability denials such as Plan mode.
+        let mode = state.lock().await.agent_mode;
+        if tool_calls.iter().any(|call| {
+            matches!(
+                tools::authorize_tool_with_args(
+                    &call.name,
+                    &call.arguments,
+                    mode,
+                    auto_confirm,
+                    false
+                ),
+                tools::AuthorizationDecision::Deny(_)
+            )
+        }) {
+            return false;
+        }
+        if !auto_confirm {
             for call in tool_calls {
                 let requested_filesystem_path = if let Some(requested) =
                     call.arguments.get("filesystem_write_path")
@@ -521,11 +528,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_shot_network_request_prompts_even_with_yolo_and_saved_allow() {
+    async fn yolo_auto_approves_one_shot_permissions_without_a_modal() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        state.lock().await.auto_confirm = true;
+        let calls = [ToolCall {
+            name: "run_command".into(),
+            arguments: serde_json::json!({"command": "true", "network_access": true, "filesystem_write_path": "/"}),
+            call_id: None,
+        }];
+        let approved = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            InteractivePolicy.should_approve(&state, &calls),
+        )
+        .await;
+        assert!(
+            matches!(approved, Ok(true)),
+            "YOLO must not request permission: {approved:?}"
+        );
+        assert!(state.lock().await.pending_tool_confirmation.is_none());
+        state.lock().await.agent_mode = crate::config::AgentMode::Plan;
+        assert!(
+            !InteractivePolicy.should_approve(&state, &calls).await,
+            "YOLO must retain Plan-mode blocking"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_shot_network_request_prompts_without_yolo_despite_saved_allow() {
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));
         {
             let mut state = state.lock().await;
-            state.auto_confirm = true;
+            state.auto_confirm = false;
             state.config.approved_command_prefixes = vec!["prefix-v1:cargo test".to_owned()];
         }
         let policy_state = Arc::clone(&state);
@@ -581,7 +614,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn one_shot_filesystem_request_shows_canonical_scope_with_yolo() {
+    async fn one_shot_filesystem_request_shows_canonical_scope_without_yolo() {
         let workspace = tempfile::tempdir().unwrap();
         let requested = tempfile::tempdir().unwrap();
         let canonical = requested.path().canonicalize().unwrap();
@@ -595,7 +628,7 @@ mod tests {
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));
         {
             let mut state = state.lock().await;
-            state.auto_confirm = true;
+            state.auto_confirm = false;
             state.workspace_root = Some(workspace.path().to_path_buf());
             state.config.approved_command_prefixes = vec!["prefix-v1:touch".to_owned()];
         }
@@ -662,7 +695,7 @@ mod tests {
         ));
         {
             let mut state = state.lock().await;
-            state.auto_confirm = true;
+            state.auto_confirm = false;
             assert_eq!(state.workspace_root, None);
         }
         let policy_state = Arc::clone(&state);

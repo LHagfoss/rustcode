@@ -660,7 +660,9 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     ]));
 
     let sandbox_display = fit_to_width(
-        rustcode::controller::sandbox_effective_description(state.config().sandbox_mode),
+        rustcode::controller::sandbox_effective_description(
+            state.config().sandbox_mode.effective(state.auto_confirm()),
+        ),
         inner_w.saturating_sub(label_w),
     )
     .trim_end()

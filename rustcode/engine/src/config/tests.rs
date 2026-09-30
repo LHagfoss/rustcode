@@ -2,8 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 
 #[test]
-fn sandbox_modes_round_trip_and_default_to_workspace_write() {
-    assert_eq!(SandboxMode::default(), SandboxMode::WorkspaceWrite);
+fn sandbox_modes_round_trip_and_default_to_trusted() {
+    assert_eq!(SandboxMode::default(), SandboxMode::Trusted);
     for (serialized, expected) in [
         ("read_only", SandboxMode::ReadOnly),
         ("workspace_write", SandboxMode::WorkspaceWrite),
@@ -76,7 +76,6 @@ fn project_config_cannot_widen_skill_discovery() {
 #[test]
 fn project_config_cannot_enable_any_sandbox_mode() {
     let mut config = AppConfig::default();
-    assert_ne!(config.sandbox_mode, SandboxMode::Trusted);
     let file: TomlConfig = toml::from_str("sandbox_mode = \"trusted\"").unwrap();
     assert_eq!(file.sandbox_mode, Some(SandboxMode::Trusted));
     apply_project_toml_config(&mut config, file);

@@ -243,8 +243,8 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. A failed sandboxed command is annotated with the restriction that blocked it (network, filesystem write, filesystem read), the writable roots in effect, and the smallest command that widens it, so a sandbox denial is never confused with a credential or environment failure. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both always require user confirmation, including in YOLO mode, and reusable command approvals cannot grant them. filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
-    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "network_access": "optional bool requesting one-shot network access; always requires user confirmation", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; always requires user confirmation"}"#,
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. A failed sandboxed command is annotated with its effective permissions and possible restriction (network, filesystem write, filesystem read), the writable roots in effect, and the smallest command that widens it, without treating generic credential or environment failures as proven sandbox denials. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both require confirmation when YOLO is off, and reusable command approvals cannot grant them. Trusted is the default; YOLO also overrides saved restrictions and approves these requests. In restricted modes filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
     handler: run_command,
     requires_confirmation: true,
     schema: run_command_schema,
@@ -572,7 +572,7 @@ fn run_command_output_inner(
     let context = super::current_tool_context();
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     let has_explicit_workspace_root = explicit_workspace_root.is_some();
-    let workspace_root = explicit_workspace_root.unwrap_or_else(|| context.workspace_root.clone());
+    let workspace_root = explicit_workspace_root.unwrap_or_else(|| super::active_workspace_root());
     let resolved_cwd = match cwd {
         Some("sandbox") | Some("./sandbox") => {
             if let Some(session_id) = get_active_session_id() {
@@ -679,25 +679,26 @@ fn run_command_output_inner(
         .get("network_access")
         .and_then(parse_json_bool)
         .unwrap_or(false);
-    let one_shot_writable_roots = if args.get("filesystem_write_path").is_some() {
-        let path = args
-            .get("filesystem_write_path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                "filesystem_write_path must be an absolute directory string".to_string()
-            })?;
-        vec![sandbox::resolve_scoped_writable_root(
-            path,
-            workspace_root.as_deref().ok_or_else(|| {
-                "one-shot filesystem permission requires an active workspace".to_string()
-            })?,
-        )?]
-    } else {
-        Vec::new()
-    };
+    let one_shot_writable_roots =
+        if !sandbox_mode.is_trusted() && args.get("filesystem_write_path").is_some() {
+            let path = args
+                .get("filesystem_write_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    "filesystem_write_path must be an absolute directory string".to_string()
+                })?;
+            vec![sandbox::resolve_scoped_writable_root(
+                path,
+                workspace_root.as_deref().ok_or_else(|| {
+                    "one-shot filesystem permission requires an active workspace".to_string()
+                })?,
+            )?]
+        } else {
+            Vec::new()
+        };
     // Trusted mode bypasses OS sandbox wrapping and runs with the RustCode
-    // process's own permissions (#1496). It is explicit user opt-in via
-    // user config or `/sandbox trusted`; project files cannot enable it and
+    // process's own permissions (#1496). It is the default and the YOLO override;
+    // explicit user config can opt into restrictions, project files cannot change it, and
     // shell approval policy still applies. Command failures (GitHub auth,
     // SSH, certificates, network) surface as tool results and must not be
     // misattributed to sandbox denial.
@@ -851,9 +852,9 @@ fn run_command_output_inner(
     // A failed command's own stderr is ambiguous: "error connecting to
     // api.github.com" reads identically to a sandbox network denial and to a
     // dead VPN. Name the restriction the active mode actually enforces so the
-    // model stops guessing (#1540). Trusted mode is unwrapped, so it never
-    // gets an attribution line.
-    if failed && !sandbox_mode.is_trusted() {
+    // model sees effective grants rather than only configured defaults.
+    // Trusted and unsupported platforms are unwrapped, so they get no attribution.
+    if failed && !sandbox_mode.is_trusted() && cfg!(any(target_os = "linux", target_os = "macos")) {
         let observed = format!("{stdout}\n{stderr}");
         let denial = sandbox::classify_denial(&observed);
         // Roots the launcher actually used, so the note can name them.
@@ -863,7 +864,13 @@ fn run_command_output_inner(
             sandbox_mode.allows_workspace_write(),
         );
         result.push('\n');
-        result.push_str(&sandbox::failure_attribution(sandbox_mode, denial, &roots));
+        result.push_str(&sandbox::failure_attribution(
+            sandbox_mode,
+            sandbox_mode.allows_network() || one_shot_network_access,
+            true,
+            denial,
+            &roots,
+        ));
         result.push('\n');
     }
     Ok(super::ToolExecutionOutput {
@@ -886,7 +893,7 @@ fn run_command_output_inner(
 }
 
 /// The directories a sandboxed command could write to, mirroring what the
-/// launcher does with the policy: a read-only mode grants none, and one-shot
+/// launcher does with the policy: a read-only mode grants only one-shot
 /// grants add to the configured roots. Used only to name them in a denial
 /// note; canonicalization and symlink checks stay in the launcher.
 fn effective_writable_roots(
@@ -894,10 +901,11 @@ fn effective_writable_roots(
     one_shot_writable_roots: &[std::path::PathBuf],
     write_access: bool,
 ) -> Vec<std::path::PathBuf> {
-    if !write_access {
-        return Vec::new();
-    }
-    let mut roots = writable_roots.to_vec();
+    let mut roots = if write_access {
+        writable_roots.to_vec()
+    } else {
+        Vec::new()
+    };
     for root in one_shot_writable_roots {
         if !roots.contains(root) {
             roots.push(root.clone());
@@ -1244,9 +1252,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn explicit_missing_workspace_fails_closed() {
+        super::super::set_active_workspace_context(
+            None,
+            None,
+            false,
+            Some(crate::config::SandboxMode::WorkspaceWrite),
+        );
         let result =
             super::run_command_output_with_workspace(&serde_json::json!({"command": "pwd"}), None);
 
+        super::super::set_active_workspace_context(None, None, false, None);
         assert!(
             result
                 .expect_err("explicitly missing workspace must fail closed")
@@ -1418,7 +1433,7 @@ mod tests {
             .expect("command should run");
             super::super::set_active_workspace_context(None, None, false, None);
 
-            if expect_attribution {
+            if expect_attribution && cfg!(any(target_os = "linux", target_os = "macos")) {
                 assert!(
                     result
                         .content
@@ -1449,8 +1464,8 @@ mod tests {
         );
         assert_eq!(
             super::effective_writable_roots(&roots, &[one_shot.clone()], false),
-            Vec::<std::path::PathBuf>::new(),
-            "a read-only mode grants no writable root"
+            vec![one_shot.clone()],
+            "a read-only mode still permits approved one-shot roots"
         );
         assert_eq!(
             super::effective_writable_roots(&roots, &[workspace.clone()], true),
@@ -1512,7 +1527,7 @@ mod tests {
             );
         }
 
-        // One-shot escalations are never covered by auto-confirm, trusted or not.
+        // YOLO also approves one-shot permission requests.
         for args in [
             serde_json::json!({"command": "gh pr list", "network_access": true}),
             serde_json::json!({"command": "cargo fmt", "filesystem_write_path": "/tmp/other"}),
@@ -1525,8 +1540,8 @@ mod tests {
                     true,
                     false,
                 ),
-                AuthorizationDecision::RequireConfirmation,
-                "{args} must still need interactive approval"
+                AuthorizationDecision::Allow,
+                "{args} must be auto-approved in YOLO"
             );
         }
     }

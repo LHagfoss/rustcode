@@ -843,7 +843,7 @@ thread_local! {
     static ACTIVE_WORKSPACE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static ACTIVE_TASK_WORKING_DIRECTORY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static ACTIVE_TASK_SCOPE_ESCAPE: RefCell<bool> = const { RefCell::new(false) };
-    static ACTIVE_SANDBOX_MODE: RefCell<crate::config::SandboxMode> = const { RefCell::new(crate::config::SandboxMode::WorkspaceWrite) };
+    static ACTIVE_SANDBOX_MODE: RefCell<crate::config::SandboxMode> = const { RefCell::new(crate::config::SandboxMode::Trusted) };
 }
 
 pub fn set_active_session_id(id: Option<String>) {
@@ -903,12 +903,14 @@ pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
             )
         })
         .unwrap_or((None, None));
+    let trusted = active_sandbox_mode().is_trusted();
+    let task_working_directory = task_working_directory.or_else(|| workspace_root.clone());
     rustcode_tools::ToolContext {
-        workspace_root,
+        workspace_root: if trusted { None } else { workspace_root },
         task_working_directory,
         sandbox_dir,
         artifacts_dir,
-        allow_task_scope_escape,
+        allow_task_scope_escape: trusted || allow_task_scope_escape,
     }
 }
 
@@ -1126,16 +1128,13 @@ pub fn authorize_tool_with_args(
         );
     }
     let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
-    let one_shot_escalation = name == "run_command"
-        && (args.get("network_access").and_then(Value::as_bool) == Some(true)
-            || args.get("filesystem_write_path").is_some());
     let requires_confirmation = if name == "run_command" {
         command_is_destructive
     } else {
         needs_confirmation(name)
     };
     if !bypass_confirmation
-        && (!auto_confirm || one_shot_escalation)
+        && !auto_confirm
         && (requires_confirmation || matches!(tool_safety(name), ToolSafety::Unknown))
     {
         return AuthorizationDecision::RequireConfirmation;

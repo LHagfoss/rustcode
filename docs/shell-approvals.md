@@ -42,31 +42,38 @@ forbid rule.
 The `/sandbox` command and `sandbox_mode` setting in
 `~/.config/rustcode/config.toml` control
 effective shell permissions on Linux and macOS. Its values are
-`read_only`, `workspace_write` (the default),
-`workspace_write_network`, and `trusted` (explicit opt-in, also accepted as
+`read_only`, `workspace_write`,
+`workspace_write_network`, and `trusted` (the default, also accepted as
 `unrestricted`). The startup banner and `/status` show the effective mode
 separately from the command approval mode. Project config files cannot change
 this user-level security setting, including `trusted`: a checked-out project
 can neither enable nor downgrade it. `/sandbox` with no
 argument shows every mode with its permissions and marks the current one; pass
-one of the mode names to change and persist it. `trusted` runs shell commands
+one of the mode names to change and persist it. `trusted` runs shell commands and native filesystem/search tools
 with the RustCode process's own filesystem and network permissions, bypassing
 OS sandbox wrapping, so a command can read and write anywhere the user can —
 not only the workspace and a task worktree. Shell approval/deny policy still
-applies separately, and only the user config or `/sandbox trusted` can turn it
-on. The background scheduler's scheduled `run_command` path honors the same
+applies separately when YOLO is off. The background scheduler's scheduled `run_command` path honors the same
 mode.
 
 ### Default mode
 
-`workspace_write` remains the default. This is a deliberate decision, not an
-oversight: `sandbox_mode` is a user-level security setting, and a project
-checkout, an issue body, or a model tool call must never be able to grant host
-network and filesystem access by default. Widening the session is one
-`/sandbox workspace_write_network`, or `/sandbox trusted`, and the effective
-mode is always visible in the status line, the welcome banner, `/status`, and
-`/sandbox`. Changing the default would move that decision from an explicit,
-persisted, per-user choice to an invisible one, so it is left alone.
+`trusted` is the default: tools run with the RustCode process's native filesystem
+and network permissions. Native filesystem and search tools can reach paths
+outside the launch workspace, while relative paths remain based on the active
+task directory or workspace. No OS sandbox is applied unless the user selects
+one of the restricted modes in their global config or with `/sandbox`.
+
+`--yolo` and `/yolo on` auto-approve every tool confirmation, including one-shot
+network and filesystem requests, and override a saved restricted sandbox mode
+for the session. This does not rewrite the saved mode; turning YOLO off restores
+it. Interactive, headless `--prompt`/`--loop`, and ACP execution agree. Plan mode
+still blocks mutation, shell execution, delegation, and unknown tools. Explicit
+saved forbid rules still block matching commands. Project configuration cannot
+change the user's sandbox selection.
+
+The following backend restrictions apply only when a restricted mode is selected
+and YOLO is off.
 
 On Linux, shell commands run through bubblewrap with the host filesystem
 read-only and, in `workspace_write` modes, the active workspace and session
@@ -103,14 +110,14 @@ the system Seatbelt interface RustCode currently uses.
 The `workspace_write_network` mode allows network access for every shell
 command. A command may also request `network_access: true` for one-shot
 network permission. RustCode adds the requested permission to the approval
-card and requires an interactive approval even in YOLO mode; saved command
+card and requires interactive approval when YOLO is off; saved command
 approvals do not grant it. Approval only widens network access for that one
 command and does not change the configured mode.
 
 The `filesystem_write_path` argument requests write access to one existing
 absolute directory outside the active workspace. The approval card shows its
 canonical resolved path and RustCode requires an interactive decision,
-including in YOLO mode; saved command approvals do not grant filesystem
+when YOLO is off; saved command approvals do not grant filesystem
 access. On Linux and macOS, that directory is the only additional writable
 root for the command, so read-only mode continues to protect the workspace
 and other paths.
@@ -130,29 +137,17 @@ build, and commit there without repeated path grants. A normal GitHub
 workflow can alternatively request one-shot `network_access: true` in a
 constrained mode, or use explicit `trusted` mode.
 
-Failure attribution: OS sandbox denials, missing writable roots, and
-approval denials are reported before the command runs. A command that does run
-and fails keeps its own stdout/stderr verbatim, and RustCode appends one
-`[harness: ...]` line naming what the active mode restricts and what to do
-about it, so the reason does not have to be inferred:
+Failure attribution uses the command's effective permissions, including one-shot
+network and writable-directory grants. A failed restricted command keeps its own
+stdout/stderr and receives a `[harness: ...]` note naming the mode, effective
+network access, and actual writable roots. Read-only mode can still have approved
+one-shot writable roots.
 
-- The line names the mode, its effective permissions, and the denied class
-  (`network`, `write`, `read`, or `unknown`).
-- A network-class failure names network as the restriction and points at
-  `network_access: true`, `/sandbox workspace_write_network`, and
-  `/sandbox trusted`.
-- A filesystem failure names the restriction, the writable roots in effect,
-  and `filesystem_write_path`, a `/workspace` task worktree, or
-  `/sandbox trusted`.
-- A failure that matches no sandbox signature says exactly that, so a
-  command, credential, or environment bug is not retried with a wider sandbox.
-
-Credential, SSH (`No user exists for uid`, key lookup), and certificate
-failures are never reported as sandbox denials, and `trusted` mode is never
-annotated: no OS sandbox was involved, so the command's own error is the whole
-story. When a remote command fails, check the smallest fix first: approval
-denied, then missing writable root or cwd, then network access for the mode,
-then credentials/certs/SSH, before assuming OS sandboxing is at fault.
+Only permission-specific errors suggest possible sandbox enforcement. DNS errors,
+connection refusal, generic host permission errors, credentials, SSH keys, and
+certificate failures do not establish a sandbox denial. When network access was
+enabled, the note does not recommend network escalation. Trusted commands and
+platforms without an OS sandbox backend receive no sandbox attribution.
 
 Windows does not yet have an operating-system sandbox backend. Shell commands
 continue to run with the RustCode process permissions there, and the startup

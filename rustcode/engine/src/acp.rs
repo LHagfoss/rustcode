@@ -1352,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn acp_yolo_still_requests_one_shot_network_permission() {
+    fn acp_yolo_auto_approves_one_shot_network_permission() {
         let call = crate::tools::ToolCall {
             name: "run_command".to_owned(),
             arguments: serde_json::json!({
@@ -1363,12 +1363,12 @@ mod tests {
         };
         assert_eq!(
             approval_requirement(&[call], crate::config::AgentMode::Build, true),
-            ApprovalRequirement::Request
+            ApprovalRequirement::Allow
         );
     }
 
     #[test]
-    fn acp_yolo_still_requests_one_shot_filesystem_permission() {
+    fn acp_yolo_auto_approves_one_shot_filesystem_permission() {
         let call = crate::tools::ToolCall {
             name: "run_command".to_owned(),
             arguments: serde_json::json!({
@@ -1379,7 +1379,7 @@ mod tests {
         };
         assert_eq!(
             approval_requirement(&[call], crate::config::AgentMode::Build, true),
-            ApprovalRequirement::Request
+            ApprovalRequirement::Allow
         );
     }
 

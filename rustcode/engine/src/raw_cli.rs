@@ -327,7 +327,8 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
         async move {
             let s = s_clone.lock().await;
             for call in &calls {
-                if call.name == "run_command"
+                if !s.auto_confirm
+                    && call.name == "run_command"
                     && (call
                         .arguments
                         .get("network_access")
@@ -502,13 +503,15 @@ pub async fn run_raw_cli_loop(
     prompt: &str,
     model_override: Option<&str>,
     max_iters: usize,
+    auto_confirm: bool,
 ) -> Result<LoopReport, Box<dyn std::error::Error>> {
     let cap = max_iters.clamp(1, MAX_LOOP_ITERS);
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let state = build_state(prompt, model_override);
+    let mut state = build_state(prompt, model_override);
+    state.auto_confirm = auto_confirm;
     let state_arc = Arc::new(Mutex::new(state));
 
     let mcp_servers = state_arc.lock().await.config.mcp_servers.clone();
@@ -544,6 +547,7 @@ pub async fn run_raw_cli_loop(
 pub async fn run_raw_cli(
     prompt: &str,
     model_override: Option<&str>,
+    auto_confirm: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tokens = prompt.split_whitespace().collect::<Vec<_>>();
     if tokens.first() == Some(&"/memory") && tokens.len() > 1 {
@@ -559,7 +563,8 @@ pub async fn run_raw_cli(
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let state = build_state(prompt, model_override);
+    let mut state = build_state(prompt, model_override);
+    state.auto_confirm = auto_confirm;
 
     let state_arc = Arc::new(Mutex::new(state));
 
@@ -651,6 +656,29 @@ mod tests {
             }),
             call_id: None,
         };
+        assert!(
+            !HeadlessPolicy { quiet: true }
+                .should_approve(&state, &[call])
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_yolo_auto_approves_one_shot_permissions() {
+        let mut state = build_state("permission request", None);
+        state.auto_confirm = true;
+        let state = Arc::new(Mutex::new(state));
+        let call = ToolCall {
+            name: "run_command".into(),
+            arguments: serde_json::json!({"command": "true", "network_access": true, "filesystem_write_path": "/"}),
+            call_id: None,
+        };
+        assert!(
+            HeadlessPolicy { quiet: true }
+                .should_approve(&state, &[call.clone()])
+                .await
+        );
+        state.lock().await.agent_mode = crate::config::AgentMode::Plan;
         assert!(
             !HeadlessPolicy { quiet: true }
                 .should_approve(&state, &[call])

@@ -299,7 +299,7 @@ async fn handle_enter_inner(
                 }
             },
             "/sandbox" => {
-                let current = s.config.sandbox_mode;
+                let current = s.effective_sandbox_mode();
                 match tokens.get(1).copied() {
                     None => {
                         let modes = crate::config::SandboxMode::ALL
@@ -317,7 +317,7 @@ async fn handle_enter_inner(
                         s.history.push(ChatMessage::new(
                             "system",
                             format!(
-                                "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is explicit user opt-in: commands run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nA failed shell command now names the restriction it hit and the command that widens it.",
+                                "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nRestricted command failures name effective permissions and possible sandbox restrictions.",
                                 current.description(),
                                 current.effective_description()
                             ),

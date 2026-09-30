@@ -160,9 +160,9 @@ The process speaks stable ACP v1 JSON-RPC on stdin/stdout. A runtime such as
 Multica can launch it as a subprocess, create a session with `session/new`, and
 send work with `session/prompt`. The working directory supplied to
 `session/new` becomes RustCode's task working directory and default project
-scope. RustCode retains its launch workspace as the security boundary, so
-relative tool paths stay in the task project and sibling writes require
-explicit authorization. Rustcode stores
+scope. Relative tool paths stay in the task project. Trusted mode permits
+paths outside the workspace; explicitly restricted modes retain the launch
+workspace boundary. Rustcode stores
 its canonical configuration in `config.toml`. On macOS and Linux this is
 `${XDG_CONFIG_HOME:-~/.config}/rustcode/config.toml`; on Windows it is
 `%APPDATA%\rustcode\config.toml`. `RUSTCODE_CONFIG_DIR` overrides the
@@ -210,7 +210,8 @@ rustcode --prompt "inspect this repository and run its tests"
 ```
 
 Add `--yolo` only in a trusted workspace when the run should automatically
-approve tool confirmations. Background commands started by the turn are
+approve all tool confirmations and override saved sandbox restrictions for
+the session. Plan-mode capability blocking and saved forbid rules remain. Background commands started by the turn are
 tracked until their terminal result is delivered; unrelated tasks already
 running in the same session do not delay the turn.
 
@@ -226,53 +227,38 @@ permissions. OS sandbox enforcement is available only on supported backends
 (currently Linux and macOS); on unsupported platforms such as Windows,
 approved commands run with the RustCode process's permissions. Configure the
 effective Linux/macOS mode with `sandbox_mode = "read_only"`,
-`"workspace_write"` (default), `"workspace_write_network"`, or `"trusted"` in
+`"workspace_write"`, `"workspace_write_network"`, or `"trusted"` (default) in
 the user config, or switch it in a session with `/sandbox <mode>` — `/sandbox`
 with no argument lists every mode with its permissions and marks the current
 one. The status line and the welcome banner display the effective mode
 separately from the approval mode. `network_access: true` requests network
-access for one command and always needs interactive approval, including in YOLO
-mode. The `filesystem_write_path` argument requests one-command write access to
+access for one command and needs interactive approval when YOLO is off. The `filesystem_write_path` argument requests one-command write access to
 one existing absolute directory outside the active workspace; its canonical path
 is shown in the approval card. It also requires
-interactive approval and cannot be covered by a saved command approval. See
+interactive approval when YOLO is off and cannot be covered by a saved command approval. See
 [docs/shell-approvals.md](docs/shell-approvals.md).
 
 ### Sandbox modes and the default
 
-`workspace_write` stays the default. It is a deliberate safety decision, not an
-oversight: a project checkout, an issue body, or a model tool call must never
-be able to turn host network and filesystem access on by default, and
-`sandbox_mode` is user-level only — a project `.rustcode/config.toml` cannot
-change it in either direction.
+`trusted` is the default. Shell commands and native filesystem/search tools run
+with RustCode's process permissions, including network access and paths outside
+the workspace. Relative paths still resolve from the active task directory or
+workspace. Restricted modes are opt-in through the global config or `/sandbox`;
+project configuration cannot change this selection.
 
-`workspace_write` denying network is the mode that surprised a session
-expecting `gh` to work. When a sandboxed command fails, the result names the
-restriction that blocked it (network, filesystem write, filesystem read), the
-writable roots in effect, and the smallest command that widens it, so the
-model does not have to infer the cause:
+YOLO overrides a saved restricted mode and auto-approves all tool confirmations,
+including one-shot network and filesystem requests. It applies to interactive,
+headless, and ACP turns and does not rewrite the saved mode. Turning YOLO off
+restores that selection. Plan-mode capability restrictions and explicit saved
+forbid rules remain in effect.
 
-```text
-[harness: OS sandbox mode workspace_write (workspace/session writes; no network)
-is active and this command failed with a network error. Denied class: network. This mode
-denies outbound network, so the sandbox is the most likely cause. Widen it with
-network_access=true on this command (interactive approval, including in YOLO mode), /sandbox
-workspace_write_network, or /sandbox trusted for RustCode process permissions. ...]
-```
-
-Credential, SSH, and certificate failures are never reported as sandbox
-denials; a failure that matches no sandbox signature says so instead of
-inventing a reason.
-
-`trusted` is the explicit opt-in for working in your own directory with no OS
-sandbox wrapping: commands run with the RustCode process's own filesystem and
-network permissions, anywhere on the host, not only inside the workspace or a
-task worktree. It does not relax the shell approval policy — confirmations,
-saved allows, and deny rules all still apply — and only the user config or
-`/sandbox trusted` can enable it. Use it for routine GitHub work (`gh`, `git
-push`) or when a task needs to read and write your real checkout. Once
-`trusted` is set, a failed command is not annotated, because no OS sandbox
-was involved; the command's own stderr is the result.
+Failed restricted commands report effective network permissions and actual
+writable roots, including one-shot grants. Permission-specific errors suggest
+possible sandbox enforcement. DNS errors, refused connections, generic host
+filesystem permissions, credentials, SSH keys, and certificates are not treated
+as proven sandbox denials. Enabled network access is never blamed as a network
+restriction. Trusted execution and platforms without a native OS backend receive
+no sandbox attribution.
 
 ## Background commands
 
