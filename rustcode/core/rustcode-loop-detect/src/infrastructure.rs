@@ -11,6 +11,22 @@ pub struct InfrastructureFailure {
     pub class: String,
 }
 
+/// Fingerprint for harness workspace-boundary rejections (`path ... escapes
+/// the workspace root`). These are unreachable paths, not model stagnation:
+/// they belong to the infrastructure guard (reset + hint) rather than the
+/// evidence-recovery streak.
+pub const WORKSPACE_BOUNDARY_FINGERPRINT: &str = "workspace:boundary";
+
+/// Whether tool output reports a workspace-boundary rejection. Matched on the
+/// harness message text so it holds regardless of the error kind the tool
+/// layer attached (validation, permission, sandbox denial).
+pub fn is_workspace_boundary_failure(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("escapes the workspace root")
+        || lower.contains("escapes the project workspace")
+        || lower.contains("outside the task working directory")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InfrastructureFailureDecision {
     NotInfrastructure,
@@ -82,6 +98,16 @@ fn classify(
     retryable: bool,
     content: &str,
 ) -> Option<InfrastructureFailure> {
+    // Workspace-boundary rejections are deterministic harness guardrails, not
+    // provider/MCP outages, so they classify as infrastructure unconditionally:
+    // no retryable flag or error-kind cooperation is required.
+    if is_workspace_boundary_failure(content) {
+        return Some(InfrastructureFailure {
+            fingerprint: WORKSPACE_BOUNDARY_FINGERPRINT.to_string(),
+            dependency: "workspace".to_string(),
+            class: "boundary".to_string(),
+        });
+    }
     let kind = error_kind.unwrap_or_default().to_ascii_lowercase();
     let lower = content.to_ascii_lowercase();
     let provider_failure = kind == "providerfailed";
@@ -279,6 +305,25 @@ mod tests {
             decision,
             InfrastructureFailureDecision::Allowed { .. }
         ));
+    }
+
+    #[test]
+    fn workspace_boundary_rejection_is_infrastructure_regardless_of_error_kind() {
+        use super::{WORKSPACE_BOUNDARY_FINGERPRINT, is_workspace_boundary_failure};
+        let content = "path '/etc/passwd' escapes the workspace root '/work/proj'";
+        assert!(is_workspace_boundary_failure(content));
+        for kind in [None, Some("Validation"), Some("PermissionDenied")] {
+            let mut tracker = InfrastructureFailureTracker::default();
+            let decision = tracker.observe("read_file", kind, false, false, content);
+            match decision {
+                InfrastructureFailureDecision::Allowed { failure, streak } => {
+                    assert_eq!(failure.fingerprint, WORKSPACE_BOUNDARY_FINGERPRINT);
+                    assert_eq!(failure.dependency, "workspace");
+                    assert_eq!(streak, 1);
+                }
+                other => panic!("expected Allowed, got {other:?}"),
+            }
+        }
     }
 
     #[test]
