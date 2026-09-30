@@ -144,13 +144,11 @@ fn linux_command(command: &str, policy: SandboxPolicy<'_>) -> Result<SandboxedCo
     } else {
         None
     };
-    let use_network_namespace = if !policy.network_access {
-        Some(probe_network_namespace(
-            &bubblewrap,
-            seccomp.as_ref().unwrap(),
-        )?)
-    } else {
-        None
+    let use_network_namespace = match seccomp.as_ref() {
+        // `seccomp` is `Some` exactly when network access is denied, so the
+        // namespace probe runs in the same cases as before with no unwrap.
+        Some(filter) => Some(probe_network_namespace(&bubblewrap, filter)?),
+        None => None,
     };
 
     use std::os::fd::AsRawFd;
