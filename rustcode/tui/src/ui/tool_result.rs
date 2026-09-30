@@ -61,18 +61,38 @@ pub(super) fn render_tool_result<'a>(
         return Vec::new();
     }
 
-    let lines = match tool_name {
-        "view_file" => render_read_result(result, width, show_picker),
-        "grep" => render_search_result(result, width, show_picker),
-        "glob" | "list_directory" => render_directory_result(result, show_picker),
-        "run_command" => render_command_result(result, show_picker),
+    let lower = tool_name.to_ascii_lowercase();
+    let lines = match lower.as_str() {
+        "view_file" | "viewfile" | "read_file" | "readfile" => {
+            render_read_result(result, width, show_picker)
+        }
+        "grep" | "grep_search" | "grepsearch" => render_search_result(result, width, show_picker),
+        "glob" | "list_directory" | "list_dir" | "listdir" => {
+            render_directory_result(result, show_picker)
+        }
+        "run_command" | "bash" => render_command_result(result, show_picker),
         "replace_file_content"
+        | "replacefilecontent"
         | "multi_replace_file_content"
+        | "multireplacefilecontent"
         | "write_to_file"
+        | "writetofile"
+        | "write_file"
+        | "writefile"
+        | "create_file"
+        | "createfile"
         | "write_file_chunk"
+        | "writefilechunk"
+        | "edit_file"
+        | "editfile"
+        | "patch_file"
+        | "patchfile"
         | "delete_file"
+        | "deletefile"
         | "move_file"
-        | "copy_file" => render_mutation_result(result, width, show_picker),
+        | "movefile"
+        | "copy_file"
+        | "copyfile" => render_mutation_result(result, width, show_picker),
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
         // `ask_question` is excluded: its result is the user's answer, which
@@ -123,6 +143,97 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
         )));
     }
     lines
+}
+
+/// True when an edit result reports a no-op rather than a change.
+///
+/// No-op and failed changes keep their truthful single-line status; they never
+/// synthesize a diff preview.
+pub(super) fn edit_result_is_noop(result: &str) -> bool {
+    let lower = result.to_ascii_lowercase();
+    lower.contains("already applied") || lower.contains("no changes made")
+}
+
+/// True when the tool result already carries an embedded unified diff.
+pub(super) fn result_has_embedded_diff(result: &str) -> bool {
+    result.contains("```diff")
+}
+
+fn edit_args_path(args: &serde_json::Value) -> &str {
+    args.get("path")
+        .or_else(|| args.get("TargetFile"))
+        .or_else(|| args.get("target_file"))
+        .or_else(|| args.get("AbsolutePath"))
+        .or_else(|| args.get("absolute_path"))
+        .or_else(|| args.get("file"))
+        .or_else(|| args.get("filePath"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+fn edit_args_content<'a>(tool_name: &str, args: &'a serde_json::Value) -> Option<&'a str> {
+    let lower = tool_name.to_ascii_lowercase();
+    match lower.as_str() {
+        "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file"
+        | "createfile" | "write_file_chunk" | "writefilechunk" => {
+            args.get("content").and_then(|v| v.as_str())
+        }
+        "replace_file_content"
+        | "replacefilecontent"
+        | "multi_replace_file_content"
+        | "multireplacefilecontent"
+        | "edit_file"
+        | "editfile"
+        | "patch_file"
+        | "patchfile" => args
+            .get("replacement_content")
+            .or_else(|| args.get("ReplacementContent"))
+            .or_else(|| args.get("new_string"))
+            .or_else(|| args.get("newString"))
+            .or_else(|| args.get("content"))
+            .and_then(|v| v.as_str()),
+        _ => None,
+    }
+}
+
+/// Synthesize a compact added-lines preview for write/edit calls whose result
+/// carries no embedded diff (e.g. `write_to_file` reports only `wrote 'path'
+/// (N lines, M bytes)`).
+///
+/// Returns an empty vec when there is nothing meaningful to show: failures,
+/// no-ops, results that already embed a diff, or calls without content args.
+/// The caller keeps the truthful summary line in those cases.
+pub(super) fn synthesized_edit_preview<'a>(
+    tool_name: &str,
+    args: &serde_json::Value,
+    result: &str,
+    success: bool,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    if !success || edit_result_is_noop(result) || result_has_embedded_diff(result) {
+        return Vec::new();
+    }
+    let Some(content) = edit_args_content(tool_name, args) else {
+        return Vec::new();
+    };
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+    let _path = edit_args_path(args);
+    // Render the new content as added diff lines so the transcript keeps the
+    // same syntax/diff cues as real edit diffs. Line numbers and wrapping are
+    // handled by the unified-diff renderer; the transcript layer truncates the
+    // preview and expands the full body on Ctrl+O.
+    let diff_text = content
+        .lines()
+        .map(|line| format!("+{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if diff_text.trim().is_empty() {
+        return Vec::new();
+    }
+    render_unified_diff(&diff_text, width, show_picker)
 }
 
 fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
@@ -474,6 +585,73 @@ mod tests {
                 .iter()
                 .any(|line| { line.spans.iter().any(|span| span.content.contains("@@")) })
         );
+    }
+
+    #[test]
+    fn write_preview_synthesizes_added_lines_from_content_args() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        use serde_json::json;
+
+        let args = json!({"path": "src/new.rs", "content": "pub fn new() {}\n"});
+        let lines = super::synthesized_edit_preview(
+            "write_to_file",
+            &args,
+            "wrote 'src/new.rs' (1 lines, 15 bytes)",
+            true,
+            80,
+            false,
+        );
+        assert!(!lines.is_empty());
+        let text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("pub fn new"), "{text:?}");
+    }
+
+    #[test]
+    fn write_preview_stays_empty_for_noop_failure_or_embedded_diff() {
+        use serde_json::json;
+
+        let args = json!({"path": "src/main.rs", "content": "hi"});
+        assert!(
+            super::synthesized_edit_preview(
+                "write_to_file",
+                &args,
+                "already applied; no changes made to 'src/main.rs'",
+                true,
+                80,
+                false,
+            )
+            .is_empty()
+        );
+        assert!(
+            super::synthesized_edit_preview(
+                "write_to_file",
+                &args,
+                "wrote 'src/main.rs'",
+                false,
+                80,
+                false,
+            )
+            .is_empty()
+        );
+        assert!(
+            super::synthesized_edit_preview(
+                "write_to_file",
+                &args,
+                "ok\n\n```diff\n+hi\n```",
+                true,
+                80,
+                false,
+            )
+            .is_empty()
+        );
+        assert!(super::edit_result_is_noop(
+            "Already Applied; NO CHANGES made"
+        ));
+        assert!(super::result_has_embedded_diff("```diff\n+hi\n```"));
     }
 
     #[test]
