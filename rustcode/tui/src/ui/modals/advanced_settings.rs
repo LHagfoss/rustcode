@@ -1,5 +1,15 @@
 use super::*;
 
+/// Binary-local current version for the update prompt.
+///
+/// `env!("CARGO_PKG_VERSION")` here resolves to the shipping `rustcode-tui`
+/// binary (which owns the `rustcode` binary), not the engine library, so the
+/// render layer names only the shared core update leaf plus this
+/// local helper instead of reaching into the engine directly.
+fn current_binary_version() -> rustcode_core::update::Version {
+    rustcode_core::update::parse_semver(env!("CARGO_PKG_VERSION")).unwrap_or((0, 0, 0))
+}
+
 pub(in crate::ui) fn render_thinking_picker_modal(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -424,11 +434,11 @@ pub(in crate::ui) fn render_update_prompt_modal(
 
     let latest = match state.update_check() {
         rustcode_core::update::UpdateState::Available(latest) => latest,
-        _ => rustcode::update::current_version(),
+        _ => current_binary_version(),
     };
     let versions = format!(
         "v{} → v{}",
-        rustcode_core::update::format_version(rustcode::update::current_version()),
+        rustcode_core::update::format_version(current_binary_version()),
         rustcode_core::update::format_version(latest)
     );
     f.render_widget(
