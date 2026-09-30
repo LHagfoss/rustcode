@@ -442,7 +442,13 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         && !ctx.recovery.force_final
         && ctx.recovery.finish_gate_retries < MAX_FINISH_GATE_RETRIES
     {
-        let source_root = state.lock().await.effective_workspace_root();
+        let (source_root, sandbox_mode) = {
+            let state = state.lock().await;
+            (
+                state.effective_workspace_root(),
+                state.effective_sandbox_mode(),
+            )
+        };
         let root = ctx
             .compiler
             .edit_root
@@ -462,6 +468,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
             &mut ctx.compiler.dirty,
             &mut ctx.compiler.cache,
             cancel_token,
+            sandbox_mode,
         )
         .await
         {

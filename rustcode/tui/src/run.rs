@@ -488,9 +488,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(prompt) = cli_args.prompt {
         if let Some(max_iters) = cli_args.loop_count {
-            let report =
-                rustcode::raw_cli::run_raw_cli_loop(&prompt, model_override.as_deref(), max_iters)
-                    .await?;
+            let report = rustcode::raw_cli::run_raw_cli_loop(
+                &prompt,
+                model_override.as_deref(),
+                max_iters,
+                cli_args.yolo,
+            )
+            .await?;
             println!(
                 "Loop finished after {} turn(s){}.",
                 report.iters,
@@ -501,7 +505,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             );
         } else {
-            rustcode::raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
+            rustcode::raw_cli::run_raw_cli(&prompt, model_override.as_deref(), cli_args.yolo)
+                .await?;
         }
         rustcode::config::flush_history();
         return Ok(());

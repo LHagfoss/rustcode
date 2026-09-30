@@ -14,8 +14,9 @@ initialize it, create a session, and submit prompts through the ACP v1 methods.
 
 `session/new` creates an isolated RustCode session. The request's working
 directory becomes the task working directory and default project scope. The
-launch workspace remains the security boundary; writes in sibling projects
-require explicit authorization. Model and tool settings come from
+trusted default permits paths outside the launch workspace. Explicitly
+restricted modes retain the workspace boundary; YOLO overrides those restrictions
+and auto-approves tool permissions without changing the saved configuration. Model and tool settings come from
 the normal RustCode configuration stack:
 
 ```text

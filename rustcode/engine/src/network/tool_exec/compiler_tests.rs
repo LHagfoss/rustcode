@@ -73,6 +73,8 @@ async fn batch_compiler_diagnostics_are_once_per_edit_and_refresh_after_fix() {
     let state = Arc::new(Mutex::new(AppState::new()));
     state.lock().await.workspace_root = Some(project.path().to_path_buf());
     state.lock().await.agent_mode = crate::config::AgentMode::Build;
+    state.lock().await.auto_confirm = true;
+    state.lock().await.config.sandbox_mode = crate::config::SandboxMode::ReadOnly;
     let calls =
         ["pub fn broken( {", "pub fn repaired() {}"].map(|content| crate::tools::ToolCall {
             name: "write_to_file".to_string(),

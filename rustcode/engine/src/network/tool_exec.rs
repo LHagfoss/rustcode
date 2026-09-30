@@ -302,6 +302,7 @@ pub(crate) async fn confirm_and_execute(
     )
     .await;
 
+    let sandbox_mode = { state.lock().await.effective_sandbox_mode() };
     // Standalone subagent calls have no batch-level compiler check.
     if matches!(
         name,
@@ -313,7 +314,7 @@ pub(crate) async fn confirm_and_execute(
             | "copy_file"
     ) && result.success
         && let Some(cwd) = get_tool_project_root(name, args)
-        && let Some(errors) = run_compiler_check(&cwd, cancel_token).await
+        && let Some(errors) = run_compiler_check(&cwd, cancel_token, sandbox_mode).await
     {
         append_standalone_compiler_result(&mut result, &errors);
     }
@@ -382,8 +383,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     Option<String>,
     std::time::Duration,
 ) {
+    let trusted = state.lock().await.effective_sandbox_mode().is_trusted();
     let normalized_args;
-    let args = if let Some(requested) = args.get("filesystem_write_path") {
+    let args = if !trusted && let Some(requested) = args.get("filesystem_write_path") {
         let Some(path) = requested.as_str() else {
             return (
                 crate::tools::ToolExecutionOutput::failure_with_kind(
@@ -543,7 +545,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let args_owned = args.clone();
         let call_id_owned = call_id.map(str::to_owned);
         let session_id = { state.lock().await.active_session_id.clone() };
-        let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
+        let sandbox_mode_for_task = { state.lock().await.effective_sandbox_mode() };
         let workspace_root_for_task = execution_workspace_root.clone();
         let task_working_directory_for_task = task_working_directory.clone();
         let live_key_owned = live_key.map(str::to_owned);
@@ -689,7 +691,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     .get("command")
                     .and_then(|value| value.as_str())
                     .unwrap_or("");
-                let sandbox_mode = state.lock().await.config.sandbox_mode;
+                let sandbox_mode = state.lock().await.effective_sandbox_mode();
                 let one_shot_network_access = args
                     .get("network_access")
                     .and_then(serde_json::Value::as_bool)
@@ -811,7 +813,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let args_owned = args.clone();
                 let call_id_owned = call_id.map(str::to_owned);
                 let session_id = { state.lock().await.active_session_id.clone() };
-                let sandbox_mode_for_task = { state.lock().await.config.sandbox_mode };
+                let sandbox_mode_for_task = { state.lock().await.effective_sandbox_mode() };
                 let workspace_root_for_task = execution_workspace_root.clone();
                 let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
@@ -1392,8 +1394,15 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                 .effective_workspace_root()
                 .unwrap_or_default(),
         };
-        if let Some(compiler_errors) =
-            cached_compiler_check(&root, compile_dirty, compile_cache, cancel_token).await
+        let sandbox_mode = { state.lock().await.effective_sandbox_mode() };
+        if let Some(compiler_errors) = cached_compiler_check(
+            &root,
+            compile_dirty,
+            compile_cache,
+            cancel_token,
+            sandbox_mode,
+        )
+        .await
         {
             dbg_log!("Inline compiler check returned diagnostics after edit");
             if let Some(result) = results
@@ -1512,6 +1521,63 @@ mod cancellation_tests {
             Some(crate::tools::ToolErrorKind::Cancelled)
         );
         assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn yolo_executes_outside_workspace_despite_saved_read_only_mode() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.auto_confirm = true;
+            state.config.sandbox_mode = crate::config::SandboxMode::ReadOnly;
+        }
+        let client = reqwest::Client::new();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        for (name, args) in [
+            (
+                "run_command",
+                serde_json::json!({"command": "printf shell > shell.txt", "cwd": outside.path(), "network_access": true, "filesystem_write_path": workspace.path()}),
+            ),
+            (
+                "write_to_file",
+                serde_json::json!({"path": outside.path().join("native.txt"), "content": "native"}),
+            ),
+        ] {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                super::confirm_and_execute_for_call(
+                    &client,
+                    &state,
+                    &cancellation,
+                    name,
+                    &args,
+                    name,
+                    false,
+                    Some(workspace.path().into()),
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .expect("YOLO must not wait for permission")
+            .0;
+            assert!(result.success, "{}", result.content);
+        }
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("shell.txt")).unwrap(),
+            "shell"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("native.txt")).unwrap(),
+            "native"
+        );
+        assert_eq!(
+            state.lock().await.config.sandbox_mode,
+            crate::config::SandboxMode::ReadOnly,
+            "effective permissions must not rewrite saved mode"
+        );
     }
 
     #[tokio::test]

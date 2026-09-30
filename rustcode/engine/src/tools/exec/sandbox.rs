@@ -560,22 +560,10 @@ const CREDENTIAL_FAILURE_SIGNATURES: &[&str] = &[
     "rate limit exceeded",
 ];
 
-/// Failure text that means the command could not reach a remote host.
+/// Permission-specific network errors that may indicate sandbox enforcement.
 const NETWORK_DENIAL_SIGNATURES: &[&str] = &[
-    "error connecting to api.github.com",
-    "could not resolve host",
-    "temporary failure in name resolution",
-    "name or service not known",
-    "no such host",
-    "connection refused",
-    "connection reset by peer",
-    "network is unreachable",
-    "dial tcp",
-    "tls handshake",
-    "proxyconnect",
+    "deny network",
     "connect: operation not permitted",
-    "connect: permission denied",
-    "connect: permission denied (os error 13)",
     "socket: address family not supported",
 ];
 
@@ -590,21 +578,14 @@ const READ_DENIAL_SIGNATURES: &[&str] = &[
     "permission denied (os error 13) (read)",
 ];
 
-/// Failure text that means a filesystem write outside the writable roots was
-/// refused. This is the catch-all for `operation not permitted`, because a
-/// sandboxed create, truncate, rename, or directory write is the dominant
-/// cause on both supported backends.
-const WRITE_DENIAL_SIGNATURES: &[&str] = &[
-    "read-only file system",
-    "operation not permitted",
-    "permission denied",
-];
+/// Explicit write-policy errors. Generic host permission failures are ambiguous.
+const WRITE_DENIAL_SIGNATURES: &[&str] = &["deny file-write", "read-only file system"];
 
 fn mentions(text: &str, signatures: &[&str]) -> bool {
     signatures.iter().any(|needle| text.contains(needle))
 }
 
-/// Name the restriction a failed sandboxed command hit, or `None` when the
+/// Name a possible restriction a failed sandboxed command hit, or `None` when the
 /// output matches no sandbox signature (or matches a credential failure that
 /// the sandbox cannot explain). `None` is not proof of innocence: it means
 /// the harness must not invent a reason.
@@ -627,48 +608,47 @@ pub(crate) fn classify_denial(output: &str) -> Option<SandboxDenial> {
 
 /// Attribution line appended to a failed sandboxed command result so the
 /// model reads the reason instead of guessing it (#1540). Names the mode, the
-/// restriction that matched, the writable roots in effect, and the smallest
+/// possible restriction that matched, the writable roots in effect, and the smallest
 /// command that widens the request. The command's own output is never
 /// rewritten: attribution is additive and always names one source of truth.
 pub(crate) fn failure_attribution(
     mode: crate::config::SandboxMode,
+    network_access: bool,
+    os_enforced: bool,
     denial: Option<SandboxDenial>,
     writable_roots: &[PathBuf],
 ) -> String {
-    let mode_text = format!("{} ({})", mode.as_str(), mode.effective_description());
-    match denial {
-        Some(SandboxDenial::Network) => format!(
-            "[harness: OS sandbox mode {mode_text} is active and this command failed with a \
-network error. Denied class: network. This mode denies outbound network, so the sandbox is the \
-most likely cause. Widen it with network_access=true on this command (interactive approval, \
-including in YOLO mode), /sandbox workspace_write_network, or /sandbox trusted for RustCode \
-process permissions. If the sandbox is not the cause, check GitHub authentication, SSH keys, \
-and certificate validation next.]"
-        ),
-        Some(SandboxDenial::Write) => format!(
-            "[harness: OS sandbox mode {mode_text} denied a filesystem write outside its writable \
-roots. Denied class: write. Writable roots for this command: {roots}. Widen it with \
-filesystem_write_path=<dir> on this command (interactive approval, including in YOLO mode), a \
-/workspace-created task worktree that stays writable for the session, or /sandbox trusted for \
-RustCode process permissions. A read-only mode denies every write.]",
-            roots = render_roots(if mode.allows_workspace_write() {
-                writable_roots
-            } else {
-                &[]
-            })
-        ),
-        Some(SandboxDenial::Read) => format!(
-            "[harness: OS sandbox mode {mode_text} denied a filesystem read. Denied class: read. \
-Writable roots do not change read policy; /sandbox trusted removes OS sandbox wrapping so the \
-command runs with RustCode process permissions.]"
-        ),
-        None => format!(
-            "[harness: OS sandbox mode {mode_text} is active for this command, and this failure \
-matches no sandbox denial signature. Denied class: unknown. Treat it as a command, credential, \
-or environment failure rather than sandbox enforcement; do not retry it with a wider sandbox \
-until the command's own error is understood.]"
-        ),
+    if !os_enforced || mode.is_trusted() {
+        return String::new();
     }
+    let mode_text = format!("{} ({})", mode.as_str(), mode.description());
+    let effective = format!(
+        "Effective network access: {}. Writable roots for this command: {}.",
+        if network_access {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        render_roots(writable_roots)
+    );
+    let reason = match denial {
+        Some(SandboxDenial::Network) if !network_access => {
+            "Possible denied class: network. This command denies outbound network; its network-permission error may be sandbox enforcement. Request network_access=true for this command, /sandbox workspace_write_network, or /sandbox trusted. Check the command's own error before widening permissions."
+        }
+        Some(SandboxDenial::Network) => {
+            "Network access was enabled for this command. This failure is not evidence of sandbox network enforcement; check host networking and the command's own error."
+        }
+        Some(SandboxDenial::Write) => {
+            "Possible denied class: write. A filesystem write error may be sandbox enforcement outside these writable roots, or host filesystem permissions. Request filesystem_write_path=<dir> for an additional root or /sandbox trusted only after checking the failing path."
+        }
+        Some(SandboxDenial::Read) => {
+            "Possible denied class: read. A read-permission error may be sandbox enforcement; writable grants do not change the read policy. Check the failing path and host permissions before /sandbox trusted."
+        }
+        None => {
+            "Denied class: unknown. This failure matches no sandbox denial signature; treat it as a command, credential, or environment failure rather than proven sandbox enforcement."
+        }
+    };
+    format!("[harness: OS sandbox mode {mode_text} is active. {effective} {reason}]")
 }
 
 fn render_roots(writable_roots: &[PathBuf]) -> String {
@@ -1037,23 +1017,20 @@ mod tests {
                 "error connecting to api.github.com\ncheck your internet connection or \
 https://githubstatus.com"
             ),
-            Some(SandboxDenial::Network)
+            None
         );
-        assert_eq!(
-            classify_denial("Could not resolve host: github.com"),
-            Some(SandboxDenial::Network)
-        );
+        assert_eq!(classify_denial("Could not resolve host: github.com"), None);
         assert_eq!(
             classify_denial("dial tcp 140.82.121.4:443: connect: connection refused"),
-            Some(SandboxDenial::Network)
+            None
         );
         assert_eq!(
             classify_denial("/bin/bash: /Users/me/notes.txt: Operation not permitted"),
-            Some(SandboxDenial::Write)
+            None
         );
         assert_eq!(
             classify_denial("open /etc/sudoers: permission denied"),
-            Some(SandboxDenial::Write)
+            None
         );
         assert_eq!(
             classify_denial("bash: /tmp/ro/file: Read-only file system"),
@@ -1085,37 +1062,45 @@ https://githubstatus.com"
         let roots = vec![PathBuf::from("/Users/me/checkout")];
         let network = failure_attribution(
             crate::config::SandboxMode::WorkspaceWrite,
+            false,
+            true,
             Some(SandboxDenial::Network),
             &roots,
         );
         assert!(network.contains("workspace_write"), "{network}");
-        assert!(network.contains("failed with a network error"), "{network}");
-        assert!(network.contains("Denied class: network"), "{network}");
+        assert!(network.contains("network-permission error"), "{network}");
+        assert!(
+            network.contains("Possible denied class: network"),
+            "{network}"
+        );
         assert!(network.contains("network_access=true"), "{network}");
         assert!(network.contains("/sandbox trusted"), "{network}");
 
         let write = failure_attribution(
             crate::config::SandboxMode::WorkspaceWrite,
+            false,
+            true,
             Some(SandboxDenial::Write),
             &roots,
         );
-        assert!(write.contains("denied a filesystem write"), "{write}");
-        assert!(write.contains("Denied class: write"), "{write}");
+        assert!(write.contains("filesystem write error"), "{write}");
+        assert!(write.contains("Possible denied class: write"), "{write}");
         assert!(write.contains("/Users/me/checkout"), "{write}");
         assert!(write.contains("filesystem_write_path=<dir>"), "{write}");
 
         let read_only = failure_attribution(
             crate::config::SandboxMode::ReadOnly,
+            false,
+            true,
             Some(SandboxDenial::Write),
             &roots,
         );
-        assert!(
-            read_only.contains("Writable roots for this command: none"),
-            "{read_only}"
-        );
+        assert!(read_only.contains("/Users/me/checkout"), "{read_only}");
 
         let unmatched = failure_attribution(
             crate::config::SandboxMode::WorkspaceWriteNetwork,
+            true,
+            true,
             None,
             &roots,
         );
@@ -1123,6 +1108,69 @@ https://githubstatus.com"
         assert!(
             unmatched.contains("matches no sandbox denial signature"),
             "{unmatched}"
+        );
+    }
+
+    #[test]
+    fn enabled_network_and_host_permissions_are_not_sandbox_denials() {
+        let note = failure_attribution(
+            crate::config::SandboxMode::WorkspaceWriteNetwork,
+            true,
+            true,
+            Some(SandboxDenial::Network),
+            &[],
+        );
+        assert!(!note.contains("denies outbound network"), "{note}");
+        assert!(!note.contains("Denied class: network"), "{note}");
+        assert_eq!(
+            classify_denial("open /etc/private: permission denied"),
+            None
+        );
+        assert_eq!(classify_denial("dial tcp: connection refused"), None);
+    }
+
+    #[test]
+    fn attribution_lists_read_only_one_shot_writable_roots() {
+        let roots = vec![PathBuf::from("/approved-one-shot")];
+        let note = failure_attribution(
+            crate::config::SandboxMode::ReadOnly,
+            false,
+            true,
+            Some(SandboxDenial::Write),
+            &roots,
+        );
+        assert!(note.contains("/approved-one-shot"), "{note}");
+        assert!(!note.contains("denies every write"), "{note}");
+    }
+
+    #[test]
+    fn attribution_uses_granted_network_and_actual_backend_support() {
+        let granted = failure_attribution(
+            crate::config::SandboxMode::WorkspaceWrite,
+            true,
+            true,
+            Some(SandboxDenial::Network),
+            &[],
+        );
+        assert!(granted.contains("Network access was enabled"), "{granted}");
+        assert!(
+            !granted.contains("Possible denied class: network"),
+            "{granted}"
+        );
+        for mode in crate::config::SandboxMode::ALL {
+            assert!(
+                failure_attribution(mode, false, false, Some(SandboxDenial::Write), &[]).is_empty()
+            );
+        }
+        assert!(
+            failure_attribution(
+                crate::config::SandboxMode::Trusted,
+                true,
+                true,
+                Some(SandboxDenial::Network),
+                &[]
+            )
+            .is_empty()
         );
     }
 

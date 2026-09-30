@@ -29,14 +29,16 @@ impl CompilerCheckOutcome {
 pub(crate) async fn run_compiler_check(
     cwd: &std::path::Path,
     cancel_token: &CancellationToken,
+    sandbox_mode: crate::config::SandboxMode,
 ) -> Option<String> {
-    let (outcome, command) = run_compiler_check_with_command(cwd, cancel_token).await;
+    let (outcome, command) = run_compiler_check_with_command(cwd, cancel_token, sandbox_mode).await;
     outcome.legacy_output(command)
 }
 
 async fn run_compiler_check_with_command(
     cwd: &std::path::Path,
     cancel_token: &CancellationToken,
+    sandbox_mode: crate::config::SandboxMode,
 ) -> (CompilerCheckOutcome, &'static str) {
     let (command, cargo, timeout) = if cwd.join("Cargo.toml").exists() {
         ("cargo check --message-format=json", true, 120)
@@ -64,6 +66,7 @@ async fn run_compiler_check_with_command(
             cargo,
             std::time::Duration::from_secs(timeout),
             cancel_token,
+            sandbox_mode,
         )
         .await,
         command,
@@ -78,9 +81,16 @@ async fn run_compiler_command(
     timeout: std::time::Duration,
     cancel_token: &CancellationToken,
 ) -> Option<String> {
-    run_compiler_command_outcome(cwd, command, cargo, timeout, cancel_token)
-        .await
-        .legacy_output(command)
+    run_compiler_command_outcome(
+        cwd,
+        command,
+        cargo,
+        timeout,
+        cancel_token,
+        crate::config::SandboxMode::default(),
+    )
+    .await
+    .legacy_output(command)
 }
 
 pub(super) async fn run_compiler_command_outcome(
@@ -89,6 +99,7 @@ pub(super) async fn run_compiler_command_outcome(
     cargo: bool,
     timeout: std::time::Duration,
     cancel_token: &CancellationToken,
+    sandbox_mode: crate::config::SandboxMode,
 ) -> CompilerCheckOutcome {
     let unverified = |reason: String| CompilerCheckOutcome::UnverifiedInfrastructure { reason };
     if cancel_token.is_cancelled() {
@@ -102,20 +113,24 @@ pub(super) async fn run_compiler_command_outcome(
     };
     let writable_roots = [cwd.to_path_buf(), scratch_path.clone()];
     let session_scratch_roots = [scratch_path.clone()];
-    let command_for_exec = match crate::tools::exec::sandbox::command(
-        command,
-        crate::tools::exec::sandbox::SandboxPolicy {
-            command_cwd: Some(cwd),
-            workspace_root: Some(cwd),
-            writable_roots: &writable_roots,
-            session_scratch_roots: &session_scratch_roots,
-            one_shot_writable_roots: &[],
-            write_access: true,
-            network_access: false,
-        },
-    ) {
-        Ok(command) => command,
-        Err(error) => return record_unverified_event(unverified(error.to_string()), command),
+    let command_for_exec = if sandbox_mode.is_trusted() {
+        crate::tools::exec::sandbox::passthrough_command(command)
+    } else {
+        match crate::tools::exec::sandbox::command(
+            command,
+            crate::tools::exec::sandbox::SandboxPolicy {
+                command_cwd: Some(cwd),
+                workspace_root: Some(cwd),
+                writable_roots: &writable_roots,
+                session_scratch_roots: &session_scratch_roots,
+                one_shot_writable_roots: &[],
+                write_access: sandbox_mode.allows_workspace_write(),
+                network_access: sandbox_mode.allows_network(),
+            },
+        ) {
+            Ok(command) => command,
+            Err(error) => return record_unverified_event(unverified(error.to_string()), command),
+        }
     };
     // A child token also stops the blocking worker if this async future is dropped.
     let worker_token = cancel_token.child_token();
@@ -453,6 +468,7 @@ pub(crate) async fn cached_compiler_check(
     dirty: &mut bool,
     cache: &mut Option<(std::path::PathBuf, Option<String>)>,
     cancel_token: &CancellationToken,
+    sandbox_mode: crate::config::SandboxMode,
 ) -> Option<String> {
     if !cancel_token.is_cancelled()
         && !*dirty
@@ -462,7 +478,7 @@ pub(crate) async fn cached_compiler_check(
         dbg_log!("Compiler check: reusing cached result (tree unchanged since last check)");
         return cached_result.clone();
     }
-    let result = run_compiler_check(root, cancel_token).await;
+    let result = run_compiler_check(root, cancel_token, sandbox_mode).await;
     if result
         .as_deref()
         .is_some_and(|text| text.starts_with("__BUILD_UNVERIFIED__"))
@@ -683,6 +699,52 @@ mod compiler_execution_tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_compiler_commands_can_write_outside_the_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let marker = outside.path().join("checker-marker.txt");
+        let command = format!("printf checked > '{}'", marker.display());
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            &command,
+            false,
+            std::time::Duration::from_secs(5),
+            &CancellationToken::new(),
+            crate::config::SandboxMode::default(),
+        )
+        .await;
+        assert_eq!(outcome, CompilerCheckOutcome::Passed);
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "checked");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn restricted_compiler_commands_still_enforce_writable_roots() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let marker = outside.path().join("checker-marker.txt");
+        let command = format!("printf checked > '{}'", marker.display());
+        let outcome = run_compiler_command_outcome(
+            workspace.path(),
+            &command,
+            false,
+            std::time::Duration::from_secs(5),
+            &CancellationToken::new(),
+            crate::config::SandboxMode::WorkspaceWrite,
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            CompilerCheckOutcome::UnverifiedInfrastructure { .. }
+        ));
+        assert!(!marker.exists());
+    }
+
     #[test]
     fn only_recognized_source_diagnostics_affect_the_diagnostic_streak() {
         let rustc_json = r#"{"reason":"compiler-message","message":{"level":"error","rendered":"error[E0425]: cannot find value `missing` in this scope\n --> src/lib.rs:3:5\n"}}"#;
@@ -871,9 +933,15 @@ mod compiler_execution_tests {
         let token = CancellationToken::new();
         let mut dirty = true;
         let mut cache = None;
-        let result = cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
-            .await
-            .unwrap();
+        let result = cached_compiler_check(
+            project.path(),
+            &mut dirty,
+            &mut cache,
+            &token,
+            crate::config::SandboxMode::default(),
+        )
+        .await
+        .unwrap();
         assert!(result.starts_with("__BUILD_UNVERIFIED__"), "{result}");
         assert!(result.contains("status 101"), "{result}");
         assert!(result.contains("not-a-version"), "{result}");
@@ -893,9 +961,15 @@ mod compiler_execution_tests {
         let mut dirty = true;
         let mut cache = None;
         assert!(
-            cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
-                .await
-                .is_none()
+            cached_compiler_check(
+                project.path(),
+                &mut dirty,
+                &mut cache,
+                &token,
+                crate::config::SandboxMode::default()
+            )
+            .await
+            .is_none()
         );
         assert!(!dirty);
         assert_eq!(cache, Some((project.path().to_owned(), None)));
@@ -909,9 +983,15 @@ mod compiler_execution_tests {
         token.cancel();
         let mut dirty = false;
         let mut cache = Some((project.path().to_owned(), None));
-        let result = cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
-            .await
-            .unwrap();
+        let result = cached_compiler_check(
+            project.path(),
+            &mut dirty,
+            &mut cache,
+            &token,
+            crate::config::SandboxMode::default(),
+        )
+        .await
+        .unwrap();
         assert!(result.starts_with("__BUILD_UNVERIFIED__"));
         assert!(result.contains("cancelled"));
         assert!(dirty);
