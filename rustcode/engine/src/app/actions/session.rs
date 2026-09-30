@@ -140,19 +140,37 @@ pub enum ExpandOutcome {
 /// recent collapsed entry, and a second press collapses exactly what the first
 /// expanded (#1541).
 pub fn toggle_expanded_thought(s: &mut AppState, candidates: &[usize]) -> ExpandOutcome {
-    let Some(&focus) = candidates.last() else {
-        s.set_transient_notice("Nothing to expand");
-        return ExpandOutcome::NothingToExpand;
+    let (outcome, notice) = toggle_expanded_bodies(
+        &mut s.expanded_thoughts,
+        &mut s.expanded_thought_focus,
+        candidates,
+    );
+    s.set_transient_notice(notice);
+    outcome
+}
+
+/// The transition itself, over just the state the collapsed bodies live in.
+///
+/// Split out of [`toggle_expanded_thought`] so the frontend seam can drive the
+/// same press over the render-visible expand state a frontend already holds,
+/// instead of needing an `AppState` to own it (frontend seam #1431). `focus` is
+/// the last expanded index the session keeps in step with the set. Returns what
+/// the press did plus the feedback text to surface.
+pub(crate) fn toggle_expanded_bodies(
+    expanded: &mut std::collections::HashSet<usize>,
+    focus: &mut Option<usize>,
+    candidates: &[usize],
+) -> (ExpandOutcome, &'static str) {
+    let Some(&target) = candidates.last() else {
+        return (ExpandOutcome::NothingToExpand, "Nothing to expand");
     };
-    if s.expanded_thoughts.remove(&focus) {
-        s.expanded_thought_focus = None;
-        s.set_transient_notice("Collapsed tool output");
-        ExpandOutcome::Collapsed(focus)
+    if expanded.remove(&target) {
+        *focus = None;
+        (ExpandOutcome::Collapsed(target), "Collapsed tool output")
     } else {
-        s.expanded_thoughts.insert(focus);
-        s.expanded_thought_focus = Some(focus);
-        s.set_transient_notice("Expanded tool output");
-        ExpandOutcome::Expanded(focus)
+        expanded.insert(target);
+        *focus = Some(target);
+        (ExpandOutcome::Expanded(target), "Expanded tool output")
     }
 }
 

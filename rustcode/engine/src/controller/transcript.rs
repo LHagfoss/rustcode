@@ -55,6 +55,21 @@ pub fn toggle_expanded_thought(
     crate::app::toggle_expanded_thought(state, candidates)
 }
 
+/// Apply one expand/collapse press to the collapsed bodies a frontend owns.
+///
+/// A production frontend presses through [`toggle_expanded_thought`] against the
+/// session; a frontend that holds only the render-visible expand state drives
+/// the same press here, so the transition and the feedback cannot drift between
+/// the two. Returns what the press did plus the notice to install on the view
+/// the next frame renders from (#1431).
+pub fn toggle_expanded_bodies(
+    expanded: &mut std::collections::HashSet<usize>,
+    focus: &mut Option<usize>,
+    candidates: &[usize],
+) -> (ExpandOutcome, &'static str) {
+    crate::app::toggle_expanded_bodies(expanded, focus, candidates)
+}
+
 /// PascalCase display name for an MCP tool, if it follows the prefix convention.
 pub fn mcp_tool_display_name(name: &str) -> Option<String> {
     crate::tools::mcp_tool_display_name(name)

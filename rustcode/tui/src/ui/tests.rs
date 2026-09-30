@@ -2899,12 +2899,11 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
 
 #[test]
 fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
-    use rustcode::app::AppState;
     use rustcode::controller::{
         ChatMessage, ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity,
     };
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state
         .history
@@ -2940,21 +2939,13 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
             }),
     );
 
-    let render = |state: &AppState| {
-        super::render_committed_tool_result_group(
-            &rustcode::controller::render_state(state),
-            &[1, 2],
-            80,
-            false,
-        )
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
+    let render = |state: &RenderState| {
+        super::render_committed_tool_result_group(state, &[1, 2], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
     };
-    let candidates = super::collapsible_tool_indices(
-        &render_snapshot(&rustcode::controller::render_state(&state)),
-        80,
-    );
+    let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1, 2], "both tool rows are collapsible");
     assert!(
         !render(&state)
@@ -2963,18 +2954,29 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         "the command body starts collapsed"
     );
 
-    assert_eq!(
-        rustcode::controller::toggle_expanded_thought(&mut state, &candidates),
-        ExpandOutcome::Expanded(2)
+    // The press runs through the seam against the expand state this view
+    // already carries: the engine owns the transition, the render layer only
+    // holds the set and the focus it reports back (#1431).
+    let mut focus = None;
+    let (outcome, notice) = rustcode::controller::toggle_expanded_bodies(
+        &mut state.expanded_thoughts,
+        &mut focus,
+        &candidates,
+    );
+    assert_eq!(outcome, ExpandOutcome::Expanded(2));
+    assert_eq!(notice, "Expanded tool output");
+    assert_eq!(focus, Some(2));
+    let expanded = render(&state);
+    assert!(
+        expanded.iter().any(|line| line.contains("Thursday, 08:30")),
+        "the expanded body renders inline: {expanded:?}"
     );
     assert!(
-        render(&state)
+        !expanded
             .iter()
-            .any(|line| line.contains("Thursday, 08:30")),
-        "the expanded body renders inline: {:?}",
-        render(&state)
+            .any(|line| line.contains("GetTime") && line.contains("ctrl+o to expand")),
+        "an expanded row drops the hint it carried while collapsed: {expanded:?}"
     );
-    assert_eq!(state.expanded_thought_focus, Some(2));
 
     // Expansion survives new output and scrolling: the expanded set lives in
     // session state, not in the committed scrollback, so neither can reset it.
@@ -2989,13 +2991,19 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         "expansion survives new output and scrolling"
     );
 
+    let (outcome, notice) = rustcode::controller::toggle_expanded_bodies(
+        &mut state.expanded_thoughts,
+        &mut focus,
+        &candidates,
+    );
     assert_eq!(
-        rustcode::controller::toggle_expanded_thought(&mut state, &candidates),
+        outcome,
         ExpandOutcome::Collapsed(2),
         "a second press collapses what the first expanded"
     );
+    assert_eq!(notice, "Collapsed tool output");
     assert!(state.expanded_thoughts.is_empty());
-    assert_eq!(state.expanded_thought_focus, None);
+    assert_eq!(focus, None);
     assert!(
         !render(&state)
             .iter()
@@ -3007,21 +3015,32 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
 
 #[test]
 fn ctrl_o_without_a_collapsed_body_reports_it_instead_of_doing_nothing() {
-    use rustcode::app::AppState;
     use rustcode::controller::ChatMessage;
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
+    let mut expanded = std::collections::HashSet::new();
+    let mut focus = None;
+
+    let (outcome, notice) =
+        rustcode::controller::toggle_expanded_bodies(&mut expanded, &mut focus, &[]);
 
     assert_eq!(
-        rustcode::controller::toggle_expanded_thought(&mut state, &[]),
+        outcome,
         rustcode::controller::ExpandOutcome::NothingToExpand
     );
     assert_eq!(
-        state.active_transient_notice(),
-        Some("Nothing to expand"),
+        notice, "Nothing to expand",
         "an empty press must still say something"
     );
+    assert!(expanded.is_empty());
+
+    // The notice is the press's only visible effect, so it has to reach the
+    // frame: the frontend installs it on the view the next render reads.
+    state.transient_notice = Some(notice.to_owned());
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    assert!(rendered.contains("Nothing to expand"), "{rendered}");
 }
 
 #[test]

@@ -65,7 +65,7 @@ pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, ExpandOutcome, History, LiveToolCall,
     LiveToolOutputChunk, PendingSteer, StreamTracker, SubAgent, SubAgentStatus, TokenUsage,
     ToolCallRef, ToolResultRecord, Verbosity, is_compaction_summary, mcp_tool_display_name,
-    sanitize_recap_content, toggle_expanded_thought,
+    sanitize_recap_content, toggle_expanded_bodies, toggle_expanded_thought,
 };
 
 pub use worker::InteractiveController;
