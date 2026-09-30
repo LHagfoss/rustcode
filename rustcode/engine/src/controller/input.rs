@@ -52,6 +52,27 @@ pub fn build_help_text() -> String {
     crate::app::actions::build_help_text()
 }
 
+/// The key that copies a transcript selection on the platform this session is
+/// running on.
+///
+/// macOS is the exception. `cmd+c` is the copy chord the Mac terminal reserves
+/// for whatever is in the foreground, while `ctrl+c` there can be claimed by the
+/// line discipline and raise SIGINT instead of arriving as a key event, so
+/// naming `ctrl+c` in a Mac footer would be a promise the terminal may not keep.
+/// Every other platform delivers `ctrl+c` to the app, which is where the copy
+/// binding has to be advertised.
+///
+/// This is the one piece of selection policy the engine owns: the chord is the
+/// same in every frontend, and a hint that hardcodes it would be wrong on one
+/// platform or the other.
+pub fn copy_selection_binding() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd+c"
+    } else {
+        "ctrl+c"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +113,19 @@ mod tests {
             crate::app::activity::classify_activity(&AppStatus::Streaming, &[])
         );
         assert!(classify_live_tools(&[]).is_none());
+    }
+
+    /// The advertised copy chord must name the key the platform actually
+    /// delivers, so the footer is not a promise the terminal breaks (#1542).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_copy_binding_is_cmd_c() {
+        assert_eq!(copy_selection_binding(), "cmd+c");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_copy_binding_is_ctrl_c() {
+        assert_eq!(copy_selection_binding(), "ctrl+c");
     }
 }
