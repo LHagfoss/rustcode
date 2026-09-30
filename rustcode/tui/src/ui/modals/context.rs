@@ -29,17 +29,27 @@ pub(in crate::ui) fn render_status_modal(
     let mut lines = vec![
         modal_header("Session status"),
         Line::default(),
-        Line::from(format!("Model       {}", state.model_name())),
-        Line::from(format!("Session     {}", state.active_session_id())),
-        Line::from(format!(
-            "Messages    {user_count} user · {assistant_count} assistant · {tool_count} tool calls"
-        )),
+        panel_line("Model       ", state.model_name(), PanelEmphasis::Normal),
+        panel_line(
+            "Session     ",
+            state.active_session_id(),
+            PanelEmphasis::Normal,
+        ),
+        panel_line(
+            "Messages    ",
+            &format!("{user_count} user · {assistant_count} assistant · {tool_count} tool calls"),
+            PanelEmphasis::Normal,
+        ),
     ];
     if let Some(usage) = state.current_token_usage() {
-        lines.push(Line::from(format!(
-            "Last turn   {} prompt + {} completion = {} tokens",
-            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-        )));
+        lines.push(panel_line(
+            "Last turn   ",
+            &format!(
+                "{} prompt + {} completion = {} tokens",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            ),
+            PanelEmphasis::Normal,
+        ));
     }
     render_modal_body(f, lines, inner);
 }
@@ -66,18 +76,27 @@ pub(in crate::ui) fn render_stats_modal(
     let mut lines = vec![modal_header("Token usage")];
     match state.current_token_usage() {
         Some(usage) => {
-            lines.push(Line::from(format!(
-                "Last turn   {} prompt + {} completion = {} tokens",
-                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-            )));
+            lines.push(panel_line(
+                "Last turn   ",
+                &format!(
+                    "{} prompt + {} completion = {} tokens",
+                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+                ),
+                PanelEmphasis::Normal,
+            ));
         }
-        None => lines.push(Line::from("Last turn   no token data yet")),
+        None => lines.push(panel_line(
+            "Last turn   ",
+            "no token data yet",
+            PanelEmphasis::Normal,
+        )),
     }
     if let Some(rt) = state.response_time() {
-        lines.push(Line::from(format!(
-            "Latency     {:.1}s last response",
-            rt.as_secs_f32()
-        )));
+        lines.push(panel_line(
+            "Latency     ",
+            &format!("{:.1}s last response", rt.as_secs_f32()),
+            PanelEmphasis::Normal,
+        ));
     }
     let usage_history = state.stats_usage_history();
     if usage_history.is_empty() {
@@ -89,11 +108,15 @@ pub(in crate::ui) fn render_stats_modal(
         lines.push(Line::default());
         lines.push(Line::from("Monthly usage"));
         for (month, stats) in usage_history.iter().rev().take(4) {
-            lines.push(Line::from(format!(
-                "  {month}   {} total tokens · {} calls",
-                thousands(stats.total_tokens),
-                thousands(stats.calls)
-            )));
+            lines.push(panel_line(
+                &format!("  {month}   "),
+                &format!(
+                    "{} total tokens · {} calls",
+                    thousands(stats.total_tokens),
+                    thousands(stats.calls)
+                ),
+                PanelEmphasis::Normal,
+            ));
         }
     }
 
@@ -128,11 +151,17 @@ pub(in crate::ui) fn render_session_modal(
     let lines = vec![
         modal_header("Session"),
         Line::default(),
-        Line::from(format!("ID         {}", state.active_session_id())),
-        Line::from(format!("Model      {}", state.model_name())),
-        Line::from(format!(
-            "Messages   {user_count} user · {assistant_count} assistant"
-        )),
+        panel_line(
+            "ID         ",
+            state.active_session_id(),
+            PanelEmphasis::Normal,
+        ),
+        panel_line("Model      ", state.model_name(), PanelEmphasis::Normal),
+        panel_line(
+            "Messages   ",
+            &format!("{user_count} user · {assistant_count} assistant"),
+            PanelEmphasis::Normal,
+        ),
     ];
 
     render_modal_body(f, lines, inner);
@@ -485,17 +514,17 @@ pub(in crate::ui) fn render_context_modal(
         }
     };
 
-    let prompt_b = compute_blocks(breakdown.current_usage.used_tokens as usize);
-    let free_b = total_blocks.saturating_sub(prompt_b);
-
-    let color_prompt = Color::Rgb(100, 160, 255);
-    let color_asst = Color::Rgb(120, 220, 120);
-    let color_tool = Color::Rgb(240, 200, 100);
-    let color_sys_p = Color::Rgb(140, 180, 220);
-    let color_sys_t = Color::Rgb(170, 175, 190);
-    let color_skill = Color::Rgb(210, 150, 240);
-    let color_sub = Color::Rgb(100, 200, 200);
-    let color_free = Color::Rgb(80, 95, 110);
+    // Category colors come from the active theme (see `panel::context_category_colors`)
+    // so the panel matches the themed UI in light and dark modes alike.
+    let cat_colors = context_category_colors();
+    let color_user = cat_colors[0];
+    let color_asst = cat_colors[1];
+    let color_tool = cat_colors[2];
+    let color_sys_p = cat_colors[3];
+    let color_sys_t = cat_colors[4];
+    let color_skill = cat_colors[5];
+    let color_sub = cat_colors[6];
+    let color_free = cat_colors[7];
 
     let mut dot_spans: Vec<Span<'static>> = Vec::with_capacity(total_blocks);
 
@@ -508,8 +537,34 @@ pub(in crate::ui) fn render_context_modal(
         }
     };
 
-    push_dots(prompt_b, "● ", color_prompt);
-    push_dots(free_b, "□ ", color_free);
+    // One grid segment per usage category, in legend order, so the matrix
+    // shows the same breakdown as the stats column. Segments are capped at
+    // the remaining cells so rounding never overflows the grid.
+    let mut remaining = total_blocks;
+    for (tokens, color) in [
+        breakdown.user_tokens,
+        breakdown.assistant_tokens,
+        breakdown.tool_tokens,
+        breakdown.system_prompt_tokens,
+        breakdown.system_tools_tokens,
+        breakdown.skills_tokens,
+        breakdown.subagent_tokens,
+    ]
+    .into_iter()
+    .zip([
+        color_user,
+        color_asst,
+        color_tool,
+        color_sys_p,
+        color_sys_t,
+        color_skill,
+        color_sub,
+    ]) {
+        let segment = compute_blocks(tokens).min(remaining);
+        push_dots(segment, "● ", color);
+        remaining = remaining.saturating_sub(segment);
+    }
+    push_dots(remaining, "□ ", color_free);
 
     while dot_spans.len() < total_blocks {
         dot_spans.push(Span::styled(
@@ -552,33 +607,38 @@ pub(in crate::ui) fn render_context_modal(
 
     let mut stats_lines: Vec<Line<'static>> = Vec::new();
 
-    // Model and overall usage header
+    // Model and overall usage header. The summary value turns Strong once
+    // overall usage crosses HIGH_USAGE_PCT so a nearly-full window stands out.
+    let summary_text = format!(
+        "{}/{} ({:.1}%) {}",
+        format_token_count(breakdown.current_usage.used_tokens as usize),
+        format_token_count(breakdown.context_window),
+        current_usage_pct,
+        match breakdown.current_usage.source {
+            super::super::context_usage::ContextUsageSource::ProviderPrompt => "prompt",
+            super::super::context_usage::ContextUsageSource::HistoryEstimate => "estimate",
+        }
+    );
+    let summary_emphasis = if current_usage_pct >= HIGH_USAGE_PCT {
+        PanelEmphasis::Strong
+    } else {
+        PanelEmphasis::Normal
+    };
+    let mut summary_spans = vec![Span::styled(
+        format!("{} · ", breakdown.model_name),
+        Style::default()
+            .fg(COLOR_TEXT())
+            .add_modifier(Modifier::BOLD),
+    )];
+    summary_spans.extend(panel_value_spans(
+        &summary_text,
+        summary_emphasis,
+        Style::default()
+            .fg(COLOR_TEXT())
+            .add_modifier(Modifier::BOLD),
+    ));
     stats_lines.push(Line::default());
-    stats_lines.push(Line::from(vec![
-        Span::styled(
-            format!("{} · ", breakdown.model_name),
-            Style::default()
-                .fg(COLOR_TEXT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "{}/{} ({:.1}%) {}",
-                format_token_count(breakdown.current_usage.used_tokens as usize),
-                format_token_count(breakdown.context_window),
-                current_usage_pct,
-                match breakdown.current_usage.source {
-                    super::super::context_usage::ContextUsageSource::ProviderPrompt => {
-                        "prompt"
-                    }
-                    super::super::context_usage::ContextUsageSource::HistoryEstimate => "estimate",
-                }
-            ),
-            Style::default()
-                .fg(COLOR_TEXT())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    stats_lines.push(Line::from(summary_spans));
 
     stats_lines.push(Line::default());
     stats_lines.push(Line::from(vec![Span::styled(
@@ -586,11 +646,13 @@ pub(in crate::ui) fn render_context_modal(
         Style::default().fg(COLOR_MUTED()),
     )]));
 
-    // Category breakdown lines
+    // Category breakdown lines. Every swatch uses the same ● glyph as the
+    // grid; over-threshold categories (see OVER_THRESHOLD_PCT) get an
+    // emphasized value through the shared panel markup helper.
     let categories = [
         (
             "●",
-            color_prompt,
+            color_user,
             "User messages",
             breakdown.user_tokens,
             pct(breakdown.user_tokens),
@@ -613,7 +675,7 @@ pub(in crate::ui) fn render_context_modal(
             true,
         ),
         (
-            "⛃",
+            "●",
             color_sys_p,
             "System prompt",
             breakdown.system_prompt_tokens,
@@ -621,7 +683,7 @@ pub(in crate::ui) fn render_context_modal(
             true,
         ),
         (
-            "⛃",
+            "●",
             color_sys_t,
             "System tools",
             breakdown.system_tools_tokens,
@@ -629,7 +691,7 @@ pub(in crate::ui) fn render_context_modal(
             true,
         ),
         (
-            "⛃",
+            "●",
             color_skill,
             "Skills",
             breakdown.skills_tokens,
@@ -637,7 +699,7 @@ pub(in crate::ui) fn render_context_modal(
             true,
         ),
         (
-            "⛃",
+            "●",
             color_sub,
             "Subagents",
             breakdown.subagent_tokens,
@@ -653,17 +715,19 @@ pub(in crate::ui) fn render_context_modal(
             format!(": {} ({:.1}%)", format_token_count(count), percent)
         };
 
-        stats_lines.push(Line::from(vec![
+        let mut row_spans = vec![
             Span::styled(
                 format!("{icon} "),
                 Style::default().fg(color).bg(COLOR_PANEL()),
             ),
             Span::styled(label, Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
-            Span::styled(
-                count_str,
-                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-            ),
-        ]));
+        ];
+        row_spans.extend(panel_value_spans(
+            &count_str,
+            emphasis_for_share(percent),
+            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+        ));
+        stats_lines.push(Line::from(row_spans));
     }
 
     stats_lines.push(Line::from(vec![
