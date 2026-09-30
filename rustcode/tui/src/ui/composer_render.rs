@@ -1034,6 +1034,47 @@ pub(super) fn completion_footer_hint_clauses(
     }
 }
 
+/// Clauses shown in the footer while a transcript selection is active.
+///
+/// The selection is the modal gesture here: it claims the copy chord before any
+/// other handler sees the key (`selection_owns_key` in the runtime), so the key
+/// that copies it is the footer's *leading* clause and therefore the one clause
+/// that survives the narrowest row. `or right-click` follows it as the second
+/// copy path (`selection.rs`: copy needs Ctrl/Cmd+C or a right-click on the
+/// selection), so the shortest still-truthful form -- the key alone -- is what a
+/// narrow row keeps. Both are whole clauses of `fit_hint_clauses`, so nothing is
+/// ever clipped mid-affordance (#1529).
+pub(super) fn selection_hint_clauses() -> [&'static str; 2] {
+    [
+        rustcode::controller::copy_selection_binding(),
+        "or right-click",
+    ]
+}
+
+/// The footer's key hints in drop order, or `None` when the row has no hint.
+///
+/// A live selection leads. Its copy chord is claimed outright -- pressing it can
+/// only ever reach the selection -- so it outranks both the completion popup's
+/// clauses and the passive session metadata the hint replaces. The popup's own
+/// clauses follow and degrade first. One `fit_hint_clauses` prefix covers both
+/// families, so the order of this list *is* the footer's drop order.
+pub(super) fn footer_hint_clauses(
+    popup_hint: Option<&'static [&'static str]>,
+    selection_active: bool,
+) -> Option<Vec<&'static str>> {
+    let copy = selection_active.then(selection_hint_clauses);
+    let popup = popup_hint.unwrap_or_default();
+    if copy.is_none() && popup.is_empty() {
+        return None;
+    }
+    Some(
+        copy.into_iter()
+            .flatten()
+            .chain(popup.iter().copied())
+            .collect(),
+    )
+}
+
 /// Longest prefix of `clauses` whose text, prefixed by `prefix`, fits `width`,
 /// or `None` when not even the first clause fits.
 ///
@@ -1074,6 +1115,7 @@ pub(super) fn render_composer_footer(
     area: ratatui::layout::Rect,
     state: &RenderSnapshot,
     popup_hint: Option<&'static [&'static str]>,
+    selection_active: bool,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1083,25 +1125,30 @@ pub(super) fn render_composer_footer(
     let window = state.active_context_window().max(1);
     let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
-    let (left_content, left_style, hint_clauses) = if let Some(clauses) = popup_hint {
-        // The completion popup owns the selection, so the hint replaces the
-        // session metadata rather than competing with it for the same row.
-        (
-            String::new(),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-            Some(clauses),
-        )
-    } else if state.ctrl_c_exit_armed() {
+    let hint_clauses = footer_hint_clauses(popup_hint, selection_active);
+    let (left_content, left_style, hint_clauses) = if state.ctrl_c_exit_armed() {
+        // A second Ctrl+C is a pending exit, which outranks every hint.
         (
             "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
             None,
         )
     } else if let Some(notice) = state.transient_notice() {
+        // A notice is the answer to the key that was just pressed, so it outranks
+        // the standing hints: right after a copy the footer must read "Copied
+        // selection to clipboard", not the copy key sitting next to it.
         (
             format!("  {notice}"),
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
             None,
+        )
+    } else if let Some(clauses) = hint_clauses {
+        // A hint names a key the user can press, so it replaces the session
+        // metadata rather than competing with it for the same row.
+        (
+            String::new(),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            Some(clauses),
         )
     } else {
         let mut metadata = Vec::new();
@@ -1130,11 +1177,11 @@ pub(super) fn render_composer_footer(
     let (left, keep_right) = match hint_clauses {
         Some(clauses) => {
             let beside_right =
-                fit_hint_clauses("  ", clauses, row_width.saturating_sub(right_width));
+                fit_hint_clauses("  ", &clauses, row_width.saturating_sub(right_width));
             match beside_right {
                 Some(hint) => (hint, true),
                 None => (
-                    fit_hint_clauses("  ", clauses, row_width).unwrap_or_default(),
+                    fit_hint_clauses("  ", &clauses, row_width).unwrap_or_default(),
                     false,
                 ),
             }

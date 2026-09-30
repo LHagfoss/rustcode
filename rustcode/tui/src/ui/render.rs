@@ -365,7 +365,18 @@ pub(crate) fn render_with_transcript_snapshot(
         Composer::default().render(f, &composer_chunks, state)
     };
     if footer_visible {
-        render_composer_footer(f, chunks[8], state, popup_hint);
+        // A live selection is the modal gesture, so the footer names the copy
+        // key for as long as it lasts and drops it the moment the selection is
+        // cleared (#1542). Both gestures pin the painted viewport, so the
+        // content-drift clear in `refresh_view` below cannot fire while a
+        // selection is live: reading the range here is already its answer.
+        render_composer_footer(
+            f,
+            chunks[8],
+            state,
+            popup_hint,
+            transcript.selection.has_selection(),
+        );
     }
 
     if !filtered_cmds.is_empty() {
