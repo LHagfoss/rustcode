@@ -1,0 +1,1 @@
+Bearer error="invalid_token", error_description="No authorization provided", resource_metadata="https://mcp.vercel.com/.well-known/oauth-protected-resource"
