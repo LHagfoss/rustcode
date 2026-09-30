@@ -301,56 +301,65 @@ async fn handle_enter_inner(
             "/sandbox" => {
                 let current = s.config.sandbox_mode;
                 match tokens.get(1).copied() {
-                    None => s.history.push(ChatMessage::new(
-                        "system",
-                        format!(
-                            "OS sandbox mode: {} ({})\nUse /sandbox read_only, /sandbox workspace_write, /sandbox workspace_write_network, or /sandbox trusted (explicit opt-in, no OS sandbox).",
-                            current.description(),
-                            current.effective_description()
-                        ),
-                    )),
-                    Some("read_only") => {
-                        s.config.sandbox_mode = crate::config::SandboxMode::ReadOnly;
-                        crate::config::save_entire_config(&s.config);
-                        let effective = s.config.sandbox_mode.effective_description();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!("OS sandbox mode set to read_only ({effective})"),
-                        ));
-                    }
-                    Some("workspace_write") => {
-                        s.config.sandbox_mode = crate::config::SandboxMode::WorkspaceWrite;
-                        crate::config::save_entire_config(&s.config);
-                        let effective = s.config.sandbox_mode.effective_description();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!("OS sandbox mode set to workspace_write ({effective})"),
-                        ));
-                    }
-                    Some("workspace_write_network") => {
-                        s.config.sandbox_mode = crate::config::SandboxMode::WorkspaceWriteNetwork;
-                        crate::config::save_entire_config(&s.config);
-                        let effective = s.config.sandbox_mode.effective_description();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!("OS sandbox mode set to workspace_write_network ({effective})"),
-                        ));
-                    }
-                    Some("trusted" | "unrestricted") => {
-                        s.config.sandbox_mode = crate::config::SandboxMode::Trusted;
-                        crate::config::save_entire_config(&s.config);
-                        let effective = s.config.sandbox_mode.effective_description();
+                    None => {
+                        let modes = crate::config::SandboxMode::ALL
+                            .iter()
+                            .map(|mode| {
+                                let marker = if *mode == current { "*" } else { " " };
+                                format!(
+                                    " {marker} /sandbox {:<22} {}",
+                                    mode.as_str(),
+                                    mode.description()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         s.history.push(ChatMessage::new(
                             "system",
                             format!(
-                                "OS sandbox mode set to trusted ({effective}). Commands run with RustCode process permissions; shell approval policy still applies separately."
+                                "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is explicit user opt-in: commands run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nA failed shell command now names the restriction it hit and the command that widens it.",
+                                current.description(),
+                                current.effective_description()
                             ),
-                        ));
+                        ))
                     }
-                    Some(_) => s.history.push(ChatMessage::new(
-                        "system",
-                        "Invalid option. Use read_only, workspace_write, workspace_write_network, or trusted.",
-                    )),
+                    Some(mode) => {
+                        match crate::config::SandboxMode::ALL
+                            .into_iter()
+                            .find(|candidate| {
+                                candidate.as_str() == mode
+                                    || (mode == "unrestricted" && candidate.is_trusted())
+                            }) {
+                            Some(selected) => {
+                                s.config.sandbox_mode = selected;
+                                crate::config::save_entire_config(&s.config);
+                                let effective = selected.effective_description();
+                                let note = if selected.is_trusted() {
+                                    " Commands run with RustCode process permissions; shell approval policy still applies separately."
+                                } else {
+                                    ""
+                                };
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!(
+                                        "OS sandbox mode set to {} ({effective}){note}",
+                                        selected.as_str()
+                                    ),
+                                ));
+                            }
+                            None => s.history.push(ChatMessage::new(
+                                "system",
+                                format!(
+                                    "Invalid option `{mode}`. Use {}.",
+                                    crate::config::SandboxMode::ALL
+                                        .iter()
+                                        .map(|candidate| candidate.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                            )),
+                        }
+                    }
                 }
             }
             "/verbosity" => {

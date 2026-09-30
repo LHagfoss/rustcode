@@ -46,11 +46,27 @@ effective shell permissions on Linux and macOS. Its values are
 `workspace_write_network`, and `trusted` (explicit opt-in, also accepted as
 `unrestricted`). The startup banner and `/status` show the effective mode
 separately from the command approval mode. Project config files cannot change
-this user-level security setting, including `trusted`. `/sandbox` with no
-argument shows the current effective permissions; pass one of the mode names
-to change and persist it. `trusted` runs shell commands with the RustCode
-process's own filesystem and network permissions, bypassing OS sandbox
-wrapping; shell approval/deny policy still applies separately.
+this user-level security setting, including `trusted`: a checked-out project
+can neither enable nor downgrade it. `/sandbox` with no
+argument shows every mode with its permissions and marks the current one; pass
+one of the mode names to change and persist it. `trusted` runs shell commands
+with the RustCode process's own filesystem and network permissions, bypassing
+OS sandbox wrapping, so a command can read and write anywhere the user can —
+not only the workspace and a task worktree. Shell approval/deny policy still
+applies separately, and only the user config or `/sandbox trusted` can turn it
+on. The background scheduler's scheduled `run_command` path honors the same
+mode.
+
+### Default mode
+
+`workspace_write` remains the default. This is a deliberate decision, not an
+oversight: `sandbox_mode` is a user-level security setting, and a project
+checkout, an issue body, or a model tool call must never be able to grant host
+network and filesystem access by default. Widening the session is one
+`/sandbox workspace_write_network`, or `/sandbox trusted`, and the effective
+mode is always visible in the status line, the welcome banner, `/status`, and
+`/sandbox`. Changing the default would move that decision from an explicit,
+persisted, per-user choice to an invisible one, so it is left alone.
 
 On Linux, shell commands run through bubblewrap with the host filesystem
 read-only and, in `workspace_write` modes, the active workspace and session
@@ -115,14 +131,28 @@ workflow can alternatively request one-shot `network_access: true` in a
 constrained mode, or use explicit `trusted` mode.
 
 Failure attribution: OS sandbox denials, missing writable roots, and
-approval denials are reported before the command runs. Once a command runs,
-its stderr is the command's own result — GitHub authentication, SSH
-(`No user exists for uid`, key lookup), certificate validation, and network
-errors are credential/environment failures, not sandbox failures, even when
-they occur inside a sandbox. When a remote command fails, check the smallest
-fix first: approval denied, then missing writable root or cwd, then network
-access for the mode, then credentials/certs/SSH, before assuming OS
-sandboxing is at fault.
+approval denials are reported before the command runs. A command that does run
+and fails keeps its own stdout/stderr verbatim, and RustCode appends one
+`[harness: ...]` line naming what the active mode restricts and what to do
+about it, so the reason does not have to be inferred:
+
+- The line names the mode, its effective permissions, and the denied class
+  (`network`, `write`, `read`, or `unknown`).
+- A network-class failure names network as the restriction and points at
+  `network_access: true`, `/sandbox workspace_write_network`, and
+  `/sandbox trusted`.
+- A filesystem failure names the restriction, the writable roots in effect,
+  and `filesystem_write_path`, a `/workspace` task worktree, or
+  `/sandbox trusted`.
+- A failure that matches no sandbox signature says exactly that, so a
+  command, credential, or environment bug is not retried with a wider sandbox.
+
+Credential, SSH (`No user exists for uid`, key lookup), and certificate
+failures are never reported as sandbox denials, and `trusted` mode is never
+annotated: no OS sandbox was involved, so the command's own error is the whole
+story. When a remote command fails, check the smallest fix first: approval
+denied, then missing writable root or cwd, then network access for the mode,
+then credentials/certs/SSH, before assuming OS sandboxing is at fault.
 
 Windows does not yet have an operating-system sandbox backend. Shell commands
 continue to run with the RustCode process permissions there, and the startup
