@@ -18,9 +18,52 @@ struct CellPosition {
     column: usize,
 }
 
-struct CapturedRow {
+/// One painted visual row of the transcript.
+///
+/// `text_end` is derived once when the row is read, so copy and highlight never
+/// rescan the row's terminal-width padding.
+#[derive(Clone, Eq, PartialEq)]
+struct PaintedRow {
     cells: Vec<String>,
     soft_wrap_before: bool,
+    text_end: usize,
+}
+
+impl PaintedRow {
+    fn new(cells: Vec<String>, soft_wrap_before: bool) -> Self {
+        let text_end = cells
+            .iter()
+            .rposition(|cell| !cell.trim().is_empty())
+            .map_or(0, |column| column + 1);
+        Self {
+            cells,
+            soft_wrap_before,
+            text_end,
+        }
+    }
+}
+
+/// Reads one visual row out of a rendered frame.
+///
+/// Empty cells are the trailing half of a wide grapheme, so a cell covered by
+/// an earlier wide symbol yields no character of its own.
+fn buffer_row_cells(area: Rect, buffer: &Buffer, y: u16) -> Vec<String> {
+    let mut continuation = 0;
+    (area.x..area.right())
+        .map(|x| {
+            let symbol = buffer
+                .cell((x, y))
+                .map(|cell| cell.symbol().to_owned())
+                .unwrap_or_default();
+            if continuation > 0 {
+                continuation -= 1;
+                String::new()
+            } else {
+                continuation = symbol.width().saturating_sub(1);
+                symbol
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -34,7 +77,8 @@ enum SelectionUnit {
 #[derive(Default)]
 pub(crate) struct TranscriptSelection {
     area: Rect,
-    rows: Vec<Vec<String>>,
+    rows: Vec<PaintedRow>,
+    rows_scanned: bool,
     soft_wrap_before: Vec<bool>,
     anchor: Option<CellPosition>,
     focus: Option<CellPosition>,
@@ -49,7 +93,7 @@ pub(crate) struct TranscriptSelection {
     dragging: bool,
     snapshot: Option<Arc<RenderSnapshot>>,
     pinned_width: u16,
-    captured: BTreeMap<i64, CapturedRow>,
+    captured: BTreeMap<i64, PaintedRow>,
     viewport_scroll: usize,
     viewport_top_key: i64,
     pending_scroll: isize,
@@ -113,44 +157,44 @@ impl TranscriptSelection {
         scroll_rows: usize,
     ) {
         let geometry_changed = self.area != area;
-        let rows = (area.y..area.bottom())
-            .map(|y| {
-                let mut continuation = 0;
-                (area.x..area.right())
-                    .map(|x| {
-                        let symbol = buffer
-                            .cell((x, y))
-                            .map(|cell| cell.symbol().to_owned())
-                            .unwrap_or_default();
-                        if continuation > 0 {
-                            continuation -= 1;
-                            String::new()
-                        } else {
-                            continuation = symbol.width().saturating_sub(1);
-                            symbol
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
         if self.snapshot.is_some() {
             // Scroll offsets count pre-wrapped visual Lines. The selected view
             // stays bottom-anchored when its height changes.
             self.viewport_top_key += self.viewport_scroll as i64 - scroll_rows as i64
                 + self.area.height as i64
                 - area.height as i64;
-        }
-        if self.snapshot.is_none()
-            && (self.area != area || self.rows != rows || self.soft_wrap_before != soft_wrap_before)
-        {
-            self.clear();
-        }
-        self.area = area;
-        self.rows = rows;
-        self.soft_wrap_before = soft_wrap_before.to_vec();
-        self.viewport_scroll = scroll_rows;
-        if self.snapshot.is_some() {
-            self.capture_visible_rows();
+            // A pinned view reads its text from `captured`, so the frame is
+            // only scanned for the rows that scrolled in since the last frame.
+            self.area = area;
+            self.rows = Vec::new();
+            self.rows_scanned = false;
+            self.set_soft_wrap_before(soft_wrap_before);
+            self.viewport_scroll = scroll_rows;
+            self.capture_missing_rows(area, buffer);
+        } else {
+            let rows = (area.y..area.bottom())
+                .map(|y| {
+                    PaintedRow::new(
+                        buffer_row_cells(area, buffer, y),
+                        soft_wrap_before
+                            .get(usize::from(y - area.y))
+                            .copied()
+                            .unwrap_or(false),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if self.rows_scanned
+                && (self.area != area
+                    || self.rows != rows
+                    || self.soft_wrap_before != soft_wrap_before)
+            {
+                self.clear();
+            }
+            self.area = area;
+            self.rows = rows;
+            self.rows_scanned = true;
+            self.set_soft_wrap_before(soft_wrap_before);
+            self.viewport_scroll = scroll_rows;
         }
         if let Some((key, previous_top, count)) = self.pending_keyboard_move
             && self.viewport_top_key != previous_top
@@ -164,8 +208,18 @@ impl TranscriptSelection {
                 }
             }
         }
-        if self.snapshot.is_some() && self.dragging && !geometry_changed {
-            self.extend_from_pointer();
+        if self.snapshot.is_some() {
+            if self.dragging && !geometry_changed {
+                self.extend_from_pointer();
+            }
+            self.prune_captured();
+        }
+    }
+
+    fn set_soft_wrap_before(&mut self, soft_wrap_before: &[bool]) {
+        if self.soft_wrap_before != soft_wrap_before {
+            self.soft_wrap_before.clear();
+            self.soft_wrap_before.extend_from_slice(soft_wrap_before);
         }
     }
 
@@ -173,23 +227,84 @@ impl TranscriptSelection {
         self.viewport_top_key + local_row as i64
     }
 
-    fn capture_visible_rows(&mut self) {
-        for (local_row, cells) in self
-            .rows
-            .iter()
-            .take(self.soft_wrap_before.len())
-            .enumerate()
-        {
+    /// Captures the painted rows that are not pinned yet.
+    ///
+    /// Pinned rows are already in `captured`, so a scrolled frame only pays for
+    /// the rows that actually moved into view.
+    fn capture_missing_rows(&mut self, area: Rect, buffer: &Buffer) {
+        let count = usize::from(area.height).min(self.soft_wrap_before.len());
+        for local_row in 0..count {
             let key = self.row_key(local_row);
-            self.captured.entry(key).or_insert_with(|| CapturedRow {
-                cells: cells.clone(),
-                soft_wrap_before: self
-                    .soft_wrap_before
-                    .get(local_row)
-                    .copied()
-                    .unwrap_or(false),
-            });
+            if self.captured.contains_key(&key) {
+                continue;
+            }
+            let cells = buffer_row_cells(area, buffer, area.y + local_row as u16);
+            let soft_wrap_before = self.soft_wrap_before[local_row];
+            self.captured
+                .insert(key, PaintedRow::new(cells, soft_wrap_before));
         }
+    }
+
+    fn capture_painted_rows(&mut self) {
+        for local_row in 0..usize::from(self.area.height).min(self.soft_wrap_before.len()) {
+            let key = self.row_key(local_row);
+            if self.captured.contains_key(&key) {
+                continue;
+            }
+            let Some(row) = self.rows.get(local_row) else {
+                break;
+            };
+            self.captured.insert(key, row.clone());
+        }
+    }
+
+    /// Drops captured rows that no live selection or viewport can reach.
+    ///
+    /// A gesture in progress can move its focus to any row in the viewport, so
+    /// everything between the selection and the viewport stays reachable. Once
+    /// the gesture is over only the selected rows, the viewport, and the rows a
+    /// shift-click would extend from remain, which is what keeps a long scroll
+    /// away from a released selection from pinning the whole history. Soft-wrapped
+    /// runs are contiguous, so growing each range out to its run boundaries keeps
+    /// the rows a word or line selection can still walk into.
+    fn prune_captured(&mut self) {
+        let top = self.viewport_top_key;
+        let mut ranges = vec![(
+            top,
+            top + self.soft_wrap_before.len().saturating_sub(1) as i64,
+        )];
+        // A collapsed drag still has to stay reachable, so fall back to the
+        // anchor and focus rows when there is no range to read yet.
+        let selected = self.range().or_else(|| {
+            self.anchor
+                .zip(self.focus)
+                .map(|(start, end)| (start.min(end), start.max(end)))
+        });
+        for (start, end) in [selected, self.origin_range].into_iter().flatten() {
+            ranges.push((start.row.min(end.row), start.row.max(end.row)));
+        }
+        if self.dragging || self.keyboard_mode {
+            let low = ranges.iter().map(|(low, _)| *low).min().unwrap_or(top);
+            let high = ranges.iter().map(|(_, high)| *high).max().unwrap_or(top);
+            ranges = vec![(low, high)];
+        }
+        for (low, high) in &mut ranges {
+            while self.soft_wrap_before(*low) && self.captured.contains_key(&(*low - 1)) {
+                *low -= 1;
+            }
+            while self.soft_wrap_before(*high + 1) && self.captured.contains_key(&(*high + 1)) {
+                *high += 1;
+            }
+        }
+        let span = ranges.iter().map(|(low, high)| high - low + 1).sum::<i64>();
+        if self.captured.len() as i64 <= span {
+            return;
+        }
+        self.captured.retain(|key, _| {
+            ranges
+                .iter()
+                .any(|(low, high)| (*low..=*high).contains(key))
+        });
     }
 
     fn position(&self, column: u16, row: u16) -> Option<CellPosition> {
@@ -237,42 +352,54 @@ impl TranscriptSelection {
         (anchor != focus).then_some((anchor.min(focus), anchor.max(focus)))
     }
 
+    /// Columns a visual row contributes to the copied text.
+    ///
+    /// A visual row is padded to the terminal width, so the tail of a row that
+    /// ends a logical line is gutter padding rather than content. Only that
+    /// padding is dropped: leading whitespace stays, and a row the next visual
+    /// row soft-wraps into keeps its trailing whitespace, because that is the
+    /// space that rejoins the wrapped words. Copy and highlight share this so
+    /// they never disagree about which whitespace is selected.
+    fn copied_range(&self, row: i64, from: usize, through: usize) -> Option<(usize, usize)> {
+        let painted = self.painted_row(row)?;
+        let from = from.min(painted.cells.len());
+        let through = through.min(painted.cells.len());
+        let through = if self.soft_wrap_before(row + 1) {
+            through
+        } else {
+            // A drag that starts inside the padding of a row selects nothing
+            // from it, so the end never moves behind the start.
+            through.min(painted.text_end).max(from)
+        };
+        Some((from, through))
+    }
+
     pub(crate) fn selected_text(&self) -> Option<String> {
         if self.keyboard_mode {
             return self.keyboard_selected_text();
         }
         let (start, end) = self.range()?;
-        let mut lines = Vec::new();
+        let mut text = String::new();
         for row in start.row..=end.row {
-            let cells = if self.snapshot.is_some() {
-                &self.captured.get(&row)?.cells
-            } else {
-                self.rows.get(row as usize)?
-            };
+            if row > start.row && !self.soft_wrap_before(row) {
+                text.push('\n');
+            }
             let from = if row == start.row { start.column } else { 0 };
+            let cells = self.row_cells(row)?;
             let through = if row == end.row {
                 end.column.saturating_add(1)
             } else {
                 cells.len()
             };
-            let text = cells
-                .get(from..through.min(cells.len()))?
-                .iter()
-                .map(String::as_str)
-                .collect::<String>();
-            let next_is_soft_wrap = row < end.row && self.soft_wrap_before(row + 1);
-            lines.push(if next_is_soft_wrap {
-                text
-            } else {
-                text.trim_end().to_owned()
-            });
+            let (from, through) = self.copied_range(row, from, through)?;
+            text.extend(cells.get(from..through)?.iter().map(String::as_str));
         }
-        let mut text = String::new();
-        for (index, line) in lines.iter().enumerate() {
-            if index > 0 && !self.soft_wrap_before(start.row + index as i64) {
-                text.push('\n');
-            }
-            text.push_str(line);
+        // A drag that overshoots into the blank rows below the transcript has
+        // still selected prose, not the blank lines after it. Keyboard range
+        // selection keeps a trailing newline: walking a caret across a row
+        // boundary asks for that newline.
+        while text.ends_with('\n') {
+            text.pop();
         }
         (!text.trim().is_empty()).then_some(text)
     }
@@ -290,42 +417,34 @@ impl TranscriptSelection {
             if row > start.row && !self.soft_wrap_before(row) {
                 text.push('\n');
             }
-            let cells = self.row_cells(row)?;
             let from = if row == start.row { start.column } else { 0 };
+            let cells = self.row_cells(row)?;
             let through = if row == end.row {
                 end.column
             } else {
-                self.text_end(row)
+                cells.len()
             };
-            text.extend(
-                cells
-                    .get(from.min(cells.len())..through.min(cells.len()))?
-                    .iter()
-                    .map(String::as_str),
-            );
+            let (from, through) = self.copied_range(row, from, through)?;
+            text.extend(cells.get(from..through)?.iter().map(String::as_str));
         }
         (!text.is_empty()).then_some(text)
     }
 
     fn soft_wrap_before(&self, row: i64) -> bool {
+        self.painted_row(row)
+            .is_some_and(|painted| painted.soft_wrap_before)
+    }
+
+    fn painted_row(&self, row: i64) -> Option<&PaintedRow> {
         if self.snapshot.is_some() {
-            self.captured
-                .get(&row)
-                .is_some_and(|row| row.soft_wrap_before)
+            self.captured.get(&row)
         } else {
-            self.soft_wrap_before
-                .get(row as usize)
-                .copied()
-                .unwrap_or(false)
+            self.rows.get(row as usize)
         }
     }
 
     fn row_cells(&self, row: i64) -> Option<&[String]> {
-        if self.snapshot.is_some() {
-            Some(&self.captured.get(&row)?.cells)
-        } else {
-            Some(self.rows.get(row as usize)?)
-        }
+        Some(&self.painted_row(row)?.cells)
     }
 
     fn unit_range(
@@ -427,15 +546,10 @@ impl TranscriptSelection {
         }
     }
 
+    /// Column just past the last cell that carries text, i.e. where the
+    /// terminal-width padding of the row starts.
     fn text_end(&self, row: i64) -> usize {
-        self.row_cells(row)
-            .and_then(|cells| {
-                cells
-                    .iter()
-                    .rposition(|cell| !cell.trim().is_empty())
-                    .map(|column| column + 1)
-            })
-            .unwrap_or(0)
+        self.painted_row(row).map_or(0, |painted| painted.text_end)
     }
 
     pub(crate) fn begin_keyboard_with_snapshot(
@@ -449,7 +563,7 @@ impl TranscriptSelection {
             self.pinned_width = self.area.width;
             self.viewport_scroll = scroll_rows;
             self.viewport_top_key = 0;
-            self.capture_visible_rows();
+            self.capture_painted_rows();
         }
         self.keyboard_mode = true;
         let cursor = old_start.unwrap_or(CellPosition {
@@ -603,7 +717,7 @@ impl TranscriptSelection {
             self.origin_row = event.row;
             self.anchor = self.position(event.column, event.row);
             self.focus = self.anchor;
-            self.capture_visible_rows();
+            self.capture_painted_rows();
         }
     }
 
@@ -781,6 +895,12 @@ impl TranscriptSelection {
             } else {
                 usize::from(self.area.width)
             };
+            // Mark exactly the cells the copy reads, so the highlight never
+            // claims trailing padding that the clipboard will not carry.
+            let through = self
+                .copied_range(row, from, through)
+                .map_or(through, |(_, through)| through)
+                .min(usize::from(self.area.width));
             for column in from..through {
                 let x = self.area.x.saturating_add(column as u16);
                 let y = self.area.y.saturating_add(local_row as u16);
@@ -1111,6 +1231,152 @@ mod tests {
     }
 
     #[test]
+    fn copy_keeps_the_space_that_joins_a_soft_wrapped_line() {
+        // A soft-wrapped row is full width by construction, so the space at
+        // its end is content, not terminal padding (#1538).
+        let area = Rect::new(0, 0, 6, 2);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello ", Style::default());
+        buffer.set_string(0, 1, "world", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false, true]);
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 1));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 1));
+        assert_eq!(selection.selected_text().as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn keyboard_copy_keeps_the_space_that_joins_a_soft_wrapped_line() {
+        let area = Rect::new(0, 0, 6, 2);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello ", Style::default());
+        buffer.set_string(0, 1, "world", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false, true]);
+        selection.begin_keyboard_with_snapshot(
+            super::super::render_snapshot::render_snapshot(&RenderState::new()),
+            0,
+        );
+        for _ in 0..11 {
+            selection.move_keyboard(KeyCode::Right);
+        }
+        assert_eq!(
+            selection.keyboard_focus,
+            Some(CellPosition { row: 1, column: 5 })
+        );
+        assert_eq!(selection.selected_text().as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn copy_drops_terminal_padding_but_keeps_leading_indentation() {
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "  indented", Style::default());
+        buffer.set_string(0, 1, "tail", Style::default());
+        buffer.set_string(0, 2, "", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false, false, false]);
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 9, 2));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 9, 2));
+        // Leading indentation survives, terminal-width padding and the blank
+        // row the drag overshot into do not.
+        assert_eq!(
+            selection.selected_text().as_deref(),
+            Some("  indented\ntail")
+        );
+    }
+
+    #[test]
+    fn copy_round_trips_a_code_block_and_an_ascii_table() {
+        let mut state = RenderState::new();
+        state.history.push(ChatMessage::new(
+            "assistant",
+            "Prose line that wraps past the edge of the narrow viewport.\n\n\
+             ```\nfn main() {\n    let x = 1;\n}\n```\n\n\
+             ```\n+------+------+\n| name | value |\n+------+------+\n| a    | 1    |\n+------+------+\n```",
+        ));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript_size(&state, &mut transcript, 40, 20);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x, area.y + 1),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 20,
+            area.bottom() - 1,
+        ));
+        let copied = transcript.selection.selected_text().unwrap();
+        // The transcript indents every row by two columns; that indentation is
+        // content and round-trips, as does the code block's own four spaces.
+        assert_eq!(
+            copied,
+            "• Prose line that wraps past the edge\n  \
+             of the narrow viewport.\n\n  \
+             fn main() {\n      let x = 1;\n  }\n\n  \
+             +------+------+\n  | name | value |\n  +------+------+\n  \
+             | a    | 1    |\n  +------+------+"
+        );
+        for line in copied.lines() {
+            assert_eq!(line, line.trim_end(), "trailing padding in {line:?}");
+        }
+    }
+
+    #[test]
+    fn highlight_stops_where_the_copy_stops() {
+        let area = Rect::new(0, 0, 8, 3);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello", Style::default());
+        buffer.set_string(0, 1, "world", Style::default());
+        buffer.set_string(0, 2, "again", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false, false, false]);
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, 2));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 2));
+        assert_eq!(
+            selection.selected_text().as_deref(),
+            Some("hello\nworld\naga")
+        );
+        selection.highlight(&mut buffer);
+        let highlighted = |y: u16| {
+            (0..8u16)
+                .filter(|x| {
+                    buffer
+                        .cell((*x, y))
+                        .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+                })
+                .count()
+        };
+        assert_eq!((highlighted(0), highlighted(1), highlighted(2)), (5, 5, 3));
+    }
+
+    #[test]
+    fn highlight_keeps_covering_a_soft_wrapped_row() {
+        let area = Rect::new(0, 0, 6, 2);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello ", Style::default());
+        buffer.set_string(0, 1, "world", Style::default());
+        let mut selection = TranscriptSelection::default();
+        selection.refresh(area, &buffer, &[false, true]);
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 1));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 1));
+        assert_eq!(selection.selected_text().as_deref(), Some("hello world"));
+        selection.highlight(&mut buffer);
+        // The wrapped row stays fully marked, matching the space the copy keeps.
+        assert!((0..6u16).all(|x| {
+            buffer
+                .cell((x, 0))
+                .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+        }));
+    }
+
+    #[test]
     fn left_release_does_not_copy_while_right_click_does() {
         let area = Rect::new(0, 0, 8, 1);
         let mut buffer = Buffer::empty(area);
@@ -1340,6 +1606,53 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_away_from_a_released_selection_keeps_the_capture_bounded() {
+        let mut state = RenderState::new();
+        let text = (0..2_000)
+            .map(|row| format!("history row {row:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.history.push(ChatMessage::new("assistant", text));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        let selected = transcript.selection.selected_text().unwrap();
+        let selected_rows = transcript.selection.last_row() - transcript.selection.first_row() + 1;
+        assert_eq!(transcript.selection.captured.len() as i64, selected_rows);
+
+        // Scrolling far from the drag origin keeps the copy and stops growing
+        // the capture cache instead of pinning every row ever painted.
+        for _ in 0..200 {
+            transcript.scroll_up(1);
+            let _ = rendered_transcript(&state, &mut transcript);
+        }
+        assert_eq!(
+            transcript.selection.selected_text().as_deref(),
+            Some(selected.as_str())
+        );
+        assert!(
+            transcript.selection.captured.len() <= area.height as usize + 3,
+            "captured {}",
+            transcript.selection.captured.len()
+        );
+    }
+
+    #[test]
     fn wrapped_rows_keep_visual_anchors_across_reverse_scroll() {
         let mut state = RenderState::new();
         let text = (0..40)
@@ -1454,8 +1767,21 @@ mod tests {
         state.history.push(ChatMessage::new("assistant", text));
         let mut transcript = super::super::history_cell::TranscriptState::default();
         let start = std::time::Instant::now();
-        let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        let painted = rendered_transcript_size(&state, &mut transcript, 100, 40);
         eprintln!("first paint: {:?}", start.elapsed());
+
+        // Baseline: the same scroll with no selection pinned, so the pinned
+        // numbers below can be read as the selection's share of a frame.
+        transcript.scroll_up(10);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            transcript.scroll_down(1);
+            let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+        }
+        eprintln!("10 unselected wheel frames: {:?}", start.elapsed());
+        transcript.scroll_up(10);
+        let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
+
         let area = transcript.selection.area;
         transcript.selection.begin_with_snapshot(
             mouse(
@@ -1504,5 +1830,45 @@ mod tests {
             let _ = rendered_transcript_size(&state, &mut transcript, 100, 40);
         }
         eprintln!("10 downward edge frames: {:?}", start.elapsed());
+
+        bench_selection_frame_cost(painted, area);
+    }
+
+    /// Times the selection-only part of a frame: capturing the rows a scrolled
+    /// frame adds and painting the highlight.
+    fn bench_selection_frame_cost(painted: Buffer, area: Rect) {
+        let mut selection = TranscriptSelection::default();
+        let soft_wrap_before = vec![false; usize::from(area.height)];
+        selection.refresh(area, &painted, &soft_wrap_before);
+        selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&RenderState::new()),
+            0,
+        );
+        selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+        let mut highlighted = painted.clone();
+        let start = std::time::Instant::now();
+        for scroll in 0..200 {
+            selection.refresh_view(area, &painted, &soft_wrap_before, scroll);
+            selection.highlight(&mut highlighted);
+        }
+        eprintln!("200 pinned capture+highlight frames: {:?}", start.elapsed());
+
+        let mut unpinned = TranscriptSelection::default();
+        unpinned.refresh(area, &painted, &soft_wrap_before);
+        let start = std::time::Instant::now();
+        for _ in 0..200 {
+            unpinned.refresh(area, &painted, &soft_wrap_before);
+        }
+        eprintln!("200 unpinned capture frames: {:?}", start.elapsed());
+        eprintln!("captured rows: {}", selection.captured.len());
     }
 }
