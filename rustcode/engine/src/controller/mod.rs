@@ -59,7 +59,7 @@ pub use snapshot::{
 };
 pub use tasks::{
     SubagentController, TaskDisplay, TurnContext, background_command_label,
-    background_task_snapshots, has_background_tasks, stop_background_tasks,
+    background_task_snapshots, has_background_tasks, spawn_background_task, stop_background_tasks,
 };
 pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, History, LiveToolCall, LiveToolOutputChunk, PendingSteer,
