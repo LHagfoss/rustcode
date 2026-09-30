@@ -54,6 +54,7 @@ pub(crate) struct RenderSnapshot {
     verbosity: Verbosity,
     delegation_active: bool,
     modal_open: bool,
+    user_overlay_open: bool,
     last_copy_text: Option<(String, std::time::Instant)>,
     transient_notice: Option<String>,
     expanded_thoughts: std::collections::HashSet<usize>,
@@ -107,6 +108,8 @@ struct OverlaySnapshot {
     pending_delete_session_idx: Option<usize>,
     show_subagent_picker: bool,
     subagent_picker_index: usize,
+    settings_picker: Option<rustcode::controller::SettingsPicker>,
+    command_panel: Option<rustcode::controller::CommandPanel>,
     show_context_modal: bool,
     show_status_modal: bool,
     show_stats_modal: bool,
@@ -142,6 +145,8 @@ impl OverlaySnapshot {
             pending_delete_session_idx: view.pending_delete_session_idx,
             show_subagent_picker: view.show_subagent_picker,
             subagent_picker_index: view.subagent_picker_index,
+            settings_picker: view.settings_picker,
+            command_panel: view.command_panel.clone(),
             show_context_modal: view.show_context_modal,
             show_status_modal: view.show_status_modal,
             show_stats_modal: view.show_stats_modal,
@@ -220,6 +225,7 @@ impl RenderSnapshot {
             verbosity: view.verbosity.clone(),
             delegation_active: view.delegation_active,
             modal_open: view.modal_open(),
+            user_overlay_open: view.user_overlay_open(),
             last_copy_text: view.last_copy_text.clone(),
             transient_notice: view.transient_notice.clone(),
             expanded_thoughts: view.expanded_thoughts.clone(),
@@ -435,6 +441,18 @@ impl RenderSnapshot {
     pub(crate) fn subagent_picker_index(&self) -> usize {
         self.overlay.subagent_picker_index
     }
+    pub(crate) fn user_overlay_open(&self) -> bool {
+        self.user_overlay_open
+    }
+
+    pub(crate) fn settings_picker(&self) -> Option<rustcode::controller::SettingsPicker> {
+        self.overlay.settings_picker
+    }
+
+    pub(crate) fn command_panel(&self) -> Option<&rustcode::controller::CommandPanel> {
+        self.overlay.command_panel.as_ref()
+    }
+
     pub(crate) fn show_context_modal(&self) -> bool {
         self.overlay.show_context_modal
     }

@@ -50,7 +50,7 @@ pub(in crate::ui) use navigation::{
 };
 pub(in crate::ui) use panel::{
     HIGH_USAGE_PCT, OVER_THRESHOLD_PCT, PanelEmphasis, context_category_colors, emphasis_for_share,
-    panel_line, panel_value_spans,
+    panel_line, panel_value_spans, render_command_panel,
 };
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
@@ -416,6 +416,8 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
         }
     } else if state.show_subagent_picker() {
         SUBAGENT_PICKER_HEIGHT
+    } else if state.command_panel().is_some() {
+        18
     } else if state.show_context_modal() {
         CONTEXT_MODAL_HEIGHT
     } else if state.show_status_modal() {
@@ -429,12 +431,12 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
     } else if state.show_mcp_config() {
         MCP_CONFIG_HEIGHT
     } else {
-        match state.status() {
-            AppStatus::VerbosityPicker => VERBOSITY_PICKER_HEIGHT,
-            AppStatus::ThinkingPicker => THINKING_PICKER_HEIGHT,
-            AppStatus::EffortPicker => EFFORT_PICKER_HEIGHT,
-            AppStatus::ProtocolPicker => PROTOCOL_PICKER_HEIGHT,
-            AppStatus::YoloPicker => YOLO_PICKER_HEIGHT,
+        match state.settings_picker() {
+            Some(rustcode::controller::SettingsPicker::Verbosity) => VERBOSITY_PICKER_HEIGHT,
+            Some(rustcode::controller::SettingsPicker::Thinking) => THINKING_PICKER_HEIGHT,
+            Some(rustcode::controller::SettingsPicker::Effort) => EFFORT_PICKER_HEIGHT,
+            Some(rustcode::controller::SettingsPicker::Protocol) => PROTOCOL_PICKER_HEIGHT,
+            Some(rustcode::controller::SettingsPicker::Yolo) => YOLO_PICKER_HEIGHT,
             _ => return 0,
         }
     };

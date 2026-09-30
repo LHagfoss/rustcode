@@ -6,6 +6,8 @@ pub struct OverlayState<'a> {
     redraw_requested: &'a mut bool,
     render_revision: &'a mut u64,
     status: &'a mut AppStatus,
+    settings_picker: &'a mut Option<crate::app::SettingsPicker>,
+    command_panel: &'a mut Option<crate::app::CommandPanel>,
     show_model_picker: &'a mut bool,
     show_theme_picker: &'a mut bool,
     show_command_picker: &'a mut bool,
@@ -33,6 +35,8 @@ impl<'a> OverlayState<'a> {
             redraw_requested: &mut state.redraw_requested,
             render_revision: &mut state.render_revision,
             status: &mut state.status,
+            settings_picker: &mut state.settings_picker,
+            command_panel: &mut state.command_panel,
             show_model_picker: &mut state.show_model_picker,
             show_theme_picker: &mut state.show_theme_picker,
             show_command_picker: &mut state.show_command_picker,
@@ -56,7 +60,9 @@ impl<'a> OverlayState<'a> {
 
     #[cfg(test)]
     pub(crate) fn any_open(&self) -> bool {
-        *self.show_model_picker
+        self.settings_picker.is_some()
+            || self.command_panel.is_some()
+            || *self.show_model_picker
             || *self.show_theme_picker
             || *self.show_command_picker
             || *self.show_history_picker
@@ -81,6 +87,8 @@ impl<'a> OverlayState<'a> {
     }
 
     pub fn close_all(&mut self) {
+        *self.settings_picker = None;
+        *self.command_panel = None;
         *self.show_model_picker = false;
         *self.show_theme_picker = false;
         *self.show_command_picker = false;
@@ -120,11 +128,13 @@ impl<'a> OverlayState<'a> {
             Overlay::Model => *self.show_model_picker = true,
             Overlay::Theme => *self.show_theme_picker = true,
             Overlay::McpConfig => *self.show_mcp_config = true,
-            Overlay::Verbosity => *self.status = AppStatus::VerbosityPicker,
-            Overlay::Thinking => *self.status = AppStatus::ThinkingPicker,
-            Overlay::Effort => *self.status = AppStatus::EffortPicker,
-            Overlay::Protocol => *self.status = AppStatus::ProtocolPicker,
-            Overlay::Yolo => *self.status = AppStatus::YoloPicker,
+            Overlay::Verbosity => {
+                *self.settings_picker = Some(crate::app::SettingsPicker::Verbosity)
+            }
+            Overlay::Thinking => *self.settings_picker = Some(crate::app::SettingsPicker::Thinking),
+            Overlay::Effort => *self.settings_picker = Some(crate::app::SettingsPicker::Effort),
+            Overlay::Protocol => *self.settings_picker = Some(crate::app::SettingsPicker::Protocol),
+            Overlay::Yolo => *self.settings_picker = Some(crate::app::SettingsPicker::Yolo),
             Overlay::ToolConfirmation => {
                 if self.pending_tool_confirmation.is_some() {
                     *self.status = AppStatus::AwaitingToolConfirmation;
@@ -226,6 +236,41 @@ mod tests {
         assert!(state.auto_confirm);
         assert!(state.history.is_empty());
         assert_eq!(state.active_transient_notice(), Some("YOLO mode enabled"));
+    }
+
+    #[test]
+    fn settings_dismissal_preserves_pending_tool_or_question_lifecycle() {
+        for status in [
+            AppStatus::AwaitingToolConfirmation,
+            AppStatus::AwaitingQuestion,
+            AppStatus::Idle,
+        ] {
+            let mut state = AppState::new();
+            state.status = AppStatus::Streaming;
+            state.orchestrator_running = true;
+            state.overlays().open(Overlay::Verbosity);
+            state.modal_picker_index = 1;
+            state.status = status.clone();
+            assert!(state.user_overlay_open());
+            state.close_modal_status();
+            assert_eq!(state.status, status);
+            assert_eq!(state.settings_picker, None);
+            assert_eq!(state.modal_picker_index, 1);
+        }
+    }
+
+    #[test]
+    fn async_command_refresh_preserves_scroll_and_respects_dismissal() {
+        let mut state = AppState::new();
+        state.show_command_panel("Model quota", "Loading");
+        state.modal_scroll_row = 5;
+        state.update_command_panel("Model quota", "Refreshed");
+        assert_eq!(state.modal_scroll_row, 5);
+        assert_eq!(state.command_panel.as_ref().unwrap().content, "Refreshed");
+        state.overlays().close_all();
+        state.update_command_panel("Model quota", "Late response");
+        assert!(state.command_panel.is_none());
+        assert!(state.history.is_empty());
     }
 
     #[test]

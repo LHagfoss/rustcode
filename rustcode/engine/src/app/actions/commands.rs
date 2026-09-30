@@ -615,7 +615,7 @@ pub fn select_picker_model(s: &mut AppState) {
         s.model_name = profile.model.clone();
         s.config.default.set_big(profile.name.clone());
         crate::config::save_entire_config(&s.config);
-        s.set_notice(format!("Switched to model profile '{}'", profile.name));
+        s.set_transient_notice(format!("Switched to model profile '{}'", profile.name));
     }
 }
 
@@ -765,21 +765,15 @@ pub fn trigger_quota_fetch(s: &AppState, state: &Arc<Mutex<AppState>>, client: &
                         text.push_str("\n  No quota information returned by this provider.");
                     }
                     let mut s = state_clone.lock().await;
-                    s.history.push(ChatMessage::new("system", text));
+                    s.update_command_panel("Model quota", text);
                 } else {
                     let mut s = state_clone.lock().await;
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "Failed to parse quota JSON response.",
-                    ));
+                    s.update_command_panel("Model quota", "Failed to parse quota JSON response.");
                 }
             }
             Err(e) => {
                 let mut s = state_clone.lock().await;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Failed to reach proxy: {}", e),
-                ));
+                s.update_command_panel("Model quota", format!("Failed to reach proxy: {}", e));
             }
         }
         state_clone.lock().await.request_redraw();

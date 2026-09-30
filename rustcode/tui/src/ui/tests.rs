@@ -1159,6 +1159,168 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 }
 
 #[test]
+fn busy_command_surfaces_stay_between_activity_and_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for (width, height) in [(80, 24), (60, 18), (100, 30)] {
+        for panel in [false, true] {
+            let mut state = RenderState::new();
+            state.status = AppStatus::Streaming;
+            state.running_tools = vec!["run_command".to_owned()];
+            state
+                .history
+                .push(ChatMessage::new("assistant", "latest transcript"));
+            if panel {
+                state.show_status_modal = true;
+            } else {
+                state.input_buffer = "/verbosity".to_owned();
+                state.cursor_position = state.input_buffer.len();
+                state.active_suggestion_index = Some(0);
+            }
+            let activity =
+                super::activity_status_line(&render_snapshot(&state), false, width as usize)
+                    .to_string();
+            let rendered = render_state_to_text(&mut state, width, height);
+            let row = |text: &str| {
+                rendered
+                    .lines()
+                    .position(|line| line.contains(text))
+                    .unwrap_or_else(|| panic!("missing {text:?}: {rendered}"))
+            };
+            let surface = if panel {
+                "Session status"
+            } else {
+                "Show or set verbosity"
+            };
+            assert!(
+                row(activity.trim()) < row(surface),
+                "activity must remain above command surface: {rendered}"
+            );
+            let composer = rendered
+                .lines()
+                .enumerate()
+                .filter(|(_, line)| {
+                    line.contains(if panel {
+                        "Ask RustCode"
+                    } else {
+                        "› /verbosity"
+                    })
+                })
+                .map(|(row, _)| row)
+                .last()
+                .unwrap();
+            assert!(
+                row(surface) < composer,
+                "surface must remain above composer: {rendered}"
+            );
+            assert_eq!(
+                rendered
+                    .lines()
+                    .filter(|line| line.contains(activity.trim()))
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
+    use rustcode::controller::{AgentUiEvent, SettingsPicker, ToolResult, ToolResultMetadata};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for settings in [false, true] {
+        let mut state = RenderState::new();
+        state.status = AppStatus::Streaming;
+        state.show_context_modal = !settings;
+        state.settings_picker = settings.then_some(SettingsPicker::Verbosity);
+        state.modal_picker_index = 1;
+        let mut transcript = TranscriptState::default();
+        for event in [
+            AgentUiEvent::TextDelta {
+                text: "Streaming thought".to_owned(),
+            },
+            AgentUiEvent::ToolStarted {
+                name: "get_time".to_owned(),
+                id: "panel-call".to_owned(),
+                detail: None,
+            },
+            AgentUiEvent::ToolFinished {
+                id: "panel-call".to_owned(),
+                result: ToolResult {
+                    tool_name: "get_time".to_owned(),
+                    content: "12:30".to_owned(),
+                    diff: None,
+                    file_preview: None,
+                    metadata: ToolResultMetadata {
+                        success: true,
+                        ..Default::default()
+                    },
+                },
+            },
+            AgentUiEvent::TurnFinished {
+                content: "Done".to_owned(),
+                completed: true,
+            },
+        ] {
+            transcript.apply_agent_event(&event);
+            match event {
+                AgentUiEvent::ToolStarted { name, .. } => state.running_tools.push(name),
+                AgentUiEvent::ToolFinished { .. } => {
+                    state.running_tools.clear();
+                }
+                AgentUiEvent::TurnFinished { .. } => state.status = AppStatus::Idle,
+                _ => {}
+            }
+            for (width, height) in [(80, 24), (60, 18)] {
+                let rendered = render_state_to_text_with_transcript(
+                    &mut state,
+                    &mut transcript,
+                    width,
+                    height,
+                );
+                assert!(
+                    rendered.contains(if settings {
+                        "Output verbosity"
+                    } else {
+                        "context usage"
+                    }),
+                    "panel vanished: {rendered}"
+                );
+                assert_eq!(state.modal_picker_index, 1);
+            }
+        }
+        state.show_context_modal = false;
+        state.settings_picker = None;
+        let rendered = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+        assert!(!rendered.contains(if settings {
+            "Output verbosity"
+        } else {
+            "context usage"
+        }));
+    }
+}
+
+#[test]
+fn command_output_panel_scrolls_wrapped_content_on_short_terminals() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Help",
+        content: (0..40).map(|row| format!("Unique help row {row:02} with a long description that wraps past the terminal edge")).collect::<Vec<_>>().join("\n\n"),
+    });
+    for (width, height) in [(40, 12), (80, 24)] {
+        state.modal_scroll_row = 0;
+        let start = render_state_to_text(&mut state, width, height);
+        assert!(start.contains("Unique help row 00"));
+        state.modal_scroll_row = 12;
+        let scrolled = render_state_to_text(&mut state, width, height);
+        assert!(scrolled.contains("Help"));
+        assert!(!scrolled.contains("Unique help row 00"));
+        assert!(scrolled.contains("Unique help row"));
+        assert!(state.history.is_empty());
+    }
+}
+
+#[test]
 fn status_screen_uses_the_viewport_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
