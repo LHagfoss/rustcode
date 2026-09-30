@@ -11,6 +11,7 @@ pub(crate) enum ComposerAction {
     Submit,
     Paste,
     ClearScreen,
+    ToggleExpand,
     Unhandled,
 }
 
@@ -71,6 +72,9 @@ impl Composer {
             KeyAction::Submit => ComposerAction::Submit,
             KeyAction::ClearScreen => ComposerAction::ClearScreen,
             KeyAction::Paste => ComposerAction::Paste,
+            // The transcript owns the expand state, so the composer only
+            // reports the intent; the runtime applies it (#1541).
+            KeyAction::ToggleExpand => ComposerAction::ToggleExpand,
             KeyAction::MoveLeft => {
                 state.move_cursor_left();
                 ComposerAction::Handled
@@ -318,6 +322,28 @@ mod tests {
 
         assert_eq!(state.input_buffer, "ø\n界");
         assert!(state.input_buffer.is_char_boundary(state.cursor_position));
+    }
+
+    /// Ctrl+O expands a collapsed tool body whether or not the composer holds
+    /// a draft, so the hint the transcript advertises is never a lie (#1541).
+    #[test]
+    fn ctrl_o_reports_expand_and_leaves_the_draft_untouched() {
+        for draft in ["", "in progress"] {
+            let mut state = AppState::new();
+            for character in draft.chars() {
+                state.insert_char(character);
+            }
+            let before = state.input_buffer.clone();
+
+            assert_eq!(
+                Composer::default().handle_key(
+                    &mut state,
+                    KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)
+                ),
+                ComposerAction::ToggleExpand
+            );
+            assert_eq!(state.input_buffer, before, "draft survives ctrl+o");
+        }
     }
 
     #[test]

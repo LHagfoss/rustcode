@@ -330,6 +330,12 @@ pub struct AppState {
     pub prompt_cache: PromptCache,
     pub verbosity: Verbosity,
     pub expanded_thoughts: std::collections::HashSet<usize>,
+    /// Message index the expand affordance is currently pointed at.
+    ///
+    /// `ctrl+o` toggles the focused entry. Keeping the focus next to
+    /// `expanded_thoughts` means a press always collapses what the previous
+    /// press expanded, even when new tool output has arrived in between.
+    pub expanded_thought_focus: Option<usize>,
     /// Warning or informational notices collected from background operations (e.g. MCP startup timeouts)
     /// to be displayed cleanly upon application exit instead of interrupting active terminal rendering.
     pub exit_warnings: Vec<String>,
@@ -1104,6 +1110,7 @@ impl AppState {
             theme_picker_initial: String::new(),
             verbosity,
             expanded_thoughts: std::collections::HashSet::new(),
+            expanded_thought_focus: None,
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),

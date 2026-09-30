@@ -122,6 +122,58 @@ pub fn check_memory_usage(s: &mut AppState) {
     }
 }
 
+/// Outcome of one `ctrl+o` press against the collapsed tool bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpandOutcome {
+    /// The focused entry now renders its body inline.
+    Expanded(usize),
+    /// The focused entry is collapsed again.
+    Collapsed(usize),
+    /// Nothing in the transcript is collapsible, so the press was a no-op.
+    NothingToExpand,
+}
+
+/// Toggle the collapsed tool body `candidates` points at.
+///
+/// `candidates` are the message indices the frontend rendered with a collapsed
+/// body, newest last. The last one wins, so `ctrl+o` always acts on the most
+/// recent collapsed entry, and a second press collapses exactly what the first
+/// expanded (#1541).
+pub fn toggle_expanded_thought(s: &mut AppState, candidates: &[usize]) -> ExpandOutcome {
+    let (outcome, notice) = toggle_expanded_bodies(
+        &mut s.expanded_thoughts,
+        &mut s.expanded_thought_focus,
+        candidates,
+    );
+    s.set_transient_notice(notice);
+    outcome
+}
+
+/// The transition itself, over just the state the collapsed bodies live in.
+///
+/// Split out of [`toggle_expanded_thought`] so the frontend seam can drive the
+/// same press over the render-visible expand state a frontend already holds,
+/// instead of needing an `AppState` to own it (frontend seam #1431). `focus` is
+/// the last expanded index the session keeps in step with the set. Returns what
+/// the press did plus the feedback text to surface.
+pub(crate) fn toggle_expanded_bodies(
+    expanded: &mut std::collections::HashSet<usize>,
+    focus: &mut Option<usize>,
+    candidates: &[usize],
+) -> (ExpandOutcome, &'static str) {
+    let Some(&target) = candidates.last() else {
+        return (ExpandOutcome::NothingToExpand, "Nothing to expand");
+    };
+    if expanded.remove(&target) {
+        *focus = None;
+        (ExpandOutcome::Collapsed(target), "Collapsed tool output")
+    } else {
+        expanded.insert(target);
+        *focus = Some(target);
+        (ExpandOutcome::Expanded(target), "Expanded tool output")
+    }
+}
+
 pub fn toggle_auto_confirm(s: &mut AppState) {
     s.auto_confirm = !s.auto_confirm;
     let status = if s.auto_confirm {
@@ -176,6 +228,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.expanded_thoughts.clear();
+    s.expanded_thought_focus = None;
     s.enter_idle();
     s.subagents.clear();
     s.selected_subagent_id = None;

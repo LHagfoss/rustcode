@@ -698,6 +698,65 @@ fn start_new_session_clears_history_and_starts_fresh() {
     assert_eq!(state.history[0].content, "✨ New chat started");
 }
 
+#[test]
+fn toggle_expanded_thought_expands_then_collapses_the_last_candidate() {
+    let mut state = crate::app::AppState::new();
+
+    assert_eq!(
+        super::toggle_expanded_thought(&mut state, &[]),
+        super::ExpandOutcome::NothingToExpand
+    );
+    assert_eq!(state.active_transient_notice(), Some("Nothing to expand"));
+    assert!(state.expanded_thoughts.is_empty());
+
+    // The newest collapsed entry wins, so a second press collapses exactly
+    // what the first one expanded.
+    assert_eq!(
+        super::toggle_expanded_thought(&mut state, &[1, 2]),
+        super::ExpandOutcome::Expanded(2)
+    );
+    assert_eq!(state.expanded_thought_focus, Some(2));
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Expanded tool output")
+    );
+
+    assert_eq!(
+        super::toggle_expanded_thought(&mut state, &[1, 2]),
+        super::ExpandOutcome::Collapsed(2)
+    );
+    assert!(state.expanded_thoughts.is_empty());
+    assert_eq!(state.expanded_thought_focus, None);
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Collapsed tool output")
+    );
+
+    // Each entry is keyed on its own message index, so a batch of collapsed
+    // entries expands independently rather than as one group.
+    super::toggle_expanded_thought(&mut state, &[1, 2]);
+    assert_eq!(
+        super::toggle_expanded_thought(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::Expanded(3)
+    );
+    assert_eq!(
+        state.expanded_thoughts,
+        std::collections::HashSet::from([2, 3])
+    );
+}
+
+#[test]
+fn start_new_session_drops_expanded_tool_bodies() {
+    let mut state = crate::app::AppState::new();
+    state.expanded_thoughts = std::collections::HashSet::from([1]);
+    state.expanded_thought_focus = Some(1);
+
+    super::start_new_session(&mut state);
+
+    assert!(state.expanded_thoughts.is_empty());
+    assert_eq!(state.expanded_thought_focus, None);
+}
+
 #[tokio::test]
 async fn start_new_session_cancels_active_subagent_tasks() {
     let mut state = crate::app::AppState::new();
