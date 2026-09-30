@@ -97,15 +97,10 @@ pub struct SessionChoice {
 impl SessionChoice {
     pub(crate) fn from_meta(session: &crate::config::SessionMeta) -> Self {
         let id = crate::config::session_id_from_path(&session.path).unwrap_or_default();
-        // Prefer the embedded cwd (no extra I/O per picker row); fall back
-        // to a store lookup for metas constructed without it (tests/legacy).
-        let workspace = session.workspace_cwd.clone().or_else(|| {
-            if id.is_empty() {
-                None
-            } else {
-                crate::config::load_session_workspace(&id).map(|record| record.cwd)
-            }
-        });
+        // The store embeds the recorded cwd in every `SessionMeta` it builds, so
+        // projecting a picker row costs no store read at all (#1533). `None` is
+        // a legacy session with no workspace recorded, not a missing read.
+        let workspace = session.workspace_cwd.clone();
         Self {
             id,
             title: session.title.clone(),

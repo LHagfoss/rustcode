@@ -144,48 +144,41 @@ fn acp_list_sessions(
         })
         .transpose()?;
     let cursor = parse_session_cursor(request.cursor.as_deref())?;
-    let (metas, next) = crate::config::list_sessions_page(cursor, ACP_SESSION_PAGE_SIZE, |meta| {
-        if !session_file_is_contained(&meta.path) {
-            return false;
-        }
-        let id = crate::config::session_id_from_path(&meta.path);
-        if !id.as_deref().is_some_and(valid_acp_session_id) {
-            return false;
-        }
-        // Filtering uses the embedded workspace cwd (no extra I/O per row).
-        match &filter_cwd {
-            Some(filter) => {
-                meta.workspace_cwd
-                    .as_deref()
-                    .and_then(|cwd| {
-                        let canonical = std::fs::canonicalize(cwd).ok()?;
-                        canonical.is_dir().then_some(canonical)
-                    })
-                    .as_ref()
-                    == Some(filter)
+    // `session/list` is a per-project API: the client's `cwd` selects one
+    // project, so it takes the store's exact-match scope rather than the
+    // parent/child scope the picker uses (#1533). Legacy sessions with no
+    // recorded workspace and sessions whose workspace has since been deleted
+    // stay unlisted, as they were before.
+    let scope = match &filter_cwd {
+        Some(filter) => crate::config::SessionScope::WorkspaceExact(filter.clone()),
+        None => crate::config::SessionScope::All,
+    };
+    let (metas, next) =
+        crate::config::list_sessions_page(cursor, ACP_SESSION_PAGE_SIZE, &scope, |meta| {
+            // Path containment and id shape are not workspace concerns, so they
+            // stay a separate narrowing step on the store's own listing.
+            if !session_file_is_contained(&meta.path) {
+                return false;
             }
-            None => true,
-        }
-    })
-    .map_err(|_| {
-        agent_client_protocol::Error::invalid_params().data("unknown or stale session cursor")
-    })?;
+            let id = crate::config::session_id_from_path(&meta.path);
+            id.as_deref().is_some_and(valid_acp_session_id)
+        })
+        .map_err(|_| {
+            agent_client_protocol::Error::invalid_params().data("unknown or stale session cursor")
+        })?;
     let sessions = metas
         .iter()
         .map(|meta| {
-            let workspace = meta
-                .workspace_cwd
-                .clone()
-                .map(|cwd| rustcode_session::SessionWorkspace {
-                    cwd,
-                    additional_directories: Vec::new(),
-                    task_workspace_id: None,
-                })
-                .or_else(|| {
-                    crate::config::session_id_from_path(&meta.path)
-                        .as_deref()
-                        .and_then(crate::config::load_session_workspace)
-                });
+            // Already carried by the row the store returned; re-reading the
+            // record here would cost one file per legacy session (#1533).
+            let workspace =
+                meta.workspace_cwd
+                    .clone()
+                    .map(|cwd| rustcode_session::SessionWorkspace {
+                        cwd,
+                        additional_directories: Vec::new(),
+                        task_workspace_id: None,
+                    });
             session_info(meta, workspace)
         })
         .collect();
