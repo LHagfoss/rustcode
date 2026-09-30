@@ -259,28 +259,39 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(crate::cli::Commands::Sessions { command }) = cli_args.command.as_ref() {
-        if let Some(crate::cli::SessionCommands::Migrate { dry_run }) = command {
-            let Some(report) = rustcode::config::migrate_legacy_sessions(*dry_run) else {
-                eprintln!("Session migration failed: configuration directory is unavailable.");
-                std::process::exit(1);
-            };
-            println!(
-                "{} {} legacy session(s): {} migrated, {} skipped, {} error(s).",
-                if *dry_run {
-                    "Would migrate"
-                } else {
-                    "Processed"
-                },
-                report.found,
-                report.migrated,
-                report.skipped,
-                report.errors.len()
-            );
-            for error in &report.errors {
-                eprintln!("session migration: {error}");
+        match command {
+            Some(crate::cli::SessionCommands::Migrate { dry_run }) => {
+                let Some(report) = rustcode::config::migrate_legacy_sessions(*dry_run) else {
+                    eprintln!("Session migration failed: configuration directory is unavailable.");
+                    std::process::exit(1);
+                };
+                println!(
+                    "{} {} legacy session(s): {} migrated, {} skipped, {} error(s).",
+                    if *dry_run {
+                        "Would migrate"
+                    } else {
+                        "Processed"
+                    },
+                    report.found,
+                    report.migrated,
+                    report.skipped,
+                    report.errors.len()
+                );
+                for error in &report.errors {
+                    eprintln!("session migration: {error}");
+                }
+                if !report.errors.is_empty() {
+                    std::process::exit(1);
+                }
             }
-            if !report.errors.is_empty() {
-                std::process::exit(1);
+            // `rustcode sessions` with no subcommand lists sessions, scoped
+            // to the current workspace by default (`list --all` shows every
+            // workspace with its path per entry).
+            Some(crate::cli::SessionCommands::List { all }) => {
+                run_sessions_list(*all || cli_args.all);
+            }
+            None => {
+                run_sessions_list(cli_args.all);
             }
         }
         return Ok(());
@@ -497,6 +508,79 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     return run_interactive(cli_args, model_override).await;
 }
+/// Bare `--resume` with `--all`: restore the most recent session across
+/// every workspace, bypassing the default current-workspace scoping.
+fn resume_latest_unscoped(
+    state: &mut AppState,
+) -> Result<
+    rustcode::app::session_controller::SessionTransition,
+    rustcode::app::session_controller::SessionError,
+> {
+    if !rustcode::config::session_has_content(&state.history)
+        && let Some(live) = rustcode::config::live_session_meta()
+    {
+        if rustcode::app::actions::load_session_into(state, &live) {
+            return Ok(
+                rustcode::app::session_controller::SessionTransition::Resumed {
+                    session_id: state.active_session_id.clone(),
+                },
+            );
+        }
+    }
+    let meta = rustcode::config::latest_resumable_session_meta()
+        .ok_or(rustcode::app::session_controller::SessionError::NoSessionToResume)?;
+    let session_id =
+        rustcode::app::session_controller::session_id_from_meta(&meta).ok_or_else(|| {
+            rustcode::app::session_controller::SessionError::SessionNotFound(meta.title.clone())
+        })?;
+    if !rustcode::app::actions::load_session_into(state, &meta) {
+        return Err(rustcode::app::session_controller::SessionError::SessionNotFound(session_id));
+    }
+    Ok(
+        rustcode::app::session_controller::SessionTransition::Resumed {
+            session_id: state.active_session_id.clone(),
+        },
+    )
+}
+
+/// `rustcode sessions list`: print saved sessions scoped to the current
+/// workspace by default; `--all` prints every workspace with its path.
+fn run_sessions_list(show_all: bool) {
+    const LIMIT: usize = 50;
+    let scope = if show_all {
+        None
+    } else {
+        rustcode::config::current_workspace_dir()
+    };
+    let (sessions, truncated) =
+        rustcode::config::list_sessions_limited_scoped(LIMIT, scope.as_deref());
+    if sessions.is_empty() {
+        println!("No saved sessions found.");
+        return;
+    }
+    for meta in &sessions {
+        let id = rustcode::config::session_id_from_path(&meta.path).unwrap_or_default();
+        let workspace = meta
+            .workspace_cwd
+            .as_deref()
+            .map(|cwd| cwd.display().to_string())
+            .unwrap_or_else(|| "no workspace recorded".to_owned());
+        if show_all {
+            println!(
+                "{id}  {}  {} msgs  {workspace}  {}",
+                meta.title, meta.message_count, meta.when
+            );
+        } else {
+            println!(
+                "{id}  {}  {} msgs  {}",
+                meta.title, meta.message_count, meta.when
+            );
+        }
+    }
+    if truncated {
+        eprintln!("Showing the {LIMIT} most recent sessions; use --all to see every workspace.");
+    }
+}
 async fn run_interactive(
     cli_args: crate::cli::Cli,
     model_override: Option<String>,
@@ -516,10 +600,32 @@ async fn run_interactive(
     if cli_args.yolo {
         app_state_struct.auto_confirm = true;
     }
-    if cli_args.resume || cli_args.continue_session {
-        if let Err(error) = rustcode::app::session_controller::SessionController::default()
-            .resume(&mut app_state_struct, rustcode::app::SessionAction::Latest)
-        {
+    // Bare `--resume`/`--continue` restore the most recent session in the
+    // current workspace; `--resume <id>`/`--continue <id>` restore that
+    // exact session from any workspace and adopt its cwd. `--all` lifts
+    // workspace scoping for the bare flags.
+    let resume_raw = cli_args.resume.as_deref();
+    let continue_raw = cli_args.continue_session.as_deref();
+    let wants_continue = continue_raw.is_some();
+    if let Some(raw) = continue_raw.or(resume_raw) {
+        let id = raw.trim();
+        let explicit = !id.is_empty();
+        let action = if explicit {
+            rustcode::app::SessionAction::Id(id.to_owned())
+        } else {
+            rustcode::app::SessionAction::Latest
+        };
+        let result = if cli_args.all && !explicit {
+            resume_latest_unscoped(&mut app_state_struct)
+        } else {
+            rustcode::app::session_controller::SessionController::default()
+                .resume(&mut app_state_struct, action)
+        };
+        if let Err(error) = result {
+            if explicit {
+                eprintln!("rustcode: cannot resume session '{id}': {error}");
+                std::process::exit(1);
+            }
             let message = if matches!(
                 &error,
                 rustcode::app::session_controller::SessionError::NoSessionToResume
@@ -531,7 +637,7 @@ async fn run_interactive(
             app_state_struct
                 .history
                 .push(rustcode::app::ChatMessage::new("system", message));
-        } else if cli_args.continue_session {
+        } else if wants_continue {
             let queued = rustcode::app::actions::queue_restored_segment(&mut app_state_struct);
             if !queued {
                 app_state_struct
@@ -734,7 +840,7 @@ fn print_exit_summary(summary: &ExitSummary) {
     }
     if !summary.session_id.is_empty() {
         let _ = writeln!(out, "Session   {}", summary.session_id);
-        let _ = writeln!(out, "Continue  rustcode --resume");
+        let _ = writeln!(out, "Continue  rustcode --resume {}", summary.session_id);
     }
     if !summary.warnings.is_empty() {
         let _ = writeln!(out);

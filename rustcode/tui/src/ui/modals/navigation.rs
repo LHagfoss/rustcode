@@ -272,7 +272,19 @@ pub(in crate::ui) fn render_history_picker_modal(
 
     let mut list_lines = Vec::new();
     for (idx, session) in sessions.iter().enumerate() {
-        let desc = format!("{} msgs  {}", session.message_count, session.when);
+        let workspace_label = session
+            .workspace_cwd
+            .as_deref()
+            .and_then(|cwd| {
+                cwd.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "no workspace recorded".to_owned());
+        let desc = format!(
+            "{} msgs  {}  {}",
+            session.message_count, session.when, workspace_label
+        );
         let is_selected = selected_idx == idx;
         let max_title_width = (inner_area.width as usize).saturating_sub(desc.width() + 5);
         let title_display = truncate_middle_to_width(&session.title, max_title_width);
