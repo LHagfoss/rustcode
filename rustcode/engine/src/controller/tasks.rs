@@ -75,11 +75,7 @@ pub fn background_task_snapshots(session_id: &str) -> Vec<TaskDisplay> {
 /// tests, which cannot use engine `#[cfg(test)]` helpers) can seed live tasks
 /// without reaching into `crate::tools` directly. Render tests use short
 /// `sleep`-style commands and stop them with [`stop_background_tasks`].
-pub fn spawn_background_task(
-    task_id: &str,
-    session_id: &str,
-    command: &str,
-) -> Result<(), String> {
+pub fn spawn_background_task(task_id: &str, session_id: &str, command: &str) -> Result<(), String> {
     crate::tools::background_task_manager()
         .spawn_with_id(
             task_id,
