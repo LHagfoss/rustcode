@@ -5338,6 +5338,66 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
 }
 
 #[test]
+fn a_wheel_tick_moves_three_painted_rows() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    assert_eq!(
+        WHEEL_SCROLL_LINES, 3,
+        "the wheel step matches the three lines per notch a terminal scrolls its own \
+         scrollback, and a frame costs the same at 1 or 6 rows, so 3 is ~3x cheaper \
+         per line scrolled than 1"
+    );
+
+    let mut state = RenderState::new();
+    for index in 0..12 {
+        state.history.push(ChatMessage::new(
+            "user",
+            format!(
+                "message {index} with enough words to wrap across the narrow transcript viewport"
+            ),
+        ));
+    }
+    let mut terminal = Terminal::new(TestBackend::new(36, 16)).unwrap();
+    let mut transcript = TranscriptState::default();
+    let mut input_area = ratatui::layout::Rect::default();
+    terminal
+        .draw(|frame| {
+            input_area = render_with_transcript(frame, &mut state, &mut transcript).1;
+        })
+        .unwrap();
+    let input_top = input_area.y;
+    let painted = |terminal: &Terminal<TestBackend>| {
+        (0..input_top)
+            .map(|row| {
+                (0..36)
+                    .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = painted(&terminal);
+
+    transcript.scroll_up(WHEEL_SCROLL_LINES);
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let after = painted(&terminal);
+
+    assert_eq!(transcript.scroll_rows(), WHEEL_SCROLL_LINES);
+    assert_ne!(after, before, "a wheel tick should move the transcript");
+    assert_eq!(
+        &after[WHEEL_SCROLL_LINES + 1..],
+        &before[1..before.len() - WHEEL_SCROLL_LINES],
+        "one wheel tick should shift the painted viewport by {WHEEL_SCROLL_LINES} rows, \
+         soft-wrapped rows included"
+    );
+}
+
+#[test]
 fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();

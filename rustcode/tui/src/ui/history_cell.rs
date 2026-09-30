@@ -63,6 +63,23 @@ pub(super) struct ReadingAnchor {
     pub(super) tail_rows: usize,
 }
 
+/// Rows the mouse wheel moves per tick.
+///
+/// A discrete wheel notch arrives as a single scroll event, and the scrollback
+/// a user is used to moves three lines per notch (Ghostty's
+/// `mouse-scroll-multiplier` defaults to 3 for discrete devices), so one line
+/// per tick is three times slower than the terminal's own scrolling. It is
+/// also the expensive choice: a frame's cost is flat in the rows it moves —
+/// `bench_wheel_step_cost` measures the same ~0.8 ms at 1, 3 and 6 rows in
+/// release — so three rows per tick buys three times the travel for the price
+/// of one frame.
+///
+/// Keyboard scrolling is untouched. `PageUp`/`PageDown` still step a page, the
+/// selection caret still walks one row at a time, and `step_selection_scroll`
+/// must keep advancing a single row per frame so that every row a scroll
+/// crosses is captured before it leaves the screen.
+pub(crate) const WHEEL_SCROLL_LINES: usize = 3;
+
 impl TranscriptState {
     pub(crate) fn scroll_up(&mut self, rows: usize) {
         self.scroll_rows = self.scroll_rows.saturating_add(rows).min(10_000);
