@@ -57,15 +57,28 @@ pub struct InlineTerminal<B: Backend> {
     last_cursor_position: Position,
     needs_clear: bool,
     clear_from_y: Option<u16>,
-    /// Lowest screen row that may still hold stale transient viewport rows.
+    /// First screen row this session's projection occupied, recorded before
+    /// any scrolling so later viewport growth, history commits, and
+    /// `scroll_screen_up` can only move the projection *up*, never below this
+    /// anchor.
     ///
-    /// Unlike `clear_from_y` (pending resize state consumed by the next
-    /// draw), this survives draws: viewport growth, shrinks, and resizes can
-    /// leave previously painted rows outside the current viewport, and the
-    /// exit erase must cover them without touching committed scrollback
-    /// above. Reset whenever rows are known clean: history commits (rows
-    /// above become committed scrollback), full-screen clears, and erases.
-    transient_top: Option<u16>,
+    /// `None` until the session first writes (a draw or a history commit), and
+    /// again after an erase or a full-screen clear resets the projection.
+    /// Unlike `clear_from_y` (pending resize state consumed by the next draw)
+    /// this survives draws and commits: the exit erase anchors here, so it
+    /// covers the whole range the session painted rather than just the live
+    /// viewport.
+    session_top: Option<u16>,
+    /// Rows this session has pushed the screen up with `append_lines`.
+    ///
+    /// Every one of them moves the session's first painted row up by one, so
+    /// the exit erase anchors at `session_top - scrolled_rows` rather than at
+    /// a recorded absolute row. Deriving the anchor from scroll distance
+    /// instead of a saved row is what makes it survive viewport growth,
+    /// `scroll_screen_up`, and a mid-session resize: the terminal window
+    /// always shows the tail of the same content stream, so the session's
+    /// first row moves up with the screen instead of going stale.
+    scrolled_rows: u32,
 }
 
 impl<B> InlineTerminal<B>
@@ -103,7 +116,8 @@ where
             last_cursor_position: cursor,
             needs_clear: false,
             clear_from_y: None,
-            transient_top: None,
+            session_top: None,
+            scrolled_rows: 0,
         }
     }
 
@@ -140,45 +154,60 @@ where
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.needs_clear = false;
-        self.transient_top = None;
+        // The session anchor deliberately survives: Ctrl-L blanks the
+        // projection rows but leaves this session's committed transcript on
+        // screen, and the exit erase must still cover those rows. Only the
+        // pending resize state is consumed here.
         Ok(())
     }
 
-    /// Erase the transient viewport projection, preserving committed scrollback.
+    /// Erase everything this session painted, from its first row to the bottom
+    /// of the screen, keeping native scrollback.
     ///
-    /// Shutdown calls this before printing the exit handoff: it clears from
-    /// the lowest row that may hold stale transient content — the live
-    /// viewport top, any pending resize row, the tracked historical minimum,
-    /// or the last known composer row — down to the bottom of the screen.
-    /// Committed native scrollback above that anchor is left intact, and the
-    /// handoff prints where the projection was.
+    /// Decision (#1544, revising #1520): an inline exit leaves only the exit
+    /// handoff and the shell prompt on screen. #1520 anchored the erase at the
+    /// live mutable viewport and preserved committed scrollback, but a long
+    /// session commits nearly its whole conversation through `insert_before`
+    /// *while it runs*, so that anchor had nothing left to remove by the time
+    /// the user quit — the chat stayed on screen above the handoff. The erase
+    /// now covers the full range the UI painted for this session: the first
+    /// row it ever wrote, shifted up by every row the session scrolled the
+    /// screen. That is the whole screen once the session has scrolled at all,
+    /// and exactly the rows the session wrote when it has not, so a short
+    /// session still leaves the user's earlier terminal output alone.
     ///
-    /// The erase is exact and idempotent: it collapses the viewport and
-    /// clears all tracking, so repeats (second restore, `Drop`, post-update
-    /// output) clear nothing. When the model holds no projection at all, a
-    /// stale `fallback_y` is ignored so output printed after a restore (for
-    /// example the `--update` result) is never wiped.
-    pub fn erase_transient_projection(&mut self, fallback_y: Option<u16>) -> Result<(), B::Error> {
+    /// Scrollback above the visible screen is never touched: the erase is
+    /// `ClearType::AfterCursor` from the anchor, with no `ESC[3J`. The
+    /// conversation stays scrollable, output from before the session survives,
+    /// and nothing depends on scrollback-purge support that varies by terminal.
+    ///
+    /// The erase is exact and idempotent: it collapses the viewport and clears
+    /// all tracking, so repeats (second restore, `Drop`, editor handoff) clear
+    /// nothing. When the session has painted nothing, a stale `fallback_y` is
+    /// ignored so output printed after a restore (for example the `--update`
+    /// result) is never wiped.
+    pub fn erase_session_projection(&mut self, fallback_y: Option<u16>) -> Result<(), B::Error> {
         let screen_height = self.backend.size()?.height;
         if screen_height == 0 {
             return Ok(());
         }
-        let mut top = self.viewport_area.y;
-        let mut dirty = !self.viewport_area.is_empty();
+        let mut top = self.session_projection_top();
+        let mut dirty = top.is_some();
         if let Some(y) = self.clear_from_y {
-            top = top.min(y);
-            dirty = true;
-        }
-        if let Some(y) = self.transient_top {
-            top = top.min(y);
+            top = Some(top.map_or(y, |top: u16| top.min(y)));
             dirty = true;
         }
         if !dirty {
             return Ok(());
         }
-        if let Some(y) = fallback_y.filter(|&y| y < screen_height) {
-            top = top.min(y);
-        }
+        // The caller's composer row is a hint about a projection the model no
+        // longer tracks, and it sits *inside* the live viewport. Narrowing the
+        // erase to it is what left the conversation on screen in #1520, so it
+        // is only consulted when the session extent is unknown.
+        let top = top.or_else(|| fallback_y.filter(|&y| y < screen_height));
+        let Some(top) = top else {
+            return Ok(());
+        };
         if top >= screen_height {
             // The tracked rows scrolled entirely off-screen; nothing visible
             // left to erase.
@@ -190,10 +219,28 @@ where
         self.buffers[1].reset();
         self.needs_clear = false;
         self.clear_from_y = None;
-        self.transient_top = None;
+        self.session_top = None;
+        self.scrolled_rows = 0;
         self.viewport_area.height = 0;
         self.viewport_area.y = top;
         self.backend.flush()
+    }
+
+    /// The topmost row this session can still own, or `None` when it has
+    /// painted nothing.
+    fn session_projection_top(&self) -> Option<u16> {
+        let session_top = self.session_top?;
+        let scrolled = u16::try_from(self.scrolled_rows).unwrap_or(u16::MAX);
+        Some(session_top.saturating_sub(scrolled))
+    }
+
+    /// Record the session anchor at the first row the session writes, before
+    /// any scrolling moves it. Commits can run before the first draw (a
+    /// resumed session replays its transcript), so both writers arm it.
+    fn arm_session_top(&mut self) {
+        if self.session_top.is_none() {
+            self.session_top = Some(self.viewport_area.y);
+        }
     }
 
     /// Clear the entire terminal screen and reset the viewport to the origin.
@@ -205,7 +252,11 @@ where
         self.last_cursor_position = Position::new(0, 0);
         self.needs_clear = false;
         self.clear_from_y = None;
-        self.transient_top = None;
+        // The screen is blank, so the session projection restarts at the
+        // origin and the scroll distance measured so far is irrelevant. The
+        // next write re-arms the anchor.
+        self.session_top = None;
+        self.scrolled_rows = 0;
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.backend.flush()
@@ -233,7 +284,9 @@ where
                     prev.min(old_y).min(self.viewport_area.y)
                 });
             self.clear_from_y = Some(clear_y);
-            self.transient_top = Some(self.transient_top.map_or(clear_y, |prev| prev.min(clear_y)));
+            // A resize moves the viewport inside the same content stream, so
+            // the session anchor stays put: `scrolled_rows` already accounts
+            // for every row the screen has been pushed up.
             self.needs_clear = true;
             self.resize_buffers();
             self.buffers[0].reset();
@@ -262,23 +315,18 @@ where
         area.width = self.screen_size.width;
         area.height = height.min(self.screen_size.height);
 
+        if area.height > 0 {
+            // Anchor the session before the growth scroll below moves the
+            // viewport, so the exit erase can follow the projection up instead
+            // of pointing at a row that has already scrolled into scrollback.
+            self.arm_session_top();
+        }
+
         if area.bottom() > self.screen_size.height {
             let amount = area.bottom() - self.screen_size.height;
             self.scroll_screen_up(amount)?;
             area.y = self.screen_size.height.saturating_sub(area.height);
         }
-
-        // Track the lowest row the transient projection may occupy so the
-        // exit erase covers viewport growth and scrolls, not just the final
-        // viewport top. Draws only ever move the viewport up (growth scroll)
-        // within transient rows, so extending the minimum here can never
-        // reach committed scrollback above.
-        self.transient_top = Some(
-            self.transient_top
-                .map_or(area.y.min(self.viewport_area.y), |prev| {
-                    prev.min(area.y).min(self.viewport_area.y)
-                }),
-        );
 
         if area != self.viewport_area || self.needs_clear {
             let clear_at = if self.viewport_area.is_empty() {
@@ -343,6 +391,11 @@ where
             return Ok(());
         }
         self.autoresize()?;
+        // A resumed session commits its transcript before the first draw, so
+        // anchor here too: without it the commit's own scroll would be
+        // measured against no anchor and the exit erase would reach above the
+        // session into the user's own terminal output.
+        self.arm_session_top();
         let width = self.screen_size.width;
         let mut rendered = Buffer::empty(Rect::new(0, 0, width, height));
         draw(&mut rendered);
@@ -373,11 +426,12 @@ where
             y: drawn_height as u16,
             ..self.viewport_area
         });
-        // Committed lines now own every row above the viewport; previously
-        // tracked minima would point into scrollback, so the exit erase must
-        // anchor at the live viewport from here on. The same holds for a
-        // resize pending-clear: clamp it below the committed rows.
-        self.transient_top = None;
+        // Committed lines now own every row above the viewport, but they are
+        // still this session's output and still on screen, so the session
+        // anchor and its scroll distance stay: the exit erase covers them
+        // (that is the #1544 decision) instead of stopping at the live
+        // viewport. A resize pending-clear is clamped below the committed rows
+        // because the next draw repaints from there.
         self.clear_from_y = self.clear_from_y.map(|y| y.max(self.viewport_area.y));
 
         self.backend
@@ -431,6 +485,10 @@ where
             self.backend.set_cursor_position(Position::new(0, bottom))?;
             self.backend.append_lines(rows)?;
             self.viewport_area.y = self.viewport_area.y.saturating_sub(rows);
+            // Every scrolled row moves the session's first painted row up one,
+            // which is what keeps the exit erase anchored on the session
+            // instead of on a stale absolute row.
+            self.scrolled_rows = self.scrolled_rows.saturating_add(u32::from(rows));
         }
         Ok(())
     }
@@ -460,6 +518,65 @@ where
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+
+    /// Trimmed text of every row of `buffer`, top to bottom; blank rows come
+    /// back as empty strings.
+    fn rows_of(buffer: &Buffer, width: u16) -> Vec<String> {
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// A screen already holding `above` rows of pre-session shell output, with
+    /// the cursor parked on row `cursor_y` where an inline session starts.
+    fn inline_session(
+        width: u16,
+        height: u16,
+        cursor_y: u16,
+        above: u16,
+    ) -> InlineTerminal<TestBackend> {
+        let filled = format!("shell {}", "o".repeat(usize::from(width) - 6));
+        let blank = " ".repeat(usize::from(width));
+        let backend = TestBackend::with_lines((0..height).map(|row| {
+            ratatui::text::Line::from(if row < above {
+                filled.as_str()
+            } else {
+                blank.as_str()
+            })
+        }));
+        InlineTerminal::with_size_and_cursor(
+            backend,
+            Size::new(width, height),
+            Position::new(0, cursor_y),
+        )
+    }
+
+    fn commit(terminal: &mut InlineTerminal<TestBackend>, rows: u16, text: &str) {
+        terminal
+            .insert_before(rows, |buffer| {
+                for row in 0..rows {
+                    buffer.set_string(0, row, text, ratatui::style::Style::default());
+                }
+            })
+            .unwrap();
+    }
+
+    fn composer(terminal: &mut InlineTerminal<TestBackend>, height: u16, text: &str) {
+        terminal
+            .draw_height(height, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(text),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+    }
 
     #[test]
     fn viewport_starts_empty_and_uses_each_requested_height() {
@@ -680,137 +797,246 @@ mod tests {
         );
     }
 
+    /// #1544 decision, regression: a long session commits nearly its whole
+    /// conversation while it runs, so the exit erase must cover every row the
+    /// session painted, not just the live mutable viewport. The rows the
+    /// session already pushed into scrollback stay there — the erase must not
+    /// purge scrollback, which would destroy output from before the session
+    /// too and would depend on terminal-specific `ESC[3J` support.
     #[test]
-    fn erase_covers_tracked_minimum_after_resize_without_redraw() {
-        let backend = TestBackend::new(40, 20);
-        let mut terminal = InlineTerminal::new(backend).unwrap();
-        terminal
-            .insert_before(2, |buffer| {
-                buffer.set_string(0, 0, "committed", ratatui::style::Style::default());
-            })
-            .unwrap();
-        terminal
-            .draw_height(4, |frame| {
-                frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
-            })
-            .unwrap();
-        // Grow scrollback, repaint, then resize without a redraw: the old
-        // exit anchor (live viewport top) would miss rows 16..23.
-        terminal.insert_before(14, |_| {}).unwrap();
-        terminal
-            .draw_height(4, |frame| {
-                frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
-            })
-            .unwrap();
-        terminal.backend_mut().resize(40, 28);
+    fn erase_clears_the_whole_session_projection_and_keeps_scrollback() {
+        let mut terminal = inline_session(20, 8, 7, 7);
+        composer(&mut terminal, 6, "composer");
+        // A long session: far more committed rows than the screen can hold.
+        commit(&mut terminal, 4, "chat");
+        composer(&mut terminal, 6, "composer again");
+
+        terminal.erase_session_projection(None).unwrap();
+
+        assert!(
+            rows_of(terminal.backend().buffer(), 20)
+                .iter()
+                .all(|row| row.is_empty()),
+            "conversation survived the exit erase: {:?}",
+            rows_of(terminal.backend().buffer(), 20)
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 0, 20, 0));
+        let scrollback = rows_of(terminal.backend().scrollback(), 20);
+        assert_eq!(scrollback.len(), 9, "{scrollback:?}");
+        assert!(
+            scrollback
+                .iter()
+                .filter(|row| row.contains("shell"))
+                .count()
+                >= 5,
+            "pre-session output was destroyed: {scrollback:?}"
+        );
+        assert!(
+            scrollback.iter().any(|row| row.contains("chat")),
+            "committed conversation is no longer scrollable: {scrollback:?}"
+        );
+    }
+
+    /// A session that never scrolls the screen owns only the rows it wrote, so
+    /// the terminal output above it (the user's own commands) survives — even
+    /// when the caller passes a stale row that would narrow the erase.
+    #[test]
+    fn erase_stops_at_the_first_row_the_session_painted() {
+        let mut terminal = inline_session(20, 12, 7, 7);
+        composer(&mut terminal, 3, "composer");
+        commit(&mut terminal, 2, "chat");
+        assert_eq!(terminal.scrolled_rows, 0);
+
+        terminal.erase_session_projection(Some(0)).unwrap();
+
+        let rows = rows_of(terminal.backend().buffer(), 20);
+        assert!(
+            rows[..7].iter().all(|row| row.starts_with("shell")),
+            "rows the session never painted were erased: {rows:?}"
+        );
+        assert!(
+            rows[7..].iter().all(|row| row.is_empty()),
+            "session rows survived: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 7, 20, 0));
+        assert!(terminal.backend().scrollback().area.height == 0);
+    }
+
+    /// The session-start row goes stale the moment the screen scrolls: the
+    /// anchor is the start row shifted up by the rows the session scrolled, not
+    /// the row recorded at startup.
+    #[test]
+    fn erase_follows_the_session_up_when_the_screen_scrolls() {
+        let mut terminal = inline_session(20, 12, 11, 11);
+        composer(&mut terminal, 5, "composer");
+        commit(&mut terminal, 3, "chat");
+        assert_eq!(terminal.scrolled_rows, 7);
+
+        terminal.erase_session_projection(None).unwrap();
+
+        let rows = rows_of(terminal.backend().buffer(), 20);
+        assert!(
+            rows[..4].iter().all(|row| row.starts_with("shell")),
+            "rows above the session extent were erased: {rows:?}"
+        );
+        assert!(
+            rows[4..].iter().all(|row| row.is_empty()),
+            "session rows survived the scroll: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 4, 20, 0));
+        let scrollback = rows_of(terminal.backend().scrollback(), 20);
+        assert_eq!(scrollback.len(), 7, "{scrollback:?}");
+    }
+
+    /// Replaces #1520's `erase_covers_tracked_minimum_after_resize_without_redraw`.
+    /// The reason it asserted the opposite is #1544: the old test pinned
+    /// "committed rows above the live viewport stay on screen", which is
+    /// exactly the reported bug. What it was really protecting against is
+    /// still checked here: a resize without a redraw must not strand rows.
+    #[test]
+    fn erase_after_a_resize_without_a_redraw_still_covers_the_session() {
+        let mut terminal = inline_session(20, 12, 7, 7);
+        composer(&mut terminal, 3, "composer");
+        commit(&mut terminal, 2, "chat");
+        terminal.backend_mut().resize(20, 20);
         terminal.autoresize().unwrap();
-        assert_eq!(terminal.transient_top, Some(16));
 
-        terminal.erase_transient_projection(None).unwrap();
+        terminal.erase_session_projection(None).unwrap();
 
-        let committed: String = (0..9)
-            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
-            .collect();
-        assert_eq!(committed, "committed");
-        let stale: String = (0..40)
-            .map(|column| terminal.backend().buffer()[(column, 16)].symbol())
-            .collect();
+        let rows = rows_of(terminal.backend().buffer(), 20);
         assert!(
-            stale.trim().is_empty(),
-            "stale viewport row survived: {stale:?}"
+            rows[..7].iter().all(|row| row.starts_with("shell")),
+            "pre-session rows were erased: {rows:?}"
         );
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .skip(16 * 40)
-                .all(|cell| cell.symbol().trim().is_empty())
+            rows[7..].iter().all(|row| row.is_empty()),
+            "the resize stranded session rows: {rows:?}"
         );
-        assert_eq!(terminal.area(), Rect::new(0, 16, 40, 0));
+        assert_eq!(terminal.area(), Rect::new(0, 7, 20, 0));
     }
 
+    /// Replaces #1520's `erase_after_late_commits_preserves_all_scrollback`.
+    /// That test asserted the committed rows above the live viewport survive
+    /// the erase; #1544 is the report that they must not. The preserved half
+    /// of the old decision is still covered: scrollback is not purged.
     #[test]
-    fn erase_after_late_commits_preserves_all_scrollback() {
-        let backend = TestBackend::new(40, 12);
-        let mut terminal = InlineTerminal::new(backend).unwrap();
-        terminal
-            .insert_before(2, |buffer| {
-                buffer.set_string(0, 0, "first", ratatui::style::Style::default());
-            })
-            .unwrap();
-        terminal
-            .draw_height(4, |frame| {
-                frame.render_widget(ratatui::widgets::Paragraph::new("stale"), frame.area());
-            })
-            .unwrap();
-        // Late history commits move the viewport down and turn the rows
-        // above into scrollback: the tracked minimum must reset instead of
-        // pointing the exit erase at committed lines.
-        terminal
-            .insert_before(3, |buffer| {
-                buffer.set_string(0, 0, "second", ratatui::style::Style::default());
-            })
-            .unwrap();
-        assert_eq!(terminal.transient_top, None);
-        terminal.draw_height(4, |_| {}).unwrap();
+    fn erase_after_late_commits_still_covers_committed_rows() {
+        let mut terminal = inline_session(20, 12, 7, 7);
+        composer(&mut terminal, 3, "stale");
+        commit(&mut terminal, 2, "first");
+        commit(&mut terminal, 2, "second");
 
-        terminal.erase_transient_projection(None).unwrap();
+        terminal.erase_session_projection(None).unwrap();
 
-        let first: String = (0..5)
-            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
-            .collect();
-        assert_eq!(first, "first");
-        let second: String = (0..6)
-            .map(|column| terminal.backend().buffer()[(column, 2)].symbol())
-            .collect();
-        assert_eq!(second, "second");
+        let rows = rows_of(terminal.backend().buffer(), 20);
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .skip(5 * 40)
-                .all(|cell| cell.symbol().trim().is_empty())
+            rows.iter()
+                .all(|row| !row.contains("first") && !row.contains("second")),
+            "committed rows survived: {rows:?}"
         );
-        assert_eq!(terminal.area(), Rect::new(0, 5, 40, 0));
+        assert!(
+            rows[5..].iter().all(|row| row.is_empty()),
+            "session rows survived: {rows:?}"
+        );
+        assert!(
+            rows[..5].iter().all(|row| row.starts_with("shell")),
+            "pre-session rows were erased: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 5, 20, 0));
+        assert_eq!(rows_of(terminal.backend().scrollback(), 20).len(), 2);
     }
 
+    /// Replaces #1520's `erase_with_live_projection_keeps_scrollback_above`.
+    /// The composer row is a hint for a projection the model no longer tracks;
+    /// it must never narrow the erase, or the conversation stays on screen.
     #[test]
-    fn erase_with_live_projection_keeps_scrollback_above() {
-        let backend = TestBackend::new(40, 12);
-        let mut terminal = InlineTerminal::new(backend).unwrap();
-        terminal
-            .insert_before(2, |buffer| {
-                buffer.set_string(0, 0, "kept", ratatui::style::Style::default());
-            })
-            .unwrap();
-        terminal
-            .draw_height(4, |frame| {
-                frame.render_widget(ratatui::widgets::Paragraph::new("gone"), frame.area());
-            })
-            .unwrap();
+    fn a_composer_fallback_never_narrows_the_erase_to_the_live_viewport() {
+        let mut terminal = inline_session(20, 12, 11, 11);
+        composer(&mut terminal, 5, "composer");
+        commit(&mut terminal, 3, "chat");
 
-        // A composer row inside the live viewport must not move the anchor
-        // above the tracked projection.
-        terminal.erase_transient_projection(Some(4)).unwrap();
+        terminal.erase_session_projection(Some(10)).unwrap();
 
-        let kept: String = (0..4)
-            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
-            .collect();
-        assert_eq!(kept, "kept");
+        let rows = rows_of(terminal.backend().buffer(), 20);
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .skip(2 * 40)
-                .all(|cell| cell.symbol().trim().is_empty())
+            rows[..4].iter().all(|row| row.starts_with("shell")),
+            "pre-session rows were erased: {rows:?}"
         );
-        assert_eq!(terminal.area(), Rect::new(0, 2, 40, 0));
+        assert!(
+            rows[4..].iter().all(|row| row.is_empty()),
+            "the fallback narrowed the erase: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 4, 20, 0));
+    }
+
+    /// Ctrl-L blanks the projection rows but leaves the session's committed
+    /// transcript on screen, so the session anchor must survive it: the exit
+    /// erase still owns those rows.
+    #[test]
+    fn erase_after_clear_still_covers_the_committed_transcript() {
+        let mut terminal = inline_session(20, 12, 7, 7);
+        composer(&mut terminal, 3, "composer");
+        commit(&mut terminal, 2, "chat");
+        terminal.clear().unwrap();
+        assert!(
+            rows_of(terminal.backend().buffer(), 20)[7].contains("chat"),
+            "Ctrl-L must keep the committed transcript"
+        );
+
+        terminal.erase_session_projection(None).unwrap();
+
+        let rows = rows_of(terminal.backend().buffer(), 20);
+        assert!(
+            rows[7..].iter().all(|row| row.is_empty()),
+            "the committed transcript survived: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 7, 20, 0));
+    }
+
+    /// A mid-session resize replaces the projection: the old rows are cleared
+    /// and the transcript is replayed from the origin, so the exit erase owns
+    /// the whole screen from then on.
+    #[test]
+    fn erase_after_a_transcript_replacement_covers_the_whole_screen() {
+        let mut terminal = inline_session(20, 12, 7, 7);
+        composer(&mut terminal, 3, "composer");
+        commit(&mut terminal, 2, "old");
+        terminal.clear_screen().unwrap();
+        composer(&mut terminal, 3, "replayed");
+        commit(&mut terminal, 2, "chat");
+
+        terminal.erase_session_projection(None).unwrap();
+
+        assert!(
+            rows_of(terminal.backend().buffer(), 20)
+                .iter()
+                .all(|row| row.is_empty()),
+            "the replayed transcript survived: {:?}",
+            rows_of(terminal.backend().buffer(), 20)
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 0, 20, 0));
+    }
+
+    /// A resumed session replays its transcript before the first draw, so the
+    /// commit has to anchor the session too.
+    #[test]
+    fn erase_anchors_a_commit_that_precedes_the_first_draw() {
+        let mut terminal = inline_session(20, 12, 11, 11);
+        commit(&mut terminal, 4, "replay");
+        composer(&mut terminal, 2, "composer");
+
+        terminal.erase_session_projection(None).unwrap();
+
+        let rows = rows_of(terminal.backend().buffer(), 20);
+        assert!(
+            rows.iter().all(|row| !row.contains("replay")),
+            "the replayed transcript survived: {rows:?}"
+        );
+        assert!(
+            rows[..6].iter().all(|row| row.starts_with("shell")),
+            "pre-session rows were erased: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 6, 20, 0));
     }
 
     #[test]
@@ -822,7 +1048,7 @@ mod tests {
                 frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
             })
             .unwrap();
-        terminal.erase_transient_projection(Some(3)).unwrap();
+        terminal.erase_session_projection(Some(3)).unwrap();
         assert_eq!(terminal.area(), Rect::new(0, 0, 40, 0));
 
         // Simulate `--update` output printed after the restore, bypassing
@@ -836,7 +1062,7 @@ mod tests {
 
         // A stale composer row from before the restore must not wipe it:
         // with no tracked projection the erase is a no-op.
-        terminal.erase_transient_projection(Some(3)).unwrap();
+        terminal.erase_session_projection(Some(3)).unwrap();
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "!");
         assert_eq!(terminal.area(), Rect::new(0, 0, 40, 0));
     }
