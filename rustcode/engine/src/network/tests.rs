@@ -2070,8 +2070,17 @@ async fn multi_call_response_executes_all_valid_reads() {
 async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
     // Search an empty directory so the outputs are hermetic: the pattern can
     // never match the test source itself (which contains the pattern text).
-    let dir = tempfile::tempdir().expect("temp search root");
+    // The directory must live inside the workspace root: an out-of-workspace
+    // path is a harness boundary rejection, which rides the infrastructure
+    // guard instead of evidence-based recovery (see the boundary test below).
     let state = Arc::new(Mutex::new(AppState::new()));
+    let workspace = {
+        let state = state.lock().await;
+        state
+            .effective_workspace_root()
+            .expect("test workspace root")
+    };
+    let dir = tempfile::tempdir_in(workspace).expect("temp search root");
     {
         let mut state = state.lock().await;
         state.auto_confirm = true;
@@ -2139,6 +2148,86 @@ async fn evidence_recovery_suppresses_duplicate_loop_warnings() {
             .any(|body| body.contains("last 4 tool results")),
         "output-stagnation warning must not stack with recovery: {bodies:?}"
     );
+}
+
+#[tokio::test]
+async fn workspace_boundary_rejections_skip_evidence_recovery_for_infra_guard() {
+    // An out-of-workspace search path is a harness guardrail hit, not model
+    // stagnation: repeated rejections must reset the evidence streak and stop
+    // via the workspace-boundary guard instead of injecting evidence-based
+    // recovery.
+    let dir = tempfile::tempdir().expect("temp search root outside workspace");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+    let root = dir.path().to_string_lossy().to_string();
+    assert!(
+        !root.starts_with(
+            state
+                .lock()
+                .await
+                .effective_workspace_root()
+                .expect("test workspace root")
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "this scenario needs an out-of-workspace path"
+    );
+
+    for round in 0..4 {
+        super::turn_engine::tools::handle_tool_response(
+            &client,
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            vec![crate::tools::ToolCallEnvelope {
+                call_id: format!("call-boundary-{round}"),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({
+                    "pattern": "zzz-no-match-xyz-123",
+                    "path": root,
+                }),
+            }],
+            "",
+        )
+        .await;
+        ctx.response.final_content = "Searching for references.".to_string();
+    }
+
+    let history = state.lock().await;
+    let bodies: Vec<&str> = history
+        .history
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("[Evidence-based recovery:")),
+        "boundary rejections must not inject evidence recovery: {bodies:?}"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("[Workspace boundary guard:")),
+        "boundary rejections must stop via the infra guard: {bodies:?}"
+    );
+    assert_eq!(ctx.metrics.evidence_recoveries, 0);
+    assert_eq!(ctx.progress.ledger.no_progress_streak(), 0);
 }
 
 #[test]

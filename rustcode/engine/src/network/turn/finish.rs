@@ -21,17 +21,23 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
     policy: &Arc<P>,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
 ) -> TurnContext {
-    let (max_tool_rounds, max_total_tool_rounds) = {
+    let (max_tool_rounds, max_total_tool_rounds, loop_guard) = {
         let s = state.lock().await;
-        (s.config.max_tool_rounds, s.config.max_total_tool_rounds)
+        (
+            s.config.max_tool_rounds,
+            s.config.max_total_tool_rounds,
+            s.config.loop_guard,
+        )
     };
+    let mut turn_context = TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds);
+    turn_context.apply_loop_guard(&loop_guard);
     run_agent_turn_with_context(
         client,
         state,
         cancel_token,
         policy,
         stream_buffer,
-        TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds),
+        turn_context,
     )
     .await
 }
