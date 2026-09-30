@@ -954,6 +954,7 @@ mod tests {
                 title: "A session title".to_owned(),
                 message_count: 3,
                 when: "now".to_owned(),
+                workspace_cwd: None,
             });
         state.mcp_edit_state = Some(rustcode::controller::McpEditState {
             is_add: true,
@@ -983,6 +984,7 @@ mod tests {
                 title: "A session title".to_owned(),
                 message_count: 3,
                 when: "now".to_owned(),
+                workspace_cwd: None,
             });
         state.mcp_edit_state = Some(rustcode::controller::McpEditState {
             is_add: true,
