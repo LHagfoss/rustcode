@@ -184,3 +184,58 @@ fn tool_confirmation_selection_moves_between_approve_and_deny() {
     state.move_tool_confirmation_selection(-1);
     assert_eq!(state.tool_confirmation_selected, 0);
 }
+
+#[test]
+fn tool_confirmation_selection_reaches_the_prefix_choices_and_clamps() {
+    let mut state = AppState::new();
+    state.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+        request_id: None,
+        tool_name: "run_command".to_owned(),
+        path: "cargo test --lib".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+        rememberable_prefix: Some("cargo test".to_owned()),
+        forbidden_prefix: Some("cargo test".to_owned()),
+    }]);
+
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 1);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 2);
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 3);
+    // Clamped at the last prefix choice.
+    state.move_tool_confirmation_selection(1);
+    assert_eq!(state.tool_confirmation_selected, 3);
+    state.move_tool_confirmation_selection(-1);
+    assert_eq!(state.tool_confirmation_selected, 2);
+}
+
+#[test]
+fn deferred_speculative_projections_are_dropped_while_running_calls_remain() {
+    let mut state = AppState::new();
+    state.update_speculative_live_tool_call(
+        Some("call-a"),
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    state.update_speculative_live_tool_call(
+        Some("call-b"),
+        "run_command",
+        &serde_json::json!({"command": "cargo lint"}),
+    );
+    // Adopt one call; the other represents a scheduler-deferred projection.
+    state.begin_live_tool_call(
+        Some("call-a"),
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    assert_eq!(state.live_tool_calls.len(), 2);
+    state.clear_speculative_live_tool_calls();
+    assert_eq!(state.live_tool_calls.len(), 1);
+    assert!(state.live_tool_calls[0].execution_started);
+    assert_eq!(
+        state.live_tool_calls[0].provider_call_id.as_deref(),
+        Some("call-a")
+    );
+}

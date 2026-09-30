@@ -725,7 +725,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 #[cfg(test)]
 mod tests {
     use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
-    use rustcode::controller::{ChatMessage, History};
+    use rustcode::controller::{ChatMessage, History, RenderState};
 
     #[test]
     fn committed_history_cache_shares_large_block_and_projects_only_viewport() {
@@ -734,7 +734,7 @@ mod tests {
         let _theme_guard = super::super::tests::THEME_TEST_LOCK
             .lock()
             .expect("theme test lock");
-        let mut state = rustcode::app::AppState::new();
+        let mut state = RenderState::new();
         state.history.push(ChatMessage::new(
             "assistant",
             (0..1_000)

@@ -26,24 +26,27 @@ for controlling and observing a session: `InteractiveController`,
 `ControllerSnapshot`, `Command`. New frontends drive this; `rustcode/desktop`
 is the reference implementation.
 
-The terminal UI lives in its own crate and drives `controller` for turns,
-config, skills, background tasks, and shared domain types. The render layer's
-only remaining direct core read is the `AppState` snapshot bridge
-(`rustcode/tui/src/ui/render_snapshot.rs`, which captures the immutable
-`RenderSnapshot` each frame) plus the tests that construct an `AppState`.
-Converging that bridge onto a narrow controller view (the 79 fields the bridge
-reads today) is the remaining step for #1442 step 1; the TUI's event loop
-(`rustcode/tui/src/runtime`) moves with the frontend by design. The update
-prompt renders a binary-local `env!("CARGO_PKG_VERSION")` helper plus the
-shared `rustcode_core::update` leaf, and render tests spawn background tasks
-through `controller::spawn_background_task` — neither path names engine
-internals anymore. Treat `controller` as the stable seam for anything new.
+The terminal UI lives in its own crate and follows the same seam
+(enforced by `scripts/check-frontend-seam.sh`). It drives `controller` for
+turns, config, skills, background tasks, and shared domain types. Its render
+layer renders from `controller::RenderState`, a per-frame owned projection of
+a live session (`controller::render_state`), in place of the `AppState`
+snapshot bridge it used to read. Anything that needed an `AppState` method —
+whether the turn is interruptible, whether an overlay owns the screen, the
+active model profile / context window / tool protocol, the unexpired transient
+notice — is resolved into the view by the engine, so a frontend never
+re-derives engine policy. The TUI's event loop (`rustcode/tui/src/runtime`) is
+out of scope by design: it moves with the frontend and drives turns directly.
+The update prompt renders a binary-local `env!("CARGO_PKG_VERSION")` helper
+plus the shared `rustcode_core::update` leaf, and render tests spawn
+background tasks through `controller::spawn_background_task` — neither path
+names engine internals. Treat `controller` as the stable seam for anything
+new.
 
 `controller` also re-exports the shared domain types a frontend renders —
 session status, chat history and tool records, live tool calls, subagents,
-pending confirmations, approval/question answers, and `UiRect` — so render
-code names the contract instead of `rustcode::app`. Prefer extending that
-list over re-introducing an `app` path.
+pending confirmations, approval/question answers, and `UiRect`. Prefer
+extending the view over reaching past `controller`.
 
 ## Rules
 

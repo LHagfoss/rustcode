@@ -1775,3 +1775,302 @@ async fn save_config_command_persists_the_active_session_config() {
     assert!(dir.join("config.toml").exists());
     handle.send(Command::Shutdown).expect("shutdown");
 }
+
+/// The render view is the render layer's whole contract, so its projections
+/// are covered here rather than through a frontend: these assertions moved
+/// out of the TUI when the bridge started reading `RenderState`.
+mod render_state_tests {
+    use super::*;
+    use crate::controller::{McpEditState, RenderState, render_state};
+
+    #[test]
+    fn render_metrics_reject_stale_revision() {
+        let mut state = AppState::new();
+        let revision = render_state(&state).revision;
+        let input_area = crate::app::UiRect::new(2, 3, 40, 4);
+
+        assert!(state.publish_render_metrics(revision, 12, input_area));
+        assert_eq!(state.conversation_content_height, 12);
+        assert_eq!(state.input_text_area, Some(input_area));
+
+        state.request_redraw();
+        assert!(!state.publish_render_metrics(revision, 99, crate::app::UiRect::default()));
+        assert_eq!(state.conversation_content_height, 12);
+        assert_eq!(state.input_text_area, Some(input_area));
+    }
+
+    #[test]
+    fn response_mutations_invalidate_render_metrics() {
+        let mut state = AppState::new();
+
+        let append_revision = render_state(&state).revision;
+        state.append_current_response("streamed output");
+        assert_eq!(state.current_response.as_str(), "streamed output");
+        assert!(!state.publish_render_metrics(append_revision, 12, crate::app::UiRect::default()));
+
+        let clear_revision = render_state(&state).revision;
+        state.clear_current_response();
+        assert!(state.current_response.is_empty());
+        assert!(!state.publish_render_metrics(clear_revision, 12, crate::app::UiRect::default()));
+    }
+
+    #[test]
+    fn input_and_cursor_mutations_invalidate_render_metrics() {
+        let mut state = AppState::new();
+        let input_revision = render_state(&state).revision;
+        state.insert_char('x');
+        assert!(!state.publish_render_metrics(input_revision, 1, crate::app::UiRect::default()));
+
+        let cursor_revision = render_state(&state).revision;
+        state.move_cursor_to_start();
+        assert!(!state.publish_render_metrics(cursor_revision, 1, crate::app::UiRect::default()));
+
+        state.pending_queue.push("queued".to_owned());
+        let recall_revision = render_state(&state).revision;
+        state.composer().pop_queued_prompt();
+        assert!(!state.publish_render_metrics(recall_revision, 1, crate::app::UiRect::default()));
+
+        state.input_buffer = "/he".to_owned();
+        let autocomplete_revision = render_state(&state).revision;
+        state.insert_char('l');
+        assert!(!state.publish_render_metrics(
+            autocomplete_revision,
+            1,
+            crate::app::UiRect::default()
+        ));
+    }
+
+    #[test]
+    fn steering_is_interruptible_only_for_a_steerable_active_turn() {
+        let mut state = AppState::new();
+        assert!(!render_state(&state).steering_interruptible);
+
+        state.status = AppStatus::Streaming;
+        assert!(
+            !render_state(&state).steering_interruptible,
+            "a streaming turn with no steerable session must not accept steers"
+        );
+
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(render_state(&state).steering_interruptible);
+    }
+
+    #[test]
+    fn escape_interrupt_is_suppressed_by_a_completion_or_a_selection() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(render_state(&state).steering_escape_will_interrupt);
+
+        state.input_buffer = "/mo".to_owned();
+        assert!(!render_state(&state).steering_escape_will_interrupt);
+
+        state.input_buffer = "draft text".to_owned();
+        assert!(render_state(&state).steering_escape_will_interrupt);
+        state.sel_start = Some((0, 0));
+        state.sel_end = Some((5, 0));
+        assert!(!render_state(&state).steering_escape_will_interrupt);
+    }
+
+    #[test]
+    fn armed_ctrl_c_is_reported_before_the_deadline_expires() {
+        let mut state = AppState::new();
+        assert!(!render_state(&state).ctrl_c_exit_armed);
+
+        state.ctrl_c_exit_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+        assert!(render_state(&state).ctrl_c_exit_armed);
+
+        state.ctrl_c_exit_deadline =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(!render_state(&state).ctrl_c_exit_armed);
+    }
+
+    #[test]
+    fn question_chain_counters_follow_the_installed_chain() {
+        let mut view = RenderState::new();
+        view.set_question_chain(vec![
+            PendingQuestion::new("First?".to_owned(), vec!["a".to_owned()], false),
+            PendingQuestion::new("Second?".to_owned(), vec!["b".to_owned()], false),
+        ]);
+        assert_eq!(view.pending_question_chain_len, 2);
+        assert_eq!(view.pending_question_chain_position, 1);
+        assert_eq!(view.pending_question_chain_answered, 0);
+        assert_eq!(view.pending_question.as_ref().unwrap().question, "First?");
+
+        view.set_question_chain(Vec::new());
+        assert_eq!(view.pending_question_chain_len, 0);
+        assert!(view.pending_question.is_none());
+    }
+
+    #[test]
+    fn subagent_rows_are_captured_only_for_open_picker_surfaces() {
+        let mut state = AppState::new();
+        crate::app::SubagentController.spawn(
+            &mut state,
+            "child task",
+            None,
+            None,
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+
+        let hidden = render_state(&state);
+        assert!(hidden.subagents.is_empty(), "no picker surface is open");
+
+        state.show_subagent_picker = true;
+        assert_eq!(render_state(&state).subagents.len(), 1);
+    }
+
+    #[test]
+    fn the_selected_subagent_resolves_even_when_no_picker_is_open() {
+        let mut state = AppState::new();
+        state.show_context_modal = true;
+        let id = crate::app::SubagentController
+            .spawn(
+                &mut state,
+                "child task",
+                None,
+                None,
+                false,
+                Vec::new(),
+                None,
+                None,
+            )
+            .raw();
+        state.selected_subagent_id = Some(id);
+        // The context modal closes; the transcript still renders this subagent.
+        state.show_context_modal = false;
+
+        let view = render_state(&state);
+
+        assert!(view.subagents.is_empty());
+        assert_eq!(view.selected_subagent.as_ref().unwrap().id, id);
+        assert_eq!(view.selected_subagent_id, Some(id));
+    }
+
+    #[test]
+    fn pending_confirmation_blocks_steering() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(render_state(&state).steering_interruptible);
+
+        state.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+            request_id: None,
+            tool_name: "run_command".to_owned(),
+            path: "cargo test".to_owned(),
+            content_preview: String::new(),
+            content_bytes: 0,
+            rememberable_prefix: None,
+            forbidden_prefix: None,
+        }]);
+
+        let view = render_state(&state);
+        assert!(!view.steering_interruptible);
+        assert!(!view.steering_escape_will_interrupt);
+        // A pending confirmation alone does not open an overlay: the status
+        // does, once the turn yields to it.
+        assert!(!view.modal_open());
+        state.status = AppStatus::AwaitingToolConfirmation;
+        assert!(render_state(&state).modal_open());
+    }
+
+    #[test]
+    fn overlay_payloads_are_captured_only_while_their_overlay_is_open() {
+        let mut state = AppState::new();
+        state
+            .history_picker_sessions
+            .push(crate::config::SessionMeta {
+                path: std::path::PathBuf::from("session.json"),
+                title: "A session title".to_owned(),
+                message_count: 3,
+                when: "now".to_owned(),
+                workspace_cwd: None,
+            });
+        state.mcp_edit_state = Some(McpEditState {
+            is_add: true,
+            edit_index: None,
+            name_input: "server".to_owned(),
+            command_input: "command".to_owned(),
+            args_input: "--flag".to_owned(),
+            active_field: 0,
+            cursor_pos: 0,
+        });
+
+        let hidden = render_state(&state);
+        assert!(hidden.history_picker_sessions.is_empty());
+        assert!(hidden.mcp_edit_state.is_none());
+
+        state.show_history_picker = true;
+        state.show_mcp_config = true;
+        let shown = render_state(&state);
+        assert_eq!(shown.history_picker_sessions[0].title, "A session title");
+        assert_eq!(shown.mcp_edit_state.as_ref().unwrap().name_input, "server");
+    }
+
+    #[test]
+    fn a_seeded_view_matches_a_projected_one() {
+        let state = AppState::new();
+
+        let seeded = RenderState::new();
+        let mut projected = render_state(&state);
+        // `RenderState::new()` is documented as `render_state(&AppState::new())`;
+        // the only fields allowed to differ are per-call clocks and the
+        // generated session id.
+        projected.active_session_id = seeded.active_session_id.clone();
+        projected.generation_start_time = seeded.generation_start_time;
+        assert_eq!(seeded.revision, projected.revision);
+        assert_eq!(seeded.status, projected.status);
+        assert_eq!(seeded.modal_open(), projected.modal_open());
+        assert_eq!(seeded.config.models.len(), projected.config.models.len());
+    }
+
+    #[test]
+    fn background_task_state_is_projected_for_the_active_session() {
+        let state = AppState::new();
+
+        let view = render_state(&state);
+        assert!(view.background_tasks.is_empty());
+        assert!(!view.waiting_for_background_terminal);
+
+        let mut state = state;
+        state.background_turn_context = Some(Box::new(
+            crate::network::TurnContext::with_max_tool_rounds(1),
+        ));
+        assert!(render_state(&state).waiting_for_background_terminal);
+    }
+
+    #[test]
+    fn transient_notice_is_reported_only_while_it_has_not_expired() {
+        let mut state = AppState::new();
+        assert!(render_state(&state).transient_notice.is_none());
+
+        state.set_transient_notice("YOLO mode enabled");
+        assert_eq!(
+            render_state(&state).transient_notice.as_deref(),
+            Some("YOLO mode enabled")
+        );
+
+        state.transient_notice = Some((
+            "expired".to_owned(),
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        ));
+        assert!(render_state(&state).transient_notice.is_none());
+    }
+
+    #[test]
+    fn queued_steers_project_as_their_text() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Streaming;
+        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(state.queue_steer("correct the approach".to_owned()));
+
+        assert_eq!(
+            render_state(&state).pending_steers,
+            ["correct the approach"]
+        );
+    }
+}

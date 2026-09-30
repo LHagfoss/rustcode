@@ -32,23 +32,16 @@ pub(super) fn render_live_conversation(
     }
 }
 
+/// Test-only single-frame entry point.
+///
+/// Returns the composer rect the frame laid out. The view is a read
+/// projection, so there is no engine session left to publish layout metrics
+/// into; tests that assert the composer position read this instead.
 #[cfg(test)]
-pub fn render(f: &mut Frame, state: &mut AppState) {
+pub fn render(f: &mut Frame, view: &RenderState) -> (u16, ratatui::layout::Rect) {
     let mut transcript = TranscriptState::default();
-    let snapshot = render_snapshot(&state);
-    let revision = snapshot.revision();
-    let (content_height, input_area) =
-        render_with_transcript_snapshot(f, &snapshot, &mut transcript);
-    state.publish_render_metrics(
-        revision,
-        content_height,
-        rustcode::controller::UiRect::new(
-            input_area.x,
-            input_area.y,
-            input_area.width,
-            input_area.height,
-        ),
-    );
+    let snapshot = render_snapshot(view);
+    render_with_transcript_snapshot(f, &snapshot, &mut transcript)
 }
 
 pub(super) fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
@@ -109,12 +102,12 @@ pub(crate) fn desired_height_snapshot(
 
 #[cfg(test)]
 pub(crate) fn desired_height(
-    state: &AppState,
+    view: &RenderState,
     transcript: &mut TranscriptState,
     width: u16,
     terminal_height: u16,
 ) -> u16 {
-    let snapshot = render_snapshot(&state);
+    let snapshot = render_snapshot(view);
     desired_height_snapshot(&snapshot, transcript, width, terminal_height)
 }
 
@@ -482,23 +475,16 @@ pub(crate) fn render_with_transcript_snapshot(
     (conversation_content_height, input_box_area)
 }
 
+/// Test-only frame entry point that keeps a caller-owned transcript.
+///
+/// Returns the composer rect the frame laid out, for the same reason
+/// [`render`] does.
 #[cfg(test)]
 pub fn render_with_transcript(
     f: &mut Frame,
-    state: &mut AppState,
+    view: &RenderState,
     transcript: &mut TranscriptState,
-) {
-    let snapshot = render_snapshot(&state);
-    let revision = snapshot.revision();
-    let (content_height, input_area) = render_with_transcript_snapshot(f, &snapshot, transcript);
-    state.publish_render_metrics(
-        revision,
-        content_height,
-        rustcode::controller::UiRect::new(
-            input_area.x,
-            input_area.y,
-            input_area.width,
-            input_area.height,
-        ),
-    );
+) -> (u16, ratatui::layout::Rect) {
+    let snapshot = render_snapshot(view);
+    render_with_transcript_snapshot(f, &snapshot, transcript)
 }

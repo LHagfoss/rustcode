@@ -1565,6 +1565,7 @@ mod tests {
         COMMAND_DISPLAY_MAX_LINES, collapse_command_preview, is_hidden_system_notice,
         tool_result_status, truncate_wrapped_lines,
     };
+    use rustcode::controller::RenderState;
 
     #[test]
     fn raw_deferred_batch_notice_is_hidden_from_model_cells() {
@@ -1586,7 +1587,7 @@ mod tests {
 
     #[test]
     fn deferred_tool_result_is_not_rendered_as_a_failed_call() {
-        let mut state = rustcode::app::AppState::new();
+        let mut state = RenderState::new();
         state.history.push(rustcode::controller::ChatMessage::new(
             "tool",
             "read_email: error: intentionally deferred by the scheduler; reissue it only if still needed after reviewing the executed results",
