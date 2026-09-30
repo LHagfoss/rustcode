@@ -99,3 +99,44 @@ reduced-motion activity-label tests. Headless/serve behavior is unchanged.
 Fullscreen releases the alternate screen on normal exit, panic, Ctrl-Z
 suspension, and the terminal runtime's external-command handoff. The main
 screen scrollback is never cleared as part of fullscreen exit.
+
+### Umbrella closeout (#1450, 2026-09-30)
+
+The umbrella's remaining scope is settled. Recorded here so it is not re-opened
+by assumption.
+
+Complete, code-verified:
+
+- Follow-up interaction issues #1492 (#1497), #1493 (#1501), #1494 (#1498), and
+  #1495 (#1499) are closed by merged PRs, each with focused tests.
+- Large paste behavior is implemented end to end:
+  `Composer::handle_paste` collapses payloads of 300 characters or more into a
+  `<!--PASTE:…-->` marker (`rustcode/tui/src/runtime/composer.rs:145`), the
+  composer renders it collapsed, and the provider boundary expands it
+  (`rustcode/engine/src/network/payload.rs:96`).
+- Palette contrast and reduced motion stay covered by the render goldens and
+  `reduced_motion_renders_the_activity_label_without_a_sweep`.
+
+Not performed — needs a hardware lab run:
+
+- The matrix above has never been exercised on real macOS Terminal, Ghostty,
+  Kitty, WezTerm, tmux, or SSH sessions. Every entry is inferred from
+  environment variables and terminal attributes. A lab pass should record
+  per-terminal results and file terminal-specific bugs against this epic.
+
+Split into reviewable follow-ups:
+
+- #1527 — one insert path for pasted text and images. The Ctrl/Cmd+V fallback
+  duplicates the 300-character threshold and the marker format.
+- #1528 — one shared sizing rule for the inline pickers. Eleven pickers
+  hand-roll their column budgets, and only one picker has sizing tests.
+- #1529 — hints degrade by content at narrow widths. The footer hint is clipped
+  by `fit_to_width` and loses its dismiss affordance first.
+
+Descoped:
+
+- Flipping fullscreen on by default. The epic asked for that to be revisited
+  only after the rest is stable, so fullscreen stays opt-in — `--fullscreen` or
+  `fullscreen = true` (`rustcode/tui/src/run.rs:591`), guarded by
+  `fullscreen_is_opt_in` (`rustcode/tui/src/cli.rs:451`). Revisit it as its own
+  change backed by a lab pass, never inside an unrelated bug fix.
