@@ -171,7 +171,7 @@ pub(crate) fn render_with_transcript_snapshot(
         0
     };
     let popup_hint = if !filtered_cmds.is_empty() || !at_files.is_empty() {
-        Some(completion_footer_hint(!filtered_cmds.is_empty()))
+        Some(completion_footer_hint_clauses(!filtered_cmds.is_empty()))
     } else {
         None
     };
@@ -186,7 +186,7 @@ pub(crate) fn render_with_transcript_snapshot(
         || !state.background_tasks().is_empty();
     let mut activity_lines = if activity_visible {
         let mut lines = background_command_lines(state);
-        lines.push(activity_status_line(state, false));
+        lines.push(activity_status_line(state, false, f.area().width as usize));
         lines
     } else {
         Vec::new()

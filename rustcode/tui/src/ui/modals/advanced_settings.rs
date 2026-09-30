@@ -39,8 +39,7 @@ pub(in crate::ui) fn render_thinking_picker_modal(
 
     let title_text = "Model thinking";
     let right_esc = "esc";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -85,8 +84,7 @@ pub(in crate::ui) fn render_thinking_picker_modal(
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
             let left_text = format!("› {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -106,8 +104,7 @@ pub(in crate::ui) fn render_thinking_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -165,8 +162,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
 
     let title_text = "Reasoning effort";
     let right_esc = "esc";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -208,8 +204,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
             let left_text = format!("› {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -229,8 +224,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -288,8 +282,7 @@ pub(in crate::ui) fn render_protocol_picker_modal(
 
     let title_text = "Tool protocol";
     let right_esc = "esc";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -337,8 +330,7 @@ pub(in crate::ui) fn render_protocol_picker_modal(
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
             let left_text = format!("› {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -358,8 +350,7 @@ pub(in crate::ui) fn render_protocol_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),

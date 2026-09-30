@@ -230,8 +230,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
 
     let title_text = "Select theme (live preview)";
     let right_esc = "esc";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -262,8 +261,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
         let full_desc = format!("{}{}", theme.description, active_badge);
         let line = if is_selected {
             let left_text = format!("› {}", theme.name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -283,8 +281,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
             ])
         } else {
             let left_text = format!("  {}", theme.name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &full_desc);
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -296,14 +293,7 @@ pub(in crate::ui) fn render_theme_picker_modal(
 
     let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
-    let scroll_y: u16 = if total_lines <= list_height {
-        0
-    } else {
-        let ideal = selected_idx.saturating_sub(list_height / 3);
-        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
-        let hi = selected_idx.min(total_lines - list_height);
-        ideal.clamp(lo, hi)
-    } as u16;
+    let scroll_y = picker_list_window(selected_idx, total_lines, list_height);
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
@@ -465,8 +455,7 @@ pub(in crate::ui) fn render_context_modal(
 
     let title_text = "context usage";
     let right_esc = "Esc to close";
-    let padding_header =
-        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
