@@ -1040,9 +1040,10 @@ pub(super) fn completion_footer_hint_clauses(
 /// other handler sees the key (`selection_owns_key` in the runtime), so the key
 /// that copies it is the footer's *leading* clause and therefore the one clause
 /// that survives the narrowest row. `or right-click` follows it as the second
-/// copy path (`selection.rs`: copy needs Ctrl/Cmd+C or a right-click on the
-/// selection), so the shortest still-truthful form -- the key alone -- is what a
-/// narrow row keeps. Both are whole clauses of `fit_hint_clauses`, so nothing is
+/// copy path (`selection.rs`: copy needs Ctrl+C or a right-click on the
+/// selection -- Cmd+C is the terminal's native selection and never reaches
+/// the app on macOS, see #1566), so the shortest still-truthful form -- the
+/// key alone -- is what a narrow row keeps. Both are whole clauses of `fit_hint_clauses`, so nothing is
 /// ever clipped mid-affordance (#1529).
 pub(super) fn selection_hint_clauses() -> [&'static str; 2] {
     [

@@ -5,6 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
+    widgets::{Paragraph, Wrap},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use unicode_segmentation::UnicodeSegmentation;
@@ -93,6 +94,8 @@ pub(crate) struct TranscriptSelection {
     dragging: bool,
     snapshot: Option<Arc<RenderSnapshot>>,
     pinned_width: u16,
+    pinned_height: u16,
+    pinned_scroll: usize,
     captured: BTreeMap<i64, PaintedRow>,
     viewport_scroll: usize,
     viewport_top_key: i64,
@@ -305,6 +308,97 @@ impl TranscriptSelection {
                 .iter()
                 .any(|(low, high)| (*low..=*high).contains(key))
         });
+    }
+
+    /// Rebuilds painted rows a released selection pruned before a shift-click.
+    ///
+    /// Pruning keeps only the selected rows and the viewport once the gesture
+    /// is over, so scrolling several viewports away drops everything between
+    /// them. A shift-click then extends over rows that are no longer in
+    /// `captured`, and `selected_text` would return `None`. The pinned
+    /// snapshot is immutable, so the missing visual rows are re-rendered from
+    /// it at the pinned width: the same `Paragraph` wrap the live frame uses,
+    /// which preserves wide characters, soft wraps and the pinned layout
+    /// across resizes. Only the extended range (plus one neighbour each side
+    /// for the trailing-space decision in `copied_range`) is inserted, so an
+    /// idle selection stays bounded and the capture grows only to the rows the
+    /// new selection actually covers (#1562).
+    fn regenerate_gap_from_snapshot(&mut self) {
+        let Some(range) = self.range() else {
+            return;
+        };
+        let (start, end) = (range.0.row.min(range.1.row), range.0.row.max(range.1.row));
+        if (start..=end).all(|row| self.captured.contains_key(&row)) {
+            return;
+        }
+        let Some(snapshot) = self.snapshot.as_ref().map(Arc::clone) else {
+            return;
+        };
+        if self.pinned_width == 0 || self.pinned_height == 0 {
+            return;
+        }
+        // The full transcript at the pinned width; the temp transcript only
+        // supplies the committed-block cache, never the live selection.
+        let mut temp = super::TranscriptState::default();
+        let lines = super::render_visible_conversation_with_transcript(
+            &snapshot,
+            self.pinned_width,
+            u16::MAX,
+            &mut temp,
+        );
+        if lines.is_empty() {
+            return;
+        }
+        let soft_wrap_flags: Vec<bool> = lines
+            .iter()
+            .flat_map(|line| {
+                let count = Paragraph::new(line.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(self.pinned_width)
+                    .max(1);
+                std::iter::once(false).chain(std::iter::repeat_n(true, count.saturating_sub(1)))
+            })
+            .collect();
+        let total_visual = soft_wrap_flags.len();
+        if total_visual == 0 {
+            return;
+        }
+        let Ok(total_height) = u16::try_from(total_visual) else {
+            return;
+        };
+        let source_area = Rect::new(0, 0, self.pinned_width, total_height);
+        let mut source = Buffer::empty(source_area);
+        {
+            use ratatui::widgets::Widget as _;
+            let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+            paragraph.render(source_area, &mut source);
+        }
+        // Absolute key -> visual index: key 0 is the top of the viewport as
+        // pinned, which showed `pinned_height` visual rows ending
+        // `pinned_scroll` rows above the bottom.
+        let base = total_visual as i64 - self.pinned_height as i64 - self.pinned_scroll as i64;
+        // One neighbour each side keeps `copied_range`'s trailing-space
+        // decision exact when the extended edge ends mid-logical-line.
+        for row in start.saturating_sub(1)..=end.saturating_add(1) {
+            if self.captured.contains_key(&row) {
+                continue;
+            }
+            let index = base + row;
+            if index < 0 || index >= total_visual as i64 {
+                continue;
+            }
+            let visual = index as u16;
+            let cells = buffer_row_cells(source_area, &source, visual);
+            let soft_wrap_before = soft_wrap_flags
+                .get(index as usize)
+                .copied()
+                .unwrap_or(false);
+            self.captured
+                .insert(row, PaintedRow::new(cells, soft_wrap_before));
+        }
+        // Drop the neighbours again if they fall outside the selected and
+        // viewport ranges; they were only needed to decide trailing spaces.
+        // `prune_captured` on the next frame does this, so no work here.
     }
 
     fn position(&self, column: u16, row: u16) -> Option<CellPosition> {
@@ -561,6 +655,8 @@ impl TranscriptSelection {
         if self.snapshot.is_none() {
             self.snapshot = Some(Arc::new(snapshot));
             self.pinned_width = self.area.width;
+            self.pinned_height = self.area.height;
+            self.pinned_scroll = scroll_rows;
             self.viewport_scroll = scroll_rows;
             self.viewport_top_key = 0;
             self.capture_painted_rows();
@@ -712,6 +808,8 @@ impl TranscriptSelection {
             }
             self.snapshot = Some(Arc::new(snapshot));
             self.pinned_width = self.area.width;
+            self.pinned_height = self.area.height;
+            self.pinned_scroll = scroll_rows;
             self.viewport_scroll = scroll_rows;
             self.viewport_top_key = 0;
             self.origin_row = event.row;
@@ -790,7 +888,9 @@ impl TranscriptSelection {
 
     /// Returns text to copy only for the explicit right-click copy action.
     /// Left-button release keeps the highlight visible without touching the
-    /// clipboard; copy requires Ctrl/Cmd+C or right-click on the selection.
+    /// clipboard; copy requires Ctrl+C or right-click on the selection.
+    /// (Cmd+C is the terminal's native selection on macOS and never reaches
+    /// the app; see #1566.)
     pub(crate) fn mouse(&mut self, event: MouseEvent) -> Option<String> {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -823,6 +923,10 @@ impl TranscriptSelection {
                         if let Some(position) = position {
                             self.extend_semantic(position);
                         }
+                        // The released selection pruned the rows between it
+                        // and this viewport; rebuild them from the pinned
+                        // snapshot so the extended range stays copyable.
+                        self.regenerate_gap_from_snapshot();
                     } else {
                         self.anchor = position;
                         self.focus = position;
@@ -851,6 +955,9 @@ impl TranscriptSelection {
                 if self.snapshot.is_some() {
                     self.pointer = Some((event.column, event.row));
                     self.extend_from_pointer();
+                    // A shift-drag can jump viewports in one gesture; fill any
+                    // rows it crossed so release leaves a copyable range.
+                    self.regenerate_gap_from_snapshot();
                 } else {
                     self.focus = self.position(event.column, event.row);
                     if let Some(position) = self.focus {
@@ -865,7 +972,7 @@ impl TranscriptSelection {
                     self.clear();
                 }
                 // Keep the highlight but do not copy: copying requires an
-                // explicit Ctrl/Cmd+C or right-click. See #1492.
+                // explicit Ctrl+C or right-click. See #1492 and #1566.
                 return None;
             }
             MouseEventKind::Down(MouseButton::Right) if self.inside(event.column, event.row) => {
@@ -1390,7 +1497,7 @@ mod tests {
             selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 0)),
             None
         );
-        // Highlight remains after release for explicit Ctrl/Cmd+C.
+        // Highlight remains after release for explicit Ctrl+C.
         assert_eq!(selection.selected_text().as_deref(), Some("hell"));
         // Right-click on the selection is the explicit mouse copy action.
         assert_eq!(
@@ -1650,6 +1757,251 @@ mod tests {
             transcript.selection.captured.len() <= area.height as usize + 3,
             "captured {}",
             transcript.selection.captured.len()
+        );
+    }
+
+    #[test]
+    fn shift_click_extends_released_selection_after_distant_scroll() {
+        // Select, release, scroll several viewports away, then shift-click:
+        // the pruned gap is rebuilt from the pinned snapshot so the whole
+        // extended range stays copyable (#1562).
+        let state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        let original = transcript.selection.selected_text().unwrap();
+
+        for _ in 0..30 {
+            transcript.scroll_up(1);
+            let _ = rendered_transcript(&state, &mut transcript);
+        }
+        assert_eq!(
+            transcript.selection.selected_text().as_deref(),
+            Some(original.as_str())
+        );
+        assert!(
+            transcript.selection.captured.len() <= area.height as usize + 3,
+            "captured {}",
+            transcript.selection.captured.len()
+        );
+
+        let mut shifted = mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y);
+        shifted.modifiers = KeyModifiers::SHIFT;
+        transcript.selection.mouse(shifted);
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 1,
+            area.y,
+        ));
+        let extended = transcript
+            .selection
+            .selected_text()
+            .expect("shift-click over pruned rows must stay copyable");
+        assert!(
+            extended.len() > original.len(),
+            "original={original:?}, extended={extended:?}"
+        );
+        assert!(
+            extended.contains("history row"),
+            "extended copy lost the transcript text: {extended:?}"
+        );
+        assert!(
+            extended.contains(original.trim()),
+            "extended copy lost the original selection {original:?}: {extended:?}"
+        );
+    }
+
+    #[test]
+    fn shift_click_extends_in_the_opposite_direction_after_distant_scroll() {
+        // Mirror of the above: select in older history, scroll back toward the
+        // bottom, then shift-click forward. Both extension directions must
+        // rebuild the pruned gap (#1562).
+        let state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        for _ in 0..30 {
+            transcript.scroll_up(1);
+        }
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 4,
+            area.y,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 4,
+            area.y,
+        ));
+        let original = transcript.selection.selected_text().unwrap();
+
+        for _ in 0..30 {
+            transcript.scroll_down(1);
+            let _ = rendered_transcript(&state, &mut transcript);
+        }
+        assert_eq!(
+            transcript.selection.selected_text().as_deref(),
+            Some(original.as_str())
+        );
+
+        let mut shifted = mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x + 1,
+            area.bottom() - 1,
+        );
+        shifted.modifiers = KeyModifiers::SHIFT;
+        transcript.selection.mouse(shifted);
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 1,
+            area.bottom() - 1,
+        ));
+        let extended = transcript
+            .selection
+            .selected_text()
+            .expect("forward shift-click over pruned rows must stay copyable");
+        assert!(
+            extended.len() > original.len(),
+            "original={original:?}, extended={extended:?}"
+        );
+        assert!(extended.contains("history row"));
+        assert!(extended.contains(original.trim()));
+    }
+
+    #[test]
+    fn shift_click_after_scroll_preserves_soft_wrap_and_wide_graphemes() {
+        // Soft-wrapped rows join without a newline and wide graphemes round-
+        // trip even when the gap was pruned and rebuilt (#1562).
+        let mut state = RenderState::new();
+        let text = (0..40)
+            .map(|row| {
+                format!("row {row:02} café 🙂 hello world {row:02} abcdefghijklmnopqrstuvwxyz")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.history.push(ChatMessage::new("assistant", text));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        assert!(transcript.selection.selected_text().is_some());
+
+        for _ in 0..30 {
+            transcript.scroll_up(1);
+            let _ = rendered_transcript(&state, &mut transcript);
+        }
+
+        let mut shifted = mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y);
+        shifted.modifiers = KeyModifiers::SHIFT;
+        transcript.selection.mouse(shifted);
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 1,
+            area.y,
+        ));
+        let extended = transcript
+            .selection
+            .selected_text()
+            .expect("extended copy with wraps and wide chars must exist");
+        assert!(
+            extended.contains("café"),
+            "wide/unicode text lost: {extended:?}"
+        );
+        assert!(extended.contains("🙂"), "emoji lost: {extended:?}");
+        // A soft-wrapped logical line rejoins with its space, not a newline:
+        // every wrapped "hello world" survives as one phrase.
+        assert!(
+            extended.contains("hello world"),
+            "soft-wrapped phrase split: {extended:?}"
+        );
+        for line in extended.lines() {
+            assert_eq!(line, line.trim_end(), "trailing padding in {line:?}");
+        }
+    }
+
+    #[test]
+    fn shift_click_extension_after_scroll_uses_the_pinned_snapshot() {
+        // New history arriving after the pin must not leak into the rebuilt
+        // gap: the extension copies what was pinned, not what streamed later.
+        let mut state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 4,
+            area.y + 2,
+        ));
+
+        state
+            .history
+            .push(ChatMessage::new("assistant", "new streamed response"));
+        for _ in 0..30 {
+            transcript.scroll_up(1);
+            let _ = rendered_transcript(&state, &mut transcript);
+        }
+
+        let mut shifted = mouse(MouseEventKind::Down(MouseButton::Left), area.x + 1, area.y);
+        shifted.modifiers = KeyModifiers::SHIFT;
+        transcript.selection.mouse(shifted);
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 1,
+            area.y,
+        ));
+        let extended = transcript
+            .selection
+            .selected_text()
+            .expect("pinned extension must stay copyable");
+        assert!(extended.contains("history row"));
+        assert!(
+            !extended.contains("new streamed response"),
+            "pinned copy leaked live history: {extended:?}"
         );
     }
 
