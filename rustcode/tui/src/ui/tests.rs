@@ -1219,6 +1219,41 @@ fn welcome_banner_renders_without_a_conversation() {
     );
 }
 
+/// The effective mode must be readable from the banner and the status line
+/// without opening anything, otherwise the unrestricted mode exists but cannot
+/// be noticed (#1540).
+#[test]
+fn welcome_banner_names_the_effective_sandbox_mode() {
+    for (mode, expected) in [
+        (
+            rustcode::controller::SandboxMode::WorkspaceWrite,
+            "workspace/session writes; no network",
+        ),
+        (
+            rustcode::controller::SandboxMode::Trusted,
+            "trusted process permissions; no OS sandbox",
+        ),
+    ] {
+        let mut state = RenderState::new();
+        state.config.sandbox_mode = mode;
+
+        let rendered = super::build_claude_startup_banner(&state, 100, 28)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("OS sandbox:"),
+            "the banner must always show the mode: {rendered:?}"
+        );
+        assert!(
+            rendered.contains(expected),
+            "{mode} must render as {expected:?}: {rendered:?}"
+        );
+    }
+}
+
 #[test]
 fn welcome_banner_shows_active_model_effort_and_context_window() {
     let mut state = RenderState::new();

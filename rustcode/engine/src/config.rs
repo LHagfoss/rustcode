@@ -24,6 +24,12 @@ pub enum SandboxMode {
     Trusted,
 }
 
+impl std::fmt::Display for SandboxMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl SandboxMode {
     pub fn allows_workspace_write(self) -> bool {
         !matches!(self, Self::ReadOnly)
@@ -46,6 +52,26 @@ impl SandboxMode {
             Self::Trusted => "trusted process permissions; no OS sandbox",
         }
     }
+
+    /// The serialized config/CLI spelling. Single source of truth for the
+    /// `sandbox_mode` value, `/sandbox` arguments, and user-facing output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::WorkspaceWrite => "workspace_write",
+            Self::WorkspaceWriteNetwork => "workspace_write_network",
+            Self::Trusted => "trusted",
+        }
+    }
+
+    /// Every mode in increasing order of permission, for `/sandbox` usage
+    /// text and model-facing mode listings.
+    pub const ALL: [SandboxMode; 4] = [
+        Self::ReadOnly,
+        Self::WorkspaceWrite,
+        Self::WorkspaceWriteNetwork,
+        Self::Trusted,
+    ];
 
     pub fn effective_description(self) -> &'static str {
         #[cfg(any(target_os = "linux", target_os = "macos"))]

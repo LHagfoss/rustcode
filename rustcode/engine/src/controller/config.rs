@@ -14,8 +14,15 @@
 use std::path::PathBuf;
 
 pub use crate::config::{
-    AgentMode, AppConfig, ModelProfile, MonthlyUsage, SessionMeta, ToolProtocol,
+    AgentMode, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta, ToolProtocol,
 };
+
+/// The effective shell permissions for a mode, as shown in the status line,
+/// the welcome banner, and `/status`. Frontends render this string; they must
+/// not match on mode variants, which would pin them to engine internals.
+pub fn sandbox_effective_description(mode: SandboxMode) -> &'static str {
+    mode.effective_description()
+}
 
 /// Persist `config` to disk, preserving project overrides like the
 /// settings and MCP flows expect. No-op for invalid configs.
