@@ -365,15 +365,19 @@ pub fn build_session_list_with_truncation(s: &AppState) -> (Vec<crate::config::S
 /// Scoped session list with an explicit `--all` escape hatch. When
 /// `show_all` is true, sessions from every workspace are returned with
 /// their workspace per entry.
+///
+/// The scope rule itself lives in the store (`SessionScope`), which is what the
+/// TUI picker, ACP `session/list` and the desktop shell all list through; this
+/// only chooses the variant. The desktop is the documented exception: it lists
+/// through here too, but renders the result as a cross-project browser and asks
+/// for the resume directory in the UI instead of filtering to one project.
 pub fn build_session_list_scoped_with_truncation(
     s: &AppState,
     show_all: bool,
 ) -> (Vec<crate::config::SessionMeta>, bool) {
     const MAX_SESSIONS: usize = 50;
-    let cwd = crate::config::current_workspace_dir();
-    let scope = if show_all { None } else { cwd.as_deref() };
-    let (mut list, mut truncated) =
-        crate::config::list_sessions_limited_scoped(MAX_SESSIONS, scope);
+    let scope = session_list_scope(show_all);
+    let (mut list, mut truncated) = crate::config::list_sessions_in_scope(MAX_SESSIONS, &scope);
     if !crate::config::session_has_content(&s.history)
         && let Some(live) = crate::config::live_session_meta()
         && !list.iter().any(|m| m.path == live.path)
@@ -385,6 +389,15 @@ pub fn build_session_list_scoped_with_truncation(
         }
     }
     (list, truncated)
+}
+
+/// The scope the session picker lists under. An undeterminable working
+/// directory falls back to `All` rather than hiding every session.
+pub fn session_list_scope(show_all: bool) -> crate::config::SessionScope {
+    if show_all {
+        return crate::config::SessionScope::All;
+    }
+    crate::config::SessionScope::for_current_dir()
 }
 
 pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
@@ -404,23 +417,13 @@ pub fn is_session_list_truncated(total_sessions: usize) -> bool {
 /// directory. Reports whether the working directory changed.
 pub fn adopt_session_workspace(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
     let session_id = crate::config::session_id_from_path(&meta.path).unwrap_or_default();
-    // Prefer the embedded cwd so resume costs no extra workspace read;
-    // fall back to a store lookup for metas constructed without it.
-    let workspace = meta
-        .workspace_cwd
-        .clone()
-        .map(|cwd| crate::config::SessionWorkspace {
-            cwd,
-            additional_directories: Vec::new(),
-            task_workspace_id: None,
-        })
-        .or_else(|| {
-            if session_id.is_empty() {
-                None
-            } else {
-                crate::config::load_session_workspace(&session_id)
-            }
-        });
+    // Read the whole record rather than rebuilding one from the meta's embedded
+    // cwd: the record is the only place `task_workspace_id` lives, and a resume
+    // already opens the whole transcript, so one small extra read here costs
+    // nothing and keeps the isolated-worktree reattach above working (#1533).
+    let workspace = (!session_id.is_empty())
+        .then(|| crate::config::load_session_workspace(&session_id))
+        .flatten();
     let Some(workspace) = workspace else {
         return false;
     };
@@ -655,27 +658,47 @@ mod copy_tests {
 mod workspace_tests {
     use super::{AppState, adopt_session_workspace};
 
-    fn meta_with_workspace(
-        path: &std::path::Path,
-        cwd: Option<std::path::PathBuf>,
+    /// Store a real session with the given workspace record and return the meta
+    /// the picker would have handed to a resume. Adoption reads the session's
+    /// record rather than the meta's embedded cwd, so the tests go through the
+    /// store instead of hand-building a `SessionMeta` (#1533).
+    fn stored_meta(
+        session_id: &str,
+        workspace: Option<&std::path::Path>,
     ) -> crate::config::SessionMeta {
-        crate::config::SessionMeta {
-            path: path.to_path_buf(),
-            title: "test".to_owned(),
-            when: String::new(),
-            message_count: 2,
-            workspace_cwd: cwd,
-        }
+        let store = rustcode_session::SessionStore::new(
+            crate::config::get_config_dir().expect("config dir"),
+        );
+        store.save_session_history(
+            session_id,
+            &vec![
+                crate::app::ChatMessage::new("user", "prompt"),
+                crate::app::ChatMessage::new("assistant", "reply"),
+            ],
+        );
+        store
+            .save_session_workspace(
+                session_id,
+                &crate::config::SessionWorkspace {
+                    cwd: workspace
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_default(),
+                    additional_directories: Vec::new(),
+                    task_workspace_id: None,
+                },
+            )
+            .expect("workspace record");
+        rustcode_session::flush_history();
+        store
+            .session_meta_by_id(session_id)
+            .expect("stored session meta")
     }
 
     #[test]
     fn adopting_an_existing_workspace_sets_task_directories() {
         let dir = tempfile::tempdir().expect("temp workspace");
         let mut state = AppState::new();
-        let meta = meta_with_workspace(
-            std::path::Path::new("/tmp/sessions/id/history.json"),
-            Some(dir.path().to_path_buf()),
-        );
+        let meta = stored_meta("adopt-existing", Some(dir.path()));
         assert!(adopt_session_workspace(&mut state, &meta));
         assert_eq!(state.task_working_directory, Some(dir.path().to_path_buf()));
         assert_eq!(state.workspace_root, Some(dir.path().to_path_buf()));
@@ -686,11 +709,9 @@ mod workspace_tests {
         let mut state = AppState::new();
         let before_task = state.task_working_directory.clone();
         let before_root = state.workspace_root.clone();
-        let meta = meta_with_workspace(
-            std::path::Path::new("/tmp/sessions/id/history.json"),
-            Some(std::path::PathBuf::from(
-                "/definitely/not/a/rustcode/workspace",
-            )),
+        let meta = stored_meta(
+            "adopt-missing",
+            Some(std::path::Path::new("/definitely/not/a/rustcode/workspace")),
         );
         assert!(!adopt_session_workspace(&mut state, &meta));
         assert_eq!(state.task_working_directory, before_task);
@@ -698,9 +719,27 @@ mod workspace_tests {
     }
 
     #[test]
-    fn legacy_sessions_without_workspace_keep_current_directories() {
+    fn legacy_sessions_without_a_workspace_record_keep_current_directories() {
         let mut state = AppState::new();
-        let meta = meta_with_workspace(std::path::Path::new("/tmp/sessions/id/history.json"), None);
+        // A session written before workspaces existed has no record at all, so
+        // the meta carries no cwd and a resume stays where it is.
+        let store = rustcode_session::SessionStore::new(
+            crate::config::get_config_dir().expect("config dir"),
+        );
+        store.save_session_history(
+            "adopt-legacy",
+            &vec![
+                crate::app::ChatMessage::new("user", "prompt"),
+                crate::app::ChatMessage::new("assistant", "reply"),
+            ],
+        );
+        rustcode_session::flush_history();
+        let meta = store
+            .session_meta_by_id("adopt-legacy")
+            .expect("stored session meta");
+        assert!(meta.workspace_cwd.is_none());
         assert!(!adopt_session_workspace(&mut state, &meta));
+        assert_eq!(state.task_working_directory, None);
+        assert_eq!(state.workspace_root, None);
     }
 }

@@ -126,6 +126,154 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+/// Test-only read accounting for the store's listing path (#1533).
+///
+/// Session listing is the only store operation on the interactive hot path, so
+/// the benchmark in this module needs to know how many files the store opened
+/// and how many bytes it pulled in, not just how long it took. Counters only
+/// exist in test builds; the read helpers below are the single point every
+/// listing read site goes through, so nothing on that path is uncounted.
+#[cfg(test)]
+mod read_metrics {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// `fs::read`/`read_to_string` calls, including the ones that miss.
+    static FILE_READS: AtomicUsize = AtomicUsize::new(0);
+    static FILE_BYTES: AtomicUsize = AtomicUsize::new(0);
+    /// `read_dir` calls issued while discovering sessions.
+    static DIRECTORY_SCANS: AtomicUsize = AtomicUsize::new(0);
+    /// Per-file breakdown, so a benchmark can tell the cheap workspace record
+    /// apart from the expensive transcript.
+    static TRANSCRIPT_READS: AtomicUsize = AtomicUsize::new(0);
+    static TRANSCRIPT_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static WORKSPACE_RECORD_READS: AtomicUsize = AtomicUsize::new(0);
+    static WORKSPACE_RECORD_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Which file a read belongs to. Only the two listing costs are broken
+    /// out; every other read lands in the totals.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Kind {
+        Other,
+        Transcript,
+        WorkspaceRecord,
+    }
+
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct ReadProfile {
+        pub file_reads: usize,
+        pub file_bytes: usize,
+        pub directory_scans: usize,
+        pub transcript_reads: usize,
+        pub transcript_bytes: usize,
+        pub workspace_record_reads: usize,
+        pub workspace_record_bytes: usize,
+    }
+
+    const COUNTERS: [&AtomicUsize; 7] = [
+        &FILE_READS,
+        &FILE_BYTES,
+        &DIRECTORY_SCANS,
+        &TRANSCRIPT_READS,
+        &TRANSCRIPT_BYTES,
+        &WORKSPACE_RECORD_READS,
+        &WORKSPACE_RECORD_BYTES,
+    ];
+
+    pub fn record(bytes: usize, kind: Kind) {
+        let bump = |counter: &AtomicUsize| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        };
+        let bump_bytes = |counter: &AtomicUsize| {
+            counter.fetch_add(bytes, Ordering::Relaxed);
+        };
+        bump(&FILE_READS);
+        bump_bytes(&FILE_BYTES);
+        match kind {
+            Kind::Other => {}
+            Kind::Transcript => {
+                bump(&TRANSCRIPT_READS);
+                bump_bytes(&TRANSCRIPT_BYTES);
+            }
+            Kind::WorkspaceRecord => {
+                bump(&WORKSPACE_RECORD_READS);
+                bump_bytes(&WORKSPACE_RECORD_BYTES);
+            }
+        }
+    }
+
+    pub fn record_directory_scan() {
+        DIRECTORY_SCANS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reset() {
+        for counter in COUNTERS {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> ReadProfile {
+        let load = |counter: &AtomicUsize| counter.load(Ordering::Relaxed);
+        ReadProfile {
+            file_reads: load(&FILE_READS),
+            file_bytes: load(&FILE_BYTES),
+            directory_scans: load(&DIRECTORY_SCANS),
+            transcript_reads: load(&TRANSCRIPT_READS),
+            transcript_bytes: load(&TRANSCRIPT_BYTES),
+            workspace_record_reads: load(&WORKSPACE_RECORD_READS),
+            workspace_record_bytes: load(&WORKSPACE_RECORD_BYTES),
+        }
+    }
+}
+
+/// Read a session transcript. Tagged so the benchmark can attribute the read
+/// to the transcript cost rather than the store walk.
+fn read_transcript(path: &Path) -> std::io::Result<String> {
+    let outcome = std::fs::read_to_string(path);
+    #[cfg(test)]
+    read_metrics::record(
+        outcome.as_ref().map(|content| content.len()).unwrap_or(0),
+        read_metrics::Kind::Transcript,
+    );
+    outcome
+}
+
+/// Read a session workspace record. Records are tens of bytes, which is what
+/// makes reading one per candidate session affordable on the picker path.
+fn read_workspace_record(path: &Path) -> std::io::Result<Vec<u8>> {
+    let outcome = std::fs::read(path);
+    #[cfg(test)]
+    read_metrics::record(
+        outcome.as_ref().map(|bytes| bytes.len()).unwrap_or(0),
+        read_metrics::Kind::WorkspaceRecord,
+    );
+    outcome
+}
+
+/// Read a UTF-8 store file (titles, segment checkpoints, image cache). Counted
+/// so the totals cover every file the listing path opens, not just the two
+/// costs broken out above.
+fn read_store_text(path: &Path) -> std::io::Result<String> {
+    let outcome = std::fs::read_to_string(path);
+    #[cfg(test)]
+    read_metrics::record(
+        outcome.as_ref().map(|text| text.len()).unwrap_or(0),
+        read_metrics::Kind::Other,
+    );
+    outcome
+}
+
+/// Read a store file that is deserialized straight from bytes (workspace and
+/// session metadata records).
+fn read_store_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    let outcome = std::fs::read(path);
+    #[cfg(test)]
+    read_metrics::record(
+        outcome.as_ref().map(|bytes| bytes.len()).unwrap_or(0),
+        read_metrics::Kind::Other,
+    );
+    outcome
+}
+
 fn history_writer() -> &'static HistoryWriter {
     static WRITER: OnceLock<&'static HistoryWriter> = OnceLock::new();
     WRITER.get_or_init(|| {
@@ -268,9 +416,101 @@ pub fn canonicalize_best_effort(path: &Path) -> PathBuf {
 /// inside recorded. Used to scope the session picker and bare `--resume`
 /// to the active project while keeping nested checkouts visible.
 pub fn workspaces_match(recorded: &Path, current: &Path) -> bool {
+    matches_canonical(recorded, &canonicalize_best_effort(current))
+}
+
+/// The parent/child rule against an already canonicalized `current`. Matching a
+/// whole store canonicalizes `current` once and then reuses it, so the
+/// per-session cost is one `starts_with` rather than a `canonicalize` pair.
+fn matches_canonical(recorded: &Path, canonical_current: &Path) -> bool {
     let recorded = canonicalize_best_effort(recorded);
-    let current = canonicalize_best_effort(current);
-    recorded == current || recorded.starts_with(&current) || current.starts_with(&recorded)
+    recorded == *canonical_current
+        || recorded.starts_with(canonical_current)
+        || canonical_current.starts_with(&recorded)
+}
+
+/// Which sessions a listing may show.
+///
+/// This enum is the single shared definition of workspace membership for every
+/// frontend (#1533): the TUI picker, ACP `session/list` and the desktop shell
+/// all list through the store and differ only in the variant they pass, so the
+/// matching rule cannot drift between them. `None` for a session's recorded
+/// workspace means a legacy session that predates workspace persistence; each
+/// variant below states what it does with those.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SessionScope {
+    /// Every session in the store, each carrying its own recorded workspace
+    /// for the caller to display. The `--all` escape hatch, and the listing the
+    /// desktop shell renders as a cross-project browser.
+    #[default]
+    All,
+    /// Sessions whose recorded workspace is `cwd`, an ancestor of it, or a
+    /// descendant of it, so a nested checkout does not hide the project it
+    /// belongs to. Legacy sessions with no recorded workspace are included and
+    /// must be labelled "no workspace recorded" by the caller. Used by the TUI
+    /// picker, bare `--resume` and `rustcode sessions list`.
+    WorkspaceTree(PathBuf),
+    /// Sessions recorded for exactly `cwd`, and only while that directory still
+    /// exists. Deliberately separate from [`SessionScope::WorkspaceTree`]
+    /// (#1533): ACP `session/list` is a per-project API whose client passes an
+    /// explicit cwd, so nesting must not pull a nested project's sessions into
+    /// the parent's list and a removed project must drop out instead of
+    /// resurfacing as a stale entry. The TUI and the desktop never use it.
+    WorkspaceExact(PathBuf),
+}
+
+impl SessionScope {
+    /// The scope a listing of the current working directory should use:
+    /// parent/child matching, falling back to `All` when the working directory
+    /// cannot be determined rather than hiding every session.
+    pub fn for_current_dir() -> Self {
+        match std::env::current_dir() {
+            Ok(cwd) => SessionScope::WorkspaceTree(canonicalize_best_effort(&cwd)),
+            Err(_) => SessionScope::All,
+        }
+    }
+
+    /// Canonicalize the scope's directory once so matching N sessions does not
+    /// re-canonicalize it N times.
+    fn prepare(&self) -> PreparedScope {
+        match self {
+            SessionScope::All => PreparedScope::All,
+            SessionScope::WorkspaceTree(cwd) => PreparedScope::Tree(canonicalize_best_effort(cwd)),
+            SessionScope::WorkspaceExact(cwd) => {
+                PreparedScope::Exact(canonicalize_best_effort(cwd))
+            }
+        }
+    }
+}
+
+enum PreparedScope {
+    All,
+    Tree(PathBuf),
+    Exact(PathBuf),
+}
+
+impl PreparedScope {
+    /// The one definition of "this session belongs in this listing", shared by
+    /// every listing entry point in this crate.
+    fn accepts(&self, recorded: Option<&Path>) -> bool {
+        match self {
+            PreparedScope::All => true,
+            PreparedScope::Tree(canonical_current) => {
+                recorded.is_none_or(|recorded| matches_canonical(recorded, canonical_current))
+            }
+            PreparedScope::Exact(canonical_current) => recorded.is_some_and(|recorded| {
+                // Keep the pre-#1533 ACP rule verbatim: a session whose
+                // recorded workspace no longer resolves to a live directory is
+                // not listed, and a session with no record at all is not
+                // listed either.
+                std::fs::canonicalize(recorded)
+                    .ok()
+                    .filter(|path| path.is_dir())
+                    .as_deref()
+                    == Some(canonical_current.as_path())
+            }),
+        }
+    }
 }
 
 /// Workspace roots associated with an ACP session. Older sessions may not
@@ -476,9 +716,46 @@ impl SessionStore {
         None
     }
 
+    /// The session's recorded workspace, read from the workspace record alone.
+    /// `None` marks a legacy session that predates workspace persistence.
+    /// Cheaper than `load_session_meta` by a whole transcript, which is what
+    /// lets a scoped listing reject a session before opening it.
+    fn session_workspace_cwd(&self, path: &Path) -> Option<PathBuf> {
+        Self::session_id_from_path(path)
+            .as_deref()
+            .and_then(|id| self.load_session_workspace(id))
+            .map(|workspace| workspace.cwd)
+    }
+
+    /// Build a session's meta under a prepared scope. Scoped listings test the
+    /// scope against the workspace record *before* the transcript is opened, so
+    /// the picker reads at most one transcript per row it shows instead of one
+    /// per candidate the store walk passes (#1533).
+    fn meta_in_scope(&self, path: &Path, scope: &PreparedScope) -> Option<SessionMeta> {
+        if matches!(scope, PreparedScope::All) {
+            return self.load_session_meta(path);
+        }
+        let recorded = self.session_workspace_cwd(path);
+        if !scope.accepts(recorded.as_deref()) {
+            return None;
+        }
+        self.meta_from_session(path, recorded)
+    }
+
     pub fn load_session_meta(&self, path: &Path) -> Option<SessionMeta> {
+        self.meta_from_session(path, self.session_workspace_cwd(path))
+    }
+
+    /// Transcript plus title for one session, given its already-resolved
+    /// workspace. `None` when the transcript is missing or holds no real
+    /// user/assistant exchange.
+    fn meta_from_session(
+        &self,
+        path: &Path,
+        workspace_cwd: Option<PathBuf>,
+    ) -> Option<SessionMeta> {
         let read_path = self.session_read_path(path)?;
-        let content = std::fs::read_to_string(read_path).ok()?;
+        let content = read_transcript(&read_path).ok()?;
         let messages: Vec<ChatMessageMetaRef<'_>> = serde_json::from_str(&content).ok()?;
         let has_user = messages
             .iter()
@@ -504,13 +781,6 @@ impl SessionStore {
                     title
                 }
             });
-
-        // Workspace cwd is populated inline so callers can filter on
-        // `meta.workspace_cwd` without an extra N reads per picker open.
-        let workspace_cwd = session_id
-            .as_deref()
-            .and_then(|id| self.load_session_workspace(id))
-            .map(|workspace| workspace.cwd);
 
         Some(SessionMeta {
             title,
@@ -586,7 +856,7 @@ impl SessionStore {
         let path = self.session_dir(session_id).join("title.txt");
         path.exists()
             .then(|| {
-                std::fs::read_to_string(path)
+                read_store_text(&path)
                     .ok()
                     .map(|value| unwrap_title_paste_markers(value.trim()).into_owned())
             })
@@ -609,7 +879,7 @@ impl SessionStore {
     }
 
     pub fn load_session_image_cache(&self, session_id: &str) -> HashMap<String, String> {
-        std::fs::read_to_string(self.session_dir(session_id).join(IMAGE_CACHE_FILE))
+        read_store_text(&self.session_dir(session_id).join(IMAGE_CACHE_FILE))
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default()
@@ -627,7 +897,7 @@ impl SessionStore {
         &self,
         session_id: &str,
     ) -> Option<T> {
-        std::fs::read_to_string(self.session_dir(session_id).join(SEGMENT_CHECKPOINT_FILE))
+        read_store_text(&self.session_dir(session_id).join(SEGMENT_CHECKPOINT_FILE))
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
     }
@@ -747,31 +1017,19 @@ impl SessionStore {
         paths
     }
 
-    pub fn latest_resumable_session_meta(&self) -> Option<SessionMeta> {
+    /// Most recent resumable session under `scope`, using the same shared
+    /// definition as the listings below. Bare `--resume` passes
+    /// [`SessionScope::WorkspaceTree`] so the last chat of the current project
+    /// wins; `--all` and an explicit `--resume <id>` pass
+    /// [`SessionScope::All`], which is how they bypass scoping.
+    pub fn latest_resumable_session_meta_in_scope(
+        &self,
+        scope: &SessionScope,
+    ) -> Option<SessionMeta> {
+        let scope = scope.prepare();
         self.sorted_session_paths()
             .into_iter()
-            .find_map(|path| self.load_session_meta(&path))
-    }
-
-    /// Workspace-scoped latest session. `cwd` of `None` disables scoping.
-    /// Legacy sessions (no workspace recorded) are included so old work
-    /// remains resumable; explicit `--resume <id>` bypasses this filter.
-    pub fn latest_resumable_session_meta_scoped(&self, cwd: Option<&Path>) -> Option<SessionMeta> {
-        let Some(cwd) = cwd else {
-            return self.latest_resumable_session_meta();
-        };
-        self.sorted_session_paths().into_iter().find_map(|path| {
-            let meta = self.load_session_meta(&path)?;
-            if meta
-                .workspace_cwd
-                .as_deref()
-                .is_none_or(|recorded| workspaces_match(recorded, cwd))
-            {
-                Some(meta)
-            } else {
-                None
-            }
-        })
+            .find_map(|path| self.meta_in_scope(&path, &scope))
     }
 
     pub fn session_meta_by_id(&self, id: &str) -> Option<SessionMeta> {
@@ -781,32 +1039,27 @@ impl SessionStore {
             .and_then(|path| self.load_session_meta(&path))
     }
 
-    pub fn list_sessions_limited(&self, limit: usize) -> (Vec<SessionMeta>, bool) {
-        self.list_sessions_limited_scoped(limit, None)
-    }
-
-    /// Workspace-scoped session list with a single pass over the store.
-    /// Filtering uses the `workspace_cwd` embedded in each `SessionMeta`,
-    /// so no additional workspace reads happen per picker open beyond the
-    /// meta construction itself. Legacy sessions (`workspace_cwd: None`)
-    /// are included and should be labeled "no workspace recorded".
-    pub fn list_sessions_limited_scoped(
+    /// Sessions available to resume, most recent first, capped at `limit`.
+    /// `scope` is the single shared definition of workspace membership: the TUI
+    /// picker, `rustcode sessions list` and the desktop shell all come through
+    /// here and differ only in the variant they pass. Returns whether the store
+    /// holds more matching sessions than `limit`.
+    ///
+    /// The scope is applied to each session's workspace record before its
+    /// transcript is opened, so a filtered listing reads one small record per
+    /// candidate and at most one transcript per row it returns (#1533).
+    pub fn list_sessions_in_scope(
         &self,
         limit: usize,
-        cwd: Option<&Path>,
+        scope: &SessionScope,
     ) -> (Vec<SessionMeta>, bool) {
+        let scope = scope.prepare();
         let mut list = Vec::new();
         let mut truncated = false;
         for path in self.sorted_session_paths() {
-            let Some(meta) = self.load_session_meta(&path) else {
+            let Some(meta) = self.meta_in_scope(&path, &scope) else {
                 continue;
             };
-            if let Some(cwd) = cwd
-                && let Some(recorded) = meta.workspace_cwd.as_deref()
-                && !workspaces_match(recorded, cwd)
-            {
-                continue;
-            }
             if list.len() < limit {
                 list.push(meta);
             } else {
@@ -817,8 +1070,10 @@ impl SessionStore {
         (list, truncated)
     }
 
+    /// Every session in the store, most recent first.
     pub fn list_sessions(&self) -> Vec<SessionMeta> {
-        self.list_sessions_limited(usize::MAX).0
+        self.list_sessions_in_scope(usize::MAX, &SessionScope::All)
+            .0
     }
 
     pub fn load_session_file(&self, path: &Path) -> Vec<ChatMessage> {
@@ -828,7 +1083,7 @@ impl SessionStore {
         let Some(read_path) = self.session_read_path(path) else {
             return Vec::new();
         };
-        std::fs::read_to_string(read_path)
+        read_transcript(&read_path)
             .ok()
             .and_then(|content| serde_json::from_str::<Vec<ChatMessage>>(&content).ok())
             .map(rebuild_from_compaction_boundary)
@@ -869,7 +1124,8 @@ impl SessionStore {
             return None;
         }
         serde_json::from_slice(
-            &std::fs::read(self.session_dir(session_id).join(SESSION_WORKSPACE_FILE)).ok()?,
+            &read_workspace_record(&self.session_dir(session_id).join(SESSION_WORKSPACE_FILE))
+                .ok()?,
         )
         .ok()
     }
@@ -879,7 +1135,7 @@ impl SessionStore {
             return None;
         }
         let metadata: SessionMetadata = serde_json::from_slice(
-            &std::fs::read(self.session_dir(session_id).join(SESSION_METADATA_FILE)).ok()?,
+            &read_store_file(&self.session_dir(session_id).join(SESSION_METADATA_FILE)).ok()?,
         )
         .ok()?;
         (metadata.id == session_id && metadata.schema_version == SESSION_METADATA_SCHEMA_VERSION)
@@ -890,15 +1146,20 @@ impl SessionStore {
     /// must identify a currently discoverable session; filtering happens
     /// before the page cap. Unlike the UI ordering, this pagination order does
     /// not use mutable file modification times.
-    pub fn list_sessions_page<F>(
+    ///
+    /// `scope` is the shared workspace definition, applied before the page cap
+    /// exactly as in [`SessionStore::list_sessions_in_scope`]. `require` is
+    /// deliberately *not* a workspace filter: it narrows a page to sessions
+    /// whose file and id are acceptable to the caller (ACP refuses paths
+    /// outside the store root and ids it would not accept on resume), which is
+    /// a separate concern from workspace membership (#1533).
+    pub fn list_sessions_page(
         &self,
         after_id: Option<&str>,
         limit: usize,
-        mut include: F,
-    ) -> Result<(Vec<SessionMeta>, Option<String>), ()>
-    where
-        F: FnMut(&SessionMeta) -> bool,
-    {
+        scope: &SessionScope,
+        mut require: impl FnMut(&SessionMeta) -> bool,
+    ) -> Result<(Vec<SessionMeta>, Option<String>), ()> {
         let mut paths = self.discovered_session_paths();
         paths.sort_by(|left, right| {
             stable_session_sort_key(right).cmp(&stable_session_sort_key(left))
@@ -915,12 +1176,13 @@ impl SessionStore {
         } else {
             0
         };
+        let scope = scope.prepare();
         let mut sessions = Vec::new();
         for path in paths.into_iter().skip(start) {
-            let Some(meta) = self.load_session_meta(&path) else {
+            let Some(meta) = self.meta_in_scope(&path, &scope) else {
                 continue;
             };
-            if !include(&meta) {
+            if !require(&meta) {
                 continue;
             }
             if sessions.len() == limit {
@@ -951,6 +1213,8 @@ impl SessionStore {
 
     fn discovered_session_paths(&self) -> Vec<PathBuf> {
         let sessions = self.root.join(SESSIONS_DIR);
+        #[cfg(test)]
+        read_metrics::record_directory_scan();
         let Ok(entries) = std::fs::read_dir(&sessions) else {
             return Vec::new();
         };
@@ -1136,6 +1400,8 @@ fn session_date_parts(session_id: &str) -> Option<(i32, u32, u32)> {
 }
 
 fn read_directories(path: &Path) -> Vec<PathBuf> {
+    #[cfg(test)]
+    read_metrics::record_directory_scan();
     std::fs::read_dir(path)
         .ok()
         .into_iter()
@@ -1234,7 +1500,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    fn message(role: &str, content: &str) -> ChatMessage {
+    pub(super) fn message(role: &str, content: &str) -> ChatMessage {
         ChatMessage::new(role, content)
     }
 
@@ -1351,7 +1617,8 @@ mod tests {
         store.save_session_history("204", &history);
         flush_history();
 
-        let (scoped, _) = store.list_sessions_limited_scoped(50, Some(&project));
+        let (scoped, _) =
+            store.list_sessions_in_scope(50, &SessionScope::WorkspaceTree(project.clone()));
         let mut ids = scoped
             .iter()
             .map(|meta| SessionStore::session_id_from_path(&meta.path).unwrap())
@@ -1367,10 +1634,10 @@ mod tests {
                 assert!(meta.workspace_cwd.is_some());
             }
         }
-        let (all, _) = store.list_sessions_limited_scoped(50, None);
+        let (all, _) = store.list_sessions_in_scope(50, &SessionScope::All);
         assert_eq!(all.len(), 4);
         let latest = store
-            .latest_resumable_session_meta_scoped(Some(&other))
+            .latest_resumable_session_meta_in_scope(&SessionScope::WorkspaceTree(other.clone()))
             .unwrap();
         // Legacy "204" is newest overall and stays visible in every scope,
         // so it wins over the workspace match; the key check is that
@@ -1380,6 +1647,100 @@ mod tests {
             SessionStore::session_id_from_path(&latest.path).as_deref(),
             Some("204")
         );
+    }
+
+    #[test]
+    fn exact_scope_matches_one_project_and_drops_legacy_and_deleted_records() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let work = tempfile::tempdir().expect("work root");
+        let project = work.path().join("project");
+        let nested = project.join("nested");
+        let removed = work.path().join("removed");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(&removed).unwrap();
+        let history = vec![message("user", "prompt"), message("assistant", "reply")];
+        for (id, cwd) in [
+            ("301", project.as_path()),
+            ("302", nested.as_path()),
+            ("303", removed.as_path()),
+        ] {
+            store.save_session_history(id, &history);
+            store
+                .save_session_workspace(
+                    id,
+                    &SessionWorkspace {
+                        cwd: cwd.to_path_buf(),
+                        additional_directories: Vec::new(),
+                        task_workspace_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        store.save_session_history("304", &history);
+        std::fs::remove_dir(&removed).unwrap();
+        flush_history();
+
+        // ACP `session/list`: one project, no nesting, no legacy rows, and a
+        // project directory that has since been deleted drops out.
+        let (exact, _) =
+            store.list_sessions_in_scope(50, &SessionScope::WorkspaceExact(project.clone()));
+        let ids = |metas: &[SessionMeta]| {
+            let mut ids = metas
+                .iter()
+                .map(|meta| SessionStore::session_id_from_path(&meta.path).unwrap())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(&exact), ["301"]);
+        // The picker rule is the parent/child one, so it keeps the nested
+        // session and the legacy row.
+        let (tree, _) =
+            store.list_sessions_in_scope(50, &SessionScope::WorkspaceTree(project.clone()));
+        assert_eq!(ids(&tree), ["301", "302", "304"]);
+        // And `--all` keeps every session the store still holds, including the
+        // one whose project directory was removed: the escape hatch shows the
+        // workspace per row so the user can see what is stale.
+        let (all, _) = store.list_sessions_in_scope(50, &SessionScope::All);
+        assert_eq!(ids(&all), ["301", "302", "303", "304"]);
+    }
+
+    #[test]
+    fn scoped_list_reports_truncation_past_the_page() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let work = tempfile::tempdir().expect("work root");
+        let project = work.path().join("project");
+        let other = work.path().join("other");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let history = vec![message("user", "prompt"), message("assistant", "reply")];
+        for index in 0..6 {
+            let id = format!("4{index:02}");
+            store.save_session_history(&id, &history);
+            let cwd = if index < 4 { &project } else { &other };
+            store
+                .save_session_workspace(
+                    &id,
+                    &SessionWorkspace {
+                        cwd: cwd.to_path_buf(),
+                        additional_directories: Vec::new(),
+                        task_workspace_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        flush_history();
+
+        let (page, truncated) =
+            store.list_sessions_in_scope(2, &SessionScope::WorkspaceTree(project.clone()));
+        assert_eq!(page.len(), 2);
+        assert!(truncated, "four matching sessions overflow a two row page");
+        let (exact_page, exact_truncated) =
+            store.list_sessions_in_scope(4, &SessionScope::WorkspaceTree(project.clone()));
+        assert_eq!(exact_page.len(), 4);
+        assert!(!exact_truncated);
     }
 
     #[cfg(unix)]
@@ -1432,33 +1793,47 @@ mod tests {
                 .unwrap();
         }
         flush_history();
-        let filter = |meta: &SessionMeta| {
-            let id = SessionStore::session_id_from_path(&meta.path).unwrap();
-            store
-                .load_session_workspace(&id)
-                .is_some_and(|workspace| workspace.cwd == PathBuf::from("/work/a"))
-        };
-        let (first, cursor) = store.list_sessions_page(None, 2, filter).unwrap();
+        let project = PathBuf::from("/work/a");
+        // The workspace rule is the store's, not the caller's: one scope
+        // argument instead of a predicate that re-reads each workspace record.
+        let (first, cursor) = store
+            .list_sessions_page(
+                None,
+                2,
+                &SessionScope::WorkspaceTree(project.clone()),
+                |_| true,
+            )
+            .unwrap();
         assert_eq!(first.len(), 2);
         let cursor = cursor.expect("another filtered page");
         let (second, next) = store
-            .list_sessions_page(Some(&cursor), 2, |meta| {
-                let id = SessionStore::session_id_from_path(&meta.path).unwrap();
-                store
-                    .load_session_workspace(&id)
-                    .is_some_and(|workspace| workspace.cwd == PathBuf::from("/work/a"))
-            })
+            .list_sessions_page(
+                Some(&cursor),
+                2,
+                &SessionScope::WorkspaceTree(project.clone()),
+                |_| true,
+            )
             .unwrap();
         assert_eq!(second.len(), 1);
         assert!(next.is_none());
         assert!(
             store
-                .list_sessions_page(Some("missing"), 2, |_| true)
+                .list_sessions_page(
+                    Some("missing"),
+                    2,
+                    &SessionScope::WorkspaceTree(project.clone()),
+                    |_| true
+                )
                 .is_err()
         );
         assert!(
             store
-                .list_sessions_page(Some("../bad"), 2, |_| true)
+                .list_sessions_page(
+                    Some("../bad"),
+                    2,
+                    &SessionScope::WorkspaceTree(project.clone()),
+                    |_| true
+                )
                 .is_err()
         );
     }
@@ -1473,7 +1848,9 @@ mod tests {
         }
         flush_history();
 
-        let (first, cursor) = store.list_sessions_page(None, 2, |_| true).unwrap();
+        let (first, cursor) = store
+            .list_sessions_page(None, 2, &SessionScope::All, |_| true)
+            .unwrap();
         let ids = |metas: &[SessionMeta]| {
             metas
                 .iter()
@@ -1495,7 +1872,7 @@ mod tests {
         flush_history();
 
         let (second, next) = store
-            .list_sessions_page(cursor.as_deref(), 2, |_| true)
+            .list_sessions_page(cursor.as_deref(), 2, &SessionScope::All, |_| true)
             .unwrap();
         assert_eq!(ids(&second), ["stable-b", "stable-a"]);
         assert!(next.is_none());
@@ -1858,5 +2235,315 @@ mod tests {
                 .join("agent-7"),
             legacy.join("subagents/agent-7")
         );
+    }
+}
+
+/// Picker-open measurement for issue #1533.
+///
+/// Opening the session picker is the one store operation on an interactive hot
+/// path, and #1518 asked for numbers rather than a claim. The harness below
+/// builds a store with a realistic shape (hundreds of sessions spread over
+/// several project directories, plus legacy sessions with no workspace record)
+/// and reports, per listing strategy, how many files the store opened, how
+/// many of those were transcripts, how many bytes came back and how long it
+/// took. Read counts come from `read_metrics`, which every store read site goes
+/// through, so the totals are the store's real I/O and not an estimate.
+#[cfg(test)]
+mod picker_bench {
+    use super::*;
+    use crate::tests::message;
+    use std::time::{Duration, Instant};
+
+    const PROJECTS: usize = 6;
+    const LEGACY_SESSIONS: usize = 12;
+    const PAGE: usize = 50;
+    const SAMPLES: usize = 5;
+    /// ~7 KiB of transcript per session, in the range of a real working
+    /// session's `history.json`.
+    const TRANSCRIPT_MESSAGES: usize = 24;
+
+    struct Bench {
+        _root: tempfile::TempDir,
+        store: SessionStore,
+        projects: Vec<PathBuf>,
+    }
+
+    impl Bench {
+        /// `sessions` workspace-recorded sessions round-robin over `PROJECTS`
+        /// projects, plus legacy sessions with no workspace record at all.
+        fn new(sessions: usize) -> Self {
+            let root = tempfile::tempdir().expect("temp root");
+            let store = SessionStore::new(root.path());
+            let work = tempfile::tempdir().expect("work root");
+            let projects = (0..PROJECTS)
+                .map(|index| {
+                    let project = work.path().join(format!("project-{index}"));
+                    std::fs::create_dir_all(&project).expect("project directory");
+                    project
+                })
+                .collect::<Vec<_>>();
+            // Ids embed an ascending timestamp so the store's recency order is
+            // the creation order and a run is reproducible.
+            let newest = Utc::now().timestamp_millis() as u64;
+            let history = (0..TRANSCRIPT_MESSAGES)
+                .map(|index| {
+                    let content = format!("{index}-{}", "bench transcript body ".repeat(12));
+                    if index % 2 == 0 {
+                        message("user", &content)
+                    } else {
+                        message("assistant", &content)
+                    }
+                })
+                .collect::<Vec<_>>();
+            for index in 0..sessions {
+                let id = format!("{:012x}{:04x}", newest - index as u64 * 3_600_000, index);
+                store.save_session_history(&id, &history);
+                store.save_session_title(&id, &format!("bench session {index}"));
+                store
+                    .save_session_workspace(
+                        &id,
+                        &SessionWorkspace {
+                            cwd: projects[index % PROJECTS].clone(),
+                            additional_directories: Vec::new(),
+                            task_workspace_id: None,
+                        },
+                    )
+                    .expect("workspace record");
+            }
+            // Legacy sessions: recorded before workspaces existed, so they have
+            // no workspace record and must stay reachable.
+            for index in 0..LEGACY_SESSIONS {
+                let id = format!("{:012x}{:04x}", newest, 9_000 + index);
+                store.save_session_history(&id, &history);
+                store.save_session_title(&id, &format!("legacy session {index}"));
+            }
+            flush_history();
+            Self {
+                _root: root,
+                store,
+                projects,
+            }
+        }
+
+        fn project(&self, index: usize) -> &Path {
+            &self.projects[index % self.projects.len()]
+        }
+    }
+
+    /// The scoped listing exactly as it stood before #1533: every candidate
+    /// session's transcript is opened to build its meta, and the workspace rule
+    /// is applied to the meta afterwards. Kept here as the benchmark's "before"
+    /// column so the table stays reproducible now that the store owns the
+    /// scope; it is the body of `list_sessions_limited_scoped` as merged in
+    /// #1521, unchanged.
+    fn listing_before_unification(
+        store: &SessionStore,
+        limit: usize,
+        cwd: &Path,
+    ) -> (Vec<SessionMeta>, bool) {
+        let mut list = Vec::new();
+        let mut truncated = false;
+        for path in store.sorted_session_paths() {
+            let Some(meta) = store.load_session_meta(&path) else {
+                continue;
+            };
+            if let Some(recorded) = meta.workspace_cwd.as_deref()
+                && !workspaces_match(recorded, cwd)
+            {
+                continue;
+            }
+            if list.len() < limit {
+                list.push(meta);
+            } else {
+                truncated = true;
+                break;
+            }
+        }
+        (list, truncated)
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct Measurement {
+        profile: read_metrics::ReadProfile,
+        rows: usize,
+        median: Duration,
+    }
+
+    fn measure(label: &str, list: impl Fn() -> Vec<SessionMeta>) -> Measurement {
+        // One warm-up pass so the first sample does not pay for the page cache
+        // being cold after the store was written.
+        let rows = list().len();
+        let mut samples = Vec::with_capacity(SAMPLES);
+        let mut profile = read_metrics::ReadProfile::default();
+        for _ in 0..SAMPLES {
+            read_metrics::reset();
+            let started = Instant::now();
+            let listed = list();
+            let elapsed = started.elapsed();
+            assert_eq!(listed.len(), rows, "{label} returned an unstable row count");
+            profile = read_metrics::snapshot();
+            samples.push(elapsed);
+        }
+        samples.sort();
+        Measurement {
+            profile,
+            rows,
+            median: samples[samples.len() / 2],
+        }
+    }
+
+    fn kib(bytes: usize) -> String {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    }
+
+    fn report(label: &str, measurement: &Measurement) -> String {
+        format!(
+            "{label:<34} rows {:>3}  reads {:>5}  transcripts {:>5}  records {:>5}  \
+             bytes {:>11}  scans {:>4}  median {:>7.2} ms",
+            measurement.rows,
+            measurement.profile.file_reads,
+            measurement.profile.transcript_reads,
+            measurement.profile.workspace_record_reads,
+            kib(measurement.profile.file_bytes),
+            measurement.profile.directory_scans,
+            measurement.median.as_secs_f64() * 1000.0,
+        )
+    }
+
+    /// The gate behind #1533's "the picker does no per-session file read": a
+    /// scoped listing must open a transcript per row it returns, never per
+    /// candidate the store walk passes, so its read profile is a function of
+    /// the page and not of how many sessions the store holds. Deliberately not
+    /// `#[ignore]`d — this is the claim the benchmark measures, so CI holds it
+    /// to it.
+    #[test]
+    fn scoped_picker_reads_a_transcript_per_row_never_per_candidate() {
+        // A parent directory matches every project below it, so the page fills
+        // after `PAGE` candidates. That is the case where a per-candidate read
+        // would show up as a read profile that grows with the store.
+        let mut transcript_bytes = Vec::new();
+        for sessions in [240usize, 480] {
+            let bench = Bench::new(sessions);
+            let scope = bench
+                .project(0)
+                .parent()
+                .expect("project parent")
+                .to_path_buf();
+            read_metrics::reset();
+            let (rows, truncated) = bench
+                .store
+                .list_sessions_in_scope(PAGE, &SessionScope::WorkspaceTree(scope.clone()));
+            let profile = read_metrics::snapshot();
+            assert_eq!(rows.len(), PAGE);
+            assert!(
+                truncated,
+                "{sessions} sessions must overflow a {PAGE} row page"
+            );
+            // One transcript per row, plus the one that reveals the overflow.
+            assert_eq!(profile.transcript_reads, PAGE + 1, "at {sessions} sessions");
+            // The scope is decided from the workspace record, so the store walk
+            // reads one small record per candidate and no transcript at all.
+            assert_eq!(
+                profile.workspace_record_reads,
+                PAGE + 1,
+                "at {sessions} sessions"
+            );
+            // Legacy sessions have no record to test, so they cost a read too.
+            assert_eq!(profile.file_reads, (PAGE + 1) * 3, "at {sessions} sessions");
+            transcript_bytes.push(profile.transcript_bytes);
+        }
+        // Doubling the store does not change a byte of transcript read.
+        assert_eq!(
+            transcript_bytes[0], transcript_bytes[1],
+            "transcript bytes must track the page, not the store size"
+        );
+
+        // A sparse scope cannot fill the page without walking most of the
+        // store; that is the case the "before" column in the benchmark below
+        // measured. It walks far more candidates but still opens no transcript
+        // it does not return.
+        let bench = Bench::new(240);
+        let sparse = bench.project(0).to_path_buf();
+        read_metrics::reset();
+        let (rows, truncated) = bench
+            .store
+            .list_sessions_in_scope(PAGE, &SessionScope::WorkspaceTree(sparse));
+        let profile = read_metrics::snapshot();
+        assert_eq!(rows.len(), PAGE);
+        assert!(truncated);
+        assert!(
+            profile.workspace_record_reads > 200,
+            "sparse scope walks the store: {} records",
+            profile.workspace_record_reads
+        );
+        assert_eq!(profile.transcript_reads, PAGE + 1);
+        assert_eq!(
+            profile.transcript_bytes, transcript_bytes[0],
+            "the same page costs the same transcript bytes"
+        );
+    }
+
+    /// Prints the before/after table quoted in the #1533 PR. Run with
+    /// `cargo test -p rustcode-session -- --ignored --nocapture picker_open`.
+    #[test]
+    #[ignore = "measurement, not a correctness gate"]
+    fn picker_open_before_and_after() {
+        println!("\n== rustcode-session picker open (#1533) ==");
+        for sessions in [240usize, 480] {
+            let bench = Bench::new(sessions);
+            // A sparse project: only 1 of 6 projects matches, so the page can
+            // only fill near the end of the store and the candidate scan is
+            // close to the whole store. This is the expensive case.
+            let scope = bench.project(0).to_path_buf();
+            println!(
+                "\nstore: {sessions} sessions over {PROJECTS} projects \
+                 (+{LEGACY_SESSIONS} legacy), ~{} KiB per transcript, page {PAGE}, \
+                 {} samples, warm",
+                TRANSCRIPT_MESSAGES * 320 / 1024,
+                SAMPLES
+            );
+
+            let before = measure("scoped listing, pre-#1533 body", || {
+                listing_before_unification(&bench.store, PAGE, &scope).0
+            });
+            println!("{}", report("before (#1521 scoped listing)", &before));
+            let unified = measure("unified store scoped listing", || {
+                bench
+                    .store
+                    .list_sessions_in_scope(PAGE, &SessionScope::WorkspaceTree(scope.clone()))
+                    .0
+            });
+            println!("{}", report("after  (shared store scope)", &unified));
+            let all = measure("unified store unscoped", || {
+                bench
+                    .store
+                    .list_sessions_in_scope(PAGE, &SessionScope::All)
+                    .0
+            });
+            println!("{}", report("after  (--all / desktop)", &all));
+            println!(
+                "  transcripts avoided: {} of {} candidates ({:.0}% fewer transcript reads)",
+                before
+                    .profile
+                    .transcript_reads
+                    .saturating_sub(unified.profile.transcript_reads),
+                before.profile.transcript_reads,
+                100.0
+                    * before
+                        .profile
+                        .transcript_reads
+                        .saturating_sub(unified.profile.transcript_reads)
+                        as f64
+                    / before.profile.transcript_reads.max(1) as f64
+            );
+            println!(
+                "  wall clock: {:.2} ms -> {:.2} ms ({:.0}% faster)",
+                before.median.as_secs_f64() * 1000.0,
+                unified.median.as_secs_f64() * 1000.0,
+                100.0 * (before.median.as_secs_f64() - unified.median.as_secs_f64())
+                    / before.median.as_secs_f64().max(f64::MIN_POSITIVE)
+            );
+        }
+        println!();
     }
 }

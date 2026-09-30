@@ -2,8 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
-    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceDescriptor,
-    WorkspaceManager, WorkspaceRequest, canonicalize_best_effort, workspaces_match,
+    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionScope, SessionWorkspace,
+    WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -468,56 +468,40 @@ pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     store()?.archive_session(history)
 }
 
-pub fn latest_resumable_session_meta() -> Option<SessionMeta> {
-    store()?.latest_resumable_session_meta()
-}
-
-/// Current working directory for workspace scoping, canonicalized when
-/// possible. Returns `None` when the cwd cannot be determined, in which
-/// case callers must disable scoping (list all).
-pub fn current_workspace_dir() -> Option<PathBuf> {
-    std::env::current_dir()
-        .ok()
-        .map(|cwd| canonicalize_best_effort(&cwd))
-}
-
-/// Workspace-scoped latest session. `cwd` of `None` disables scoping
-/// (used by `--all` and explicit `--resume <id>`, which overrides scoping).
-pub fn latest_resumable_session_meta_scoped(cwd: Option<&Path>) -> Option<SessionMeta> {
-    store()?.latest_resumable_session_meta_scoped(cwd)
+/// Most recent resumable session under `scope`. The scope rule lives in the
+/// store (`rustcode_session::SessionScope`); callers only name the variant they
+/// need, so bare `--resume` cannot drift from the picker.
+pub fn latest_resumable_session_meta_in_scope(scope: &SessionScope) -> Option<SessionMeta> {
+    store()?.latest_resumable_session_meta_in_scope(scope)
 }
 
 pub fn session_meta_by_id(id: &str) -> Option<SessionMeta> {
     store()?.session_meta_by_id(id)
 }
 
-pub fn list_sessions_limited(limit: usize) -> (Vec<SessionMeta>, bool) {
+/// Sessions to offer for resume, capped at `limit`, and whether the store holds
+/// more. `scope` is the store's shared workspace rule: `SessionScope::All` is
+/// the `--all` escape hatch, `SessionScope::WorkspaceTree` the picker and bare
+/// `--resume` default (parent/child match, legacy sessions included as "no
+/// workspace recorded").
+pub fn list_sessions_in_scope(limit: usize, scope: &SessionScope) -> (Vec<SessionMeta>, bool) {
     store().map_or_else(
         || (Vec::new(), false),
-        |session_store| session_store.list_sessions_limited(limit),
+        |session_store| session_store.list_sessions_in_scope(limit, scope),
     )
 }
 
-/// Workspace-scoped list. Pass `cwd = None` to list all workspaces
-/// (`--all`). Otherwise only sessions whose recorded cwd parent/child
-/// matches `cwd` plus legacy sessions with no workspace record are shown.
-pub fn list_sessions_limited_scoped(limit: usize, cwd: Option<&Path>) -> (Vec<SessionMeta>, bool) {
-    store().map_or_else(
-        || (Vec::new(), false),
-        |session_store| session_store.list_sessions_limited_scoped(limit, cwd),
-    )
-}
-
-pub fn list_sessions_page<F>(
+/// One page of sessions in stable cursor order. `scope` is the store's shared
+/// workspace rule; `require` is a separate, non-workspace narrowing for paths
+/// and ids the caller will not accept.
+pub fn list_sessions_page(
     after_id: Option<&str>,
     limit: usize,
-    include: F,
-) -> Result<(Vec<SessionMeta>, Option<String>), ()>
-where
-    F: FnMut(&SessionMeta) -> bool,
-{
+    scope: &SessionScope,
+    require: impl FnMut(&SessionMeta) -> bool,
+) -> Result<(Vec<SessionMeta>, Option<String>), ()> {
     store()
-        .map(|session_store| session_store.list_sessions_page(after_id, limit, include))
+        .map(|session_store| session_store.list_sessions_page(after_id, limit, scope, require))
         .unwrap_or(Ok((Vec::new(), None)))
 }
 

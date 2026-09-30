@@ -18,6 +18,18 @@ pub(crate) fn resume_session_command(session_id: impl Into<String>, workspace: P
 /// selected project when it is still a live directory, otherwise the launch
 /// directory, otherwise `None` so the UI offers the folder picker before
 /// resuming (issue #1377: never resume in a stale launch directory).
+///
+/// This is the desktop's documented divergence from the TUI and ACP session
+/// listings (issue #1533). The shell lists through the same store entry point as
+/// everything else — `build_session_list` in the engine, which resolves the
+/// scope with `rustcode_session::SessionScope`, the one shared definition of
+/// workspace membership — but it is deliberately not filtered to a single
+/// project: the sidebar groups the list per project and lets the user resume
+/// any of them, and when the resumed session belongs elsewhere the shell asks
+/// which folder to continue in (above) instead of hiding the session. The TUI
+/// picker and `rustcode --resume` have no such affordance, so they scope to the
+/// current directory. The scope rule itself is not duplicated here: it lives in
+/// the store, so the two surfaces cannot drift apart.
 pub(crate) fn resolve_resume_workspace(
     selected_project: &std::path::Path,
     launch_dir: &std::path::Path,
