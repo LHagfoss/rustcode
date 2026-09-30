@@ -871,9 +871,7 @@ pub struct McpServerConfig {
 impl McpServerConfig {
     /// True when this entry declares a remote HTTP server rather than stdio.
     pub fn is_remote(&self) -> bool {
-        self.url
-            .as_ref()
-            .is_some_and(|url| !url.trim().is_empty())
+        self.url.as_ref().is_some_and(|url| !url.trim().is_empty())
     }
 
     /// Reject entries that declare neither transport, so a misconfigured

@@ -337,10 +337,7 @@ fn oauth_token_path_in_dir(dir: &std::path::Path, server: &str) -> std::path::Pa
 }
 
 #[cfg(test)]
-fn load_oauth_token_from_dir(
-    dir: &std::path::Path,
-    server: &str,
-) -> Option<OAuthToken> {
+fn load_oauth_token_from_dir(dir: &std::path::Path, server: &str) -> Option<OAuthToken> {
     let path = oauth_token_path_in_dir(dir, server);
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
@@ -355,10 +352,7 @@ fn save_oauth_token_to_dir(
     write_oauth_token_file(&oauth_token_path_in_dir(dir, server), token)
 }
 
-fn write_oauth_token_file(
-    path: &std::path::Path,
-    token: &OAuthToken,
-) -> Result<(), String> {
+fn write_oauth_token_file(path: &std::path::Path, token: &OAuthToken) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
@@ -797,10 +791,7 @@ impl McpClient {
         }
     }
 
-    fn build_remote_post(
-        snapshot: &RemoteSnapshot,
-        body: &Value,
-    ) -> reqwest::RequestBuilder {
+    fn build_remote_post(snapshot: &RemoteSnapshot, body: &Value) -> reqwest::RequestBuilder {
         let mut req = snapshot
             .http
             .post(&snapshot.target)
@@ -823,8 +814,7 @@ impl McpClient {
             req = req.header("mcp-session-id", session);
         }
         if let Some(bearer) = snapshot.bearer.as_deref()
-            && let Ok(value) =
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {bearer}"))
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {bearer}"))
         {
             req = req.header("Authorization", value);
         }
@@ -1012,9 +1002,7 @@ impl McpClient {
             Err("SSE stream ended without an endpoint event".to_string())
         })
         .await
-        .map_err(|_| {
-            format!("MCP server '{name}' legacy SSE handshake timed out after 10s")
-        })??;
+        .map_err(|_| format!("MCP server '{name}' legacy SSE handshake timed out after 10s"))??;
         Ok(join_endpoint(&snapshot.url, &found))
     }
 
@@ -1054,7 +1042,9 @@ impl McpClient {
             Ok(token) => {
                 self.store_auth_token(&token).await;
                 if let Err(error) = save_oauth_token(&name, &token) {
-                    eprintln!("[mcp] WARNING: OAuth login succeeded but the token could not be persisted: {error}");
+                    eprintln!(
+                        "[mcp] WARNING: OAuth login succeeded but the token could not be persisted: {error}"
+                    );
                 }
                 Ok(true)
             }
@@ -1098,12 +1088,7 @@ impl McpClient {
             && let Ok(meta) = meta_resp.json::<Value>().await
             && let Some(servers) = meta.get("authorization_servers").and_then(Value::as_array)
         {
-            auth_server_bases.extend(
-                servers
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string),
-            );
+            auth_server_bases.extend(servers.iter().filter_map(Value::as_str).map(str::to_string));
         }
         if auth_server_bases.is_empty() {
             auth_server_bases.push(http_origin(&mcp_url));
@@ -1125,10 +1110,7 @@ impl McpClient {
                     .get("authorization_endpoint")
                     .and_then(Value::as_str)
                     .is_some()
-                    && meta
-                        .get("token_endpoint")
-                        .and_then(Value::as_str)
-                        .is_some()
+                    && meta.get("token_endpoint").and_then(Value::as_str).is_some()
                 {
                     server_meta = Some(meta);
                     break;
@@ -1178,7 +1160,11 @@ impl McpClient {
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "none",
             });
-            if let Ok(resp) = http.post(&registration_endpoint).json(&registration).send().await
+            if let Ok(resp) = http
+                .post(&registration_endpoint)
+                .json(&registration)
+                .send()
+                .await
                 && resp.status().is_success()
                 && let Ok(body) = resp.json::<Value>().await
                 && let Some(id) = body.get("client_id").and_then(Value::as_str)
@@ -1306,7 +1292,11 @@ impl McpClient {
             drop(state);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
-                    let _ = http.delete(&url).header("mcp-session-id", session).send().await;
+                    let _ = http
+                        .delete(&url)
+                        .header("mcp-session-id", session)
+                        .send()
+                        .await;
                 });
             }
         }
@@ -1346,9 +1336,7 @@ async fn wait_for_oauth_code(
 ) -> Result<(String, String), String> {
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(300), listener.accept())
         .await
-        .map_err(|_| {
-            format!("MCP OAuth for '{name}': timed out waiting for the browser login")
-        })
+        .map_err(|_| format!("MCP OAuth for '{name}': timed out waiting for the browser login"))
         .and_then(|result| {
             result.map_err(|e| format!("MCP OAuth for '{name}': local redirect failed: {e}"))
         })?;
@@ -1760,7 +1748,9 @@ mod tests {
     fn owned_server_rejects_entries_without_a_transport() {
         let mut server = stdio_server("half-configured");
         server.command = String::new();
-        let error = server.validate().expect_err("neither command nor url must fail");
+        let error = server
+            .validate()
+            .expect_err("neither command nor url must fail");
         assert!(error.contains("half-configured"));
         assert!(error.contains("command"));
         assert!(error.contains("url"));
@@ -1864,15 +1854,15 @@ mod tests {
                             Err(_) => break,
                         }
                     }
-                    let request: Value =
-                        serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                     let id = request.get("id").cloned().unwrap_or(Value::Null);
                     let method = request
                         .get("method")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    let mut request_line = head.lines().next().unwrap_or_default().split_whitespace();
+                    let mut request_line =
+                        head.lines().next().unwrap_or_default().split_whitespace();
                     let http_method = request_line.next().unwrap_or_default();
                     let request_path = request_line.next().unwrap_or("/");
 
@@ -1984,9 +1974,7 @@ mod tests {
             MockHttpMode::Oversized => {
                 // Two tools whose combined schema bytes exceed the native
                 // budget, so an always_include reservation must be rejected.
-                let half = "x".repeat(
-                    crate::tools::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2,
-                );
+                let half = "x".repeat(crate::tools::schema::MAX_MCP_NATIVE_SCHEMA_BYTES / 2);
                 vec![
                     json!({
                         "name": "big_first",
@@ -2098,7 +2086,10 @@ mod tests {
             parse_sse_endpoint_event(stream).as_deref(),
             Some("/rpc?session=abc")
         );
-        assert_eq!(parse_sse_endpoint_event("event: message\ndata: {}\n\n"), None);
+        assert_eq!(
+            parse_sse_endpoint_event("event: message\ndata: {}\n\n"),
+            None
+        );
         assert_eq!(
             join_endpoint("http://127.0.0.1:9/mcp", "/rpc?session=abc"),
             "http://127.0.0.1:9/rpc?session=abc"
@@ -2111,7 +2102,10 @@ mod tests {
             join_endpoint("http://127.0.0.1:9/mcp/", "rpc"),
             "http://127.0.0.1:9/mcp/rpc"
         );
-        assert_eq!(http_origin("https://mcp.sentry.dev/mcp?x=1"), "https://mcp.sentry.dev");
+        assert_eq!(
+            http_origin("https://mcp.sentry.dev/mcp?x=1"),
+            "https://mcp.sentry.dev"
+        );
         assert_eq!(
             parse_challenge_param(
                 "Bearer error=\"invalid_token\", resource_metadata=\"https://example.com/.well-known/oauth-protected-resource\"",
@@ -2123,7 +2117,11 @@ mod tests {
         let candidates =
             oauth_server_metadata_urls("https://auth.example.com", "https://mcp.example.com/mcp");
         assert!(candidates[0].contains("oauth-authorization-server"));
-        assert!(candidates.iter().any(|u| u.contains("openid-configuration")));
+        assert!(
+            candidates
+                .iter()
+                .any(|u| u.contains("openid-configuration"))
+        );
     }
 
     #[tokio::test]
@@ -2183,8 +2181,14 @@ mod tests {
             .iter()
             .map(|tool| {
                 (
-                    tool.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
-                    tool.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                    tool.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    tool.get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                     tool.get("inputSchema").cloned().unwrap_or(json!({})),
                 )
             })

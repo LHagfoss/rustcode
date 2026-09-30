@@ -135,9 +135,7 @@ pub fn build_scheduled_state(
                         .config
                         .mcp_servers
                         .iter()
-                        .find(|current| {
-                            current.name == server.name && current.url == server.url
-                        })
+                        .find(|current| current.name == server.name && current.url == server.url)
                         .and_then(|current| current.headers.get(key))
                         .cloned()
                         .ok_or_else(|| {
