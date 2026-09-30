@@ -1,14 +1,13 @@
 use crate::inline_terminal::InlineTerminal;
 use crate::ui::TuiEventStream;
 use crossterm::{
-    cursor::{MoveTo, SetCursorStyle},
+    cursor::SetCursorStyle,
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
         EnableFocusChange, EnableMouseCapture, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
-    execute,
-    terminal::{self, Clear, ClearType},
+    execute, terminal,
 };
 use ratatui::backend::CrosstermBackend;
 use std::future::Future;
@@ -210,13 +209,25 @@ impl TerminalRuntime {
         self.restore_at(None)
     }
 
-    pub(crate) fn restore_at(&mut self, _cursor_y: Option<u16>) -> io::Result<()> {
+    pub(crate) fn restore_at(&mut self, cursor_y: Option<u16>) -> io::Result<()> {
+        // Erase the transient inline projection on every restore — exit,
+        // Ctrl-Z suspend, editor handoff — not just the first. Returning
+        // early for an already-restored lifecycle left stale viewport rows
+        // above the exit handoff whenever the viewport had grown or scrolled
+        // since. The erase is exact (committed scrollback above stays) and
+        // idempotent, so repeats are safe. Fullscreen sessions paint on the
+        // alternate screen: leaving it below restores the shell view, so
+        // there are no main-screen rows to erase.
+        let erase_result = if self.alternate_screen.is_active() || self.fullscreen {
+            Ok(())
+        } else {
+            self.terminal.erase_transient_projection(cursor_y)
+        };
         if self.lifecycle.is_restored() && !self.alternate_screen.is_active() {
-            return Ok(());
+            return erase_result;
         }
 
         let raw_result = terminal::disable_raw_mode();
-        let area = self.terminal.area();
         // Keyboard enhancement flags are unsupported by Crossterm's legacy
         // Windows console API. Startup already treats enabling them as
         // best-effort; cleanup must do the same or a normal quit reports a
@@ -236,20 +247,13 @@ impl TerminalRuntime {
                 FULLSCREEN_ACTIVE.store(false, Ordering::SeqCst);
             }
             result
-        } else if self.fullscreen {
-            Ok(())
         } else {
-            execute!(
-                self.terminal.backend_mut(),
-                // The full-height inline projection is transient. Clearing
-                // from its first row keeps committed native scrollback above
-                // it and avoids duplicating chat beside the exit handoff.
-                MoveTo(0, area.y),
-                Clear(ClearType::FromCursorDown)
-            )
+            // The transient inline projection was already erased above.
+            Ok(())
         };
         let cursor_result = self.terminal.show_cursor();
-        let result = raw_result
+        let result = erase_result
+            .and(raw_result)
             .and(mode_result)
             .and(screen_result)
             .and(cursor_result);
