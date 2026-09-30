@@ -6,24 +6,9 @@ fn spawn_background_task_for_test(
     session_id: &str,
     command: &str,
 ) -> Result<(), String> {
-    rustcode::tools::background_task_manager()
-        .spawn_with_id(
-            task_id,
-            rustcode_tasks::TaskSpec::new(
-                rustcode_tasks::SessionId::new(session_id),
-                rustcode_command::CommandRequest {
-                    command: command.to_owned(),
-                    status_command: None,
-                    sandboxed_shell: false,
-                    cwd: None,
-                    env: Vec::new(),
-                    timeout: std::time::Duration::from_secs(30),
-                    process_group: true,
-                    inherited_fds: Vec::new(),
-                },
-            ),
-        )
-        .map(|_| ())
+    // Route through the controller contract so the render layer never names
+    // engine task internals directly (frontend seam #1431/#1442).
+    rustcode::controller::spawn_background_task(task_id, session_id, command)
 }
 
 pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
