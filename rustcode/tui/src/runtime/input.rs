@@ -1866,13 +1866,21 @@ pub(super) async fn handle_app_event(
             TuiEvent::Mouse(mouse) => {
                 match mouse.kind {
                     event::MouseEventKind::ScrollUp if transcript_state.selection.is_active() => {
-                        transcript_state.selection.queue_scroll(-1, 1);
+                        transcript_state
+                            .selection
+                            .queue_scroll(-1, ui::WHEEL_SCROLL_LINES);
                     }
                     event::MouseEventKind::ScrollDown if transcript_state.selection.is_active() => {
-                        transcript_state.selection.queue_scroll(1, 1);
+                        transcript_state
+                            .selection
+                            .queue_scroll(1, ui::WHEEL_SCROLL_LINES);
                     }
-                    event::MouseEventKind::ScrollUp => transcript_state.scroll_up(1),
-                    event::MouseEventKind::ScrollDown => transcript_state.scroll_down(1),
+                    event::MouseEventKind::ScrollUp => {
+                        transcript_state.scroll_up(ui::WHEEL_SCROLL_LINES);
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        transcript_state.scroll_down(ui::WHEEL_SCROLL_LINES);
+                    }
                     _ => {
                         // Composer drag selection (#1493). Down starts a
                         // selection, Drag extends it, Up keeps the highlight.
