@@ -9,6 +9,7 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 use rustcode::app::AppState;
+use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 pub(crate) fn insert_scrollback_lines<B: Backend>(
@@ -508,6 +509,86 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     return run_interactive(cli_args, model_override).await;
 }
+/// Outcome of resolving `--resume`/`--continue` at startup. The explicit-id
+/// failure is returned as data rather than exiting here so the caller can own
+/// the stderr message and the exit code, and so tests can assert both without
+/// spawning the binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupResume {
+    /// Startup may continue into the TUI: either no restore flag was given,
+    /// or the request was satisfied — or, for a bare flag with nothing to
+    /// restore, reported as a transcript message instead of a hard failure.
+    Continue,
+    /// An explicit `--resume <id>`/`--continue <id>` named a session that
+    /// cannot be restored. The caller reports `error` on stderr and exits
+    /// non-zero rather than opening a TUI with no session behind it.
+    Failed { id: String, error: String },
+}
+
+/// Bare `--resume`/`--continue` restore the most recent session in the
+/// current workspace; `<id>` restores that exact session from any workspace
+/// and adopts its cwd. `--all` lifts scoping for the bare flags only.
+fn resolve_startup_resume(
+    state: &mut AppState,
+    resume_raw: Option<&str>,
+    continue_raw: Option<&str>,
+    all: bool,
+) -> StartupResume {
+    let Some(raw) = continue_raw.or(resume_raw) else {
+        return StartupResume::Continue;
+    };
+    let wants_continue = continue_raw.is_some();
+    let id = raw.trim();
+    let explicit = !id.is_empty();
+    let action = if explicit {
+        rustcode::app::SessionAction::Id(id.to_owned())
+    } else {
+        rustcode::app::SessionAction::Latest
+    };
+    let result = if all && !explicit {
+        resume_latest_unscoped(state)
+    } else {
+        rustcode::app::session_controller::SessionController::default().resume(state, action)
+    };
+    match result {
+        Ok(_) => {
+            if wants_continue {
+                let queued = rustcode::app::actions::queue_restored_segment(state);
+                if !queued {
+                    state.history.push(rustcode::app::ChatMessage::new(
+                        "system",
+                        "No pending session work is available to continue.",
+                    ));
+                }
+            }
+            StartupResume::Continue
+        }
+        Err(error) => {
+            // Only an explicit id is fatal. A bare flag with no match keeps
+            // the pre-existing behavior of reporting the reason in the
+            // transcript and starting fresh.
+            if explicit {
+                return StartupResume::Failed {
+                    id: id.to_owned(),
+                    error: error.to_string(),
+                };
+            }
+            let message = if matches!(
+                &error,
+                rustcode::app::session_controller::SessionError::NoSessionToResume
+            ) {
+                "No previous session to resume.".to_owned()
+            } else {
+                error.to_string()
+            };
+            state
+                .history
+                .push(rustcode::app::ChatMessage::new("system", message));
+            StartupResume::Continue
+        }
+    }
+}
+
 /// Bare `--resume` with `--all`: restore the most recent session across
 /// every workspace, bypassing the default current-workspace scoping.
 fn resume_latest_unscoped(
@@ -591,64 +672,28 @@ async fn run_interactive(
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
     let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
     let fullscreen = fullscreen_requested && local_terminal;
+    if cli_args.yolo {
+        app_state_struct.auto_confirm = true;
+    }
+    // Resolve `--resume`/`--continue` before the terminal is taken over. A
+    // named session that cannot be restored then fails on stderr with a
+    // non-zero exit, instead of leaving the shell in raw mode and a
+    // half-initialized TUI behind — and the failure needs no TTY at all.
+    if let StartupResume::Failed { id, error } = resolve_startup_resume(
+        &mut app_state_struct,
+        cli_args.resume.as_deref(),
+        cli_args.continue_session.as_deref(),
+        cli_args.all,
+    ) {
+        eprintln!("rustcode: cannot resume session '{id}': {error}");
+        std::process::exit(1);
+    }
     let terminal_runtime = TerminalRuntime::start(fullscreen, local_terminal)?;
     // Themes are a terminal-UI concern: shared state no longer applies them.
     // The interactive runtime seeds the palette once before the first frame;
     // every render re-applies it from `state.config().theme`.
     crate::ui::theme::ensure_themes_dir();
     crate::ui::theme::set_active_theme(&app_state_struct.config.theme);
-    if cli_args.yolo {
-        app_state_struct.auto_confirm = true;
-    }
-    // Bare `--resume`/`--continue` restore the most recent session in the
-    // current workspace; `--resume <id>`/`--continue <id>` restore that
-    // exact session from any workspace and adopt its cwd. `--all` lifts
-    // workspace scoping for the bare flags.
-    let resume_raw = cli_args.resume.as_deref();
-    let continue_raw = cli_args.continue_session.as_deref();
-    let wants_continue = continue_raw.is_some();
-    if let Some(raw) = continue_raw.or(resume_raw) {
-        let id = raw.trim();
-        let explicit = !id.is_empty();
-        let action = if explicit {
-            rustcode::app::SessionAction::Id(id.to_owned())
-        } else {
-            rustcode::app::SessionAction::Latest
-        };
-        let result = if cli_args.all && !explicit {
-            resume_latest_unscoped(&mut app_state_struct)
-        } else {
-            rustcode::app::session_controller::SessionController::default()
-                .resume(&mut app_state_struct, action)
-        };
-        if let Err(error) = result {
-            if explicit {
-                eprintln!("rustcode: cannot resume session '{id}': {error}");
-                std::process::exit(1);
-            }
-            let message = if matches!(
-                &error,
-                rustcode::app::session_controller::SessionError::NoSessionToResume
-            ) {
-                "No previous session to resume.".to_owned()
-            } else {
-                error.to_string()
-            };
-            app_state_struct
-                .history
-                .push(rustcode::app::ChatMessage::new("system", message));
-        } else if wants_continue {
-            let queued = rustcode::app::actions::queue_restored_segment(&mut app_state_struct);
-            if !queued {
-                app_state_struct
-                    .history
-                    .push(rustcode::app::ChatMessage::new(
-                        "system",
-                        "No pending session work is available to continue.",
-                    ));
-            }
-        }
-    }
     if let Some(ref m_name) = model_override
         && let Some(profile) = app_state_struct
             .config
@@ -812,7 +857,15 @@ fn print_exit_summary(summary: &ExitSummary) {
 
     let mut out = std::io::stdout();
     let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let wordmark = if crossterm::terminal::size().is_ok_and(|(width, _)| width >= 50) {
+    let wide = crossterm::terminal::size().is_ok_and(|(width, _)| width >= 50);
+    write_exit_summary(&mut out, summary, color, wide);
+}
+
+/// Exit handoff written to an injectable sink. `color` and `wide` are
+/// resolved by the caller — production asks the real stdout and terminal —
+/// so a test can capture the transcript without a TTY.
+fn write_exit_summary(out: &mut dyn Write, summary: &ExitSummary, color: bool, wide: bool) {
+    let wordmark = if wide {
         crate::ui::RUSTCODE_WORDMARK.lines().collect::<Vec<_>>()
     } else {
         vec!["RustCode"]
@@ -852,9 +905,134 @@ fn print_exit_summary(summary: &ExitSummary) {
     }
 }
 
+/// Printed after restoring the terminal and erasing the transient composer,
+/// matching Codex's compact usage and resume handoff.
+fn print_exit_summary(summary: &ExitSummary) {
+    use std::io::IsTerminal;
+
+    let mut out = std::io::stdout();
+    let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let wide = crossterm::terminal::size().is_ok_and(|(width, _)| width >= 50);
+    write_exit_summary(&mut out, summary, color, wide);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ExitSummary, format_number, should_clear_mutable_viewport_before_history};
+    use super::{
+        ExitSummary, StartupResume, format_number, resolve_startup_resume,
+        should_clear_mutable_viewport_before_history, write_exit_summary,
+    };
+    use rustcode::app::AppState;
+
+    /// Never a real session id, so the lookup fails the same way on every run.
+    const UNKNOWN_ID: &str = "ffffffff-ffff-7fff-8fff-ffffffffffff";
+
+    fn system_messages(state: &AppState) -> Vec<&str> {
+        state
+            .history
+            .iter()
+            .filter(|message| message.role == "system")
+            .map(|message| message.content.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn unknown_resume_id_is_a_hard_failure_not_a_transcript_message() {
+        let mut state = AppState::new();
+        let outcome = resolve_startup_resume(&mut state, Some(UNKNOWN_ID), None, false);
+        assert_eq!(
+            outcome,
+            StartupResume::Failed {
+                id: UNKNOWN_ID.to_owned(),
+                error: format!("session not found: {UNKNOWN_ID}"),
+            }
+        );
+        // A regression that downgraded this to an in-TUI system message is
+        // exactly what the binary-level `tests/cli_resume.rs` guards, so the
+        // transcript must stay untouched here too.
+        assert_eq!(system_messages(&state), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn malformed_resume_id_reports_the_invalid_id() {
+        let mut state = AppState::new();
+        let outcome = resolve_startup_resume(&mut state, Some("not a session id"), None, false);
+        assert_eq!(
+            outcome,
+            StartupResume::Failed {
+                id: "not a session id".to_owned(),
+                error: "invalid session id: not a session id".to_owned(),
+            }
+        );
+        assert_eq!(system_messages(&state), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn unknown_continue_id_fails_the_same_way_as_resume() {
+        let mut state = AppState::new();
+        assert_eq!(
+            resolve_startup_resume(&mut state, None, Some(UNKNOWN_ID), false),
+            StartupResume::Failed {
+                id: UNKNOWN_ID.to_owned(),
+                error: format!("session not found: {UNKNOWN_ID}"),
+            }
+        );
+        assert_eq!(system_messages(&state), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn resume_is_skipped_when_no_flag_is_given() {
+        let mut state = AppState::new();
+        assert_eq!(
+            resolve_startup_resume(&mut state, None, None, false),
+            StartupResume::Continue
+        );
+        assert_eq!(system_messages(&state), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn exit_handoff_names_the_session_that_ran() {
+        // The id that just ran, taken from live state rather than a literal:
+        // the handoff is only useful if it repeats the real session id.
+        let mut state = AppState::new();
+        state.active_session_id = "01a0f0c9-8ebe-7000-9e19-31da83800034".to_owned();
+        let summary = ExitSummary::from_state(&state);
+
+        let mut sink: Vec<u8> = Vec::new();
+        write_exit_summary(&mut sink, &summary, false, false);
+        let rendered = String::from_utf8(sink).expect("handoff is utf-8");
+
+        assert!(
+            rendered.contains("Session   01a0f0c9-8ebe-7000-9e19-31da83800034"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Continue  rustcode --resume 01a0f0c9-8ebe-7000-9e19-31da83800034"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains('\x1b'),
+            "an uncolored sink must stay free of escape codes: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn exit_handoff_omits_the_resume_command_without_a_session_id() {
+        let summary = ExitSummary {
+            prompt_tokens: 0,
+            cached_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            session_id: String::new(),
+            composer_y: None,
+            print_handoff: true,
+            warnings: Vec::new(),
+        };
+        let mut sink: Vec<u8> = Vec::new();
+        write_exit_summary(&mut sink, &summary, false, false);
+        let rendered = String::from_utf8(sink).expect("handoff is utf-8");
+        assert!(!rendered.contains("rustcode --resume"), "{rendered}");
+    }
 
     #[test]
     fn exit_summary_formats_codex_style_usage() {
