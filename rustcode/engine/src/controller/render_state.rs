@@ -177,6 +177,8 @@ pub struct RenderState {
     pub pending_delete_session_idx: Option<usize>,
     pub show_subagent_picker: bool,
     pub subagent_picker_index: usize,
+    pub settings_picker: Option<crate::app::SettingsPicker>,
+    pub command_panel: Option<crate::app::CommandPanel>,
     pub show_context_modal: bool,
     pub show_status_modal: bool,
     pub show_stats_modal: bool,
@@ -200,7 +202,17 @@ impl RenderState {
     /// a view built by hand (a render test, a future frontend's fixture)
     /// cannot hold an overlay open without the composer knowing about it.
     pub fn modal_open(&self) -> bool {
-        self.show_model_picker
+        self.user_overlay_open()
+            || matches!(
+                self.status,
+                AppStatus::AwaitingToolConfirmation | AppStatus::AwaitingQuestion
+            )
+    }
+
+    pub fn user_overlay_open(&self) -> bool {
+        self.settings_picker.is_some()
+            || self.command_panel.is_some()
+            || self.show_model_picker
             || self.show_theme_picker
             || self.show_command_picker
             || self.show_history_picker
@@ -213,9 +225,7 @@ impl RenderState {
             || self.show_mcp_config
             || matches!(
                 self.status,
-                AppStatus::AwaitingToolConfirmation
-                    | AppStatus::AwaitingQuestion
-                    | AppStatus::VerbosityPicker
+                AppStatus::VerbosityPicker
                     | AppStatus::ThinkingPicker
                     | AppStatus::EffortPicker
                     | AppStatus::ProtocolPicker
@@ -360,6 +370,8 @@ pub fn render_state(state: &AppState) -> RenderState {
         pending_delete_session_idx: state.pending_delete_session_idx,
         show_subagent_picker: state.show_subagent_picker,
         subagent_picker_index: state.subagent_picker_index,
+        settings_picker: state.settings_picker,
+        command_panel: state.command_panel.clone(),
         show_context_modal: state.show_context_modal,
         show_status_modal: state.show_status_modal,
         show_stats_modal: state.show_stats_modal,

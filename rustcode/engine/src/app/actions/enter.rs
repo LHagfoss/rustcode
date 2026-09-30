@@ -67,6 +67,7 @@ async fn handle_enter_inner(
         }
 
         let cmd = tokens[0];
+        s.overlays().close_all();
         let mut should_exit = false;
 
         match cmd {
@@ -77,7 +78,7 @@ async fn handle_enter_inner(
                     Some(_) => {
                         if let Some(message) = crate::memory::command(root.as_deref(), &tokens[1..])
                         {
-                            s.history.push(ChatMessage::new("system", message));
+                            s.show_command_panel("Memory", message);
                         }
                     }
                 }
@@ -187,6 +188,7 @@ async fn handle_enter_inner(
                 return false;
             }
             "/quota" => {
+                s.show_command_panel("Model quota", "Fetching model quota…");
                 trigger_quota_fetch(&s, state, client);
             }
             "/sync" => {
@@ -247,14 +249,13 @@ async fn handle_enter_inner(
                 if tokens.get(1).is_some_and(|mode| *mode == "off") {
                     s.delegation_armed = false;
                     s.delegation_active = false;
-                    s.history
-                        .push(ChatMessage::new("system", "Subagents disabled."));
+                    s.show_command_panel("Subagents", "Subagents disabled.");
                 } else {
                     s.delegation_armed = true;
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Subagents",
                         "Subagents enabled for the next task only. Send your task now.",
-                    ));
+                    );
                 }
             }
 
@@ -268,7 +269,7 @@ async fn handle_enter_inner(
                 let text = background_terminal_list(&s.active_session_id);
                 // Polling /ps while a job runs must not append one system
                 // message per poll (issue #1222): collapse repeats in place.
-                super::commands::push_ephemeral_status(&mut s, text);
+                s.show_command_panel("Background terminals", text);
             }
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);
@@ -278,7 +279,7 @@ async fn handle_enter_inner(
             "/yolo" => match tokens.get(1) {
                 None => {
                     s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
-                    s.status = AppStatus::YoloPicker;
+                    s.settings_picker = Some(crate::app::SettingsPicker::Yolo);
                 }
                 Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
                     s.auto_confirm = true;
@@ -314,14 +315,10 @@ async fn handle_enter_inner(
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nRestricted command failures name effective permissions and possible sandbox restrictions.",
-                                current.description(),
-                                current.effective_description()
-                            ),
-                        ))
+                        s.show_command_panel("OS sandbox", format!(
+                            "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nRestricted command failures name effective permissions and possible sandbox restrictions.",
+                            current.description(), current.effective_description()
+                        ));
                     }
                     Some(mode) => {
                         match crate::config::SandboxMode::ALL
@@ -339,16 +336,16 @@ async fn handle_enter_inner(
                                 } else {
                                     ""
                                 };
-                                s.history.push(ChatMessage::new(
-                                    "system",
+                                s.show_command_panel(
+                                    "OS sandbox",
                                     format!(
                                         "OS sandbox mode set to {} ({effective}){note}",
                                         selected.as_str()
                                     ),
-                                ));
+                                );
                             }
-                            None => s.history.push(ChatMessage::new(
-                                "system",
+                            None => s.show_command_panel(
+                                "OS sandbox",
                                 format!(
                                     "Invalid option `{mode}`. Use {}.",
                                     crate::config::SandboxMode::ALL
@@ -357,7 +354,7 @@ async fn handle_enter_inner(
                                         .collect::<Vec<_>>()
                                         .join(", ")
                                 ),
-                            )),
+                            ),
                         }
                     }
                 }
@@ -375,19 +372,17 @@ async fn handle_enter_inner(
                             Verbosity::Low => 0,
                             Verbosity::High => 1,
                         };
-                        s.status = AppStatus::VerbosityPicker;
+                        s.settings_picker = Some(crate::app::SettingsPicker::Verbosity);
                     }
                     Some(&"low") => {
                         s.verbosity = Verbosity::Low;
                         changed = true;
-                        s.history
-                            .push(ChatMessage::new("system", "Verbosity set to low."));
+                        s.show_command_panel("Output verbosity", "Verbosity set to low.");
                     }
                     Some(&"high") => {
                         s.verbosity = Verbosity::High;
                         changed = true;
-                        s.history
-                            .push(ChatMessage::new("system", "Verbosity set to high."));
+                        s.show_command_panel("Output verbosity", "Verbosity set to high.");
                     }
                     Some(&"toggle") => {
                         s.verbosity = match s.verbosity {
@@ -396,16 +391,16 @@ async fn handle_enter_inner(
                         };
                         changed = true;
                         let current = label(&s.verbosity).to_string();
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Output verbosity",
                             format!("Verbosity set to {}.", current),
-                        ));
+                        );
                     }
                     _ => {
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Output verbosity",
                             "Invalid verbosity level. Use 'low', 'high', or 'toggle'.",
-                        ));
+                        );
                     }
                 }
                 if changed {
@@ -427,17 +422,17 @@ async fn handle_enter_inner(
                             Some(false) => 1,
                             _ => 0,
                         };
-                        s.status = AppStatus::ThinkingPicker;
+                        s.settings_picker = Some(crate::app::SettingsPicker::Thinking);
                         None
                     }
                     Some(&"on") => Some(Some(true)),
                     Some(&"off") => Some(Some(false)),
                     Some(&"default") => Some(None),
                     _ => {
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Thinking",
                             "Invalid option. Use 'on', 'off', or 'default'.",
-                        ));
+                        );
                         None
                     }
                 };
@@ -451,7 +446,7 @@ async fn handle_enter_inner(
                         Some(false) => "Thinking forced off.",
                         None => "Thinking left at server/Modelfile default.",
                     };
-                    s.history.push(ChatMessage::new("system", label));
+                    s.show_command_panel("Thinking", label);
                 }
             }
             "/effort" => {
@@ -470,7 +465,7 @@ async fn handle_enter_inner(
                             Some("high") => 2,
                             _ => 3,
                         };
-                        s.status = AppStatus::EffortPicker;
+                        s.settings_picker = Some(crate::app::SettingsPicker::Effort);
                         None
                     }
                     Some(&"low") => Some(Some("low".to_string())),
@@ -478,10 +473,10 @@ async fn handle_enter_inner(
                     Some(&"high") => Some(Some("high".to_string())),
                     Some(&"off") | Some(&"none") | Some(&"default") => Some(None),
                     _ => {
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Reasoning effort",
                             "Invalid option. Use 'low', 'medium', 'high', or 'off'.",
-                        ));
+                        );
                         None
                     }
                 };
@@ -494,7 +489,7 @@ async fn handle_enter_inner(
                         Some(ref e) => format!("Reasoning effort set to '{e}'."),
                         None => "Reasoning effort cleared (default).".to_string(),
                     };
-                    s.history.push(ChatMessage::new("system", label));
+                    s.show_command_panel("Reasoning effort", label);
                 }
             }
             // Theme browsing renders a picker in the terminal frontend, which
@@ -520,16 +515,16 @@ async fn handle_enter_inner(
                             s.config.theme = theme.clone();
                             s.theme_picker_index = idx;
                             crate::config::save_entire_config(&s.config);
-                            s.set_notice(format!("Theme changed to '{theme}'"));
+                            s.show_command_panel("Theme", format!("Theme changed to '{theme}'"));
                         } else {
-                            s.history.push(ChatMessage::new(
-                                "system",
+                            s.show_command_panel(
+                                "Theme",
                                 format!(
                                     "Unknown theme '{}'. Available themes: {}.",
                                     theme_name,
                                     themes.join(", ")
                                 ),
-                            ));
+                            );
                         }
                     }
                 }
@@ -538,10 +533,7 @@ async fn handle_enter_inner(
             "/goal" => {
                 let goal_text = tokens[1..].join(" ");
                 if goal_text.trim().is_empty() {
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "Usage: /goal <task description>",
-                    ));
+                    s.show_command_panel("Goal", "Usage: /goal <task description>");
                 } else {
                     s.delegation_active = s.delegation_armed;
                     s.delegation_armed = false;
@@ -559,25 +551,22 @@ async fn handle_enter_inner(
             }
             "/info" | "/about" => {
                 let info = build_info_text();
-                s.history.push(ChatMessage::new("system", info));
+                s.show_command_panel("About RustCode", info);
             }
             "/help" => {
                 let help = build_help_text();
-                s.history.push(ChatMessage::new("system", help));
+                s.show_command_panel("Help", help);
             }
             "/exit" | "/quit" => {
                 should_exit = true;
             }
             "/skills" => {
                 let skills = crate::skills::discover_skills();
-                s.history.push(ChatMessage::new(
-                    "system",
-                    crate::skills::format_skill_catalog(&skills),
-                ));
+                s.show_command_panel("Skills", crate::skills::format_skill_catalog(&skills));
             }
             "/changelog" => {
                 let log_text = build_latest_changelog();
-                s.history.push(ChatMessage::new("assistant", log_text));
+                s.show_command_panel("Changelog", log_text);
             }
             "/copy" => {
                 copy_last_reply(&mut s);
@@ -610,8 +599,7 @@ async fn handle_enter_inner(
             "/history" => {
                 let (sessions, truncated) = build_session_list_with_truncation(&s);
                 if sessions.is_empty() {
-                    s.history
-                        .push(ChatMessage::new("system", "No saved sessions found."));
+                    s.show_command_panel("History", "No saved sessions found.");
                 } else {
                     s.history_picker_sessions = sessions;
                     s.history_picker_index = 0;
@@ -634,25 +622,25 @@ async fn handle_enter_inner(
                             {
                                 profile.context_window = Some(n);
                                 crate::config::save_entire_config(&s.config);
-                                s.history.push(ChatMessage::new(
-                                    "system",
+                                s.show_command_panel(
+                                    "Context",
                                     format!(
                                         "Set context window for profile '{}' to {} tokens",
                                         default_name, n
                                     ),
-                                ));
+                                );
                             } else {
-                                s.history.push(ChatMessage::new(
-                                    "system",
+                                s.show_command_panel(
+                                    "Context",
                                     "No active profile to set context window on.",
-                                ));
+                                );
                             }
                         }
                         None => {
-                            s.history.push(ChatMessage::new(
-                                "system",
+                            s.show_command_panel(
+                                "Context",
                                 "Usage: /context <tokens> - e.g. /context 262144 or /context 256k",
-                            ));
+                            );
                         }
                     }
                 } else {
@@ -677,7 +665,7 @@ async fn handle_enter_inner(
                         crate::config::ToolProtocol::Native => 1,
                         crate::config::ToolProtocol::ApiNative => 2,
                     };
-                    s.status = AppStatus::ProtocolPicker;
+                    s.settings_picker = Some(crate::app::SettingsPicker::Protocol);
                 } else {
                     let chosen = match tokens[1].to_lowercase().as_str() {
                         "json" => Some((crate::config::ToolProtocol::Json, "JSON (```tool)")),
@@ -711,19 +699,16 @@ async fn handle_enter_inner(
                             let scope = scoped
                                 .map(|name| format!("for model '{name}'"))
                                 .unwrap_or_else(|| "as the fallback for all models".to_string());
-                            s.history.push(ChatMessage::new(
-                                "system",
+                            s.show_command_panel(
+                                "Tool protocol",
                                 format!("Switched tool protocol to {label} {scope}."),
-                            ));
+                            );
                         }
                         None => {
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!(
+                            s.show_command_panel("Tool protocol", format!(
                                     "Unknown protocol '{}'. Supported options are 'json', 'native', or 'apinative'.",
                                     tokens[1]
-                                ),
-                            ));
+                                ));
                         }
                     }
                 }
@@ -734,7 +719,7 @@ async fn handle_enter_inner(
                     text.push_str(&format!("\n  {} - {}", t.name, t.description));
                 }
                 text.push_str("\n\nTool execution is guarded by cancellation and loop detection; calls run sequentially.");
-                s.history.push(ChatMessage::new("system", text));
+                s.show_command_panel("Tools", text);
             }
             "/model" | "/models" => {
                 if tokens.len() < 2 {
@@ -750,10 +735,10 @@ async fn handle_enter_inner(
                         s.model_name = model;
                         s.config.default.set_big(name.clone());
                         crate::config::save_entire_config(&s.config);
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Model",
                             format!("Switched to model profile '{}'", name),
-                        ));
+                        );
                     } else {
                         s.model_name = name.clone();
                         let default_name = s.config.default.big().to_string();
@@ -763,10 +748,10 @@ async fn handle_enter_inner(
                             profile.model = name.clone();
                         }
                         crate::config::save_entire_config(&s.config);
-                        s.history.push(ChatMessage::new(
-                            "system",
+                        s.show_command_panel(
+                            "Model",
                             format!("Switched active model to '{}'", name),
-                        ));
+                        );
                     }
                 }
             }
@@ -809,10 +794,10 @@ async fn handle_enter_inner(
                     }
                     s.config.default.set_big(name.clone());
                     crate::config::save_entire_config(&s.config);
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Provider",
                         format!("Created/updated profile '{}' and set as default", name),
-                    ));
+                    );
                 } else if tokens.len() == 3 {
                     let url = tokens[1].to_string();
                     let model = tokens[2].to_string();
@@ -831,15 +816,15 @@ async fn handle_enter_inner(
                     let active_default = s.config.default.big().to_string();
                     let active_url = s.api_base_url.clone();
                     let active_model = s.model_name.clone();
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Provider",
                         format!(
                             "Updated active profile '{}' with URL '{}' and model '{}'",
                             active_default, active_url, active_model
                         ),
-                    ));
+                    );
                 } else {
-                    s.history.push(ChatMessage::new("system", "Usage:\n  /provider <name> <url> <model> [context_window] - Create/update profile\n  /provider <url> <model> - Update active profile"));
+                    s.show_command_panel("Provider", "Usage:\n  /provider <name> <url> <model> [context_window] - Create/update profile\n  /provider <url> <model> - Update active profile");
                 }
             }
             "/ollama" => {
@@ -860,10 +845,10 @@ async fn handle_enter_inner(
                         format!("{}/api/tags", ollama_url)
                     };
 
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Ollama",
                         format!("Fetching Ollama models from '{}'...", tags_url),
-                    ));
+                    );
 
                     let client_clone = client.clone();
                     let state_clone = Arc::clone(state);
@@ -886,45 +871,45 @@ async fn handle_enter_inner(
                                                 tags.models.into_iter().map(|m| m.name).collect();
                                             let mut s = state_clone.lock().await;
                                             if names.is_empty() {
-                                                s.history.push(ChatMessage::new(
-                                                    "system",
+                                                s.update_command_panel(
+                                                    "Ollama",
                                                     "Ollama returned no models.",
-                                                ));
+                                                );
                                             } else {
-                                                s.history.push(ChatMessage::new(
-                                                    "system",
+                                                s.update_command_panel(
+                                                    "Ollama",
                                                     format!(
                                                         "Available Ollama models:\n  {}",
                                                         names.join("\n  ")
                                                     ),
-                                                ));
+                                                );
                                             }
                                         }
                                         Err(e) => {
                                             let mut s = state_clone.lock().await;
-                                            s.history.push(ChatMessage::new(
-                                                "system",
+                                            s.update_command_panel(
+                                                "Ollama",
                                                 format!(
                                                     "Failed to parse Ollama tags response: {}",
                                                     e
                                                 ),
-                                            ));
+                                            );
                                         }
                                     }
                                 } else {
                                     let mut s = state_clone.lock().await;
-                                    s.history.push(ChatMessage::new(
-                                        "system",
+                                    s.update_command_panel(
+                                        "Ollama",
                                         format!("Ollama returned status code: {}", res.status()),
-                                    ));
+                                    );
                                 }
                             }
                             Err(e) => {
                                 let mut s = state_clone.lock().await;
-                                s.history.push(ChatMessage::new(
-                                    "system",
+                                s.update_command_panel(
+                                    "Ollama",
                                     format!("Failed to fetch Ollama models: {}", e),
-                                ));
+                                );
                             }
                         }
                         state_clone.lock().await.request_redraw();
@@ -957,20 +942,20 @@ async fn handle_enter_inner(
                     }
                     s.config.default.set_big("ollama".to_string());
                     crate::config::save_entire_config(&s.config);
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Ollama",
                         "Switched to profile 'ollama' and updated its URL and model",
-                    ));
+                    );
                 } else {
-                    s.history.push(ChatMessage::new("system", "Usage:\n  /ollama list [url] - List available models\n  /ollama <url> <model> - Set 'ollama' profile URL and model"));
+                    s.show_command_panel("Ollama", "Usage:\n  /ollama list [url] - List available models\n  /ollama <url> <model> - Set 'ollama' profile URL and model");
                 }
             }
             "/change_title" => {
                 if tokens.len() < 2 {
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.show_command_panel(
+                        "Session title",
                         "Usage:\n  /change_title <title> - Rename the current session",
-                    ));
+                    );
                 } else {
                     let new_title = tokens[1..].join(" ");
                     crate::config::save_session_title(&s.active_session_id, &new_title);
@@ -982,10 +967,7 @@ async fn handle_enter_inner(
                 }
             }
             _ => {
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Unknown command: {}", cmd),
-                ));
+                s.show_command_panel("Command", format!("Unknown command: {}", cmd));
             }
         }
 
@@ -1103,10 +1085,7 @@ fn activate_task_workspace(
 
 fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
     let Some(action) = tokens.get(1).copied() else {
-        s.history.push(ChatMessage::new(
-            "system",
-            "Usage: /workspace create <base_sha> [branch] [name] | status | archive | cleanup confirm [delete-branch]",
-        ));
+        s.show_command_panel("Workspace", "Usage: /workspace create <base_sha> [branch] [name] | status | archive | cleanup confirm [delete-branch]");
         return;
     };
     let Some(manager) = crate::config::workspace_manager() else {
@@ -1175,22 +1154,19 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
         }
         "status" => {
             let Some(path) = s.workspace_root.as_deref() else {
-                s.history.push(ChatMessage::new(
-                    "system",
-                    "No isolated workspace is active.",
-                ));
+                s.show_command_panel("Workspace", "No isolated workspace is active.");
                 return;
             };
             match manager.handoff_for_workspace_path(path) {
-                Ok(Some(handoff)) => s.history.push(ChatMessage::new("system", handoff)),
-                Ok(None) => s.history.push(ChatMessage::new(
-                    "system",
+                Ok(Some(handoff)) => s.show_command_panel("Workspace", handoff),
+                Ok(None) => s.show_command_panel(
+                    "Workspace",
                     format!("No RustCode workspace descriptor owns {}.", path.display()),
-                )),
-                Err(error) => s.history.push(ChatMessage::new(
-                    "system",
+                ),
+                Err(error) => s.show_command_panel(
+                    "Workspace",
                     format!("Unable to inspect workspace: {error}"),
-                )),
+                ),
             }
         }
         "archive" => {

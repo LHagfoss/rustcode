@@ -20,6 +20,22 @@ pub enum AppStatus {
     YoloPicker,
 }
 
+/// A user-owned settings surface, independent of turn execution status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsPicker {
+    Verbosity,
+    Thinking,
+    Effort,
+    Protocol,
+    Yolo,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandPanel {
+    pub title: &'static str,
+    pub content: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolConfirmation {
     pub request_id: Option<String>,

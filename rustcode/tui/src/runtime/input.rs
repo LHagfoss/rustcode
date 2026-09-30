@@ -323,22 +323,24 @@ pub(super) async fn handle_app_event(
                 {
                     let selected = {
                         let s = app_state.lock().await;
-                        (s.status == AppStatus::AwaitingToolConfirmation).then(|| {
-                            let prefix = s
-                                .pending_tool_confirmation
-                                .as_ref()
-                                .filter(|items| {
-                                    items.len() == 1 && items[0].rememberable_prefix.is_some()
-                                        || items.len() == 1 && items[0].forbidden_prefix.is_some()
-                                })
-                                .and_then(|items| items[0].rememberable_prefix.clone());
-                            let forbidden_prefix = s
-                                .pending_tool_confirmation
-                                .as_ref()
-                                .filter(|items| items.len() == 1)
-                                .and_then(|items| items[0].forbidden_prefix.clone());
-                            (s.tool_confirmation_selected, prefix, forbidden_prefix)
-                        })
+                        (s.status == AppStatus::AwaitingToolConfirmation && !s.user_overlay_open())
+                            .then(|| {
+                                let prefix = s
+                                    .pending_tool_confirmation
+                                    .as_ref()
+                                    .filter(|items| {
+                                        items.len() == 1 && items[0].rememberable_prefix.is_some()
+                                            || items.len() == 1
+                                                && items[0].forbidden_prefix.is_some()
+                                    })
+                                    .and_then(|items| items[0].rememberable_prefix.clone());
+                                let forbidden_prefix = s
+                                    .pending_tool_confirmation
+                                    .as_ref()
+                                    .filter(|items| items.len() == 1)
+                                    .and_then(|items| items[0].forbidden_prefix.clone());
+                                (s.tool_confirmation_selected, prefix, forbidden_prefix)
+                            })
                     };
                     if let Some((selected, prefix, forbidden_prefix)) = selected {
                         if let Some(event) = ui::approval_event_for_key(
@@ -376,7 +378,7 @@ pub(super) async fn handle_app_event(
 
                 {
                     let s = app_state.lock().await;
-                    if s.status == AppStatus::AwaitingQuestion {
+                    if s.status == AppStatus::AwaitingQuestion && !s.user_overlay_open() {
                         let typing = s
                             .pending_question
                             .as_ref()
@@ -620,7 +622,7 @@ pub(super) async fn handle_app_event(
 
                 {
                     let s = app_state.lock().await;
-                    if s.status == AppStatus::VerbosityPicker {
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::Verbosity) {
                         drop(s);
                         match key.code {
                             KeyCode::Up => {
@@ -653,7 +655,7 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
 
-                    if s.status == AppStatus::ThinkingPicker {
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::Thinking) {
                         drop(s);
                         match key.code {
                             KeyCode::Up => {
@@ -690,7 +692,7 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
 
-                    if s.status == AppStatus::EffortPicker {
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::Effort) {
                         drop(s);
                         match key.code {
                             KeyCode::Up => {
@@ -728,7 +730,7 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
 
-                    if s.status == AppStatus::ProtocolPicker {
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::Protocol) {
                         drop(s);
                         match key.code {
                             KeyCode::Up => {
@@ -766,12 +768,8 @@ pub(super) async fn handle_app_event(
                                 }
                                 rustcode::controller::save_config(&s.config);
                                 let active_model = s.model_name.clone();
-                                s.history.push(ChatMessage::new(
-                                    "system",
-                                    format!(
-                                        "Switched tool protocol to {} for model '{}'.",
-                                        label, active_model
-                                    ),
+                                s.set_transient_notice(format!(
+                                    "Switched tool protocol to {label} for model '{active_model}'."
                                 ));
                                 s.close_modal_status();
                             }
@@ -784,7 +782,7 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
 
-                    if s.status == AppStatus::YoloPicker {
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::Yolo) {
                         drop(s);
                         match key.code {
                             KeyCode::Up => {
@@ -853,6 +851,23 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                if s.command_panel.is_some() {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            s.command_panel = None;
+                        }
+                        KeyCode::Up => s.modal_scroll_row = s.modal_scroll_row.saturating_sub(1),
+                        KeyCode::Down => s.modal_scroll_row = s.modal_scroll_row.saturating_add(1),
+                        KeyCode::PageUp => {
+                            s.modal_scroll_row = s.modal_scroll_row.saturating_sub(10)
+                        }
+                        KeyCode::PageDown => {
+                            s.modal_scroll_row = s.modal_scroll_row.saturating_add(10)
+                        }
+                        _ => {}
+                    }
+                    return Ok(InputFlow::ContinueIteration);
+                }
                 if s.show_context_modal {
                     match key.code {
                         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -1283,7 +1298,7 @@ pub(super) async fn handle_app_event(
                             s.config.theme = selected.clone();
                             s.show_theme_picker = false;
                             rustcode::controller::save_config(&s.config);
-                            s.set_notice(format!("Theme set to '{}'", selected));
+                            s.set_transient_notice(format!("Theme set to '{}'", selected));
                         }
                         _ => {}
                     }
@@ -1334,142 +1349,33 @@ pub(super) async fn handle_app_event(
                             if !filtered_items.is_empty() {
                                 let item = filtered_items[idx];
                                 s.show_command_picker = false;
-                                match item.shortcut {
-                                    "ctrl+c" => {
-                                        exit_flag = true;
-                                    }
-                                    "/model" | "/models" => {
-                                        s.show_model_picker = true;
-                                    }
-                                    "/new" => {
-                                        current_cancel_token.cancel();
-                                        *current_cancel_token =
-                                            tokio_util::sync::CancellationToken::new();
-                                        rustcode::app::start_new_session(&mut s);
-                                    }
-                                    "/resume" => {
-                                        rustcode::app::resume_latest_session(&mut s);
-                                    }
-                                    "/continue" => {
-                                        let queued =
-                                            rustcode::app::actions::queue_restored_segment(&mut s);
-                                        let message = if queued {
-                                            "Queued the pending session work."
-                                        } else {
-                                            "No pending session work is available to continue."
-                                        };
-                                        s.history.push(ChatMessage::new("system", message));
-                                    }
-                                    "/agents" => {
-                                        s.show_subagent_picker = true;
-                                        s.subagent_picker_index = 0;
-                                    }
-                                    "/skills" => {
-                                        let skills = rustcode::skills::discover_skills();
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            rustcode::skills::format_skill_catalog(&skills),
-                                        ));
-                                    }
-                                    "/info" | "/about" => {
-                                        let info = rustcode::app::actions::build_info_text();
-                                        s.history.push(ChatMessage::new("system", info));
-                                    }
-                                    "/changelog" => {
-                                        let log_text =
-                                            rustcode::app::actions::build_latest_changelog();
-                                        s.history.push(ChatMessage::new("assistant", log_text));
-                                    }
-                                    "/quota" => {
-                                        rustcode::app::actions::trigger_quota_fetch(
-                                            &s, &app_state, &client,
-                                        );
-                                    }
-                                    "/sync" => {
-                                        rustcode::app::actions::trigger_sync(
-                                            &app_state, None, None,
-                                        );
-                                    }
-                                    "/update" => {
-                                        s.update_check =
-                                            rustcode_core::update::UpdateState::Checking;
-                                        s.set_notice("🔍 Checking for a RustCode update...");
-                                        rustcode::app::actions::trigger_update(&app_state, &client);
-                                    }
-                                    "/copy" => {
-                                        rustcode::app::copy_last_reply(&mut s);
-                                    }
-                                    "/help" => {
-                                        let help = rustcode::app::build_help_text();
-                                        s.history.push(ChatMessage::new("system", help));
-                                    }
-                                    "/context" => {
-                                        s.show_context_modal = true;
-                                    }
-                                    "/parser" | "/protocol" => {
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            "Only JSON tool format is supported",
-                                        ));
-                                    }
-                                    "/provider" => {
-                                        s.history.push(ChatMessage::new(
-                                    "system",
-                                    "Use /provider <name> <url> <model> to configure a provider profile",
-                                ));
-                                    }
-                                    "/ollama" => {
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            "Use /ollama list to list available Ollama models",
-                                        ));
-                                    }
-                                    "/mcp" => {
-                                        s.show_mcp_config = true;
-                                        s.mcp_picker_index = 0;
-                                        s.mcp_edit_state = None;
-                                    }
-                                    "/change_title" => {
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            "Use /change_title <new title> to rename this session",
-                                        ));
-                                    }
-                                    "/clear" => {
-                                        s.history_display_start = s.history.len();
-                                        s.clear_current_response();
-                                        s.current_token_usage = None;
-                                        s.enter_idle();
-                                    }
-                                    "/cancel" => {
-                                        current_cancel_token.cancel();
-                                        *current_cancel_token =
-                                            tokio_util::sync::CancellationToken::new();
-                                    }
-                                    "/yolo" => {
-                                        s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
-                                        s.status = rustcode::app::AppStatus::YoloPicker;
-                                    }
-                                    "/status" => {
-                                        s.show_status_modal = true;
-                                    }
-                                    "/stats" | "/usage" => {
-                                        s.open_stats_modal();
-                                    }
-                                    "/session" => {
-                                        s.show_session_modal = true;
-                                    }
-                                    "/memory" => {
-                                        rustcode::app::check_memory_usage(&mut s);
-                                    }
-                                    "/tools" => {
-                                        let mut text = String::from("Available tools:");
-                                        for t in rustcode::tools::TOOLS {
-                                            text.push_str(&format!("\n  {}", t.name));
-                                        }
-                                        s.history.push(ChatMessage::new("system", text));
-                                    }
-                                    _ => {}
+                                if item.shortcut == "ctrl+c" {
+                                    exit_flag = true;
+                                } else {
+                                    // Palette commands share slash dispatch, including panel
+                                    // presentation, arguments and immediate actions.
+                                    s.input_buffer = item.shortcut.to_owned();
+                                    s.cursor_position = s.input_buffer.len();
+                                    drop(s);
+                                    let should_exit = rustcode::app::handle_enter_with_ui_events(
+                                        app_state,
+                                        client,
+                                        current_cancel_token,
+                                        agent_ui_event_sender.clone(),
+                                        &|| {
+                                            crate::ui::theme::load_available_themes()
+                                                .into_iter()
+                                                .map(|theme| theme.name)
+                                                .collect()
+                                        },
+                                    )
+                                    .await;
+                                    *needs_redraw = true;
+                                    return Ok(if should_exit {
+                                        InputFlow::Exit { update: false }
+                                    } else {
+                                        InputFlow::ContinueIteration
+                                    });
                                 }
                             } else {
                                 s.show_command_picker = false;
@@ -2054,7 +1960,7 @@ pub(super) async fn handle_app_event(
                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                 // Route the paste into whichever text field is focused: the
                 // ask_question custom-answer slot, the MCP editor, else chat.
-                if s.status == AppStatus::AwaitingQuestion {
+                if s.status == AppStatus::AwaitingQuestion && !s.user_overlay_open() {
                     if let Some(q) = s.pending_question.as_mut() {
                         if q.custom_input.is_some() {
                             q.insert_str(&normalized);

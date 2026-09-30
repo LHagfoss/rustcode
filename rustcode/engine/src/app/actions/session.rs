@@ -110,15 +110,12 @@ pub fn check_memory_usage(s: &mut AppState) {
     let pid = Pid::from(std::process::id() as usize);
     if let Some(process) = sys.process(pid) {
         let mem_mb = process.memory() / 1024 / 1024;
-        s.history.push(ChatMessage::new(
-            "system",
+        s.show_command_panel(
+            "Memory",
             format!("🦀 Current Rustcode RAM usage: {} MB", mem_mb),
-        ));
+        );
     } else {
-        s.history.push(ChatMessage::new(
-            "system",
-            "Could not find current process.",
-        ));
+        s.show_command_panel("Memory", "Could not find current process.");
     }
 }
 
@@ -255,6 +252,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.running_tools.clear();
     s.clear_live_tool_calls();
     s.stream_tracker = None;
+    s.settings_picker = None;
+    s.command_panel = None;
     s.show_context_modal = false;
     s.show_status_modal = false;
     s.show_stats_modal = false;

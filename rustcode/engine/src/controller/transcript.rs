@@ -19,8 +19,11 @@ pub use crate::app::SubAgent;
 pub use crate::app::state::PendingSteer;
 /// Live turn shapes: in-flight tool calls, their output chunks, and the
 /// token/thought stream tracker.
-pub use crate::app::{LiveToolCall, LiveToolOutputChunk, StreamTracker};
+pub use crate::app::{
+    CommandPanel, LiveToolCall, LiveToolOutputChunk, SettingsPicker, StreamTracker,
+};
 pub use crate::app::{SubAgentStatus, TokenUsage, Verbosity};
+pub use crate::network::events::{ToolResult, ToolResultMetadata};
 pub use crate::network::ui_adapter::AgentUiEvent;
 /// Persisted conversation and tool-record shapes the transcript renders.
 pub use rustcode_core::{ChatMessage, History, ToolCallRef, ToolResultRecord};
