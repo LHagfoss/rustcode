@@ -608,8 +608,10 @@ fn resume_latest_unscoped(
             );
         }
     }
-    let meta = rustcode::config::latest_resumable_session_meta()
-        .ok_or(rustcode::app::session_controller::SessionError::NoSessionToResume)?;
+    let meta = rustcode::config::latest_resumable_session_meta_in_scope(
+        &rustcode::config::SessionScope::All,
+    )
+    .ok_or(rustcode::app::session_controller::SessionError::NoSessionToResume)?;
     let session_id =
         rustcode::app::session_controller::session_id_from_meta(&meta).ok_or_else(|| {
             rustcode::app::session_controller::SessionError::SessionNotFound(meta.title.clone())
@@ -628,13 +630,14 @@ fn resume_latest_unscoped(
 /// workspace by default; `--all` prints every workspace with its path.
 fn run_sessions_list(show_all: bool) {
     const LIMIT: usize = 50;
+    // `--all` lists every workspace; the default scope is the store's shared
+    // parent/child rule against the current directory.
     let scope = if show_all {
-        None
+        rustcode::config::SessionScope::All
     } else {
-        rustcode::config::current_workspace_dir()
+        rustcode::config::SessionScope::for_current_dir()
     };
-    let (sessions, truncated) =
-        rustcode::config::list_sessions_limited_scoped(LIMIT, scope.as_deref());
+    let (sessions, truncated) = rustcode::config::list_sessions_in_scope(LIMIT, &scope);
     if sessions.is_empty() {
         println!("No saved sessions found.");
         return;

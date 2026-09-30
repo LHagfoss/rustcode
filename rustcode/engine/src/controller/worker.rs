@@ -363,6 +363,10 @@ async fn controller_worker(
                         );
                         crate::config::flush_history();
                     }
+                    // Same store listing the TUI picker uses; the desktop shell
+                    // is the documented exception that renders the result per
+                    // project and asks for the resume folder instead of
+                    // filtering the list down to one (#1533).
                     let sessions = crate::app::actions::build_session_list(&state);
                     let mut snapshot = ControllerSnapshot::from_state(session.generation, &state);
                     snapshot.sessions = sessions
