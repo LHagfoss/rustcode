@@ -687,6 +687,7 @@ fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() 
             title: "Saved session".to_owned(),
             when: "today".to_owned(),
             message_count: 4,
+            workspace_cwd: None,
         });
     state.active_session_id = "session-7".to_owned();
     state.model_name = "model-7".to_owned();
