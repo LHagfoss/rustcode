@@ -69,6 +69,37 @@ pub fn background_task_snapshots(session_id: &str) -> Vec<TaskDisplay> {
         .collect()
 }
 
+/// Spawn a background task for `session_id` through the controller contract.
+///
+/// Production-visible so out-of-tree frontends (notably `rustcode-tui` render
+/// tests, which cannot use engine `#[cfg(test)]` helpers) can seed live tasks
+/// without reaching into `crate::tools` directly. Render tests use short
+/// `sleep`-style commands and stop them with [`stop_background_tasks`].
+pub fn spawn_background_task(
+    task_id: &str,
+    session_id: &str,
+    command: &str,
+) -> Result<(), String> {
+    crate::tools::background_task_manager()
+        .spawn_with_id(
+            task_id,
+            rustcode_tasks::TaskSpec::new(
+                rustcode_tasks::SessionId::new(session_id),
+                rustcode_command::CommandRequest {
+                    command: command.to_owned(),
+                    status_command: None,
+                    sandboxed_shell: false,
+                    cwd: None,
+                    env: Vec::new(),
+                    timeout: std::time::Duration::from_secs(30),
+                    process_group: true,
+                    inherited_fds: Vec::new(),
+                },
+            ),
+        )
+        .map(|_| ())
+}
+
 /// Whether any background task is still running in `session_id`.
 pub fn has_background_tasks(session_id: &str) -> bool {
     crate::tools::has_background_tasks(session_id)

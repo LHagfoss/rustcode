@@ -26,12 +26,18 @@ for controlling and observing a session: `InteractiveController`,
 `ControllerSnapshot`, `Command`. New frontends drive this; `rustcode/desktop`
 is the reference implementation.
 
-The terminal UI lives in its own crate but still drives core internals
-directly (its `AppState` snapshot bridge) alongside `controller`. Converging
-the render layer onto `controller` (issue #1431, enforced by
-`scripts/check-frontend-seam.sh`) keeps shrinking that surface; the TUI's
-event loop moves with the frontend by design. Treat `controller` as the
-stable seam for anything new.
+The terminal UI lives in its own crate and drives `controller` for turns,
+config, skills, background tasks, and shared domain types. The render layer's
+only remaining direct core read is the `AppState` snapshot bridge
+(`rustcode/tui/src/ui/render_snapshot.rs`, which captures the immutable
+`RenderSnapshot` each frame) plus the tests that construct an `AppState`.
+Converging that bridge onto a narrow controller view (the 79 fields the bridge
+reads today) is the remaining step for #1442 step 1; the TUI's event loop
+(`rustcode/tui/src/runtime`) moves with the frontend by design. The update
+prompt renders a binary-local `env!("CARGO_PKG_VERSION")` helper plus the
+shared `rustcode_core::update` leaf, and render tests spawn background tasks
+through `controller::spawn_background_task` — neither path names engine
+internals anymore. Treat `controller` as the stable seam for anything new.
 
 `controller` also re-exports the shared domain types a frontend renders —
 session status, chat history and tool records, live tool calls, subagents,
@@ -55,18 +61,37 @@ list over re-introducing an `app` path.
 
 The terminal UI stays inline by default. Set `fullscreen = true` in the
 configuration file or pass `--fullscreen` to opt in. The startup capability
-check is passive: it reads terminal attributes and environment variables
-without sending queries or reading stdin, so it cannot delay the UI or
-consume a user's first keypress. Cursor-report, color, and keyboard support
-are estimates until a later phase negotiates those protocols.
+check is passive (`rustcode/tui/src/terminal_probe.rs`): it reads terminal
+attributes and environment variables without sending queries or reading stdin,
+so it cannot delay the UI or consume a user's first keypress. Cursor-report,
+color, and keyboard support are estimates until a later phase negotiates those
+protocols. Fullscreen remains opt-in; no default flip is planned here (#1450).
 
-| Environment | Phase 0 behavior |
-| --- | --- |
-| macOS Terminal (`xterm-*`) | Alternate screen when requested; standard keyboard input |
-| Ghostty, Kitty, WezTerm | Alternate screen when requested; keyboard enhancement inferred where identified |
-| tmux, screen | Inline fallback |
-| SSH session | Inline fallback |
-| Non-TTY, `TERM=dumb`, unknown terminal | Inline fallback |
+### Terminal matrix (#1450, code-verified 2026-09-30)
+
+Source of truth is `terminal_probe::infer` plus the `terminal_probe` and
+`terminal_runtime` unit tests and the `fullscreen_inline_fallback` golden.
+Entries below describe implemented behavior, not hardware lab results — record
+new terminal-specific bugs against #1450 instead of assuming one terminal
+generalizes.
+
+| Environment | Fullscreen | Mouse / selection / copy-paste | Fallback |
+| --- | --- | --- | --- |
+| macOS Terminal (`xterm-*`, direct TTY) | Alternate screen when requested; standard keyboard input | Wheel scroll, drag selection with edge scrolling, composer click-to-place; drag keeps highlight, copy only on explicit action (#1492); composer selection/copy/replace (#1493) | Inline when not requested; alternate screen released on exit/panic/Ctrl-Z suspension/handoff, scrollback preserved |
+| Ghostty (`TERM_PROGRAM=ghostty`) | Alternate screen when requested; keyboard enhancement inferred | Same mouse/selection/clipboard path as above; clipboard reports confirmed vs. terminal-sent feedback in the footer | Same release guarantees as above |
+| Kitty (`kitty`, `KITTY_WINDOW_ID`) | Alternate screen when requested; keyboard enhancement inferred | Same mouse/selection/clipboard path as above | Same release guarantees as above |
+| WezTerm (`TERM_PROGRAM=wezterm`) | Alternate screen when requested; keyboard enhancement inferred | Same mouse/selection/clipboard path as above | Same release guarantees as above |
+| tmux / screen (`TMUX`, `TMUX_PANE`, `screen*`) | Inline fallback (no takeover) | Mouse/selection/clipboard still handled by the inline surface where the multiplexer forwards events; no fullscreen dependency | Passive probe forces inline; `fullscreen_inline_fallback` golden covers it |
+| SSH (`SSH_TTY` / `SSH_CONNECTION` / `SSH_CLIENT`) | Inline fallback (remote forwarding unverified) | Same inline interaction path; no remote-specific protocol assumed | Passive probe forces inline |
+| Non-TTY, `TERM=dumb` / `unknown` / `emacs`, legacy `vt100` | Inline fallback | Keyboard-only path; no alternate-screen or cursor-report claims | `TerminalCapabilities::unsupported()` |
+
+Follow-up interaction issues #1492 (drag keeps highlight, explicit copy),
+#1493 (composer selection/copy/replace), #1494 (adaptive activity spacing), and
+#1495 (truthful Preparing/queued/running tool status) are all closed; their
+behavior is covered by TUI render/interaction tests. Palette contrast and
+reduced-motion remain covered by the render goldens
+(`rustcode/tui/src/ui/fixtures/render_snapshot_*.txt`) and the
+reduced-motion activity-label tests. Headless/serve behavior is unchanged.
 
 Fullscreen releases the alternate screen on normal exit, panic, Ctrl-Z
 suspension, and the terminal runtime's external-command handoff. The main
