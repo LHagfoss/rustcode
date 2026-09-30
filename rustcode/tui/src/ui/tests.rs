@@ -88,6 +88,77 @@ fn render_state_to_text_with_transcript_and_composer_area(
     (text, input_area)
 }
 
+/// Row the composer footer is laid out on: the last row of the layout area,
+/// which sits one row above the bottom padding.
+fn footer_row(height: u16) -> u16 {
+    height - 2
+}
+
+/// Drag a transcript selection the way the runtime does on a mouse gesture:
+/// Down pins the painted viewport, Drag and Up leave a released selection
+/// behind for the explicit copy chord to read (#1492).
+fn select_transcript_text(
+    state: &mut RenderState,
+    transcript: &mut TranscriptState,
+    from: (u16, u16),
+    to: (u16, u16),
+) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mouse = |kind: MouseEventKind, (column, row): (u16, u16)| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    transcript.selection.begin_with_snapshot(
+        mouse(MouseEventKind::Down(MouseButton::Left), from),
+        render_snapshot(state),
+        transcript.scroll_rows(),
+    );
+    transcript
+        .selection
+        .mouse(mouse(MouseEventKind::Drag(MouseButton::Left), to));
+    transcript
+        .selection
+        .mouse(mouse(MouseEventKind::Up(MouseButton::Left), to));
+}
+
+/// The footer row of a frame drawn with a live transcript selection.
+///
+/// The first frame paints the rows the selection pins, so the gesture has to
+/// happen between two draws, exactly as it does between two events.
+fn footer_row_with_transcript_selection(
+    state: &mut RenderState,
+    width: u16,
+    height: u16,
+) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, state, &mut transcript);
+        })
+        .unwrap();
+    select_transcript_text(state, &mut transcript, (2, 2), (20, 2));
+    assert!(
+        transcript.selection.has_selection(),
+        "the drag must leave a non-empty selection"
+    );
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, state, &mut transcript);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..width)
+        .map(|column| buffer[(column, footer_row(height))].symbol())
+        .collect()
+}
+
 fn render_context_modal_to_text(state: &RenderState, width: u16, height: u16) -> String {
     render_context_modal_to_buffer(state, width, height)
         .iter()
@@ -1800,6 +1871,108 @@ fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection(
             "do not imply Escape will interrupt while it handles the {blocker}"
         );
     }
+}
+
+/// The footer names the copy chord while a transcript selection is live, and
+/// stops naming it the moment the selection goes away (#1542).
+///
+/// The sibling of the Escape test above: Escape is claimed by the selection, so
+/// the footer describes the selection rather than the copy it has not made yet.
+#[test]
+fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let binding = rustcode::controller::copy_selection_binding();
+    let mut state = RenderState::new();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+
+    let footer = |terminal: &Terminal<TestBackend>| {
+        let buffer = terminal.backend().buffer();
+        (0..100)
+            .map(|column| buffer[(column, footer_row(20))].symbol())
+            .collect::<String>()
+    };
+
+    // No selection: the footer keeps naming the session, not a copy key.
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let idle = footer(&terminal);
+    assert!(!idle.contains(binding), "idle footer: {idle:?}");
+    assert!(!idle.contains("or right-click"), "idle footer: {idle:?}");
+    assert!(
+        idle.contains(&state.model_name),
+        "idle footer should keep the session metadata: {idle:?}"
+    );
+
+    // A released selection: the key that copies it is named outright.
+    select_transcript_text(&mut state, &mut transcript, (2, 2), (20, 2));
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let selected = footer(&terminal);
+    assert!(
+        selected.starts_with(&format!("  {binding} · or right-click")),
+        "selected footer: {selected:?}"
+    );
+    assert!(
+        !selected.contains(&state.model_name),
+        "the hint replaces the session metadata: {selected:?}"
+    );
+
+    // Escape clears the selection -- `selection_owns_key` routes Esc to it
+    // before the composer or the turn ever sees the key -- and the footer gives
+    // the row straight back. Nothing was copied here, so the hint was tracking
+    // the gesture rather than the copy.
+    transcript.selection.clear();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let cleared = footer(&terminal);
+    assert!(!cleared.contains(binding), "cleared footer: {cleared:?}");
+    assert!(
+        cleared.contains(&state.model_name),
+        "cleared footer should fall back to the session metadata: {cleared:?}"
+    );
+}
+
+/// Copy feedback is the answer to the key that was just pressed, so it holds
+/// the footer while it lasts and the hint returns behind it (#1542).
+#[test]
+fn copy_feedback_notice_holds_the_footer_until_it_expires() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
+    let mut state = RenderState::new();
+    let binding = rustcode::controller::copy_selection_binding();
+    let hint = footer_row_with_transcript_selection(&mut state, 100, 20);
+    assert!(hint.contains(binding), "hint before the copy: {hint:?}");
+
+    state.transient_notice = Some("Copied selection to clipboard".to_owned());
+    let noticed = footer_row_with_transcript_selection(&mut state, 100, 20);
+    assert!(
+        noticed.contains("Copied selection to clipboard"),
+        "the copy result must not be replaced by the copy key: {noticed:?}"
+    );
+    assert!(
+        !noticed.contains(binding),
+        "the hint stands down while its own result is on screen: {noticed:?}"
+    );
+
+    state.transient_notice = None;
+    let resumed = footer_row_with_transcript_selection(&mut state, 100, 20);
+    assert!(
+        resumed.contains(binding),
+        "the selection outlives the notice, so the hint returns: {resumed:?}"
+    );
 }
 
 // Regression: the tool-result cache used to `clear()` the whole map at the
@@ -4168,6 +4341,112 @@ fn hint_clauses_drop_from_the_tail_and_never_clip() {
         Some("  ↑/↓ navigate")
     );
     assert_eq!(fit_hint_clauses("  ", &COMPLETION_HINT_CLAUSES, 13), None);
+}
+
+/// The selection's copy key leads the footer, so it is the last clause a narrow
+/// row drops (#1542).
+///
+/// The selection claims the copy chord outright, which makes it outrank the
+/// completion popup's clauses and the passive metadata the hint replaces. The
+/// order of [`footer_hint_clauses`] is therefore the footer's drop order, and
+/// the order of these assertions is the claim.
+#[test]
+fn selection_copy_hint_leads_the_footer_drop_order() {
+    use super::composer_render::{
+        COMMAND_COMPLETION_HINT_CLAUSES, footer_hint_clauses, selection_hint_clauses,
+    };
+
+    let binding = rustcode::controller::copy_selection_binding();
+    let copy: Vec<&str> = selection_hint_clauses().to_vec();
+    assert_eq!(copy, vec![binding, "or right-click"]);
+
+    // Nothing to say: no selection and no popup leaves the metadata row alone.
+    assert_eq!(footer_hint_clauses(None, false), None);
+    // A selection alone replaces the metadata with the copy chord.
+    assert_eq!(
+        footer_hint_clauses(None, true).as_deref(),
+        Some(copy.as_slice())
+    );
+    // The popup alone keeps its own order untouched.
+    assert_eq!(
+        footer_hint_clauses(Some(&COMMAND_COMPLETION_HINT_CLAUSES), false).as_deref(),
+        Some(&COMMAND_COMPLETION_HINT_CLAUSES[..])
+    );
+    // Both at once: the copy chord leads, so it is what survives a narrow row
+    // and the popup's clauses are what degrade.
+    assert_eq!(
+        footer_hint_clauses(Some(&COMMAND_COMPLETION_HINT_CLAUSES), true),
+        Some(
+            [&binding, "or right-click"]
+                .into_iter()
+                .chain(COMMAND_COMPLETION_HINT_CLAUSES.iter().copied())
+                .collect::<Vec<&'static str>>()
+        )
+    );
+}
+
+/// The copy chord degrades like every other footer clause: whole clauses, from
+/// the tail, never clipped, and the context percentage yields rather than a key
+/// the user can press (#1542).
+#[test]
+fn selection_copy_hint_degrades_by_content_at_narrow_widths() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
+    let binding = rustcode::controller::copy_selection_binding();
+    for (width, expected, keeps_percentage) in [
+        (100u16, format!("  {binding} · or right-click"), true),
+        // "or right-click" no longer fits in the 21 columns left beside
+        // "100% context left  " (19), so it drops whole and the key keeps the
+        // row. The percentage is still worth its 19 columns.
+        (40, format!("  {binding}"), true),
+        // 24 columns cannot fit the leading clause beside the percentage, so
+        // the percentage is dropped rather than a key (#1529).
+        (24, format!("  {binding}"), false),
+    ] {
+        let mut state = RenderState::new();
+        let footer = footer_row_with_transcript_selection(&mut state, width, 20);
+        assert!(
+            footer.starts_with(&expected),
+            "expected the footer to read {expected:?} at {width} columns, got {footer:?}"
+        );
+        assert!(
+            !footer.contains('…'),
+            "a hint must be omitted whole, never clipped with an ellipsis: {footer:?}"
+        );
+        assert_eq!(
+            footer.chars().count(),
+            width as usize,
+            "the footer row must fill the viewport exactly once"
+        );
+        assert_eq!(
+            footer.contains("context left"),
+            keeps_percentage,
+            "the context percentage is the passive metadata the copy key outranks: {footer:?}"
+        );
+        if keeps_percentage {
+            assert!(
+                footer.ends_with("100% context left  "),
+                "the percentage stays right-aligned: {footer:?}"
+            );
+        }
+    }
+
+    // The same row with a completion popup open. On its own the popup keeps
+    // "↑/↓ navigate" at 40 columns, so the copy key sitting there instead is the
+    // drop order being applied rather than a row that happened to be narrow.
+    let mut state = RenderState::new();
+    state.input_buffer = "/".to_owned();
+    state.cursor_position = 1;
+    state.active_suggestion_index = Some(0);
+    let footer = footer_row_with_transcript_selection(&mut state, 40, 20);
+    assert!(
+        footer.starts_with(&format!("  {binding}")),
+        "the copy key leads the popup's clauses: {footer:?}"
+    );
+    assert!(
+        !footer.contains("navigate"),
+        "the popup's clauses degrade before the copy key does: {footer:?}"
+    );
 }
 
 #[test]
