@@ -1064,6 +1064,126 @@ fn repeated_same_tool_failures_accumulate_no_progress_streak() {
     assert_eq!(ledger.streak_action(), Some("run_command:stable"));
 }
 
+/// The two searches the #1513 session (`01a0eed269ed-7000-9dda-4d40-4d4078a20034`)
+/// ran against an unreachable artifact, as recorded in that session's
+/// `turn.progress` events.
+const SESSION_1513_SEARCHES: [&str; 2] = [
+    "F=artifact.txt; grep -nE '^    \"name\"' \"$F\"; echo \"---count---\"; grep -cE '^    \"name\"' \"$F\"",
+    "F=artifact.txt; grep -i vercel artifact.txt | head; echo \"---SERVERS---\"; grep -n '\"name\"' artifact.txt",
+];
+
+/// A model that keeps re-issuing the *same* failing search is looping, and the
+/// per-tool scoping must not let it through: the same action and the same
+/// failure fingerprint corroborate, so the streak still arms evidence recovery.
+#[test]
+fn the_session_1513_search_still_arms_recovery_when_repeated_verbatim() {
+    let mut ledger = ProgressLedger::default();
+    let command = SESSION_1513_SEARCHES[0];
+    let (exact, _) = signatures("run_command", &json!({ "command": command }));
+    let failure = stable_hash("run_command:1:exit 1");
+    for index in 0..ProgressLedger::RECOVERY_STREAK {
+        let mut failed = observation(&format!("stdout of attempt {index}"), None, None);
+        failed.action = exact.clone();
+        failed.failure_fingerprint = Some(failure);
+        failed.success = false;
+        let assessment = ledger.observe(&failed);
+        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        assert_eq!(
+            assessment.streak,
+            index + 1,
+            "repeating one failing action must extend the streak"
+        );
+    }
+    assert_eq!(ledger.no_progress_streak(), ledger.recovery_streak());
+    assert_eq!(ledger.streak_action(), Some(exact.as_str()));
+}
+
+/// The counterpart to the replay: alternating between the two *different*
+/// searches of the same session is divergence, not a loop, even though the
+/// tool, the exit code and the outcome are all identical. This is the
+/// discrimination #1524 introduced, and it must not swallow a real loop: the
+/// same fingerprint recurring does still extend the streak.
+#[test]
+fn alternating_session_1513_searches_do_not_arm_recovery_but_a_shared_fingerprint_does() {
+    let mut divergent = ProgressLedger::default();
+    let (first, _) = signatures(
+        "run_command",
+        &json!({ "command": SESSION_1513_SEARCHES[0] }),
+    );
+    let (second, _) = signatures(
+        "run_command",
+        &json!({ "command": SESSION_1513_SEARCHES[1] }),
+    );
+    for (index, action) in [first.clone(), second.clone()]
+        .into_iter()
+        .cycle()
+        .take(ProgressLedger::RECOVERY_STREAK * 2)
+        .enumerate()
+    {
+        let mut failed = observation(&format!("distinct output {index}"), None, None);
+        failed.action = action;
+        // Different content, so a different failure fingerprint per attempt.
+        failed.failure_fingerprint = Some(stable_hash(&format!("exit-1-{index}")));
+        failed.success = false;
+        let assessment = divergent.observe(&failed);
+        assert_eq!(assessment.streak, 1, "distinct failures must not pool");
+    }
+    assert!(
+        divergent.no_progress_streak() < divergent.recovery_streak(),
+        "divergent error recovery must not arm recovery"
+    );
+
+    // Same fingerprint across the two different commands: the model is
+    // hitting one wall through two spellings, which is corroborated looping.
+    let mut corroborated = ProgressLedger::default();
+    let shared = stable_hash("run_command:1:exit 1");
+    for index in 0..ProgressLedger::RECOVERY_STREAK {
+        let action = if index % 2 == 0 { &first } else { &second };
+        let mut failed = observation(&format!("output {index}"), None, None);
+        failed.action = action.clone();
+        failed.failure_fingerprint = Some(shared);
+        failed.success = false;
+        assert_eq!(corroborated.observe(&failed).streak, index + 1);
+    }
+    assert_eq!(
+        corroborated.no_progress_streak(),
+        corroborated.recovery_streak()
+    );
+}
+
+#[test]
+fn a_repeated_unreachable_path_is_left_to_the_infrastructure_guard() {
+    // A workspace-boundary rejection is a harness guardrail, so the ledger
+    // must not accumulate it. The unreachable-path guard that replaces it is
+    // the infrastructure tracker's bounded stop, not evidence recovery.
+    let mut ledger = ProgressLedger::default();
+    let mut tracker = InfrastructureFailureTracker::default();
+    let rejection = "path '/root/.config/rustcode/tool_output/0_list_mcp_tools.txt' escapes the workspace root '/work/proj'";
+    let mut decision = InfrastructureFailureDecision::NotInfrastructure;
+    for _ in 0..InfrastructureFailureTracker::MAX_STREAK {
+        decision = tracker.observe("grep", Some("InvalidArguments"), false, false, rejection);
+        let mut failed = observation(rejection, None, None);
+        failed.action = "grep:name@tool_output.txt".to_string();
+        failed.failure_fingerprint =
+            Some(stable_hash(&format!("grep::{}", stagnation_key(rejection))));
+        failed.read_only = true;
+        failed.fresh_read = true;
+        failed.success = false;
+        ledger.observe(&failed);
+        // The engine resets the ledger on a boundary rejection, so replay that
+        // here: nothing accumulates in the evidence streak.
+        ledger.reset_streak();
+        assert_eq!(ledger.no_progress_streak(), 0);
+    }
+    match decision {
+        InfrastructureFailureDecision::Stop { failure, streak } => {
+            assert_eq!(failure.fingerprint, WORKSPACE_BOUNDARY_FINGERPRINT);
+            assert_eq!(streak, InfrastructureFailureTracker::MAX_STREAK);
+        }
+        other => panic!("expected a bounded stop, got {other:?}"),
+    }
+}
+
 #[test]
 fn streak_action_names_streak_origin_and_resets_with_it() {
     let mut ledger = ProgressLedger::default();
