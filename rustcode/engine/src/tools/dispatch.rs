@@ -49,10 +49,19 @@ fn mcp_result_content(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
+/// Execute a tool by name and return its output with metadata.
+///
+/// MUST be called off the async runtime (e.g. inside `spawn_blocking`):
+/// MCP calls block on the runtime handle and will panic if invoked on a
+/// runtime worker thread.
 pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
     execute_with_metadata_cancellable(name, args, None)
 }
 
+/// Cancellable variant of [`execute_with_metadata`].
+///
+/// Same off-runtime contract: call only from blocking threads, never from
+/// async tasks running on the Tokio runtime.
 pub(crate) fn execute_with_metadata_cancellable(
     name: &str,
     args: &Value,
@@ -61,6 +70,11 @@ pub(crate) fn execute_with_metadata_cancellable(
     execute_with_metadata_cancellable_for_call(name, args, cancel_token, None)
 }
 
+/// Call-scoped variant of [`execute_with_metadata_cancellable`].
+///
+/// Same off-runtime contract: the MCP path uses `Handle::block_on`, so this
+/// must run on a blocking thread (see `network/tool_exec.rs` `spawn_blocking`
+/// call sites), never directly on a runtime worker.
 pub(crate) fn execute_with_metadata_cancellable_for_call(
     name: &str,
     args: &Value,
