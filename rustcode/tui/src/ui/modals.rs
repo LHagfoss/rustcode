@@ -18,9 +18,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
-#[cfg(test)]
-use rustcode::app::AppState;
-use rustcode::controller::{ApprovalDecision, PendingQuestion, QuestionAnswer};
+use rustcode::controller::{ApprovalDecision, PendingQuestion, QuestionAnswer, RenderState};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod advanced_settings;

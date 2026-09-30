@@ -7,6 +7,7 @@ mod context;
 mod events;
 mod input;
 mod native_commands;
+mod render_state;
 mod snapshot;
 mod tasks;
 mod transcript;
@@ -49,6 +50,7 @@ pub use input::{
     classify_live_tools, command_token, filtered_commands, get_completion_len,
     list_project_file_paths, summarize_tool_call,
 };
+pub use render_state::{RenderState, SubAgentView, render_state};
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command,
     ControllerHandle, ControllerSnapshot, DraftSubmitMode, McpEditState, ModelChoice,

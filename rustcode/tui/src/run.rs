@@ -889,8 +889,11 @@ mod tests {
                 "▀     ▀▀▀  ▀▀▀▀    ▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀",
             ]
         );
-        let banner =
-            crate::ui::build_claude_startup_banner(&rustcode::app::AppState::new(), 100, 30);
+        let banner = crate::ui::build_claude_startup_banner(
+            &rustcode::controller::RenderState::new(),
+            100,
+            30,
+        );
         let rendered = banner.iter().map(ToString::to_string).collect::<Vec<_>>();
         for line in lines {
             assert!(rendered.iter().any(|row| row.contains(line.trim_end())));

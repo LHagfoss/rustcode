@@ -26,18 +26,21 @@ for controlling and observing a session: `InteractiveController`,
 `ControllerSnapshot`, `Command`. New frontends drive this; `rustcode/desktop`
 is the reference implementation.
 
-The terminal UI lives in its own crate but still drives core internals
-directly (its `AppState` snapshot bridge) alongside `controller`. Converging
-the render layer onto `controller` (issue #1431, enforced by
-`scripts/check-frontend-seam.sh`) keeps shrinking that surface; the TUI's
-event loop moves with the frontend by design. Treat `controller` as the
-stable seam for anything new.
+The terminal UI lives in its own crate and follows the same seam
+(enforced by `scripts/check-frontend-seam.sh`). Its render layer renders from
+`controller::RenderState`, a per-frame owned projection of a live session
+(`controller::render_state`), in place of the `AppState` snapshot bridge it
+used to read. Anything that needed an `AppState` method — whether the turn is
+interruptible, whether an overlay owns the screen, the active model profile /
+context window / tool protocol, the unexpired transient notice — is resolved
+into the view by the engine, so a frontend never re-derives engine policy. The
+TUI's event loop (`rustcode/tui/src/runtime`) is out of scope by design: it
+moves with the frontend and drives turns directly.
 
 `controller` also re-exports the shared domain types a frontend renders —
 session status, chat history and tool records, live tool calls, subagents,
-pending confirmations, approval/question answers, and `UiRect` — so render
-code names the contract instead of `rustcode::app`. Prefer extending that
-list over re-introducing an `app` path.
+pending confirmations, approval/question answers, and `UiRect`. Prefer
+extending the view over reaching past `controller`.
 
 ## Rules
 

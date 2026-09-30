@@ -796,17 +796,17 @@ impl TranscriptSelection {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
-    use rustcode::app::{AppState, ChatMessage};
+    use rustcode::controller::{ChatMessage, RenderState};
 
     fn rendered_transcript(
-        state: &AppState,
+        state: &RenderState,
         transcript: &mut super::super::history_cell::TranscriptState,
     ) -> Buffer {
         rendered_transcript_size(state, transcript, 32, 14)
     }
 
     fn rendered_transcript_size(
-        state: &AppState,
+        state: &RenderState,
         transcript: &mut super::super::history_cell::TranscriptState,
         width: u16,
         height: u16,
@@ -824,8 +824,8 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
-    fn long_conversation() -> AppState {
-        let mut state = AppState::new();
+    fn long_conversation() -> RenderState {
+        let mut state = RenderState::new();
         let text = (0..40)
             .map(|row| format!("history row {row:02}"))
             .collect::<Vec<_>>()
@@ -920,7 +920,7 @@ mod tests {
         let mut selection = TranscriptSelection::default();
         selection.refresh(area, &buffer, &[false]);
         selection.begin_keyboard_with_snapshot(
-            super::super::render_snapshot::render_snapshot(&AppState::new()),
+            super::super::render_snapshot::render_snapshot(&RenderState::new()),
             0,
         );
         selection.keyboard_anchor = Some(CellPosition { row: 0, column: 0 });
@@ -944,7 +944,7 @@ mod tests {
         let mut selection = TranscriptSelection::default();
         selection.refresh(area, &buffer, &[false, false]);
         selection.begin_keyboard_with_snapshot(
-            super::super::render_snapshot::render_snapshot(&AppState::new()),
+            super::super::render_snapshot::render_snapshot(&RenderState::new()),
             0,
         );
         assert_eq!(
@@ -964,7 +964,7 @@ mod tests {
         let mut selection = TranscriptSelection::default();
         selection.refresh(area, &buffer, &[false, false]);
         selection.begin_keyboard_with_snapshot(
-            super::super::render_snapshot::render_snapshot(&AppState::new()),
+            super::super::render_snapshot::render_snapshot(&RenderState::new()),
             0,
         );
         selection.keyboard_anchor = Some(CellPosition { row: 0, column: 3 });
@@ -1028,7 +1028,7 @@ mod tests {
         for _ in 0..2 {
             selection.begin_with_snapshot(
                 mouse(MouseEventKind::Down(MouseButton::Left), 5, 0),
-                super::super::render_snapshot::render_snapshot(&AppState::new()),
+                super::super::render_snapshot::render_snapshot(&RenderState::new()),
                 0,
             );
             selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn large_history_mouse_down_only_captures_visible_rows() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         let text = (0..12_000)
             .map(|row| format!("history row {row:05}"))
             .collect::<Vec<_>>()
@@ -1341,7 +1341,7 @@ mod tests {
 
     #[test]
     fn wrapped_rows_keep_visual_anchors_across_reverse_scroll() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         let text = (0..40)
             .map(|row| format!("row {row:02}: abcdefghijklmnopqrstuvwxyz 123456789"))
             .collect::<Vec<_>>()
@@ -1382,7 +1382,7 @@ mod tests {
 
     #[test]
     fn repeated_identical_rows_still_advance_anchor_when_scrolled() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.history.push(ChatMessage::new(
             "assistant",
             std::iter::repeat_n("repeat", 40)
@@ -1446,7 +1446,7 @@ mod tests {
     #[test]
     #[ignore = "manual transcript scroll benchmark"]
     fn bench_long_selection_scroll() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         let text = (0..50_000)
             .map(|row| format!("history row {row:05} with a few words"))
             .collect::<Vec<_>>()

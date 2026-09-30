@@ -181,7 +181,9 @@ pub(super) async fn handle_app_event(
                 {
                     let snapshot = {
                         let state = app_state.lock().await;
-                        ui::render_snapshot::render_snapshot(&state)
+                        ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(
+                            &state,
+                        ))
                     };
                     transcript_state
                         .selection
@@ -1972,7 +1974,9 @@ pub(super) async fn handle_app_event(
                         {
                             let snapshot = {
                                 let state = app_state.lock().await;
-                                ui::render_snapshot::render_snapshot(&state)
+                                ui::render_snapshot::render_snapshot(
+                                    &rustcode::controller::render_state(&state),
+                                )
                             };
                             let scroll_rows = transcript_state.scroll_rows();
                             transcript_state.selection.begin_with_snapshot(
@@ -2151,7 +2155,9 @@ mod tests {
             .selection
             .refresh(area, &Buffer::empty(area), &[false]);
         transcript.selection.begin_keyboard_with_snapshot(
-            crate::ui::render_snapshot::render_snapshot(&AppState::new()),
+            crate::ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(
+                &AppState::new(),
+            )),
             0,
         );
         assert!(transcript.selection.is_keyboard_mode());
@@ -2209,7 +2215,9 @@ mod tests {
         let begin = |transcript: &mut TranscriptState| {
             transcript.selection.begin_with_snapshot(
                 down,
-                crate::ui::render_snapshot::render_snapshot(&AppState::new()),
+                crate::ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(
+                    &AppState::new(),
+                )),
                 transcript.scroll_rows(),
             );
             assert!(transcript.selection.is_active());

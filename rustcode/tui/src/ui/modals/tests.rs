@@ -9,7 +9,7 @@ use rustcode::controller::ToolConfirmation;
 fn single_command_confirmation_uses_codex_command_prompt() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.config.theme = "default".to_owned();
     let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
     crate::ui::theme::set_active_theme("nord");
@@ -75,7 +75,7 @@ fn single_command_confirmation_uses_codex_command_prompt() {
 #[test]
 fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
     let mut terminal = Terminal::new(TestBackend::new(72, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let command = "git log v0.17.0..HEAD --oneline --no-merges; echo ---; git log -3 --oneline; echo ---; git tag --sort=-v:refname | head -5";
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
@@ -133,7 +133,7 @@ fn middle_truncation_keeps_command_start_and_tail() {
 #[test]
 fn compact_approval_keeps_heading_and_actions_visible() {
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
         tool_name: "write_to_file".to_owned(),
@@ -163,7 +163,7 @@ fn compact_approval_keeps_heading_and_actions_visible() {
 #[test]
 fn approval_selection_visibly_moves_to_deny() {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.tool_confirmation_selected = 1;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
@@ -200,7 +200,7 @@ fn approval_selection_visibly_moves_to_deny() {
 #[test]
 fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
     let mut terminal = Terminal::new(TestBackend::new(90, 12)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.tool_confirmation_selected = 2;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
@@ -233,7 +233,7 @@ fn subagent_command_confirmation_keeps_the_reusable_choice_visible() {
 #[test]
 fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
     let mut terminal = Terminal::new(TestBackend::new(90, 12)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
         tool_name: "run_command".to_owned(),
@@ -258,9 +258,7 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
     assert!(rendered.contains("3. Always forbid literal tokens `curl…`"));
     assert!(!rendered.contains("Always allow"));
 
-    state.move_tool_confirmation_selection(1);
-    state.move_tool_confirmation_selection(1);
-    assert_eq!(state.tool_confirmation_selected, 2);
+    state.tool_confirmation_selected = 2;
     assert!(matches!(
         approval_event_for_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -274,31 +272,9 @@ fn unsafe_allow_commands_can_still_be_forbidden_from_the_confirmation_panel() {
 }
 
 #[test]
-fn approval_selection_reaches_allow_and_forbid_prefix_choices() {
-    let mut state = AppState::new();
-    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
-        request_id: None,
-        tool_name: "run_command".to_owned(),
-        path: "cargo test --lib".to_owned(),
-        content_preview: String::new(),
-        content_bytes: 0,
-        rememberable_prefix: Some("cargo test".to_owned()),
-        forbidden_prefix: Some("cargo test".to_owned()),
-    }]);
-    state.move_tool_confirmation_selection(1);
-    assert_eq!(state.tool_confirmation_selected, 1);
-    state.move_tool_confirmation_selection(1);
-    assert_eq!(state.tool_confirmation_selected, 2);
-    state.move_tool_confirmation_selection(1);
-    assert_eq!(state.tool_confirmation_selected, 3);
-    state.move_tool_confirmation_selection(-1);
-    assert_eq!(state.tool_confirmation_selected, 2);
-}
-
-#[test]
 fn batch_approval_lists_each_tool_in_the_bottom_pane() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.pending_tool_confirmation = Some(vec![
         ToolConfirmation {
             request_id: None,
@@ -463,8 +439,8 @@ fn multi_select_question_answer_joins_selected_options() {
 #[test]
 fn chained_question_modal_shows_position_descriptions_and_nav_hint() {
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-    let mut state = AppState::new();
-    state.begin_question_chain(vec![
+    let mut state = RenderState::new();
+    state.set_question_chain(vec![
         PendingQuestion::new(
             "Where from?".to_owned(),
             vec!["CHANGELOG".to_owned(), "API".to_owned()],
@@ -504,8 +480,8 @@ fn chained_question_modal_shows_position_descriptions_and_nav_hint() {
 #[test]
 fn question_modal_wraps_long_option_and_description_and_keeps_navigation_visible() {
     let mut terminal = Terminal::new(TestBackend::new(44, 10)).unwrap();
-    let mut state = AppState::new();
-    state.begin_question_chain(vec![
+    let mut state = RenderState::new();
+    state.set_question_chain(vec![
         PendingQuestion::new(
             "Pick one".to_owned(),
             vec!["A long option label that needs to wrap cleanly".to_owned()],
@@ -554,8 +530,8 @@ fn question_modal_wraps_long_option_and_description_and_keeps_navigation_visible
 
 #[test]
 fn question_height_accounts_for_wrapped_options() {
-    let mut state = AppState::new();
-    state.begin_question_chain(vec![PendingQuestion::new(
+    let mut state = RenderState::new();
+    state.set_question_chain(vec![PendingQuestion::new(
         "Pick one".to_owned(),
         vec![
             "A deliberately long option label that wraps across several rows".to_owned(),
@@ -572,8 +548,8 @@ fn question_height_accounts_for_wrapped_options() {
 #[test]
 fn question_modal_keeps_selected_option_and_footer_on_narrow_terminal() {
     let mut terminal = Terminal::new(TestBackend::new(24, 11)).unwrap();
-    let mut state = AppState::new();
-    state.begin_question_chain(vec![
+    let mut state = RenderState::new();
+    state.set_question_chain(vec![
         PendingQuestion::new(
             "Choose an option".to_owned(),
             vec!["The selected answer has a long label".to_owned()],
@@ -611,7 +587,7 @@ fn question_modal_keeps_selected_option_and_footer_on_narrow_terminal() {
 #[test]
 fn settings_picker_uses_unified_modal_picker_style() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.modal_picker_index = 1;
     terminal
         .draw(|frame| {
@@ -636,7 +612,7 @@ fn picker_panel_is_bounded_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    let state = AppState::new();
+    let state = RenderState::new();
     terminal
         .draw(|frame| {
             render_verbosity_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 20, 80, 3))
@@ -656,7 +632,7 @@ fn picker_panel_never_exceeds_the_space_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    let state = AppState::new();
+    let state = RenderState::new();
     // Only six rows sit above the composer, fewer than the panel's max height,
     // so the panel is clamped to what is available instead of overflowing.
     terminal
@@ -672,7 +648,7 @@ fn picker_panel_never_exceeds_the_space_above_the_composer() {
 #[test]
 fn yolo_picker_renders_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.modal_picker_index = 0;
     terminal
         .draw(|frame| {
@@ -696,7 +672,7 @@ fn yolo_picker_renders_options() {
 #[test]
 fn effort_picker_renders_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.modal_picker_index = 0;
     terminal
         .draw(|frame| {
@@ -721,7 +697,7 @@ fn effort_picker_renders_options() {
 #[test]
 fn history_picker_renders_borderless_full_width_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_history_picker = true;
     state.history_picker_sessions = vec![rustcode::controller::SessionMeta {
         path: std::path::PathBuf::from("/tmp/test-1.json"),
@@ -755,7 +731,7 @@ fn context_panel_uses_theme_swatches_matching_the_grid() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     crate::ui::theme::set_active_theme("default");
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "user",
         "Hello assistant",
@@ -805,7 +781,7 @@ fn context_panel_emphasizes_over_threshold_categories() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     crate::ui::theme::set_active_theme("default");
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     // Tool traffic dominates a small window, pushing "Tool calls" over the
     // over-threshold share while tiny categories stay muted.
     let mut profile = rustcode::controller::ModelProfile::default();

@@ -1,6 +1,7 @@
 use rustcode::controller::{
     AppStatus, ChatMessage, History, LiveToolCall, McpEditState, MonthlyUsage, PendingQuestion,
-    StreamTracker, SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
+    RenderState, StreamTracker, SubAgentStatus, SubAgentView, TokenUsage, ToolConfirmation,
+    Verbosity,
 };
 use std::sync::Arc;
 
@@ -68,10 +69,22 @@ pub(crate) struct RenderSnapshot {
 
 /// Capture the immutable view the renderer needs for this frame.
 ///
-/// Free function (not a method): `AppState` lives in the core library, which
-/// cannot name the rendering types this returns.
-pub(crate) fn render_snapshot(state: &rustcode::app::AppState) -> RenderSnapshot {
-    RenderSnapshot::new(state)
+/// Free function (not a method): the view is a plain controller-owned data
+/// type, so nothing in the core library needs to name the rendering types this
+/// returns.
+pub(crate) fn render_snapshot(view: &RenderState) -> RenderSnapshot {
+    RenderSnapshot::new(view)
+}
+
+/// Seed a view's streamed-response buffer.
+///
+/// The view is a read projection: production only ever receives one from
+/// `controller::render_state`. Render tests need to stand a frame up at a
+/// given response, and the buffer is an `Arc` the snapshot shares, so the
+/// helper writes the field the same way a projection would.
+#[cfg(test)]
+pub(crate) fn set_current_response(view: &mut RenderState, response: impl Into<String>) {
+    view.current_response = Arc::new(response.into());
 }
 
 /// Data used exclusively by modal overlays. Large collections and editable
@@ -110,151 +123,117 @@ struct OverlaySnapshot {
 }
 
 impl OverlaySnapshot {
-    fn new(state: &rustcode::app::AppState) -> Self {
+    fn new(view: &RenderState) -> Self {
         Self {
-            show_model_picker: state.show_model_picker,
-            model_picker_index: state.model_picker_index,
-            modal_picker_index: state.modal_picker_index,
-            model_picker_search: state
-                .show_model_picker
-                .then(|| state.model_picker_search.clone())
-                .unwrap_or_default(),
-            show_theme_picker: state.show_theme_picker,
-            theme_picker_index: state.theme_picker_index,
-            theme_picker_initial: state
-                .show_theme_picker
-                .then(|| state.theme_picker_initial.clone())
-                .unwrap_or_default(),
-            show_command_picker: state.show_command_picker,
-            command_picker_index: state.command_picker_index,
-            command_picker_search: state
-                .show_command_picker
-                .then(|| state.command_picker_search.clone())
-                .unwrap_or_default(),
-            show_history_picker: state.show_history_picker,
-            history_picker_index: state.history_picker_index,
-            history_picker_sessions: state
-                .show_history_picker
-                .then(|| state.history_picker_sessions.clone())
-                .unwrap_or_default(),
-            history_picker_truncated: state.history_picker_truncated,
-            pending_delete_session_idx: state.pending_delete_session_idx,
-            show_subagent_picker: state.show_subagent_picker,
-            subagent_picker_index: state.subagent_picker_index,
-            show_context_modal: state.show_context_modal,
-            show_status_modal: state.show_status_modal,
-            show_stats_modal: state.show_stats_modal,
-            show_session_modal: state.show_session_modal,
-            stats_usage_history: state
-                .show_stats_modal
-                .then(|| state.stats_usage_history.clone())
-                .unwrap_or_default(),
-            show_update_prompt: state.show_update_prompt,
-            update_check: state.update_check,
-            update_prompt_index: state.update_prompt_index,
-            show_mcp_config: state.show_mcp_config,
-            mcp_picker_index: state.mcp_picker_index,
-            mcp_edit_state: state
-                .show_mcp_config
-                .then(|| state.mcp_edit_state.clone())
-                .flatten(),
-            modal_scroll_row: state.modal_scroll_row,
-            tool_confirmation_selected: state.tool_confirmation_selected,
+            show_model_picker: view.show_model_picker,
+            model_picker_index: view.model_picker_index,
+            modal_picker_index: view.modal_picker_index,
+            model_picker_search: view.model_picker_search.clone(),
+            show_theme_picker: view.show_theme_picker,
+            theme_picker_index: view.theme_picker_index,
+            theme_picker_initial: view.theme_picker_initial.clone(),
+            show_command_picker: view.show_command_picker,
+            command_picker_index: view.command_picker_index,
+            command_picker_search: view.command_picker_search.clone(),
+            show_history_picker: view.show_history_picker,
+            history_picker_index: view.history_picker_index,
+            history_picker_sessions: view.history_picker_sessions.clone(),
+            history_picker_truncated: view.history_picker_truncated,
+            pending_delete_session_idx: view.pending_delete_session_idx,
+            show_subagent_picker: view.show_subagent_picker,
+            subagent_picker_index: view.subagent_picker_index,
+            show_context_modal: view.show_context_modal,
+            show_status_modal: view.show_status_modal,
+            show_stats_modal: view.show_stats_modal,
+            show_session_modal: view.show_session_modal,
+            stats_usage_history: view.stats_usage_history.clone(),
+            show_update_prompt: view.show_update_prompt,
+            update_check: view.update_check,
+            update_prompt_index: view.update_prompt_index,
+            show_mcp_config: view.show_mcp_config,
+            mcp_picker_index: view.mcp_picker_index,
+            mcp_edit_state: view.mcp_edit_state.clone(),
+            modal_scroll_row: view.modal_scroll_row,
+            tool_confirmation_selected: view.tool_confirmation_selected,
         }
     }
 }
 
 #[allow(dead_code)]
 impl RenderSnapshot {
-    pub(crate) fn new(state: &rustcode::app::AppState) -> Self {
-        let capture_subagents = state.show_context_modal || state.show_subagent_picker;
-        let subagents = capture_subagents
-            .then(|| {
-                state
-                    .subagents
-                    .iter()
-                    .map(SubAgentSnapshot::new)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let selected_subagent = state.selected_subagent_id.and_then(|id| {
-            let agent = state.subagents.iter().find(|agent| agent.id == id)?;
-            Some(SelectedSubagentSnapshot {
-                #[cfg(test)]
-                id: agent.id,
-                name: agent.name.clone(),
-                history: Arc::clone(&agent.history),
-                status: agent.status,
-                active_turn: agent.active_turn,
-                parent_id: agent.parent_id,
-            })
-        });
+    pub(crate) fn new(view: &RenderState) -> Self {
+        let selected_subagent =
+            view.selected_subagent
+                .as_ref()
+                .map(|agent| SelectedSubagentSnapshot {
+                    #[cfg(test)]
+                    id: agent.id,
+                    name: agent.name.clone(),
+                    history: Arc::clone(&agent.history),
+                    status: agent.status,
+                    active_turn: agent.active_turn,
+                    parent_id: agent.parent_id,
+                });
 
         Self {
-            revision: state.render_revision,
-            input_buffer: state.input_buffer.clone(),
-            ctrl_c_exit_armed: state.ctrl_c_exit_armed(),
-            cursor_position: state.cursor_position,
-            composer_selection_anchor: state.composer_selection_anchor,
-            history: state.history.snapshot(),
-            history_display_start: state.history_display_start,
-            current_response: Arc::clone(&state.current_response),
-            current_token_usage: state.current_token_usage.clone(),
-            response_time: state.response_time,
-            current_thought_time_ms: state.current_thought_time_ms,
-            current_thought_tokens: state.current_thought_tokens,
-            current_thought_started_at: state.current_thought_started_at,
-            model_quota_remaining: state.model_quota_remaining,
-            pending_queue: state.pending_queue.clone(),
-            pending_steers: state
-                .pending_steers
+            revision: view.revision,
+            input_buffer: view.input_buffer.clone(),
+            ctrl_c_exit_armed: view.ctrl_c_exit_armed,
+            cursor_position: view.cursor_position,
+            composer_selection_anchor: view.composer_selection_anchor,
+            history: view.history.snapshot(),
+            history_display_start: view.history_display_start,
+            current_response: Arc::clone(&view.current_response),
+            current_token_usage: view.current_token_usage.clone(),
+            response_time: view.response_time,
+            current_thought_time_ms: view.current_thought_time_ms,
+            current_thought_tokens: view.current_thought_tokens,
+            current_thought_started_at: view.current_thought_started_at,
+            model_quota_remaining: view.model_quota_remaining,
+            pending_queue: view.pending_queue.clone(),
+            pending_steers: view.pending_steers.clone(),
+            draft_submit_mode: view.draft_submit_mode,
+            steering_interruptible: view.steering_interruptible,
+            steering_escape_will_interrupt: view.steering_escape_will_interrupt,
+            status: view.status.clone(),
+            active_suggestion_index: view.active_suggestion_index,
+            dismissed_completion: view.dismissed_completion.clone(),
+            config: view.config.clone(),
+            model_name: view.model_name.clone(),
+            api_base_url: view.api_base_url.clone(),
+            active_session_id: view.active_session_id.clone(),
+            cwd_and_branch: view.cwd_and_branch.clone(),
+            home_path: view.home_path.clone(),
+            overlay: OverlaySnapshot::new(view),
+            generation_start_time: view.generation_start_time,
+            pending_tool_confirmation: view.pending_tool_confirmation.clone(),
+            pending_question: view.pending_question.clone(),
+            pending_question_chain_len: view.pending_question_chain_len,
+            pending_question_chain_position: view.pending_question_chain_position,
+            pending_question_chain_answered: view.pending_question_chain_answered,
+            running_tools: view.running_tools.clone(),
+            background_tasks: view.background_tasks.clone(),
+            waiting_for_background_terminal: view.waiting_for_background_terminal,
+            live_tool_calls: Arc::clone(&view.live_tool_calls),
+            stream_tracker: view.stream_tracker.clone(),
+            auto_confirm: view.auto_confirm,
+            verbosity: view.verbosity.clone(),
+            delegation_active: view.delegation_active,
+            modal_open: view.modal_open(),
+            last_copy_text: view.last_copy_text.clone(),
+            transient_notice: view.transient_notice.clone(),
+            expanded_thoughts: view.expanded_thoughts.clone(),
+            agent_mode: view.agent_mode,
+            subagents: view
+                .subagents
                 .iter()
-                .map(|steer| steer.text.clone())
-                .collect(),
-            draft_submit_mode: state.draft_submit_mode,
-            steering_interruptible: state.can_accept_steer(),
-            steering_escape_will_interrupt: state.can_accept_steer()
-                && !state.modal_open()
-                && state.completion_identity().is_none()
-                && state.sel_start.is_none()
-                && state.sel_end.is_none(),
-            status: state.status.clone(),
-            active_suggestion_index: state.active_suggestion_index,
-            dismissed_completion: state.dismissed_completion.clone(),
-            config: state.config.clone(),
-            model_name: state.model_name.clone(),
-            api_base_url: state.api_base_url.clone(),
-            active_session_id: state.active_session_id.clone(),
-            cwd_and_branch: state.cwd_and_branch.clone(),
-            home_path: std::env::var("HOME").ok(),
-            overlay: OverlaySnapshot::new(state),
-            generation_start_time: state.generation_start_time,
-            pending_tool_confirmation: state.pending_tool_confirmation.clone(),
-            pending_question: state.pending_question.clone(),
-            pending_question_chain_len: state.question_chain_len(),
-            pending_question_chain_position: state.question_chain_position(),
-            pending_question_chain_answered: state.question_chain_answered(),
-            running_tools: state.running_tools.clone(),
-            background_tasks: rustcode::controller::background_task_snapshots(
-                &state.active_session_id,
-            ),
-            waiting_for_background_terminal: state.background_turn_context.is_some(),
-            live_tool_calls: Arc::clone(&state.live_tool_calls),
-            stream_tracker: state.stream_tracker.clone(),
-            auto_confirm: state.auto_confirm,
-            verbosity: state.verbosity.clone(),
-            delegation_active: state.delegation_active,
-            modal_open: state.modal_open(),
-            last_copy_text: state.last_copy_text.clone(),
-            transient_notice: state.active_transient_notice().map(str::to_owned),
-            expanded_thoughts: state.expanded_thoughts.clone(),
-            agent_mode: state.agent_mode,
-            subagents,
-            selected_subagent_id: state.selected_subagent_id,
-            active_context_window: state.active_context_window(),
-            active_model_profile: state.active_model_profile(),
-            active_tool_protocol: state.active_tool_protocol(),
-            command_suggestion: state.get_command_suggestion(),
+                .map(SubAgentSnapshot::new)
+                .collect::<Vec<_>>(),
+            selected_subagent_id: view.selected_subagent_id,
+            active_context_window: view.active_context_window,
+            active_model_profile: view.active_model_profile.clone(),
+            active_tool_protocol: view.active_tool_protocol,
+            command_suggestion: view.command_suggestion.clone(),
             selected_subagent,
         }
     }
@@ -566,7 +545,7 @@ pub(crate) struct SubAgentSnapshot {
 }
 
 impl SubAgentSnapshot {
-    fn new(agent: &SubAgent) -> Self {
+    fn new(agent: &SubAgentView) -> Self {
         let last_message = agent
             .history
             .last()
@@ -642,36 +621,51 @@ impl SelectedSubagentSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::render_snapshot;
-    use rustcode::app::AppState;
-    use rustcode::controller::{AppStatus, ChatMessage, SubAgent, SubAgentStatus, UiRect};
+    use super::{render_snapshot, set_current_response};
+    use rustcode::controller::{
+        AppStatus, ChatMessage, RenderState, SubAgentStatus, SubAgentView, TaskDisplay,
+    };
     use std::sync::Arc;
+
+    fn subagent(
+        id: u32,
+        name: &str,
+        task: &str,
+        history: Vec<ChatMessage>,
+        status: SubAgentStatus,
+        active_turn: bool,
+        parent_id: Option<u32>,
+    ) -> SubAgentView {
+        SubAgentView {
+            id,
+            name: name.to_owned(),
+            task: task.to_owned(),
+            history: Arc::new(history),
+            status,
+            active_turn,
+            parent_id,
+        }
+    }
 
     #[test]
     fn render_snapshot_captures_ui_state() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.input_buffer = "draft input".to_owned();
         state.cursor_position = state.input_buffer.len();
         state.status = AppStatus::Streaming;
         state.history.push(ChatMessage::new("user", "root message"));
         state.history_display_start = 1;
-        state.replace_current_response("streamed response");
+        set_current_response(&mut state, "streamed response");
         state.show_model_picker = true;
-        state.subagents.push(SubAgent {
-            id: 7,
-            name: "reviewer".to_owned(),
-            task: "review the patch".to_owned(),
-            model: Some("test-model".to_owned()),
-            history: Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
-            status: SubAgentStatus::Running,
-            active_turn: true,
-            parent_id: Some(3),
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
+        state.selected_subagent = Some(subagent(
+            7,
+            "reviewer",
+            "review the patch",
+            vec![ChatMessage::new("assistant", "subagent response")],
+            SubAgentStatus::Running,
+            true,
+            Some(3),
+        ));
         state.selected_subagent_id = Some(7);
 
         let snapshot = render_snapshot(&state);
@@ -695,84 +689,22 @@ mod tests {
     }
 
     #[test]
-    fn render_metrics_reject_stale_revision() {
-        let mut state = AppState::new();
-        let revision = render_snapshot(&state).revision();
-        let input_area = UiRect::new(2, 3, 40, 4);
-
-        assert!(state.publish_render_metrics(revision, 12, input_area));
-        assert_eq!(state.conversation_content_height, 12);
-        assert_eq!(state.input_text_area, Some(input_area));
-
-        state.request_redraw();
-        assert!(!state.publish_render_metrics(revision, 99, UiRect::default()));
-        assert_eq!(state.conversation_content_height, 12);
-        assert_eq!(state.input_text_area, Some(input_area));
-    }
-
-    #[test]
-    fn render_snapshot_shares_response_storage_and_stays_stable_after_mutation() {
-        let mut state = AppState::new();
-        state.append_current_response("initial response");
-
-        let snapshot = render_snapshot(&state);
-        assert!(std::ptr::eq(
-            snapshot.current_response().as_ptr(),
-            state.current_response.as_str().as_ptr()
-        ));
-
-        state.append_current_response(" after snapshot");
-
-        assert_eq!(snapshot.current_response(), "initial response");
-        assert_eq!(
-            state.current_response.as_str(),
-            "initial response after snapshot"
-        );
-    }
-
-    #[test]
-    fn response_mutations_invalidate_render_metrics() {
-        let mut state = AppState::new();
-
-        let append_revision = render_snapshot(&state).revision();
-        state.append_current_response("streamed output");
-        assert_eq!(state.current_response.as_str(), "streamed output");
-        assert!(!state.publish_render_metrics(append_revision, 12, UiRect::default()));
-
-        let clear_revision = render_snapshot(&state).revision();
-        state.clear_current_response();
-        assert!(state.current_response.is_empty());
-        assert!(!state.publish_render_metrics(clear_revision, 12, UiRect::default()));
-    }
-
-    #[test]
     fn render_snapshot_captures_live_and_modal_render_data() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.pending_queue = vec!["queued prompt".to_owned()];
         state.status = AppStatus::Streaming;
-        state.active_turn_steerable_session = Some(state.active_session_id.clone());
-        state.pending_steers = vec![
-            rustcode::controller::PendingSteer {
-                session_id: state.active_session_id.clone(),
-                text: "first steer".to_owned(),
-            },
-            rustcode::controller::PendingSteer {
-                session_id: state.active_session_id.clone(),
-                text: "second steer".to_owned(),
-            },
-        ];
+        state.steering_interruptible = true;
+        state.pending_steers = vec!["first steer".to_owned(), "second steer".to_owned()];
         state.draft_submit_mode = rustcode::controller::DraftSubmitMode::Queue;
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
-        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-            rustcode::controller::LiveToolCall::new(
-                "live",
-                None,
-                "run_command",
-                "Ran",
-                "cargo test",
-            ),
-        );
+        Arc::make_mut(&mut state.live_tool_calls).push(rustcode::controller::LiveToolCall::new(
+            "live",
+            None,
+            "run_command",
+            "Ran",
+            "cargo test",
+        ));
         state.current_thought_time_ms = 42;
         state.current_thought_tokens = 7;
         state.pending_tool_confirmation = Some(vec![rustcode::controller::ToolConfirmation {
@@ -798,7 +730,10 @@ mod tests {
             snapshot.draft_submit_mode(),
             rustcode::controller::DraftSubmitMode::Queue
         );
-        assert!(!snapshot.steering_interruptible());
+        // The snapshot projects the view's resolved turn flags; the engine
+        // decides them (`controller::render_state`), see
+        // `pending_confirmation_blocks_steering`.
+        assert!(snapshot.steering_interruptible());
         assert_eq!(snapshot.dismissed_completion(), Some("command:/help"));
         assert_eq!(snapshot.running_tools(), ["run_command"]);
         assert_eq!(snapshot.live_tool_calls()[0].target, "cargo test");
@@ -812,42 +747,55 @@ mod tests {
     }
 
     #[test]
-    fn render_snapshot_marks_an_active_steerable_turn_interruptible() {
-        let mut state = AppState::new();
+    fn render_snapshot_reports_steering_interruptibility_from_the_view() {
+        let mut state = RenderState::new();
         state.status = AppStatus::Streaming;
-        state.active_turn_steerable_session = Some(state.active_session_id.clone());
+        assert!(!render_snapshot(&state).steering_interruptible());
 
+        state.steering_interruptible = true;
         assert!(render_snapshot(&state).steering_interruptible());
     }
 
     #[test]
-    fn render_snapshot_keeps_selected_subagent_and_live_tool_storage_stable() {
-        let mut state = AppState::new();
-        state.subagents.push(SubAgent {
-            id: 7,
-            name: "reviewer".to_owned(),
-            task: "review the patch".to_owned(),
-            model: None,
-            history: Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
-            status: SubAgentStatus::Running,
-            active_turn: true,
-            parent_id: None,
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
-        state.selected_subagent_id = Some(7);
-        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-            rustcode::controller::LiveToolCall::new(
-                "live",
-                None,
-                "run_command",
-                "Ran",
-                "cargo test",
-            ),
+    fn render_snapshot_shares_response_storage_and_stays_stable_after_mutation() {
+        let mut state = RenderState::new();
+        set_current_response(&mut state, "initial response");
+
+        let snapshot = render_snapshot(&state);
+        assert!(std::ptr::eq(
+            snapshot.current_response().as_ptr(),
+            state.current_response.as_str().as_ptr()
+        ));
+
+        Arc::make_mut(&mut state.current_response).push_str(" after snapshot");
+
+        assert_eq!(snapshot.current_response(), "initial response");
+        assert_eq!(
+            state.current_response.as_str(),
+            "initial response after snapshot"
         );
+    }
+
+    #[test]
+    fn render_snapshot_keeps_selected_subagent_and_live_tool_storage_stable() {
+        let mut state = RenderState::new();
+        state.selected_subagent = Some(subagent(
+            7,
+            "reviewer",
+            "review the patch",
+            vec![ChatMessage::new("assistant", "subagent response")],
+            SubAgentStatus::Running,
+            true,
+            None,
+        ));
+        state.selected_subagent_id = Some(7);
+        Arc::make_mut(&mut state.live_tool_calls).push(rustcode::controller::LiveToolCall::new(
+            "live",
+            None,
+            "run_command",
+            "Ran",
+            "cargo test",
+        ));
 
         let snapshot = render_snapshot(&state);
         let selected = snapshot.selected_subagent().expect("selected subagent");
@@ -855,60 +803,56 @@ mod tests {
         assert_eq!(selected.history()[0].content, "subagent response");
         assert_eq!(
             selected.history().as_ptr(),
-            state.subagents[0].history.as_ptr()
+            state.selected_subagent.as_ref().unwrap().history.as_ptr()
         );
 
-        Arc::make_mut(&mut state.subagents[0].history)
+        Arc::make_mut(&mut state.selected_subagent.as_mut().unwrap().history)
             .push(ChatMessage::new("assistant", "later response"));
         assert_eq!(selected.history().len(), 1);
-        assert_eq!(state.subagents[0].history.len(), 2);
+        assert_eq!(state.selected_subagent.as_ref().unwrap().history.len(), 2);
         assert_eq!(
             snapshot.live_tool_calls.as_ptr(),
             state.live_tool_calls.as_ptr()
         );
 
-        state.append_live_tool_output("live", b"new output", false);
+        Arc::make_mut(&mut state.live_tool_calls)[0]
+            .output
+            .push_back(rustcode::controller::LiveToolOutputChunk {
+                stderr: false,
+                text: "new output".into(),
+            });
         assert!(snapshot.live_tool_calls()[0].output.is_empty());
         assert_eq!(state.live_tool_calls[0].output[0].text, "new output");
     }
 
     #[test]
     fn subagent_snapshots_keep_picker_metadata_and_selected_history() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.show_subagent_picker = true;
-        state.subagents.push(SubAgent {
-            id: 1,
-            name: "background".to_owned(),
-            task: "check the background task".to_owned(),
-            model: None,
-            history: Arc::new(vec![ChatMessage::new("assistant", "background result")]),
-            status: SubAgentStatus::Completed,
-            active_turn: false,
-            parent_id: None,
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
-        state.subagents.push(SubAgent {
-            id: 2,
-            name: "selected".to_owned(),
-            task: "inspect the selected context".to_owned(),
-            model: None,
-            history: Arc::new(vec![
-                ChatMessage::new("user", "inspect"),
-                ChatMessage::new("assistant", "selected result"),
-            ]),
-            status: SubAgentStatus::Running,
-            active_turn: true,
-            parent_id: Some(1),
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
+        state.subagents = vec![
+            subagent(
+                1,
+                "background",
+                "check the background task",
+                vec![ChatMessage::new("assistant", "background result")],
+                SubAgentStatus::Completed,
+                false,
+                None,
+            ),
+            subagent(
+                2,
+                "selected",
+                "inspect the selected context",
+                vec![
+                    ChatMessage::new("user", "inspect"),
+                    ChatMessage::new("assistant", "selected result"),
+                ],
+                SubAgentStatus::Running,
+                true,
+                Some(1),
+            ),
+        ];
+        state.selected_subagent = Some(state.subagents[1].clone());
         state.selected_subagent_id = Some(2);
 
         let snapshot = render_snapshot(&state);
@@ -920,61 +864,15 @@ mod tests {
         assert_eq!(selected.history()[1].content, "selected result");
     }
 
-    #[test]
-    fn subagent_snapshot_omits_picker_metadata_when_picker_surfaces_are_hidden() {
-        let mut state = AppState::new();
-        state.subagents.push(SubAgent {
-            id: 1,
-            name: "background".to_owned(),
-            task: "check the background task".to_owned(),
-            model: None,
-            history: Arc::new(vec![ChatMessage::new("assistant", "background result")]),
-            status: SubAgentStatus::Completed,
-            active_turn: false,
-            parent_id: None,
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
-
-        let snapshot = render_snapshot(&state);
-
-        assert!(snapshot.subagents().is_empty());
-    }
-
-    #[test]
-    fn render_snapshot_omits_inactive_overlay_payloads() {
-        let mut state = AppState::new();
-        state
-            .history_picker_sessions
-            .push(rustcode::controller::SessionMeta {
-                path: std::path::PathBuf::from("session.json"),
-                title: "A session title".to_owned(),
-                message_count: 3,
-                when: "now".to_owned(),
-                workspace_cwd: None,
-            });
-        state.mcp_edit_state = Some(rustcode::controller::McpEditState {
-            is_add: true,
-            edit_index: None,
-            name_input: "server".to_owned(),
-            command_input: "command".to_owned(),
-            args_input: "--flag".to_owned(),
-            active_field: 0,
-            cursor_pos: 0,
-        });
-
-        let snapshot = render_snapshot(&state);
-
-        assert!(snapshot.history_picker_sessions().is_empty());
-        assert!(snapshot.mcp_edit_state().is_none());
-    }
+    // Whether an overlay's payload is captured at all is the engine's call,
+    // not the bridge's: `controller::render_state` only clones the session
+    // list, the usage history, and the MCP buffer while their overlay is
+    // open, so a frame never pays for a modal nobody is looking at. See
+    // `controller::tests::render_state_tests::overlay_payloads_are_captured_only_while_their_overlay_is_open`.
 
     #[test]
     fn render_snapshot_captures_active_overlay_payloads() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.show_history_picker = true;
         state.show_mcp_config = true;
         state
@@ -1011,24 +909,25 @@ mod tests {
     }
 
     #[test]
-    fn input_and_cursor_mutations_invalidate_render_metrics() {
-        let mut state = AppState::new();
-        let input_revision = render_snapshot(&state).revision();
-        state.insert_char('x');
-        assert!(!state.publish_render_metrics(input_revision, 1, UiRect::default()));
+    fn render_snapshot_reports_background_tasks_from_the_view() {
+        let mut state = RenderState::new();
+        assert!(snapshot_has_no_tasks(&render_snapshot(&state)));
+        assert!(!state.waiting_for_background_terminal);
 
-        let cursor_revision = render_snapshot(&state).revision();
-        state.move_cursor_to_start();
-        assert!(!state.publish_render_metrics(cursor_revision, 1, UiRect::default()));
+        state.background_tasks = vec![TaskDisplay {
+            id: "task-1".to_owned(),
+            command: "cargo test".to_owned(),
+            started_at: std::time::Instant::now(),
+            child_pid: Some(42),
+        }];
+        state.waiting_for_background_terminal = true;
 
-        state.pending_queue.push("queued".to_owned());
-        let recall_revision = render_snapshot(&state).revision();
-        state.composer().pop_queued_prompt();
-        assert!(!state.publish_render_metrics(recall_revision, 1, UiRect::default()));
+        let snapshot = render_snapshot(&state);
+        assert_eq!(snapshot.background_tasks().len(), 1);
+        assert!(snapshot.waiting_for_background_terminal());
+    }
 
-        state.input_buffer = "/he".to_owned();
-        let autocomplete_revision = render_snapshot(&state).revision();
-        state.insert_char('l');
-        assert!(!state.publish_render_metrics(autocomplete_revision, 1, UiRect::default()));
+    fn snapshot_has_no_tasks(snapshot: &super::RenderSnapshot) -> bool {
+        snapshot.background_tasks().is_empty()
     }
 }

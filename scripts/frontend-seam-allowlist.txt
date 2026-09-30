@@ -31,15 +31,14 @@ rustcode_tool_protocol::find_closing_tool_fence
 rustcode_tool_protocol::resolve_tool_calls
 
 # --- Convergence targets. Each entry removed = one step toward #1431. ---
-# Shared state access: the render layer's only remaining `rustcode::app`
-# reference is `AppState` itself — the snapshot bridge (render_snapshot.rs)
-# plus the tests that construct one. Converging it means a narrow controller
-# view in place of the 79 fields the bridge reads today, which is the
-# remaining step for #1442 step 1. Every shared *type* (AppStatus, ChatMessage,
-# History, LiveToolCall, StreamTracker, SubAgent, ToolConfirmation, McpEditState,
-# UiRect, ApprovalDecision, QuestionAnswer, ToolCallRef, ToolResultRecord,
-# PendingSteer) is already re-exported by rustcode::controller.
-rustcode::app
+# Shared state access converged (#1442, #1431): the render layer renders from
+# `controller::RenderState`, a per-frame owned projection built by
+# `controller::render_state`, so nothing under the seam names `AppState` and
+# `rustcode::app` is gone from this file. Every shared *type* (AppStatus,
+# ChatMessage, History, LiveToolCall, StreamTracker, SubAgentStatus,
+# ToolConfirmation, McpEditState, UiRect, ApprovalDecision, QuestionAnswer,
+# ToolCallRef, ToolResultRecord, PendingSteer) is re-exported by
+# rustcode::controller alongside the view.
 # Composer assistance + activity display converge in #1442 (controller/input:
 # classify_*, ActivityKind/Snapshot, suggestion, completion, file mentions,
 # help text; input driving already lives in runtime/).
