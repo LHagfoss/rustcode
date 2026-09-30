@@ -57,6 +57,15 @@ pub struct InlineTerminal<B: Backend> {
     last_cursor_position: Position,
     needs_clear: bool,
     clear_from_y: Option<u16>,
+    /// Lowest screen row that may still hold stale transient viewport rows.
+    ///
+    /// Unlike `clear_from_y` (pending resize state consumed by the next
+    /// draw), this survives draws: viewport growth, shrinks, and resizes can
+    /// leave previously painted rows outside the current viewport, and the
+    /// exit erase must cover them without touching committed scrollback
+    /// above. Reset whenever rows are known clean: history commits (rows
+    /// above become committed scrollback), full-screen clears, and erases.
+    transient_top: Option<u16>,
 }
 
 impl<B> InlineTerminal<B>
@@ -94,6 +103,7 @@ where
             last_cursor_position: cursor,
             needs_clear: false,
             clear_from_y: None,
+            transient_top: None,
         }
     }
 
@@ -130,7 +140,60 @@ where
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.needs_clear = false;
+        self.transient_top = None;
         Ok(())
+    }
+
+    /// Erase the transient viewport projection, preserving committed scrollback.
+    ///
+    /// Shutdown calls this before printing the exit handoff: it clears from
+    /// the lowest row that may hold stale transient content — the live
+    /// viewport top, any pending resize row, the tracked historical minimum,
+    /// or the last known composer row — down to the bottom of the screen.
+    /// Committed native scrollback above that anchor is left intact, and the
+    /// handoff prints where the projection was.
+    ///
+    /// The erase is exact and idempotent: it collapses the viewport and
+    /// clears all tracking, so repeats (second restore, `Drop`, post-update
+    /// output) clear nothing. When the model holds no projection at all, a
+    /// stale `fallback_y` is ignored so output printed after a restore (for
+    /// example the `--update` result) is never wiped.
+    pub fn erase_transient_projection(&mut self, fallback_y: Option<u16>) -> Result<(), B::Error> {
+        let screen_height = self.backend.size()?.height;
+        if screen_height == 0 {
+            return Ok(());
+        }
+        let mut top = self.viewport_area.y;
+        let mut dirty = !self.viewport_area.is_empty();
+        if let Some(y) = self.clear_from_y {
+            top = top.min(y);
+            dirty = true;
+        }
+        if let Some(y) = self.transient_top {
+            top = top.min(y);
+            dirty = true;
+        }
+        if !dirty {
+            return Ok(());
+        }
+        if let Some(y) = fallback_y.filter(|&y| y < screen_height) {
+            top = top.min(y);
+        }
+        if top >= screen_height {
+            // The tracked rows scrolled entirely off-screen; nothing visible
+            // left to erase.
+            return Ok(());
+        }
+        self.backend.set_cursor_position(Position::new(0, top))?;
+        self.backend.clear_region(ClearType::AfterCursor)?;
+        self.buffers[0].reset();
+        self.buffers[1].reset();
+        self.needs_clear = false;
+        self.clear_from_y = None;
+        self.transient_top = None;
+        self.viewport_area.height = 0;
+        self.viewport_area.y = top;
+        self.backend.flush()
     }
 
     /// Clear the entire terminal screen and reset the viewport to the origin.
@@ -142,6 +205,7 @@ where
         self.last_cursor_position = Position::new(0, 0);
         self.needs_clear = false;
         self.clear_from_y = None;
+        self.transient_top = None;
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.backend.flush()
@@ -169,6 +233,7 @@ where
                     prev.min(old_y).min(self.viewport_area.y)
                 });
             self.clear_from_y = Some(clear_y);
+            self.transient_top = Some(self.transient_top.map_or(clear_y, |prev| prev.min(clear_y)));
             self.needs_clear = true;
             self.resize_buffers();
             self.buffers[0].reset();
@@ -202,6 +267,18 @@ where
             self.scroll_screen_up(amount)?;
             area.y = self.screen_size.height.saturating_sub(area.height);
         }
+
+        // Track the lowest row the transient projection may occupy so the
+        // exit erase covers viewport growth and scrolls, not just the final
+        // viewport top. Draws only ever move the viewport up (growth scroll)
+        // within transient rows, so extending the minimum here can never
+        // reach committed scrollback above.
+        self.transient_top = Some(
+            self.transient_top
+                .map_or(area.y.min(self.viewport_area.y), |prev| {
+                    prev.min(area.y).min(self.viewport_area.y)
+                }),
+        );
 
         if area != self.viewport_area || self.needs_clear {
             let clear_at = if self.viewport_area.is_empty() {
@@ -296,6 +373,12 @@ where
             y: drawn_height as u16,
             ..self.viewport_area
         });
+        // Committed lines now own every row above the viewport; previously
+        // tracked minima would point into scrollback, so the exit erase must
+        // anchor at the live viewport from here on. The same holds for a
+        // resize pending-clear: clamp it below the committed rows.
+        self.transient_top = None;
+        self.clear_from_y = self.clear_from_y.map(|y| y.max(self.viewport_area.y));
 
         self.backend
             .set_cursor_position(self.last_cursor_position)?;
@@ -595,6 +678,167 @@ mod tests {
                 .collect::<String>(),
             "Hello"
         );
+    }
+
+    #[test]
+    fn erase_covers_tracked_minimum_after_resize_without_redraw() {
+        let backend = TestBackend::new(40, 20);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .insert_before(2, |buffer| {
+                buffer.set_string(0, 0, "committed", ratatui::style::Style::default());
+            })
+            .unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
+            })
+            .unwrap();
+        // Grow scrollback, repaint, then resize without a redraw: the old
+        // exit anchor (live viewport top) would miss rows 16..23.
+        terminal.insert_before(14, |_| {}).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
+            })
+            .unwrap();
+        terminal.backend_mut().resize(40, 28);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.transient_top, Some(16));
+
+        terminal.erase_transient_projection(None).unwrap();
+
+        let committed: String = (0..9)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect();
+        assert_eq!(committed, "committed");
+        let stale: String = (0..40)
+            .map(|column| terminal.backend().buffer()[(column, 16)].symbol())
+            .collect();
+        assert!(
+            stale.trim().is_empty(),
+            "stale viewport row survived: {stale:?}"
+        );
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .skip(16 * 40)
+                .all(|cell| cell.symbol().trim().is_empty())
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 16, 40, 0));
+    }
+
+    #[test]
+    fn erase_after_late_commits_preserves_all_scrollback() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .insert_before(2, |buffer| {
+                buffer.set_string(0, 0, "first", ratatui::style::Style::default());
+            })
+            .unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("stale"), frame.area());
+            })
+            .unwrap();
+        // Late history commits move the viewport down and turn the rows
+        // above into scrollback: the tracked minimum must reset instead of
+        // pointing the exit erase at committed lines.
+        terminal
+            .insert_before(3, |buffer| {
+                buffer.set_string(0, 0, "second", ratatui::style::Style::default());
+            })
+            .unwrap();
+        assert_eq!(terminal.transient_top, None);
+        terminal.draw_height(4, |_| {}).unwrap();
+
+        terminal.erase_transient_projection(None).unwrap();
+
+        let first: String = (0..5)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect();
+        assert_eq!(first, "first");
+        let second: String = (0..6)
+            .map(|column| terminal.backend().buffer()[(column, 2)].symbol())
+            .collect();
+        assert_eq!(second, "second");
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .skip(5 * 40)
+                .all(|cell| cell.symbol().trim().is_empty())
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 5, 40, 0));
+    }
+
+    #[test]
+    fn erase_with_live_projection_keeps_scrollback_above() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .insert_before(2, |buffer| {
+                buffer.set_string(0, 0, "kept", ratatui::style::Style::default());
+            })
+            .unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("gone"), frame.area());
+            })
+            .unwrap();
+
+        // A composer row inside the live viewport must not move the anchor
+        // above the tracked projection.
+        terminal.erase_transient_projection(Some(4)).unwrap();
+
+        let kept: String = (0..4)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect();
+        assert_eq!(kept, "kept");
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .skip(2 * 40)
+                .all(|cell| cell.symbol().trim().is_empty())
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 2, 40, 0));
+    }
+
+    #[test]
+    fn erase_is_idempotent_and_ignores_stale_fallback_once_clean() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("live"), frame.area());
+            })
+            .unwrap();
+        terminal.erase_transient_projection(Some(3)).unwrap();
+        assert_eq!(terminal.area(), Rect::new(0, 0, 40, 0));
+
+        // Simulate `--update` output printed after the restore, bypassing
+        // the (now collapsed) viewport model.
+        let mut cell = Cell::default();
+        cell.set_symbol("!");
+        terminal
+            .backend_mut()
+            .draw(std::iter::once((0u16, 0u16, &cell)))
+            .unwrap();
+
+        // A stale composer row from before the restore must not wipe it:
+        // with no tracked projection the erase is a no-op.
+        terminal.erase_transient_projection(Some(3)).unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "!");
+        assert_eq!(terminal.area(), Rect::new(0, 0, 40, 0));
     }
 
     #[test]
