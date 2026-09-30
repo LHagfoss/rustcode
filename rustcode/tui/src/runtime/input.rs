@@ -1560,6 +1560,19 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    ui::ComposerAction::ToggleExpand => {
+                        let mut state = app_state.lock().await;
+                        let width = terminal_runtime.terminal().area().width;
+                        let candidates = {
+                            let snapshot = ui::render_snapshot::render_snapshot(
+                                &rustcode::controller::render_state(&state),
+                            );
+                            ui::collapsible_tool_indices(&snapshot, width)
+                        };
+                        rustcode::controller::toggle_expanded_thought(&mut state, &candidates);
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     ui::ComposerAction::Unhandled => {}
                 }
 
@@ -1796,7 +1809,7 @@ pub(super) async fn handle_app_event(
                         } else if (alt && c == 'd') || c == '∂' {
                             s.delete_word_forward();
                             s.reset_suggestion_cycle();
-                        } else if ctrl && c == 'o' {
+                        } else if ctrl && c == 'j' {
                             s.insert_char('\n');
                             s.reset_suggestion_cycle();
                         } else if ctrl && c == 'a' {

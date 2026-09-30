@@ -884,6 +884,31 @@ pub(super) fn tool_group_header(title: &str, success: bool, show_picker: bool) -
     ])
 }
 
+/// Expand affordance appended to a collapsed body row. Reserved out of the
+/// wrap width so it always lands on the entry's own first row (#1541).
+pub(super) const EXPAND_HINT: &str = " (ctrl+o to expand)";
+
+/// Display width the expand hint occupies once appended to a row.
+pub(super) const EXPAND_HINT_WIDTH: u16 = EXPAND_HINT.len() as u16;
+
+fn expand_hint_span(show_picker: bool) -> Span<'static> {
+    Span::styled(
+        EXPAND_HINT,
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+    )
+}
+
+/// Append the expand hint to the first row of an entry's own block.
+///
+/// The hint must never be appended to the last wrapped line: that line is
+/// followed by the next tool row, so the hint reads as annotating *that* row
+/// and splits the `Ran` group (#1541).
+fn append_expand_hint(lines: &mut [Line<'static>], show_picker: bool) {
+    if let Some(first) = lines.first_mut() {
+        first.spans.push(expand_hint_span(show_picker));
+    }
+}
+
 pub(super) fn tool_child_line(
     entry: &ToolTranscriptEntry,
     first: bool,
@@ -920,12 +945,6 @@ pub(super) fn tool_child_line(
             ));
         }
     }
-    if show_hint {
-        spans.push(Span::styled(
-            " (ctrl+o to expand)",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-        ));
-    }
     let mut lines = Vec::new();
     let continuation = Span::styled(
         "    ",
@@ -934,10 +953,20 @@ pub(super) fn tool_child_line(
     push_wrapped_with_continuation(
         &mut lines,
         spans,
-        (width as usize).max(10),
+        wrap_width(width, show_hint),
         Some(continuation),
     );
+    if show_hint {
+        append_expand_hint(&mut lines, show_picker);
+    }
     lines
+}
+
+/// Wrap width for a row that carries the expand hint, leaving room for the
+/// hint so the row it annotates is the row the hint lands on.
+fn wrap_width(width: u16, show_hint: bool) -> usize {
+    let reserved = if show_hint { EXPAND_HINT_WIDTH } else { 0 };
+    (width.saturating_sub(reserved) as usize).max(10)
 }
 
 /// Maximum wrapped visual lines for a committed shell command preview,
@@ -993,20 +1022,31 @@ fn truncate_wrapped_lines(mut lines: Vec<Line<'static>>, max_lines: usize) -> Ve
 pub(super) fn command_child_lines(
     entry: &ToolTranscriptEntry,
     first: bool,
+    show_hint: bool,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     // Collapse multi-line / chained commands to a single-line preview before
     // highlighting, so `echo a; echo b; ...` renders as one dimmable row
     // instead of N source lines each wrapping again.
-    let preview =
-        collapse_command_preview(&entry.target, (width as usize).saturating_sub(12).max(20));
+    let preview = collapse_command_preview(
+        &entry.target,
+        (width as usize)
+            .saturating_sub(
+                12 + if show_hint {
+                    EXPAND_HINT_WIDTH as usize
+                } else {
+                    0
+                },
+            )
+            .max(20),
+    );
     let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
     if commands.is_empty() {
         commands.push(Line::default());
     }
     let mut lines = Vec::with_capacity(commands.len());
-    let max_w = (width as usize).max(10);
+    let max_w = wrap_width(width, show_hint);
     for (command_index, command) in commands.into_iter().enumerate() {
         let mut spans = vec![Span::styled(
             if first && command_index == 0 {
@@ -1038,6 +1078,9 @@ pub(super) fn command_child_lines(
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
     let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
+    if show_hint {
+        append_expand_hint(&mut lines, show_picker);
+    }
     if !entry.success || entry.status == "running" {
         if let Some(line) = lines.last_mut() {
             line.spans.push(Span::styled(
@@ -1224,9 +1267,12 @@ fn render_tool_result_group_snapshot(
             if matches!(state.verbosity(), rustcode::controller::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
+                    // High verbosity renders the body inline, so these rows
+                    // never collapse and never carry the expand hint.
                     lines.extend(command_child_lines(
                         entry,
                         child_index == 0,
+                        false,
                         width,
                         show_picker,
                     ));
@@ -1278,21 +1324,13 @@ fn render_tool_result_group_snapshot(
                         && !is_expanded
                         && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Command {
-                        let mut child = command_child_lines(entry, first_child, width, show_picker);
-                        if show_hint {
-                            if let Some(last) = child.last_mut() {
-                                last.spans.push(Span::styled(
-                                    " (ctrl+o to expand)",
-                                    get_themed_style(
-                                        COLOR_MUTED(),
-                                        COLOR_BG(),
-                                        Modifier::ITALIC,
-                                        show_picker,
-                                    ),
-                                ));
-                            }
-                        }
-                        lines.extend(child);
+                        lines.extend(command_child_lines(
+                            entry,
+                            first_child,
+                            show_hint,
+                            width,
+                            show_picker,
+                        ));
                     } else {
                         lines.extend(tool_child_line(
                             entry,
@@ -1330,6 +1368,29 @@ fn render_tool_result_group_snapshot(
         index = entries.len();
     }
     lines
+}
+
+/// Message indices the expand key can act on, oldest first.
+///
+/// Derived from the same rules the renderer applies — a Command or generic
+/// Tool entry with a non-empty body, at low verbosity — so the hint and the
+/// key can never disagree about what is expandable (#1541). Already expanded
+/// entries stay in the list: they are what the next press collapses, so
+/// dropping them would make a second press skip past the entry it expanded.
+pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Vec<usize> {
+    if !matches!(state.verbosity(), rustcode::controller::Verbosity::Low) {
+        return Vec::new();
+    }
+    (0..state.active_history().len())
+        .filter(|&index| {
+            tool_transcript_entry(state, index, width, false).is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    ToolTranscriptKind::Tool | ToolTranscriptKind::Command
+                ) && !entry.body.is_empty()
+            })
+        })
+        .collect()
 }
 
 pub(super) fn render_committed_tool_result(
