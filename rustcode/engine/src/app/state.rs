@@ -1014,6 +1014,11 @@ impl AppState {
         Self::new_with_workspace_session(&workspace, None)
     }
 
+    /// YOLO is a session-only override; keep the user's saved restricted mode intact.
+    pub fn effective_sandbox_mode(&self) -> crate::config::SandboxMode {
+        self.config.sandbox_mode.effective(self.auto_confirm)
+    }
+
     pub(crate) fn effective_workspace_root(&self) -> Option<std::path::PathBuf> {
         self.workspace_root
             .clone()

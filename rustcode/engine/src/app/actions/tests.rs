@@ -1142,7 +1142,7 @@ async fn sandbox_command_shows_and_sets_the_effective_mode() {
 }
 
 #[tokio::test]
-async fn sandbox_trusted_mode_is_explicit_opt_in() {
+async fn sandbox_trusted_mode_can_be_selected_explicitly() {
     use crate::config::SandboxMode;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -1182,7 +1182,7 @@ async fn sandbox_command_without_an_argument_lists_every_mode_including_trusted(
         );
     }
     assert!(
-        content.contains("* /sandbox workspace_write"),
+        content.contains("* /sandbox trusted"),
         "the current mode must be marked: {content}"
     );
     assert!(

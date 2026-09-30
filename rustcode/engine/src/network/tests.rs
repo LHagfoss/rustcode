@@ -2160,7 +2160,8 @@ async fn workspace_boundary_rejections_skip_evidence_recovery_for_infra_guard() 
     let state = Arc::new(Mutex::new(AppState::new()));
     {
         let mut state = state.lock().await;
-        state.auto_confirm = true;
+        state.auto_confirm = false;
+        state.config.sandbox_mode = crate::config::SandboxMode::WorkspaceWrite;
         let api_base_url = state.api_base_url.clone();
         state.record_function_calling_support(&api_base_url, true);
     }
@@ -2382,21 +2383,9 @@ async fn session_01a0eed26_replay_injects_no_evidence_recovery() {
     {
         let mut state = state.lock().await;
         state.auto_confirm = true;
-        // The fidelity assertions below pin the *shell's* exit status, so the OS
-        // sandbox must not be allowed to decide them. Its filesystem view is
-        // platform-specific, and the two backends disagree in ways that have
-        // nothing to do with this session: macOS Seatbelt leaves `$TMPDIR`
-        // readable, while Linux bubblewrap mounts a fresh tmpfs over the host
-        // `/tmp` (masking this replay's artifact) and, on runners that block
-        // unprivileged user namespaces, `bwrap` fails closed with exit 1
-        // before the command runs at all. That is why the Linux run of this
-        // test failed on round 7 alone: every shell round reported the
-        // sandbox's failure, and round 7 is the only one that must succeed.
-        // Trusted mode leaves the recorded decision inputs a function of the
-        // command and the artifact content on every host. The sandbox keeps its
-        // own coverage in `tools::exec::sandbox::tests`, and the read-only
-        // boundary that makes round 2 interesting is enforced from the
-        // workspace root, not from the sandbox mode, so those refusals stand.
+        // Shell rounds use native process permissions so sandbox backend behavior
+        // cannot change the recorded artifact/exit-status inputs. Native searches
+        // explicitly opt into the original workspace boundary below.
         state.config.sandbox_mode = crate::config::SandboxMode::Trusted;
         let api_base_url = state.api_base_url.clone();
         state.record_function_calling_support(&api_base_url, true);
@@ -2409,6 +2398,16 @@ async fn session_01a0eed26_replay_injects_no_evidence_recovery() {
     let mut calls = 0usize;
 
     for round in &fixture.rounds {
+        {
+            let mut state = state.lock().await;
+            let native_search = round.calls.iter().all(|call| call.tool == "grep");
+            state.auto_confirm = !native_search;
+            state.config.sandbox_mode = if native_search {
+                crate::config::SandboxMode::WorkspaceWrite
+            } else {
+                crate::config::SandboxMode::Trusted
+            };
+        }
         let envelopes = round
             .calls
             .iter()
@@ -3680,6 +3679,7 @@ async fn repeated_compiler_diagnostics_trigger_the_budget() {
             false,
             Duration::from_secs(5),
             &cancel_token,
+            crate::config::SandboxMode::default(),
         )
         .await;
         assert!(
@@ -3774,6 +3774,7 @@ async fn originating_checker_failure_replay_preserves_budget_and_workspace() {
             false,
             Duration::from_secs(5),
             &cancel_token,
+            crate::config::SandboxMode::default(),
         )
         .await;
         assert!(
@@ -4368,7 +4369,12 @@ async fn test_run_compiler_check_success() {
         return;
     }
     let cwd = std::env::current_dir().unwrap();
-    let check = run_compiler_check(&cwd, &tokio_util::sync::CancellationToken::new()).await;
+    let check = run_compiler_check(
+        &cwd,
+        &tokio_util::sync::CancellationToken::new(),
+        crate::config::SandboxMode::default(),
+    )
+    .await;
     assert!(check.is_none());
 }
 
@@ -4391,6 +4397,7 @@ async fn compiler_check_uses_disposable_temp_outside_workspace() {
             false,
             Duration::from_secs(5),
             &tokio_util::sync::CancellationToken::new(),
+            crate::config::SandboxMode::WorkspaceWrite,
         )
         .await;
         assert_eq!(outcome, CompilerCheckOutcome::Passed);

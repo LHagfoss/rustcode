@@ -2664,7 +2664,7 @@ fn command_authorization_distinguishes_safe_and_unknown_shell_commands() {
 }
 
 #[test]
-fn one_shot_network_sandbox_escalation_always_requires_confirmation() {
+fn one_shot_network_sandbox_escalation_is_auto_approved_in_yolo() {
     assert_eq!(
         authorize_tool_with_args(
             "run_command",
@@ -2673,12 +2673,12 @@ fn one_shot_network_sandbox_escalation_always_requires_confirmation() {
             true,
             false,
         ),
-        AuthorizationDecision::RequireConfirmation
+        AuthorizationDecision::Allow
     );
 }
 
 #[test]
-fn one_shot_filesystem_sandbox_escalation_always_requires_confirmation() {
+fn one_shot_filesystem_sandbox_escalation_is_auto_approved_in_yolo() {
     let args = serde_json::json!({
         "command": "touch /tmp/release.txt",
         "filesystem_write_path": "/tmp"
@@ -2691,7 +2691,7 @@ fn one_shot_filesystem_sandbox_escalation_always_requires_confirmation() {
             true,
             false,
         ),
-        AuthorizationDecision::RequireConfirmation
+        AuthorizationDecision::Allow
     );
     assert!(crate::tools::rememberable_command_prefix_for_call(&args).is_none());
 }
@@ -3188,4 +3188,102 @@ fn filter_tools_ranks_exact_before_fuzzy_and_respects_limit() {
     assert!(all_git.contains(&"git_status"));
     assert!(all_git.contains(&"git_diff"));
     assert!(super::filter_tools_by_query("", 5).is_empty());
+}
+
+#[test]
+fn trusted_native_tools_can_read_write_and_search_outside_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path().join("probe.txt");
+    set_active_workspace_context(
+        Some(workspace.path().into()),
+        Some(workspace.path().into()),
+        false,
+        Some(crate::config::SandboxMode::Trusted),
+    );
+    let write = execute_with_metadata(
+        "write_to_file",
+        &serde_json::json!({"path": path, "content": "outside-marker"}),
+    );
+    let read = execute_with_metadata("view_file", &serde_json::json!({"path": path}));
+    let search = execute_with_metadata(
+        "grep",
+        &serde_json::json!({"path": outside.path(), "pattern": "outside-marker"}),
+    );
+    set_active_workspace_context(None, None, false, None);
+    assert!(write.success, "{}", write.content);
+    assert!(
+        read.success && read.content.contains("outside-marker"),
+        "{}",
+        read.content
+    );
+    assert!(
+        search.success && search.content.contains("outside-marker"),
+        "{}",
+        search.content
+    );
+}
+
+#[test]
+fn trusted_relative_paths_stay_anchored_to_workspace_without_a_task_directory() {
+    let workspace = tempfile::tempdir().unwrap();
+    set_active_workspace_context(
+        Some(workspace.path().into()),
+        None,
+        false,
+        Some(crate::config::SandboxMode::Trusted),
+    );
+    let write = execute_with_metadata(
+        "write_to_file",
+        &serde_json::json!({"path": "relative-marker.txt", "content": "relative-marker"}),
+    );
+    let read = execute_with_metadata(
+        "view_file",
+        &serde_json::json!({"path": "relative-marker.txt"}),
+    );
+    set_active_workspace_context(None, None, false, None);
+    assert!(write.success, "{}", write.content);
+    assert!(
+        read.success && read.content.contains("relative-marker"),
+        "{}",
+        read.content
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("relative-marker.txt")).unwrap(),
+        "relative-marker"
+    );
+}
+
+#[test]
+fn explicitly_restricted_native_tools_retain_the_workspace_boundary() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path().join("restricted-marker.txt");
+    for mode in [
+        crate::config::SandboxMode::ReadOnly,
+        crate::config::SandboxMode::WorkspaceWrite,
+        crate::config::SandboxMode::WorkspaceWriteNetwork,
+    ] {
+        set_active_workspace_context(Some(workspace.path().into()), None, false, Some(mode));
+        let write = execute_with_metadata(
+            "write_to_file",
+            &serde_json::json!({"path": path, "content": "no"}),
+        );
+        let search = execute_with_metadata(
+            "grep",
+            &serde_json::json!({"path": outside.path(), "pattern": "marker"}),
+        );
+        set_active_workspace_context(None, None, false, None);
+        assert!(
+            !write.success && write.content.contains("escapes the workspace"),
+            "{}",
+            write.content
+        );
+        assert!(
+            !search.success && search.content.contains("escapes the workspace"),
+            "{}",
+            search.content
+        );
+        assert!(!path.exists());
+    }
 }

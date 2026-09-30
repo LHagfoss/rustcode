@@ -1972,12 +1972,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .clone()
                         .or_else(|| s.effective_workspace_root())
                         .unwrap_or_default();
+                    let sandbox_mode = s.effective_sandbox_mode();
                     drop(s);
                     let compiler_errors = cached_compiler_check(
                         &root,
                         &mut ctx.compiler.dirty,
                         &mut ctx.compiler.cache,
                         cancel_token,
+                        sandbox_mode,
                     )
                     .await;
                     s = state.lock().await;

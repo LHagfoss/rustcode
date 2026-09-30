@@ -158,13 +158,14 @@ pub(crate) async fn run_prompt(
     let turn = scheduled_turn.begin().await;
     crate::tools::set_active_session_id(Some(session_id.clone()));
     let (workspace_root, sandbox_mode) = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
+        state.auto_confirm = auto_approve;
         (
             state
                 .workspace_root
                 .clone()
                 .or_else(|| std::env::current_dir().ok()),
-            state.config.sandbox_mode,
+            state.effective_sandbox_mode(),
         )
     };
     crate::tools::set_active_workspace_context(
