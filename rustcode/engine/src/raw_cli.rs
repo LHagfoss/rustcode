@@ -127,6 +127,27 @@ pub fn build_scheduled_state(
                         })?;
                 }
             }
+            // Remote servers carry secrets in `headers` rather than `env`;
+            // resolve them the same way so a redacted snapshot can replay.
+            for (key, value) in &mut server.headers {
+                if value == "<redacted>" {
+                    *value = state
+                        .config
+                        .mcp_servers
+                        .iter()
+                        .find(|current| {
+                            current.name == server.name && current.url == server.url
+                        })
+                        .and_then(|current| current.headers.get(key))
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "recorded MCP credential unavailable: {} / {key}",
+                                server.name
+                            )
+                        })?;
+                }
+            }
         }
         state.config = recorded;
     }

@@ -174,12 +174,16 @@ fn redact_session_config(value: &mut serde_json::Value) {
                     serde_json::Value::Bool(true),
                 );
             }
-            if let Some(env) = object
-                .get_mut("env")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                for value in env.values_mut() {
-                    *value = serde_json::Value::String("<redacted>".to_string());
+            // Per-server secrets (`env` for stdio, `headers` for remote HTTP)
+            // must never reach the session log in cleartext.
+            for key in ["env", "headers"] {
+                if let Some(map) = object
+                    .get_mut(key)
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    for value in map.values_mut() {
+                        *value = serde_json::Value::String("<redacted>".to_string());
+                    }
                 }
             }
             for child in object.values_mut() {
@@ -293,6 +297,8 @@ mod tests {
                 "PASSWORD".to_string(),
                 "mcp-secret".to_string(),
             )]),
+            url: None,
+            headers: std::collections::HashMap::new(),
             enabled: true,
             always_include: false,
         });
