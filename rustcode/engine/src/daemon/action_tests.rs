@@ -160,6 +160,7 @@ async fn production_startup_failures_are_retryable_but_missing_snapshots_are_not
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        client_id: None,
         enabled: true,
         always_include: false,
     };
@@ -212,6 +213,7 @@ read -r line
         env: Default::default(),
         url: None,
         headers: Default::default(),
+        client_id: None,
         enabled: true,
         always_include: false,
     };
