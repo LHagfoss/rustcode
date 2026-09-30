@@ -49,8 +49,8 @@ pub(in crate::ui) use navigation::{
     render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
 };
 pub(in crate::ui) use panel::{
-    HIGH_USAGE_PCT, PanelEmphasis, context_category_colors, emphasis_for_share, panel_line,
-    panel_value_spans,
+    HIGH_USAGE_PCT, OVER_THRESHOLD_PCT, PanelEmphasis, context_category_colors, emphasis_for_share,
+    panel_line, panel_value_spans,
 };
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};

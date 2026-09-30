@@ -89,6 +89,37 @@ fn render_state_to_text_with_transcript_and_composer_area(
 }
 
 fn render_context_modal_to_text(state: &RenderState, width: u16, height: u16) -> String {
+    render_context_modal_to_buffer(state, width, height)
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One rendered cell: symbol plus the colours and modifiers the panel painted
+/// it with. `/context` is a colour change, so assertions and screenshots both
+/// need the appearance, not just the glyphs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderedCell {
+    symbol: String,
+    fg: ratatui::style::Color,
+    bg: ratatui::style::Color,
+    modifier: ratatui::style::Modifier,
+}
+
+/// Render `/context` into a `TestBackend` and keep each cell's appearance.
+/// This is what makes a real image of the panel possible without a PTY: the
+/// buffer carries truecolor `Color::Rgb` values, which `buffer_to_ansi` turns
+/// into escape sequences and a screenshot turns into pixels.
+fn render_context_modal_to_buffer(
+    state: &RenderState,
+    width: u16,
+    height: u16,
+) -> Vec<Vec<RenderedCell>> {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, layout::Rect};
 
@@ -104,14 +135,128 @@ fn render_context_modal_to_text(state: &RenderState, width: u16, height: u16) ->
         })
         .unwrap();
 
+    let buffer = terminal.backend().buffer();
     (0..height)
         .map(|row| {
             (0..width)
-                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
-                .collect::<String>()
+                .map(|column| {
+                    let cell = &buffer[(column, row)];
+                    RenderedCell {
+                        symbol: cell.symbol().to_owned(),
+                        fg: cell.fg,
+                        bg: cell.bg,
+                        modifier: cell.modifier,
+                    }
+                })
+                .collect()
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
+}
+
+/// SGR truecolor for a `Color`, falling back to `fallback` for `Reset`.
+fn sgr(color: ratatui::style::Color, fallback: ratatui::style::Color) -> String {
+    let ratatui::style::Color::Rgb(r, g, b) = color else {
+        let ratatui::style::Color::Rgb(r, g, b) = fallback else {
+            return "39".to_owned();
+        };
+        return format!("38;2;{r};{g};{b}");
+    };
+    format!("38;2;{r};{g};{b}")
+}
+
+/// CSS colour for a cell. `Reset` means "whatever the terminal paints", which
+/// inside the panel is the panel surface, so it falls back to that.
+fn hex(color: ratatui::style::Color, fallback: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => hex(fallback, ratatui::style::Color::Rgb(0, 0, 0)),
+    }
+}
+
+/// Drop rows the panel never painted, so the screenshot is the panel rather
+/// than the empty transcript above it.
+fn crop_to_panel(rows: Vec<Vec<RenderedCell>>) -> Vec<Vec<RenderedCell>> {
+    let painted = |row: &Vec<RenderedCell>| row.iter().any(|c| c.symbol != " ");
+    let first = rows.iter().position(painted).unwrap_or(0);
+    let last = rows.iter().rposition(painted).unwrap_or(rows.len() - 1);
+    rows[first..=last].to_vec()
+}
+
+/// The rendered buffer as a truecolor ANSI block. Only used for eyeballing a
+/// terminal session; the screenshot path goes through `buffer_to_html`.
+fn buffer_to_ansi(rows: &[Vec<RenderedCell>], panel: ratatui::style::Color) -> String {
+    let mut out = String::new();
+    for row in rows {
+        out.push_str(&format!(
+            "\x1b[48;2;{}m",
+            match panel {
+                ratatui::style::Color::Rgb(r, g, b) => format!("{r};{g};{b}"),
+                _ => "0;0;0".to_owned(),
+            }
+        ));
+        for cell in row {
+            out.push_str(&format!(
+                "\x1b[{};{}m{}",
+                sgr(cell.fg, ratatui::style::Color::Rgb(255, 255, 255)),
+                match cell.bg {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("48;2;{r};{g};{b}"),
+                    _ => "49".to_owned(),
+                },
+                cell.symbol
+            ));
+        }
+        out.push_str("\x1b[0m\n");
+    }
+    out
+}
+
+/// The rendered buffer as a self-contained HTML page, one `<span>` per run of
+/// identically-styled cells, so headless Chrome can turn it into a PNG with the
+/// panel's real truecolor values.
+fn buffer_to_html(rows: &[Vec<RenderedCell>], title: &str, panel: ratatui::style::Color) -> String {
+    let rows = crop_to_panel(rows.to_vec());
+    let rows = rows.as_slice();
+    let mut body = String::new();
+    for row in rows {
+        body.push_str("<div class=\"row\">");
+        let mut index = 0;
+        while index < row.len() {
+            let cell = &row[index];
+            let mut end = index;
+            while end < row.len()
+                && row[end].fg == cell.fg
+                && row[end].bg == cell.bg
+                && row[end].modifier == cell.modifier
+            {
+                end += 1;
+            }
+            let text: String = row[index..end].iter().map(|c| c.symbol.as_str()).collect();
+            let bold = if cell.modifier.contains(ratatui::style::Modifier::BOLD) {
+                "font-weight:700;"
+            } else {
+                ""
+            };
+            body.push_str(&format!(
+                "<span style=\"color:{};background:{};{bold}\">{}</span>",
+                hex(cell.fg, panel),
+                hex(cell.bg, panel),
+                text.replace(' ', "&nbsp;")
+            ));
+            index = end;
+        }
+        body.push_str("</div>");
+    }
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
+<style>body{{margin:0;padding:24px;background:#000}}\
+.pre{{background:{panel};padding:20px 22px;border-radius:10px;display:inline-block}}\
+.row{{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:15px;\
+line-height:19px;white-space:pre;color-scheme:light}}</style></head>\
+<body><div class=\"pre\">{body}</div></body></html>",
+        title = title,
+        panel = hex(panel, ratatui::style::Color::Rgb(0, 0, 0)),
+        body = body
+    )
 }
 
 fn render_snapshot_to_text(state: &RenderState, width: u16, height: u16) -> String {
@@ -6554,6 +6699,192 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         headroom_row < lines.len() - 1,
         "context stats should fit within the full-height view: {rendered:?}"
     );
+}
+
+/// A `/context` state with one category well over `OVER_THRESHOLD_PCT` of the
+/// window, so the screenshot and the emphasis assertions both have something to
+/// show. Uses a profile with an explicit window so the percentages are stable.
+fn context_state_with_over_threshold_category() -> RenderState {
+    let mut state = RenderState::new();
+    state.model_name = "claude-opus-5".to_owned();
+    let mut profile = rustcode::controller::ModelProfile::default();
+    profile.name = state.model_name.clone();
+    profile.model = state.model_name.clone();
+    profile.url = state.api_base_url.clone();
+    profile.context_window = Some(128_000);
+    state.config.models.clear();
+    state.config.models.push(profile.clone());
+    state.active_model_profile = Some(profile);
+    state.active_context_window = 128_000;
+    state.history.push(ChatMessage::new(
+        "user",
+        "summarise the release notes for the parser",
+    ));
+    state.history.push(ChatMessage::new(
+        "assistant",
+        "Here is a walkthrough of the parser changes, grouped by subsystem.",
+    ));
+    // `token` encodes close to one token per token under cl100k_base, so this
+    // lands comfortably above the 20% threshold for the tool-call category.
+    state
+        .history
+        .push(ChatMessage::new("tool", "token ".repeat(60_000)));
+    state.history.push(ChatMessage::new(
+        "tool",
+        "render_state_to_ansi buffer_to_html render_snapshot",
+    ));
+    state.show_context_modal = true;
+    state
+}
+
+/// Every shipped theme, so a per-theme claim is backed by a rendered panel
+/// rather than by reading palette tables.
+const CONTEXT_SHOT_THEMES: [&str; 8] = [
+    "default",
+    "rain",
+    "cozy-rain",
+    "light",
+    "nord",
+    "dracula",
+    "tokyo-night",
+    "sky",
+];
+
+#[test]
+fn context_panel_tells_filled_from_empty_blocks_by_colour_not_only_by_glyph() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let state = context_state_with_over_threshold_category();
+    for theme in CONTEXT_SHOT_THEMES {
+        crate::ui::theme::set_active_theme(theme);
+        let rows = render_context_modal_to_buffer(&state, 120, 24);
+        let panel = COLOR_PANEL();
+        let mut filled = Vec::new();
+        let mut empty = Vec::new();
+        for row in &rows {
+            for cell in row {
+                match cell.symbol.as_str() {
+                    "●" => filled.push(cell.fg),
+                    "□" => empty.push(cell.fg),
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            filled.len() > 2 && empty.len() > 2,
+            "theme {theme}: expected filled and empty blocks, got {filled:?} / {empty:?}"
+        );
+        for color in empty.iter().chain(filled.iter()) {
+            let ratio = super::categorical::contrast(*color, panel);
+            assert!(
+                ratio >= super::categorical::MIN_PANEL_CONTRAST,
+                "theme {theme}: block {color:?} is only {ratio:.2}:1 against panel {panel:?}"
+            );
+        }
+        // #1515 reported the empty block as effectively invisible on light
+        // palettes; it must now be colour-distinct from every filled block.
+        for free in empty.iter() {
+            for used in filled.iter() {
+                assert_ne!(
+                    free, used,
+                    "theme {theme}: empty block {free:?} matches a filled block {used:?}"
+                );
+                assert!(
+                    super::categorical::separation(*free, *used)
+                        >= super::categorical::MIN_SEPARATION,
+                    "theme {theme}: empty block {free:?} and filled {used:?} are too close"
+                );
+            }
+        }
+    }
+    crate::ui::theme::set_active_theme("default");
+}
+
+#[test]
+fn context_panel_emphasises_an_over_threshold_category_in_the_rendered_buffer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let state = context_state_with_over_threshold_category();
+    let breakdown = modals::calculate_context_breakdown(&render_snapshot(&state));
+    let share = breakdown.tool_tokens as f64 / breakdown.context_window as f64 * 100.0;
+    assert!(
+        share >= super::modals::OVER_THRESHOLD_PCT,
+        "fixture must exercise the over-threshold path, got {share:.1}%"
+    );
+
+    crate::ui::theme::set_active_theme("default");
+    let rows = render_context_modal_to_buffer(&state, 120, 24);
+    let tool_row = rows
+        .iter()
+        .find(|row| row.iter().any(|c| c.symbol == "T"))
+        .expect("tool-call stats row");
+    let value: String = tool_row
+        .iter()
+        .skip_while(|c| c.symbol != "T")
+        .skip(1)
+        .map(|c| c.symbol.as_str())
+        .collect();
+    assert!(
+        value.contains("tokens"),
+        "tool-call row should carry its value: {value:?}"
+    );
+    let emphasized: Vec<&RenderedCell> = tool_row
+        .iter()
+        .filter(|c| c.symbol != " " && c.fg == COLOR_TIP() && c.modifier.contains(Modifier::BOLD))
+        .collect();
+    assert!(
+        emphasized.len() >= 3,
+        "over-threshold value should be bold tip: {:?}",
+        tool_row
+            .iter()
+            .map(|c| (c.symbol.as_str(), c.fg, c.modifier))
+            .collect::<Vec<_>>()
+    );
+
+    let normal_row = rows
+        .iter()
+        .find(|row| {
+            row.iter()
+                .any(|c| c.symbol == "S" && row.iter().any(|d| d.symbol == "k"))
+        })
+        .expect("skills stats row");
+    assert!(
+        !normal_row
+            .iter()
+            .any(|c| c.fg == COLOR_TIP() && c.modifier.contains(Modifier::BOLD)),
+        "an under-threshold category must not borrow the emphasis: {normal_row:?}"
+    );
+    crate::ui::theme::set_active_theme("default");
+}
+
+#[test]
+fn context_panel_screenshots_are_written_when_requested() {
+    // Colour changes cannot be reviewed from `Color` equality or the text
+    // goldens in `fixtures/`, so this dumps the rendered buffer as HTML (plus a
+    // truecolor ANSI copy) for conversion to PNG by
+    // `scripts/context-panel-screenshots.sh`, which also runs this test.
+    let Ok(dir) = std::env::var("RUSTCODE_CONTEXT_PANEL_SHOTS") else {
+        return;
+    };
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("screenshot directory");
+    let state = context_state_with_over_threshold_category();
+
+    for theme in CONTEXT_SHOT_THEMES {
+        crate::ui::theme::set_active_theme(theme);
+        let rows = render_context_modal_to_buffer(&state, 120, 24);
+        let panel = COLOR_PANEL();
+        std::fs::write(
+            dir.join(format!("context-panel-{theme}.html")),
+            buffer_to_html(&rows, &format!("/context — {theme}"), panel),
+        )
+        .expect("write html");
+        std::fs::write(
+            dir.join(format!("context-panel-{theme}.ansi")),
+            buffer_to_ansi(&rows, panel),
+        )
+        .expect("write ansi");
+    }
+    crate::ui::theme::set_active_theme("default");
 }
 
 #[test]

@@ -1,4 +1,5 @@
 mod assistant_render;
+mod categorical;
 mod composer_render;
 mod context_usage;
 mod conversation_render;
