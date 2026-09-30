@@ -16,7 +16,7 @@ mod openapi;
 mod parser;
 #[cfg(all(test, unix))]
 mod scheduled_jobs_tests;
-mod schema;
+pub(crate) mod schema;
 mod search;
 mod video;
 

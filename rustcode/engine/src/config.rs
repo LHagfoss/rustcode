@@ -905,10 +905,24 @@ pub fn provider_supports_function_calling(url: &str) -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub name: String,
+    /// Command for stdio servers. Empty when this entry is a remote server
+    /// declared with `url`.
+    #[serde(default)]
     pub command: String,
+    #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    /// Remote (Streamable HTTP) server endpoint, e.g.
+    /// `url = "https://mcp.vercel.com"`. Presence of `url` selects the
+    /// remote transport; otherwise the stdio transport (`command`) is used.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Extra HTTP headers sent with every remote request (e.g. static API
+    /// keys). OAuth tokens are never stored here; they live under
+    /// `<config-dir>/mcp-oauth/` instead.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Reserve this server's complete MCP toolset in every native tool request.
@@ -916,6 +930,30 @@ pub struct McpServerConfig {
     /// budget, none of that server's tools are bound and the omission is logged.
     #[serde(default)]
     pub always_include: bool,
+}
+
+impl McpServerConfig {
+    /// True when this entry declares a remote HTTP server rather than stdio.
+    pub fn is_remote(&self) -> bool {
+        self.url.as_ref().is_some_and(|url| !url.trim().is_empty())
+    }
+
+    /// Reject entries that declare neither transport, so a misconfigured
+    /// server surfaces as an actionable startup warning instead of a silent
+    /// skip. Remote entries win when both are set; `command` is ignored.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.is_remote() {
+            return Ok(());
+        }
+        if !self.command.trim().is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "MCP server '{}' has neither `command` (stdio) nor `url` (remote HTTP); \
+             set one of them to enable this server",
+            self.name
+        ))
+    }
 }
 
 /// Local audio generation preferences. Backends are external processes and
@@ -1354,6 +1392,8 @@ impl Default for AppConfig {
                 command: "npx".to_string(),
                 args: vec!["-y".to_string(), "socraticode@latest".to_string()],
                 env: std::collections::HashMap::new(),
+                url: None,
+                headers: std::collections::HashMap::new(),
                 enabled: true,
                 always_include: false,
             }],

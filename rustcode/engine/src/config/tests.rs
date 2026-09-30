@@ -226,6 +226,84 @@ enabled = true
 }
 
 #[test]
+fn mcp_remote_url_only_parses_and_validates() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "vercel"
+url = "https://mcp.vercel.com"
+enabled = true
+
+[mcp_servers.headers]
+X-Example = "value"
+"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    let server = &config.mcp_servers[0];
+    assert!(server.is_remote());
+    assert!(server.validate().is_ok());
+    assert_eq!(server.url.as_deref(), Some("https://mcp.vercel.com"));
+    assert_eq!(
+        server.headers.get("X-Example").map(String::as_str),
+        Some("value")
+    );
+    // A url-only entry has no stdio command.
+    assert!(server.command.is_empty());
+}
+
+#[test]
+fn mcp_server_without_command_or_url_fails_validation() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "half-configured"
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    let error = config.mcp_servers[0]
+        .validate()
+        .expect_err("neither command nor url must fail validation");
+    assert!(error.contains("half-configured"));
+    assert!(error.contains("command"));
+    assert!(error.contains("url"));
+}
+
+#[test]
+fn mcp_stdio_entries_are_not_remote_and_still_validate() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        r#"version = 1
+
+[[mcp_servers]]
+name = "mail"
+command = "mail-mcp"
+args = []
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert!(!config.mcp_servers[0].is_remote());
+    assert!(config.mcp_servers[0].validate().is_ok());
+}
+
+#[test]
 fn discord_rich_presence_defaults_enabled_and_round_trips() {
     assert!(AppConfig::default().discord_rpc_enabled);
 
