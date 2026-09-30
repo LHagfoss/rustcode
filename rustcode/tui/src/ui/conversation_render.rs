@@ -692,6 +692,11 @@ mod projection_tests {
 
     #[test]
     fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
+        // Both projections are rendered with the ambient theme, so a test that
+        // changes `ACTIVE_THEME` mid-run would make the two renders disagree.
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
         let mut state = RenderState::new();
         state
             .history

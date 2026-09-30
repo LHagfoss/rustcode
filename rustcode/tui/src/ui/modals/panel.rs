@@ -11,6 +11,7 @@
 //! column alignment; only the styling is themed.
 
 use super::*;
+use crate::ui::categorical::{self, CATEGORY_COUNT};
 use crate::ui::highlight::highlight_code_line;
 
 /// How strongly a panel value should stand out.
@@ -46,19 +47,15 @@ pub fn emphasis_for_share(pct: f64) -> PanelEmphasis {
 
 /// Theme-derived colors for the `/context` usage categories in legend order
 /// (user, agent, tool calls, system prompt, system tools, skills, subagents)
-/// plus the free-space color. Every entry comes from a theme accessor so the
-/// panel follows the active theme in light and dark modes alike.
-pub fn context_category_colors() -> [Color; 8] {
-    [
-        COLOR_PRIMARY(),
-        COLOR_GREEN(),
-        COLOR_TIP(),
-        COLOR_SECONDARY(),
-        COLOR_MUTED(),
-        COLOR_TEXT(),
-        COLOR_DIFF_ADD_FG(),
-        COLOR_TURN_SEPARATOR(),
-    ]
+/// plus the free-space color at index [`CATEGORY_COUNT`].
+///
+/// Every entry comes from the active palette, but not by reading one token per
+/// role: shipped palettes expose fewer distinct hues than the panel needs, so
+/// `categorical::ramp` derives a ramp that keeps all eight roles separated
+/// (see `ui::categorical`). Filled and empty blocks are therefore told apart by
+/// colour as well as by the `●`/`□` glyph.
+pub fn context_category_colors() -> [Color; CATEGORY_COUNT + 1] {
+    categorical::ramp()
 }
 
 /// Render one `label  value` row. `label` carries its own trailing padding so
@@ -274,23 +271,19 @@ mod tests {
     }
 
     #[test]
-    fn category_colors_come_from_theme_accessors() {
+    fn category_colors_come_from_the_theme_ramp() {
         let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
         for theme in ["default", "light", "nord", "dracula", "tokyo-night", "sky"] {
             crate::ui::theme::set_active_theme(theme);
             assert_eq!(
                 context_category_colors(),
-                [
-                    COLOR_PRIMARY(),
-                    COLOR_GREEN(),
-                    COLOR_TIP(),
-                    COLOR_SECONDARY(),
-                    COLOR_MUTED(),
-                    COLOR_TEXT(),
-                    COLOR_DIFF_ADD_FG(),
-                    COLOR_TURN_SEPARATOR(),
-                ],
-                "theme {theme} must flow through accessors, not literals"
+                categorical::ramp(),
+                "theme {theme} must go through the categorical ramp, not raw tokens"
+            );
+            assert_eq!(
+                context_category_colors().len(),
+                CATEGORY_COUNT + 1,
+                "seven categories plus the free block"
             );
         }
         crate::ui::theme::set_active_theme("default");
