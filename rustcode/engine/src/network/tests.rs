@@ -2263,6 +2263,9 @@ struct SessionReplayBaseline {
 #[derive(serde::Deserialize)]
 struct SessionReplayArtifact {
     filename: String,
+    /// Server names the turn's last shell read has to surface for the loop
+    /// guard to see the round as `new_information`.
+    terminal_shell_markers: Vec<String>,
     content: String,
 }
 
@@ -2379,6 +2382,22 @@ async fn session_01a0eed26_replay_injects_no_evidence_recovery() {
     {
         let mut state = state.lock().await;
         state.auto_confirm = true;
+        // The fidelity assertions below pin the *shell's* exit status, so the OS
+        // sandbox must not be allowed to decide them. Its filesystem view is
+        // platform-specific, and the two backends disagree in ways that have
+        // nothing to do with this session: macOS Seatbelt leaves `$TMPDIR`
+        // readable, while Linux bubblewrap mounts a fresh tmpfs over the host
+        // `/tmp` (masking this replay's artifact) and, on runners that block
+        // unprivileged user namespaces, `bwrap` fails closed with exit 1
+        // before the command runs at all. That is why the Linux run of this
+        // test failed on round 7 alone: every shell round reported the
+        // sandbox's failure, and round 7 is the only one that must succeed.
+        // Trusted mode leaves the recorded decision inputs a function of the
+        // command and the artifact content on every host. The sandbox keeps its
+        // own coverage in `tools::exec::sandbox::tests`, and the read-only
+        // boundary that makes round 2 interesting is enforced from the
+        // workspace root, not from the sandbox mode, so those refusals stand.
+        state.config.sandbox_mode = crate::config::SandboxMode::Trusted;
         let api_base_url = state.api_base_url.clone();
         state.record_function_calling_support(&api_base_url, true);
     }
@@ -2440,35 +2459,61 @@ async fn session_01a0eed26_replay_injects_no_evidence_recovery() {
         "replay must issue every tool call the baseline turn made ({baseline_report})"
     );
     let history = state.lock().await;
-    let records = history
+    let recorded = history
         .history
         .iter()
-        .filter_map(|message| message.tool_result.as_ref())
+        .filter(|message| message.tool_result.is_some())
         .collect::<Vec<_>>();
     assert_eq!(
-        records.len(),
+        recorded.len(),
         calls,
         "every replayed call must produce one recorded result ({baseline_report})"
     );
-    for (call, record) in fixture
+    for (call, message) in fixture
         .rounds
         .iter()
         .flat_map(|round| &round.calls)
-        .zip(&records)
+        .zip(&recorded)
     {
+        let record = message
+            .tool_result
+            .as_ref()
+            .expect("filtered to recorded tool results");
         assert_eq!(
             record.tool_name, call.tool,
             "replayed tool order must match the baseline"
         );
-        assert_eq!(
-            record.success, call.expected.success,
-            "replayed success flag for {} must match the baseline",
-            call.tool
+        // Success and exit status are asserted together and the recorded body
+        // rides along in the message: a host that diverges (no `grep`, a
+        // different default, a denied read) can only be told apart from a real
+        // loop-guard regression by the text the tool actually returned.
+        assert!(
+            record.success == call.expected.success && record.exit_code == call.expected.exit_code,
+            "replayed result for {} must match the baseline (expected success={} exit_code={:?}, recorded success={} exit_code={:?} error_kind={:?}): {}",
+            call.tool,
+            call.expected.success,
+            call.expected.exit_code,
+            record.success,
+            record.exit_code,
+            record.error_kind,
+            message.content,
         );
-        assert_eq!(
-            record.exit_code, call.expected.exit_code,
-            "replayed exit code for {} must match the baseline",
-            call.tool
+    }
+
+    // The turn's last shell read is what the guard actually classifies: it is
+    // `new_information` because of the server names in the body, not because
+    // of its exit status. Assert those names, so a host whose shell could not
+    // read the artifact (a sandbox that hides the temp directory, a missing
+    // `grep`) fails on the round that lost its evidence rather than on an exit
+    // code that a coincidence could satisfy.
+    let terminal = recorded
+        .last()
+        .expect("the replay recorded a terminal round");
+    for marker in &fixture.artifact.terminal_shell_markers {
+        assert!(
+            terminal.content.contains(marker.as_str()),
+            "the terminal shell read must surface '{marker}' for the guard to see new information, got: {}",
+            terminal.content
         );
     }
 
