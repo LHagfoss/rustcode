@@ -321,15 +321,17 @@ fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata)
 fn benign_shell_wrapper_failure(
     call: Option<&crate::tools::ToolCall>,
     metadata: &crate::network::events::ToolResultMetadata,
-    content: &str,
+    _content: &str,
 ) -> bool {
     let Some(call) = call else {
         return false;
     };
-    if call.name != "run_command"
-        || metadata.success
-        || content.to_ascii_lowercase().contains("error")
-    {
+    // Benign-ness is structural: grep/rg exit 1 *is* the understood no-match
+    // signal, and 141 with `head` in the pipeline is SIGPIPE after enough
+    // data. Never scan output text for "error" here: a no-match report for a
+    // pattern like "error" (or harness text quoting it) is still a legitimate
+    // negative result, not a failure worth loop-recovery evidence.
+    if call.name != "run_command" || metadata.success {
         return false;
     }
     let Some(command) = call
@@ -998,6 +1000,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let content = result.content;
                 let diff_opt = result.diff;
                 let file_preview = result.file_preview;
+                // Set when the current result is a workspace-boundary
+                // rejection: a harness guardrail hit, not model stagnation.
+                let mut boundary_failure = false;
                 let infrastructure_decision = ctx.recovery.infrastructure_failures.observe(
                     &name,
                     metadata.error_kind.map(|kind| kind.as_str()),
@@ -1023,6 +1028,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                                 "streak": streak,
                             }),
                         );
+                        // Workspace-boundary rejections are harness
+                        // guardrails, not model stagnation: they ride the
+                        // infrastructure guard (reset + hint) and never feed
+                        // evidence-based recovery.
+                        if failure.fingerprint == loop_detect::WORKSPACE_BOUNDARY_FINGERPRINT {
+                            boundary_failure = true;
+                        }
                         if infrastructure_stop_reached {
                             infrastructure_stop =
                                 Some((failure.fingerprint, failure.dependency, streak));
@@ -1371,6 +1383,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     cross_turn_target_files.push(target_file.to_string());
                 }
                 ctx.progress.last_reason = Some(assessment.reason);
+                if boundary_failure {
+                    // Harness guardrail hits are not model stagnation: keep
+                    // them out of the evidence-recovery streak entirely. The
+                    // rejection text itself plus the infrastructure guard
+                    // carry the hint.
+                    ctx.progress.ledger.reset_streak();
+                }
                 crate::logger::operational_event(
                     "turn.progress",
                     serde_json::json!({
@@ -1394,10 +1413,20 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ctx.metrics.no_progress_results += 1;
                 }
                 if !assessment.suppress_stagnation
+                    && !boundary_failure
                     && (assessment.reason == loop_detect::ProgressReason::Churn
-                        || assessment.streak >= loop_detect::ProgressLedger::RECOVERY_STREAK)
+                        || assessment.streak >= ctx.progress.evidence_recovery_streak)
                 {
-                    evidence_recovery = Some((assessment.reason, assessment.streak, name.clone()));
+                    // Name the action that opened the streak (the dominating
+                    // tool), not whatever ran most recently: with corroborated
+                    // streaks the last tool misattributes the blame.
+                    let dominant = ctx
+                        .progress
+                        .ledger
+                        .streak_action()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| name.clone());
+                    evidence_recovery = Some((assessment.reason, assessment.streak, dominant));
                 }
                 if repeated_successful_verification && metadata.success {
                     let action = format!(
@@ -1413,7 +1442,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         action,
                     ));
                 }
-                if !assessment.suppress_stagnation && !benign_shell_failure {
+                if !assessment.suppress_stagnation && !benign_shell_failure && !boundary_failure {
                     match ctx
                         .recovery
                         .loop_detector
@@ -1547,6 +1576,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
             if let Some((fingerprint, dependency, streak)) = infrastructure_stop {
                 let stop_reason = fingerprint;
+                let boundary_stop = stop_reason == loop_detect::WORKSPACE_BOUNDARY_FINGERPRINT;
                 crate::logger::operational_event(
                     "turn.loop_signal",
                     loop_signal_event(
@@ -1560,16 +1590,28 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 );
                 s.history.push(ChatMessage::new(
                     "system",
-                    format!(
-                        "[Infrastructure failure guard: {dependency} has failed across multiple tool attempts ({streak} consecutive matching failures). Further retries are paused.]"
-                    ),
+                    if boundary_stop {
+                        format!(
+                            "[Workspace boundary guard: a tool path outside the workspace root was rejected across {streak} consecutive attempts. Do not retry out-of-workspace paths; choose a path under the workspace root or explain the blocker.]"
+                        )
+                    } else {
+                        format!(
+                            "[Infrastructure failure guard: {dependency} has failed across multiple tool attempts ({streak} consecutive matching failures). Further retries are paused.]"
+                        )
+                    },
                 ));
                 crate::config::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
-                ctx.response.final_content = format!(
-                    "I could not complete the task because the {dependency} dependency remained unavailable across {streak} diagnostic attempts. The harness stopped further retries ({stop_reason}). Check that service or MCP connection, then resume the session."
-                );
+                ctx.response.final_content = if boundary_stop {
+                    format!(
+                        "I could not complete the task because the requested path lies outside the workspace root ({streak} consecutive rejections; {stop_reason}). Choose a path under the workspace root, then resume the session."
+                    )
+                } else {
+                    format!(
+                        "I could not complete the task because the {dependency} dependency remained unavailable across {streak} diagnostic attempts. The harness stopped further retries ({stop_reason}). Check that service or MCP connection, then resume the session."
+                    )
+                };
                 ctx.response.final_content_persisted = false;
                 ctx.lifecycle.task_completed = false;
                 ctx.lifecycle.stop_reason =
@@ -1670,12 +1712,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // only pushed when neither of them will fire. The output-stagnation
             // warning wins over the parked call-repetition one; they share one
             // replaceable slot either way.
-            let recovery_will_fire = should_apply_loop_recovery(
-                completed,
-                output_abort,
-                round_had_meaningful,
-                evidence_recovery.is_some(),
-            );
+            let recovery_will_fire = ctx.progress.evidence_recovery_enabled
+                && should_apply_loop_recovery(
+                    completed,
+                    output_abort,
+                    round_had_meaningful,
+                    evidence_recovery.is_some(),
+                );
             let recovery_suppressed_reason =
                 (output_abort && round_had_meaningful && !completed && evidence_recovery.is_none())
                     .then_some("same_round_meaningful_progress");
@@ -3022,6 +3065,24 @@ mod tests {
             Some(&real_failure),
             &no_match_metadata,
             "exit code: 1\nerror: cargo test failed"
+        ));
+    }
+
+    #[test]
+    fn search_no_match_stays_benign_when_output_mentions_error() {
+        // A no-match report for a pattern like "error" still carries exit 1
+        // from a search stage: structural benign-ness must not be vetoed by
+        // the word "error" appearing in the quoted pattern or harness text.
+        let no_match = read_call("rg error src");
+        let no_match_metadata = ToolResultMetadata {
+            success: false,
+            exit_code: Some(1),
+            ..Default::default()
+        };
+        assert!(benign_shell_wrapper_failure(
+            Some(&no_match),
+            &no_match_metadata,
+            "no matches for 'error'"
         ));
     }
 

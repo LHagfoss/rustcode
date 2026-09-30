@@ -1617,3 +1617,74 @@ fn fallback_chain_starts_with_primary_then_small_then_rest_capped() {
     dedup.dedup();
     assert_eq!(names.len(), dedup.len());
 }
+
+#[test]
+fn loop_guard_config_defaults_and_toml_overrides() {
+    let guard = LoopGuardConfig::default();
+    assert_eq!(
+        guard.effective_recovery_streak(),
+        DEFAULT_EVIDENCE_RECOVERY_STREAK
+    );
+    assert_eq!(guard.effective_loop_abort(), DEFAULT_LOOP_DETECTOR_ABORT);
+    assert!(guard.evidence_recovery_enabled);
+
+    let parsed: TomlConfig = toml::from_str(
+        r#"
+[loop_guard]
+evidence_recovery_streak = 5
+loop_detector_abort = 8
+evidence_recovery_enabled = false
+"#,
+    )
+    .unwrap();
+    let guard = parsed.loop_guard.unwrap();
+    assert_eq!(guard.effective_recovery_streak(), 5);
+    assert_eq!(guard.effective_loop_abort(), 8);
+    assert!(!guard.evidence_recovery_enabled);
+
+    // Degenerate values fall back to safe defaults instead of firing on the
+    // first miss or warning on every repeat.
+    let degenerate = LoopGuardConfig {
+        evidence_recovery_streak: 0,
+        loop_detector_abort: 1,
+        evidence_recovery_enabled: true,
+    };
+    assert_eq!(
+        degenerate.effective_recovery_streak(),
+        DEFAULT_EVIDENCE_RECOVERY_STREAK
+    );
+    assert_eq!(
+        degenerate.effective_loop_abort(),
+        DEFAULT_LOOP_DETECTOR_ABORT
+    );
+
+    // The global file applies overrides; a project file must not touch them.
+    let mut config = AppConfig::default();
+    apply_toml_config(
+        &mut config,
+        TomlConfig {
+            loop_guard: Some(LoopGuardConfig {
+                evidence_recovery_streak: 5,
+                loop_detector_abort: 8,
+                evidence_recovery_enabled: false,
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(config.loop_guard.effective_recovery_streak(), 5);
+    assert!(!config.loop_guard.evidence_recovery_enabled);
+
+    let mut project = AppConfig::default();
+    apply_project_toml_config(
+        &mut project,
+        TomlConfig {
+            loop_guard: Some(LoopGuardConfig {
+                evidence_recovery_streak: 9,
+                loop_detector_abort: 9,
+                evidence_recovery_enabled: false,
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(project.loop_guard, LoopGuardConfig::default());
+}
