@@ -152,11 +152,18 @@ fn acp_list_sessions(
         if !id.as_deref().is_some_and(valid_acp_session_id) {
             return false;
         }
-        let workspace = id
-            .as_deref()
-            .and_then(crate::config::load_session_workspace);
+        // Filtering uses the embedded workspace cwd (no extra I/O per row).
         match &filter_cwd {
-            Some(filter) => workspace_cwd(workspace).as_ref() == Some(filter),
+            Some(filter) => {
+                meta.workspace_cwd
+                    .as_deref()
+                    .and_then(|cwd| {
+                        let canonical = std::fs::canonicalize(cwd).ok()?;
+                        canonical.is_dir().then_some(canonical)
+                    })
+                    .as_ref()
+                    == Some(filter)
+            }
             None => true,
         }
     })
@@ -166,9 +173,19 @@ fn acp_list_sessions(
     let sessions = metas
         .iter()
         .map(|meta| {
-            let workspace = crate::config::session_id_from_path(&meta.path)
-                .as_deref()
-                .and_then(crate::config::load_session_workspace);
+            let workspace = meta
+                .workspace_cwd
+                .clone()
+                .map(|cwd| rustcode_session::SessionWorkspace {
+                    cwd,
+                    additional_directories: Vec::new(),
+                    task_workspace_id: None,
+                })
+                .or_else(|| {
+                    crate::config::session_id_from_path(&meta.path)
+                        .as_deref()
+                        .and_then(crate::config::load_session_workspace)
+                });
             session_info(meta, workspace)
         })
         .collect();
@@ -1287,6 +1304,7 @@ mod tests {
             title: "Inspect project".into(),
             when: "2026-09-24T00:00:00Z".into(),
             message_count: 7,
+            workspace_cwd: None,
         };
         let info = session_info(&meta, None);
         assert_eq!(info.session_id.0.as_ref(), "session-123");

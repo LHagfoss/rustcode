@@ -97,7 +97,15 @@ pub struct SessionChoice {
 impl SessionChoice {
     pub(crate) fn from_meta(session: &crate::config::SessionMeta) -> Self {
         let id = crate::config::session_id_from_path(&session.path).unwrap_or_default();
-        let workspace = crate::config::load_session_workspace(&id).map(|record| record.cwd);
+        // Prefer the embedded cwd (no extra I/O per picker row); fall back
+        // to a store lookup for metas constructed without it (tests/legacy).
+        let workspace = session.workspace_cwd.clone().or_else(|| {
+            if id.is_empty() {
+                None
+            } else {
+                crate::config::load_session_workspace(&id).map(|record| record.cwd)
+            }
+        });
         Self {
             id,
             title: session.title.clone(),

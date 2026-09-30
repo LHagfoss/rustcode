@@ -724,6 +724,7 @@ fn history_picker_renders_borderless_full_width_options() {
         title: "Build a polished browser tower-defense game with canvas".to_string(),
         message_count: 6,
         when: "17:35".to_string(),
+        workspace_cwd: None,
     }];
     state.history_picker_index = 0;
     terminal
