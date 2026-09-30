@@ -633,6 +633,8 @@ fn settings_picker_uses_unified_modal_picker_style() {
 
 #[test]
 fn picker_panel_is_bounded_above_the_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let state = AppState::new();
     terminal
@@ -651,6 +653,8 @@ fn picker_panel_is_bounded_above_the_composer() {
 
 #[test]
 fn picker_panel_never_exceeds_the_space_above_the_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let state = AppState::new();
     // Only six rows sit above the composer, fewer than the panel's max height,
