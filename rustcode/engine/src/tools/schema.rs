@@ -1240,7 +1240,7 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
     )
 }
 
-pub(super) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
     tools: &[(String, String, Value)],
     owners: &[String],
     always_include_servers: &[String],

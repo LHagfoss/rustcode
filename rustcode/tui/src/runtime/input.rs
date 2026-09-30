@@ -1038,12 +1038,21 @@ pub(super) async fn handle_app_event(
                                     .map(|s| s.to_string())
                                     .collect::<Vec<_>>();
 
+                                // An http(s) value in the command field declares a
+                                // remote Streamable HTTP server; anything else is
+                                // spawned over stdio.
+                                let remote = command.starts_with("http://")
+                                    || command.starts_with("https://");
                                 if !name.is_empty() && !command.is_empty() {
+                                    let url = remote.then(|| command.clone());
                                     let new_srv = rustcode::config::McpServerConfig {
                                         name: name.clone(),
-                                        command,
-                                        args,
+                                        command: if remote { String::new() } else { command },
+                                        // Arguments only apply to stdio servers.
+                                        args: if remote { Vec::new() } else { args },
                                         env: std::collections::HashMap::new(),
+                                        url,
+                                        headers: std::collections::HashMap::new(),
                                         enabled: true,
                                         always_include: existing_mcp_always_include,
                                     };
@@ -1116,7 +1125,11 @@ pub(super) async fn handle_app_event(
                                         is_add: false,
                                         edit_index: Some(idx),
                                         name_input: srv.name.clone(),
-                                        command_input: srv.command.clone(),
+                                        command_input: if srv.is_remote() {
+                                            srv.url.clone().unwrap_or_default()
+                                        } else {
+                                            srv.command.clone()
+                                        },
                                         args_input: srv.args.join(" "),
                                         active_field: 0,
                                         cursor_pos: srv.name.len(),
