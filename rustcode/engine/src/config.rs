@@ -949,6 +949,10 @@ pub struct McpServerConfig {
     /// `<config-dir>/mcp-oauth/` instead.
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
+    /// Nonsecret OAuth client identifier for pre-registration or a Client ID
+    /// Metadata Document. Omit to register dynamically with the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Reserve this server's complete MCP toolset in every native tool request.
@@ -1420,6 +1424,7 @@ impl Default for AppConfig {
                 env: std::collections::HashMap::new(),
                 url: None,
                 headers: std::collections::HashMap::new(),
+                client_id: None,
                 enabled: true,
                 always_include: false,
             }],
