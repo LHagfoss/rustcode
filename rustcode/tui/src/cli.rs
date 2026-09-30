@@ -7,13 +7,17 @@ use clap::Parser;
     about = "AI-powered agentic coding assistant terminal"
 )]
 pub struct Cli {
-    /// Resume the most recent chat session
-    #[arg(short = 'r', long = "resume")]
-    pub resume: bool,
+    /// Resume a chat session: bare `--resume` restores the most recent
+    /// session in the current workspace, `--resume <id>` restores that
+    /// exact session from any workspace.
+    #[arg(short = 'r', long = "resume", num_args = 0..=1, default_missing_value = "")]
+    pub resume: Option<String>,
 
-    /// Resume the most recent chat session and continue pending work
-    #[arg(short = 'c', long = "continue")]
-    pub continue_session: bool,
+    /// Resume a session and continue pending work: bare `--continue`
+    /// uses the most recent session in the current workspace,
+    /// `--continue <id>` continues that exact session from any workspace.
+    #[arg(short = 'c', long = "continue", num_args = 0..=1, default_missing_value = "")]
+    pub continue_session: Option<String>,
 
     /// Run a quick prompt non-interactively and exit
     #[arg(short = 'p', long = "prompt")]
@@ -42,6 +46,12 @@ pub struct Cli {
     /// Use the full terminal screen for the interactive UI
     #[arg(long = "fullscreen")]
     pub fullscreen: bool,
+
+    /// Include sessions from all workspaces (default scopes the picker,
+    /// bare --resume/--continue, and `sessions list` to the current
+    /// workspace; explicit --resume/--continue <id> always bypasses scoping)
+    #[arg(long = "all")]
+    pub all: bool,
 
     /// Create a project-local .rustcode/config.toml from global defaults
     #[arg(long = "init")]
@@ -266,6 +276,12 @@ pub enum SessionCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// List saved sessions (scoped to the current workspace by default)
+    List {
+        /// List sessions from all workspaces with their workspace per entry
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -338,6 +354,97 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn resume_accepts_bare_flag_and_explicit_id() {
+        assert_eq!(Cli::try_parse_from(["rustcode"]).unwrap().resume, None);
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "--resume"])
+                .unwrap()
+                .resume,
+            Some(String::new())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "--resume", "abc-123"])
+                .unwrap()
+                .resume,
+            Some("abc-123".to_owned())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "-r", "abc-123"])
+                .unwrap()
+                .resume,
+            Some("abc-123".to_owned())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "-r"]).unwrap().resume,
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn continue_accepts_bare_flag_and_explicit_id() {
+        assert_eq!(
+            Cli::try_parse_from(["rustcode"]).unwrap().continue_session,
+            None
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "--continue"])
+                .unwrap()
+                .continue_session,
+            Some(String::new())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "--continue", "sess-1"])
+                .unwrap()
+                .continue_session,
+            Some("sess-1".to_owned())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustcode", "-c", "sess-1"])
+                .unwrap()
+                .continue_session,
+            Some("sess-1".to_owned())
+        );
+    }
+
+    #[test]
+    fn resume_composes_with_model_fullscreen_yolo_and_all() {
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "--resume",
+            "sess-9",
+            "--model",
+            "profile",
+            "--fullscreen",
+            "--yolo",
+            "--all",
+        ])
+        .unwrap();
+        assert_eq!(cli.resume, Some("sess-9".to_owned()));
+        assert_eq!(cli.model, Some("profile".to_owned()));
+        assert!(cli.fullscreen);
+        assert!(cli.yolo);
+        assert!(cli.all);
+    }
+
+    #[test]
+    fn parses_sessions_list_with_all_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "sessions", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::List { all: false })
+            })
+        ));
+        let cli_all = Cli::try_parse_from(["rustcode", "sessions", "list", "--all"]).unwrap();
+        assert!(matches!(
+            cli_all.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::List { all: true })
+            })
+        ));
     }
 
     #[test]

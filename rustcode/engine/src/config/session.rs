@@ -3,7 +3,7 @@ use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
     HistorySnapshot, SessionMeta, SessionMigrationReport, SessionWorkspace, WorkspaceDescriptor,
-    WorkspaceManager, WorkspaceRequest,
+    WorkspaceManager, WorkspaceRequest, canonicalize_best_effort, workspaces_match,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -101,7 +101,7 @@ pub fn session_title(history: &[ChatMessage]) -> String {
     SessionStore::session_title(history)
 }
 
-pub(crate) fn session_id_from_path(path: &Path) -> Option<String> {
+pub fn session_id_from_path(path: &Path) -> Option<String> {
     SessionStore::session_id_from_path(path)
 }
 
@@ -466,6 +466,21 @@ pub fn latest_resumable_session_meta() -> Option<SessionMeta> {
     store()?.latest_resumable_session_meta()
 }
 
+/// Current working directory for workspace scoping, canonicalized when
+/// possible. Returns `None` when the cwd cannot be determined, in which
+/// case callers must disable scoping (list all).
+pub fn current_workspace_dir() -> Option<PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| canonicalize_best_effort(&cwd))
+}
+
+/// Workspace-scoped latest session. `cwd` of `None` disables scoping
+/// (used by `--all` and explicit `--resume <id>`, which overrides scoping).
+pub fn latest_resumable_session_meta_scoped(cwd: Option<&Path>) -> Option<SessionMeta> {
+    store()?.latest_resumable_session_meta_scoped(cwd)
+}
+
 pub fn session_meta_by_id(id: &str) -> Option<SessionMeta> {
     store()?.session_meta_by_id(id)
 }
@@ -474,6 +489,16 @@ pub fn list_sessions_limited(limit: usize) -> (Vec<SessionMeta>, bool) {
     store().map_or_else(
         || (Vec::new(), false),
         |session_store| session_store.list_sessions_limited(limit),
+    )
+}
+
+/// Workspace-scoped list. Pass `cwd = None` to list all workspaces
+/// (`--all`). Otherwise only sessions whose recorded cwd parent/child
+/// matches `cwd` plus legacy sessions with no workspace record are shown.
+pub fn list_sessions_limited_scoped(limit: usize, cwd: Option<&Path>) -> (Vec<SessionMeta>, bool) {
+    store().map_or_else(
+        || (Vec::new(), false),
+        |session_store| session_store.list_sessions_limited_scoped(limit, cwd),
     )
 }
 
