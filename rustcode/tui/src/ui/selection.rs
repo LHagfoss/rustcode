@@ -915,6 +915,7 @@ impl TranscriptSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::WHEEL_SCROLL_LINES;
     use crossterm::event::KeyModifiers;
     use rustcode::controller::{ChatMessage, RenderState};
 
@@ -1757,6 +1758,134 @@ mod tests {
     }
 
     #[test]
+    fn a_wheel_flick_coalesces_into_one_drained_run() {
+        let state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.scroll_up(6);
+        let _ = rendered_transcript(&state, &mut transcript);
+        let start = transcript.scroll_rows();
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+
+        // A flick: eight ticks arrive before the loop paints a frame.
+        for _ in 0..8 {
+            transcript.selection.queue_scroll(-1, WHEEL_SCROLL_LINES);
+        }
+        assert_eq!(
+            transcript.selection.pending_scroll,
+            -8 * isize::try_from(WHEEL_SCROLL_LINES).unwrap(),
+            "ticks that land before the next frame coalesce instead of being dropped"
+        );
+
+        let mut frames = 0;
+        while transcript.step_selection_scroll() {
+            let _ = rendered_transcript(&state, &mut transcript);
+            frames += 1;
+            assert!(frames <= 8 * WHEEL_SCROLL_LINES, "the queue must drain");
+        }
+        assert_eq!(
+            frames,
+            8 * WHEEL_SCROLL_LINES,
+            "the run drains one row per frame, so every crossed row is captured"
+        );
+        assert_eq!(transcript.scroll_rows(), start + 8 * WHEEL_SCROLL_LINES);
+
+        // A flick that changes direction nets out to what is left over, so
+        // reversing a scroll does not run away past where it started.
+        for _ in 0..4 {
+            transcript.selection.queue_scroll(-1, WHEEL_SCROLL_LINES);
+        }
+        for _ in 0..6 {
+            transcript.selection.queue_scroll(1, WHEEL_SCROLL_LINES);
+        }
+        assert_eq!(transcript.selection.pending_scroll, 6);
+        let mut frames = 0;
+        while transcript.step_selection_scroll() {
+            let _ = rendered_transcript(&state, &mut transcript);
+            frames += 1;
+        }
+        assert_eq!(frames, 6);
+        assert_eq!(
+            transcript.scroll_rows(),
+            start + 8 * WHEEL_SCROLL_LINES - 6,
+            "the reversed run should scroll back 6 rows, not run away"
+        );
+    }
+
+    #[test]
+    fn a_wheel_flick_captures_the_rows_it_crosses() {
+        let state = long_conversation();
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let painted = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        let before = (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|column| painted[(area.x + column, area.y + row)].symbol())
+                    .collect::<String>()
+            })
+            .filter(|row| !row.trim().is_empty())
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        assert!(!before.is_empty(), "the viewport should show text");
+
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        // A hard flick: ten ticks, four times the height of the viewport, all
+        // landing before the loop paints a frame.
+        for _ in 0..10 {
+            transcript.selection.queue_scroll(-1, WHEEL_SCROLL_LINES);
+        }
+        let mut frames = 0;
+        while transcript.step_selection_scroll() {
+            let _ = rendered_transcript(&state, &mut transcript);
+            frames += 1;
+        }
+        assert_eq!(frames, 10 * WHEEL_SCROLL_LINES);
+        assert!(
+            transcript.scroll_rows() > 3 * usize::from(area.height),
+            "the flick should carry the viewport well past where it started"
+        );
+
+        // Every row that was on screen before the flick is now off screen, so
+        // the copy can only be complete if each one was captured on the frame
+        // it was painted in.
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+        let selected = transcript.selection.selected_text().unwrap();
+        for row in &before {
+            assert!(
+                selected.contains(row.as_str()),
+                "the flick scrolled {row:?} off screen but the copy lost it: {selected:?}"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "manual transcript scroll benchmark"]
     fn bench_long_selection_scroll() {
         let mut state = RenderState::new();
@@ -1832,6 +1961,72 @@ mod tests {
         eprintln!("10 downward edge frames: {:?}", start.elapsed());
 
         bench_selection_frame_cost(painted, area);
+        bench_wheel_step_cost(&state);
+    }
+
+    /// Times the same number of scrolled *lines* at several wheel step sizes.
+    ///
+    /// A bigger step is only cheaper per line if the frame cost is flat in the row
+    /// count, so this walks a fixed line budget at 1, 3 and 6 rows per tick and
+    /// prints the per-frame and per-line cost of each. With a selection pinned the
+    /// cost per line deliberately does not move: `step_selection_scroll` advances
+    /// one row per frame so every crossed row is captured, so an N-row tick costs
+    /// N frames exactly as it did when N was 1.
+    fn bench_wheel_step_cost(state: &RenderState) {
+        const LINES: usize = 60;
+        for step in [1usize, 3, 6] {
+            let ticks = LINES / step;
+            let mut transcript = super::super::history_cell::TranscriptState::default();
+            let _ = rendered_transcript_size(state, &mut transcript, 100, 40);
+            transcript.scroll_up(LINES * 2);
+            let _ = rendered_transcript_size(state, &mut transcript, 100, 40);
+            let start = std::time::Instant::now();
+            for _ in 0..ticks {
+                transcript.scroll_down(step);
+                let _ = rendered_transcript_size(state, &mut transcript, 100, 40);
+            }
+            let elapsed = start.elapsed();
+            eprintln!(
+                "{LINES} lines at {step} row(s)/tick: {elapsed:?} ({} ticks, {:?}/frame, {:?}/line)",
+                ticks,
+                elapsed / ticks as u32,
+                elapsed / LINES as u32,
+            );
+
+            let mut pinned = super::super::history_cell::TranscriptState::default();
+            let _ = rendered_transcript_size(state, &mut pinned, 100, 40);
+            let area = pinned.selection.area;
+            pinned.selection.begin_with_snapshot(
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    area.x + 2,
+                    area.bottom() - 1,
+                ),
+                super::super::render_snapshot::render_snapshot(state),
+                pinned.scroll_rows(),
+            );
+            pinned.selection.mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x + 2,
+                area.y,
+            ));
+            pinned.scroll_up(LINES);
+            let _ = rendered_transcript_size(state, &mut pinned, 100, 40);
+            let start = std::time::Instant::now();
+            for _ in 0..ticks {
+                pinned.selection.queue_scroll(1, step);
+                for _ in 0..step {
+                    assert!(pinned.step_selection_scroll());
+                    let _ = rendered_transcript_size(state, &mut pinned, 100, 40);
+                }
+            }
+            let elapsed = start.elapsed();
+            eprintln!(
+                "{LINES} lines at {step} row(s)/tick, selection pinned: {elapsed:?} ({} ticks, {:?}/line)",
+                ticks,
+                elapsed / LINES as u32,
+            );
+        }
     }
 
     /// Times the selection-only part of a frame: capturing the rows a scrolled
