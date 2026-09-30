@@ -548,8 +548,11 @@ fn match_null_redirect(segment: &str) -> Option<usize> {
             return Some(index + 1 + digit.len_utf8());
         }
     }
-    if amp_prefix && target.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        let digit_len = target.chars().next().unwrap().len_utf8();
+    if amp_prefix
+        && let Some(first) = target.chars().next()
+        && first.is_ascii_digit()
+    {
+        let digit_len = first.len_utf8();
         return Some(index + digit_len);
     }
     None
@@ -565,10 +568,14 @@ fn without_null_redirects(command: &str) -> String {
         if let Some(len) = match_null_redirect(&command[index..]) {
             out.push_str("  ");
             index += len;
-        } else {
-            let next_len = command[index..].chars().next().unwrap().len_utf8();
+        } else if let Some(next) = command[index..].chars().next() {
+            let next_len = next.len_utf8();
             out.push_str(&command[index..index + next_len]);
             index += next_len;
+        } else {
+            // Byte offset inside a char (cannot happen: index only advances
+            // by char boundaries): skip one byte to guarantee progress.
+            index += 1;
         }
     }
     out
@@ -939,7 +946,14 @@ fn parse_deny_tokens(command: &str, allow_simple_variables: bool) -> Option<Vec<
                     .peek()
                     .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\')) =>
             {
-                token.push(characters.next().unwrap());
+                if let Some(escaped) = characters.next() {
+                    token.push(escaped);
+                } else {
+                    // Peek promised a char; a None here means the iterator
+                    // was mutated concurrently, which cannot happen on a
+                    // single-threaded chars stream: end tokenization safely.
+                    return None;
+                }
             }
             (Some('"'), ch) => {
                 let assignment_value = is_leading_assignment_value(&tokens, &token);

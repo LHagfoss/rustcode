@@ -105,16 +105,6 @@ pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
     count
 }
 
-/// Import provider API keys from the user's login/interactive shell into this
-/// process when they are missing here. Keys exported in `~/.zshrc` are the
-/// classic miss: visible in every terminal, invisible to desktop/systemd/IDE
-/// launches. Runs once at startup; the 3s probe timeout bounds the cost.
-
-/// Interactive terminal session: the only path that owns a screen.
-///
-/// Gated behind the `tui` feature so non-TUI frontends never compile — or
-/// link — the rendering stack.
-
 #[cfg(test)]
 mod background_history_tests {
     use super::{background_task_history_message, queue_background_wakeup};
