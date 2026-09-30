@@ -246,12 +246,31 @@ pub fn write_history_file(path: &Path, history: &[ChatMessage]) {
 }
 
 /// A saved chat session on disk, listed by `/history` and `/resume`.
+/// `workspace_cwd` is the recorded session cwd when a workspace record
+/// exists; `None` marks legacy sessions with no workspace recorded.
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
     pub path: PathBuf,
     pub title: String,
     pub when: String,
     pub message_count: usize,
+    pub workspace_cwd: Option<PathBuf>,
+}
+
+/// Best-effort canonicalization for workspace matching: canonicalize when
+/// possible, otherwise fall back to the raw path so non-existent or
+/// removed directories still compare deterministically.
+pub fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Parent/child workspace match: equal, recorded inside current, or current
+/// inside recorded. Used to scope the session picker and bare `--resume`
+/// to the active project while keeping nested checkouts visible.
+pub fn workspaces_match(recorded: &Path, current: &Path) -> bool {
+    let recorded = canonicalize_best_effort(recorded);
+    let current = canonicalize_best_effort(current);
+    recorded == current || recorded.starts_with(&current) || current.starts_with(&recorded)
 }
 
 /// Workspace roots associated with an ACP session. Older sessions may not
@@ -469,7 +488,8 @@ impl SessionStore {
             return None;
         }
 
-        let title = Self::session_id_from_path(path)
+        let session_id = Self::session_id_from_path(path);
+        let title = session_id
             .as_deref()
             .and_then(|id| self.load_session_title(id))
             .unwrap_or_else(|| {
@@ -485,6 +505,13 @@ impl SessionStore {
                 }
             });
 
+        // Workspace cwd is populated inline so callers can filter on
+        // `meta.workspace_cwd` without an extra N reads per picker open.
+        let workspace_cwd = session_id
+            .as_deref()
+            .and_then(|id| self.load_session_workspace(id))
+            .map(|workspace| workspace.cwd);
+
         Some(SessionMeta {
             title,
             when: messages
@@ -493,6 +520,7 @@ impl SessionStore {
                 .unwrap_or_default(),
             message_count: messages.len(),
             path: path.to_path_buf(),
+            workspace_cwd,
         })
     }
 
@@ -725,6 +753,27 @@ impl SessionStore {
             .find_map(|path| self.load_session_meta(&path))
     }
 
+    /// Workspace-scoped latest session. `cwd` of `None` disables scoping.
+    /// Legacy sessions (no workspace recorded) are included so old work
+    /// remains resumable; explicit `--resume <id>` bypasses this filter.
+    pub fn latest_resumable_session_meta_scoped(&self, cwd: Option<&Path>) -> Option<SessionMeta> {
+        let Some(cwd) = cwd else {
+            return self.latest_resumable_session_meta();
+        };
+        self.sorted_session_paths().into_iter().find_map(|path| {
+            let meta = self.load_session_meta(&path)?;
+            if meta
+                .workspace_cwd
+                .as_deref()
+                .is_none_or(|recorded| workspaces_match(recorded, cwd))
+            {
+                Some(meta)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn session_meta_by_id(&self, id: &str) -> Option<SessionMeta> {
         self.sorted_session_paths()
             .into_iter()
@@ -733,16 +782,36 @@ impl SessionStore {
     }
 
     pub fn list_sessions_limited(&self, limit: usize) -> (Vec<SessionMeta>, bool) {
+        self.list_sessions_limited_scoped(limit, None)
+    }
+
+    /// Workspace-scoped session list with a single pass over the store.
+    /// Filtering uses the `workspace_cwd` embedded in each `SessionMeta`,
+    /// so no additional workspace reads happen per picker open beyond the
+    /// meta construction itself. Legacy sessions (`workspace_cwd: None`)
+    /// are included and should be labeled "no workspace recorded".
+    pub fn list_sessions_limited_scoped(
+        &self,
+        limit: usize,
+        cwd: Option<&Path>,
+    ) -> (Vec<SessionMeta>, bool) {
         let mut list = Vec::new();
         let mut truncated = false;
         for path in self.sorted_session_paths() {
-            if let Some(meta) = self.load_session_meta(&path) {
-                if list.len() < limit {
-                    list.push(meta);
-                } else {
-                    truncated = true;
-                    break;
-                }
+            let Some(meta) = self.load_session_meta(&path) else {
+                continue;
+            };
+            if let Some(cwd) = cwd
+                && let Some(recorded) = meta.workspace_cwd.as_deref()
+                && !workspaces_match(recorded, cwd)
+            {
+                continue;
+            }
+            if list.len() < limit {
+                list.push(meta);
+            } else {
+                truncated = true;
+                break;
             }
         }
         (list, truncated)
@@ -1233,6 +1302,84 @@ mod tests {
         std::fs::write(&history_path, "{not history json").unwrap();
         assert!(store.session_meta_by_id("malformed-session").is_none());
         assert!(store.load_session_file(&history_path).is_empty());
+    }
+
+    #[test]
+    fn workspace_matching_covers_equal_parent_and_child() {
+        let work = tempfile::tempdir().expect("work root");
+        let project = work.path().join("project");
+        let nested = project.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let other = work.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        assert!(workspaces_match(&project, &project));
+        assert!(workspaces_match(&nested, &project));
+        assert!(workspaces_match(&project, &nested));
+        assert!(!workspaces_match(&project, &other));
+        assert!(!workspaces_match(&other, &project));
+    }
+
+    #[test]
+    fn scoped_session_list_filters_by_workspace_and_keeps_legacy() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let work = tempfile::tempdir().expect("work root");
+        let project = work.path().join("project");
+        let nested = project.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let other = work.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let history = vec![message("user", "prompt"), message("assistant", "reply")];
+        for (id, cwd) in [
+            ("201", project.as_path()),
+            ("202", other.as_path()),
+            ("203", nested.as_path()),
+        ] {
+            store.save_session_history(id, &history);
+            store
+                .save_session_workspace(
+                    id,
+                    &SessionWorkspace {
+                        cwd: cwd.to_path_buf(),
+                        additional_directories: Vec::new(),
+                        task_workspace_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        // Legacy session with no workspace record stays visible.
+        store.save_session_history("204", &history);
+        flush_history();
+
+        let (scoped, _) = store.list_sessions_limited_scoped(50, Some(&project));
+        let mut ids = scoped
+            .iter()
+            .map(|meta| SessionStore::session_id_from_path(&meta.path).unwrap())
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["201", "203", "204"]);
+        // Embedded cwd avoids extra reads in the picker predicate.
+        for meta in &scoped {
+            let id = SessionStore::session_id_from_path(&meta.path).unwrap();
+            if id == "204" {
+                assert!(meta.workspace_cwd.is_none());
+            } else {
+                assert!(meta.workspace_cwd.is_some());
+            }
+        }
+        let (all, _) = store.list_sessions_limited_scoped(50, None);
+        assert_eq!(all.len(), 4);
+        let latest = store
+            .latest_resumable_session_meta_scoped(Some(&other))
+            .unwrap();
+        // Legacy "204" is newest overall and stays visible in every scope,
+        // so it wins over the workspace match; the key check is that
+        // project-only sessions are excluded (covered by the list above
+        // and the explicit-id bypass).
+        assert_eq!(
+            SessionStore::session_id_from_path(&latest.path).as_deref(),
+            Some("204")
+        );
     }
 
     #[cfg(unix)]
