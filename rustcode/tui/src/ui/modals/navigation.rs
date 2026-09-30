@@ -553,7 +553,7 @@ pub(in crate::ui) fn render_mcp_config_modal(
         for field_idx in 0..3 {
             let label = match field_idx {
                 0 => "Server Name",
-                1 => "Executable Command",
+                1 => "Command or URL",
                 _ => "Arguments (space-separated)",
             };
             let val = match field_idx {
