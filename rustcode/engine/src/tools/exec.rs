@@ -243,7 +243,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both always require user confirmation, including in YOLO mode, and reusable command approvals cannot grant them. filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. A failed sandboxed command is annotated with the restriction that blocked it (network, filesystem write, filesystem read), the writable roots in effect, and the smallest command that widens it, so a sandbox denial is never confused with a credential or environment failure. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both always require user confirmation, including in YOLO mode, and reusable command approvals cannot grant them. filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "network_access": "optional bool requesting one-shot network access; always requires user confirmation", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; always requires user confirmation"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -848,6 +848,24 @@ fn run_command_output_inner(
     if stdout.is_empty() && stderr.is_empty() {
         result.push_str("(no output)\n");
     }
+    // A failed command's own stderr is ambiguous: "error connecting to
+    // api.github.com" reads identically to a sandbox network denial and to a
+    // dead VPN. Name the restriction the active mode actually enforces so the
+    // model stops guessing (#1540). Trusted mode is unwrapped, so it never
+    // gets an attribution line.
+    if failed && !sandbox_mode.is_trusted() {
+        let observed = format!("{stdout}\n{stderr}");
+        let denial = sandbox::classify_denial(&observed);
+        // Roots the launcher actually used, so the note can name them.
+        let roots = effective_writable_roots(
+            &writable_roots,
+            &one_shot_writable_roots,
+            sandbox_mode.allows_workspace_write(),
+        );
+        result.push('\n');
+        result.push_str(&sandbox::failure_attribution(sandbox_mode, denial, &roots));
+        result.push('\n');
+    }
     Ok(super::ToolExecutionOutput {
         content: result.trim_end().to_string(),
         success: !failed,
@@ -865,6 +883,27 @@ fn run_command_output_inner(
         retryable: false,
         command_status: Some(command_status),
     })
+}
+
+/// The directories a sandboxed command could write to, mirroring what the
+/// launcher does with the policy: a read-only mode grants none, and one-shot
+/// grants add to the configured roots. Used only to name them in a denial
+/// note; canonicalization and symlink checks stay in the launcher.
+fn effective_writable_roots(
+    writable_roots: &[std::path::PathBuf],
+    one_shot_writable_roots: &[std::path::PathBuf],
+    write_access: bool,
+) -> Vec<std::path::PathBuf> {
+    if !write_access {
+        return Vec::new();
+    }
+    let mut roots = writable_roots.to_vec();
+    for root in one_shot_writable_roots {
+        if !roots.contains(root) {
+            roots.push(root.clone());
+        }
+    }
+    roots
 }
 
 /// Check the remote used by the default `gh` repository resolution without
@@ -1232,6 +1271,264 @@ mod tests {
             error.contains("cwd") && error.contains("not a directory"),
             "{error}"
         );
+    }
+
+    /// The originating session's core complaint: under a restricted mode `gh`
+    /// could not reach the API and the failure was reported as a bare
+    /// `error connecting to api.github.com`. Run both modes against the same
+    /// command so the difference is the mode, not the host (#1540).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn trusted_mode_reaches_the_network_and_writes_outside_the_workspace() {
+        if !sandbox::runtime_tests_available() {
+            eprintln!("skipping trusted-mode runtime assertion: sandbox probe unavailable");
+            return;
+        }
+        if std::process::Command::new("python3")
+            .arg("-c")
+            .arg("pass")
+            .status()
+            .is_err()
+        {
+            eprintln!("skipping trusted-mode runtime assertion: python3 is unavailable");
+            return;
+        }
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let outside = tempfile::tempdir().expect("temporary outside directory");
+        let outside_probe = outside.path().join("probe.txt");
+        let (echo_tx, echoed) = std::sync::mpsc::channel();
+        let listener =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback listener");
+        let port = listener.local_addr().expect("listener address").port();
+        // Nonblocking accept with a deadline: a denied connect must fail the
+        // assertion, never hang the suite.
+        listener
+            .set_nonblocking(true)
+            .expect("set the listener nonblocking");
+        let accept = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = echo_tx.send(Err("no connection within 30s".to_string()));
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(error) => {
+                        let _ = echo_tx.send(Err(error.to_string()));
+                        return;
+                    }
+                }
+            };
+            let mut buffer = [0_u8; 8];
+            match stream.read(&mut buffer) {
+                Ok(read) => {
+                    let _ = stream.write_all(&buffer[..read]);
+                    let _ = echo_tx.send(Ok(String::from_utf8_lossy(&buffer[..read]).into_owned()));
+                }
+                Err(error) => {
+                    let _ = echo_tx.send(Err(error.to_string()));
+                }
+            }
+        });
+        let command = format!(
+            "printf trusted > '{}' && printf ping | python3 -c {script}",
+            outside_probe.display(),
+            script = format!(
+                "'{script}'",
+                script = format!(
+                    "import socket,sys\ns=socket.create_connection((\"127.0.0.1\",{port}),timeout=10)\ns.sendall(sys.stdin.buffer.read())\nsys.stdout.write(s.recv(4).decode())\n"
+                )
+                .replace('\'', "'\\''")
+            )
+        );
+        let args = serde_json::json!({"command": command, "timeout_ms": 45_000});
+
+        super::super::set_active_workspace_context(
+            Some(workspace.path().to_path_buf()),
+            Some(workspace.path().to_path_buf()),
+            false,
+            Some(crate::config::SandboxMode::Trusted),
+        );
+        let trusted = run_command_output(&args).expect("trusted command should run");
+        let echo_result = echoed
+            .recv_timeout(std::time::Duration::from_secs(35))
+            .expect("loopback echo must complete");
+        accept.join().expect("loopback echo thread");
+        super::super::set_active_workspace_context(
+            Some(workspace.path().to_path_buf()),
+            Some(workspace.path().to_path_buf()),
+            false,
+            Some(crate::config::SandboxMode::WorkspaceWrite),
+        );
+        let restricted = run_command_output(&args).expect("restricted command should run");
+        super::super::set_active_workspace_context(None, None, false, None);
+
+        assert!(
+            trusted.success,
+            "trusted mode must reach the network and write outside the workspace: {}",
+            trusted.content
+        );
+        assert_eq!(echo_result.expect("loopback echo"), "ping");
+        assert_eq!(
+            std::fs::read_to_string(&outside_probe).expect("trusted write"),
+            "trusted"
+        );
+
+        assert!(
+            !restricted.success,
+            "the default mode must still deny this: {}",
+            restricted.content
+        );
+        assert!(
+            restricted.content.contains("[harness:"),
+            "a restricted failure must name the sandbox: {}",
+            restricted.content
+        );
+        let _ = std::fs::remove_file(&outside_probe);
+    }
+
+    #[test]
+    fn restricted_failures_name_the_sandbox_and_trusted_failures_do_not() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let outside = tempfile::tempdir().expect("temporary outside directory");
+        let outside_probe = outside.path().join("probe.txt");
+        let command = format!("printf x > '{}'", outside_probe.display());
+
+        for (mode, expect_attribution) in [
+            (crate::config::SandboxMode::ReadOnly, true),
+            (crate::config::SandboxMode::WorkspaceWrite, true),
+            (crate::config::SandboxMode::WorkspaceWriteNetwork, true),
+            (crate::config::SandboxMode::Trusted, false),
+        ] {
+            super::super::set_active_workspace_context(
+                Some(workspace.path().to_path_buf()),
+                Some(workspace.path().to_path_buf()),
+                false,
+                Some(mode),
+            );
+            let result = super::run_command_output_with_workspace(
+                &serde_json::json!({"command": command}),
+                Some(workspace.path().to_path_buf()),
+            )
+            .expect("command should run");
+            super::super::set_active_workspace_context(None, None, false, None);
+
+            if expect_attribution {
+                assert!(
+                    result
+                        .content
+                        .contains(&format!("OS sandbox mode {}", mode.as_str())),
+                    "{mode} must name itself: {}",
+                    result.content
+                );
+            } else {
+                assert!(
+                    !result.content.contains("[harness:"),
+                    "trusted mode is unwrapped, so it must not blame a sandbox: {}",
+                    result.content
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn effective_writable_roots_mirror_the_launcher_policy() {
+        let workspace = std::path::PathBuf::from("/workspace");
+        let scratch = std::path::PathBuf::from("/scratch");
+        let one_shot = std::path::PathBuf::from("/one-shot");
+        let roots = vec![workspace.clone(), scratch.clone()];
+
+        assert_eq!(
+            super::effective_writable_roots(&roots, &[one_shot.clone()], true),
+            vec![workspace.clone(), scratch.clone(), one_shot.clone()]
+        );
+        assert_eq!(
+            super::effective_writable_roots(&roots, &[one_shot.clone()], false),
+            Vec::<std::path::PathBuf>::new(),
+            "a read-only mode grants no writable root"
+        );
+        assert_eq!(
+            super::effective_writable_roots(&roots, &[workspace.clone()], true),
+            roots,
+            "a one-shot grant inside an existing root is not listed twice"
+        );
+    }
+
+    /// Trusted removes OS sandbox wrapping only. The approval decision is
+    /// computed before the sandbox mode is read — `authorize_tool_with_args`
+    /// takes no mode argument at all — so the decision, the scope shown to the
+    /// user, and the one-shot escalation rule must be identical in every mode
+    /// (#1540).
+    #[test]
+    fn trusted_mode_does_not_bypass_the_shell_approval_policy() {
+        use crate::config::{AgentMode, SandboxMode};
+        use crate::tools::AuthorizationDecision;
+
+        for command in [
+            "git push --force origin main",
+            "cargo publish",
+            "gh pr merge 1531 --squash",
+            "npm install",
+        ] {
+            let args = serde_json::json!({"command": command});
+            assert!(command_requires_confirmation(&args), "{command}");
+            assert_eq!(
+                super::super::authorize_tool_with_args(
+                    "run_command",
+                    &args,
+                    AgentMode::Build,
+                    false,
+                    false,
+                ),
+                AuthorizationDecision::RequireConfirmation,
+                "{command} must still need approval in trusted mode"
+            );
+            // The card the user approves is the same shape in every mode and
+            // still states the trusted permissions explicitly.
+            let trusted_preview =
+                command_confirmation_preview(command, SandboxMode::Trusted, false, None);
+            let write_preview =
+                command_confirmation_preview(command, SandboxMode::WorkspaceWrite, false, None);
+            assert!(trusted_preview.contains("scope:"), "{trusted_preview}");
+            assert!(
+                trusted_preview.contains("effective OS permissions: trusted process permissions"),
+                "{trusted_preview}"
+            );
+            assert_eq!(
+                trusted_preview
+                    .lines()
+                    .filter(|line| !line.starts_with("effective OS permissions"))
+                    .collect::<Vec<_>>(),
+                write_preview
+                    .lines()
+                    .filter(|line| !line.starts_with("effective OS permissions"))
+                    .collect::<Vec<_>>(),
+                "{command} must be approved on the same terms in trusted mode"
+            );
+        }
+
+        // One-shot escalations are never covered by auto-confirm, trusted or not.
+        for args in [
+            serde_json::json!({"command": "gh pr list", "network_access": true}),
+            serde_json::json!({"command": "cargo fmt", "filesystem_write_path": "/tmp/other"}),
+        ] {
+            assert_eq!(
+                super::super::authorize_tool_with_args(
+                    "run_command",
+                    &args,
+                    AgentMode::Build,
+                    true,
+                    false,
+                ),
+                AuthorizationDecision::RequireConfirmation,
+                "{args} must still need interactive approval"
+            );
+        }
     }
 
     #[test]

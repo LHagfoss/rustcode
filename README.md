@@ -226,15 +226,53 @@ permissions. OS sandbox enforcement is available only on supported backends
 (currently Linux and macOS); on unsupported platforms such as Windows,
 approved commands run with the RustCode process's permissions. Configure the
 effective Linux/macOS mode with `sandbox_mode = "read_only"`,
-`"workspace_write"` (default), or `"workspace_write_network"` in the user
-config; the startup banner displays effective permissions separately from
-approval mode. `network_access: true` requests network access for one command
-and always needs interactive approval, including in YOLO mode. The
-`filesystem_write_path` argument requests one-command write access to one
-existing absolute directory outside the active workspace; its canonical path
+`"workspace_write"` (default), `"workspace_write_network"`, or `"trusted"` in
+the user config, or switch it in a session with `/sandbox <mode>` — `/sandbox`
+with no argument lists every mode with its permissions and marks the current
+one. The status line and the welcome banner display the effective mode
+separately from the approval mode. `network_access: true` requests network
+access for one command and always needs interactive approval, including in YOLO
+mode. The `filesystem_write_path` argument requests one-command write access to
+one existing absolute directory outside the active workspace; its canonical path
 is shown in the approval card. It also requires
 interactive approval and cannot be covered by a saved command approval. See
 [docs/shell-approvals.md](docs/shell-approvals.md).
+
+### Sandbox modes and the default
+
+`workspace_write` stays the default. It is a deliberate safety decision, not an
+oversight: a project checkout, an issue body, or a model tool call must never
+be able to turn host network and filesystem access on by default, and
+`sandbox_mode` is user-level only — a project `.rustcode/config.toml` cannot
+change it in either direction.
+
+`workspace_write` denying network is the mode that surprised a session
+expecting `gh` to work. When a sandboxed command fails, the result names the
+restriction that blocked it (network, filesystem write, filesystem read), the
+writable roots in effect, and the smallest command that widens it, so the
+model does not have to infer the cause:
+
+```text
+[harness: OS sandbox mode workspace_write (workspace/session writes; no network)
+is active and this command failed with a network error. Denied class: network. This mode
+denies outbound network, so the sandbox is the most likely cause. Widen it with
+network_access=true on this command (interactive approval, including in YOLO mode), /sandbox
+workspace_write_network, or /sandbox trusted for RustCode process permissions. ...]
+```
+
+Credential, SSH, and certificate failures are never reported as sandbox
+denials; a failure that matches no sandbox signature says so instead of
+inventing a reason.
+
+`trusted` is the explicit opt-in for working in your own directory with no OS
+sandbox wrapping: commands run with the RustCode process's own filesystem and
+network permissions, anywhere on the host, not only inside the workspace or a
+task worktree. It does not relax the shell approval policy — confirmations,
+saved allows, and deny rules all still apply — and only the user config or
+`/sandbox trusted` can enable it. Use it for routine GitHub work (`gh`, `git
+push`) or when a task needs to read and write your real checkout. Once
+`trusted` is set, a failed command is not annotated, because no OS sandbox
+was involved; the command's own stderr is the result.
 
 ## Background commands
 

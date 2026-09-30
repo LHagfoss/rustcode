@@ -1101,6 +1101,62 @@ async fn sandbox_trusted_mode_is_explicit_opt_in() {
 }
 
 #[tokio::test]
+async fn sandbox_command_without_an_argument_lists_every_mode_including_trusted() {
+    use crate::config::SandboxMode;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/sandbox".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    let s = state.lock().await;
+    let content = s.history.last().unwrap().content.clone();
+    for mode in SandboxMode::ALL {
+        assert!(
+            content.contains(&format!("/sandbox {}", mode.as_str())),
+            "/sandbox usage must offer {}: {content}",
+            mode.as_str()
+        );
+    }
+    assert!(
+        content.contains("* /sandbox workspace_write"),
+        "the current mode must be marked: {content}"
+    );
+    assert!(
+        content.contains("RustCode process permissions"),
+        "trusted must be described, not just named: {content}"
+    );
+    assert!(
+        content.contains("a project config file cannot change it"),
+        "the user-level invariant must be stated where the mode is chosen: {content}"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_rejects_an_unknown_mode_and_names_the_valid_ones() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/sandbox unrestricted_typo".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    let s = state.lock().await;
+    let content = s.history.last().unwrap().content.clone();
+    assert!(content.contains("Invalid option"), "{content}");
+    for mode in crate::config::SandboxMode::ALL {
+        assert!(content.contains(mode.as_str()), "{content}");
+    }
+}
+
+#[tokio::test]
 async fn test_theme_command_flow() {
     use crate::app::state::AppState;
     use std::sync::Arc;

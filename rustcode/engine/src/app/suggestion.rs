@@ -186,7 +186,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/sandbox",
-        desc: "Show or set OS sandbox mode (read_only|workspace_write|workspace_write_network)",
+        desc: "Show or set OS sandbox mode (read_only|workspace_write|workspace_write_network|trusted)",
     },
     CommandInfo {
         name: "/effort",
@@ -340,6 +340,26 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{command_token, filtered_commands};
+
+    /// The composer's `/sandbox` hint is the first thing a user reads when
+    /// searching for the mode they need. Omitting `trusted` here hid the only
+    /// unrestricted mode from the palette while `/sandbox trusted` worked
+    /// (#1540).
+    #[test]
+    fn sandbox_completion_hint_names_every_mode() {
+        let command = filtered_commands("/sandbox")
+            .into_iter()
+            .find(|command| command.name == "/sandbox")
+            .expect("/sandbox is a slash command");
+        for mode in crate::config::SandboxMode::ALL {
+            assert!(
+                command.desc.contains(mode.as_str()),
+                "/sandbox hint must offer {}: {}",
+                mode.as_str(),
+                command.desc
+            );
+        }
+    }
 
     #[test]
     fn command_completion_stays_active_while_arguments_are_present() {

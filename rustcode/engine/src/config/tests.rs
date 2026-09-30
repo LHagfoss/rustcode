@@ -83,6 +83,58 @@ fn project_config_cannot_enable_any_sandbox_mode() {
     assert_eq!(config.sandbox_mode, SandboxMode::default());
 }
 
+/// "Persisted only in user config" is stronger than "cannot enable trusted": a
+/// checked-out project must not move the mode in either direction, or it
+/// could downgrade a user's explicit opt-in (#1496, #1540).
+#[test]
+fn project_config_cannot_change_a_user_selected_sandbox_mode() {
+    for user_mode in SandboxMode::ALL {
+        for project_value in [
+            "\"read_only\"",
+            "\"workspace_write\"",
+            "\"workspace_write_network\"",
+            "\"trusted\"",
+        ] {
+            let mut config = AppConfig::default();
+            config.sandbox_mode = user_mode;
+            let file: TomlConfig =
+                toml::from_str(&format!("sandbox_mode = {project_value}")).unwrap();
+            assert!(file.sandbox_mode.is_some());
+            apply_project_toml_config(&mut config, file);
+            assert_eq!(
+                config.sandbox_mode, user_mode,
+                "project config must not move {user_mode} to {project_value}"
+            );
+        }
+    }
+}
+
+/// The persisted spelling, `/sandbox` argument, and status/footer text must
+/// stay one value, so a documented mode is always a reachable mode.
+#[test]
+fn sandbox_mode_names_match_the_persisted_spelling() {
+    assert_eq!(
+        SandboxMode::ALL
+            .iter()
+            .map(|mode| mode.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "read_only",
+            "workspace_write",
+            "workspace_write_network",
+            "trusted",
+        ]
+    );
+    for mode in SandboxMode::ALL {
+        assert_eq!(
+            serde_json::to_string(&mode).unwrap(),
+            format!("\"{}\"", mode.as_str()),
+            "{mode} must serialize as its config spelling"
+        );
+        assert_eq!(mode.to_string(), mode.as_str());
+    }
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("rustcode-tests").join(format!(
         "{}-{}",

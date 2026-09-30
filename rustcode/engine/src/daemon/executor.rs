@@ -409,20 +409,28 @@ impl ActionBackend for ProductionActions {
                     let sandbox_mode = crate::config::load_config_for_workspace(&cwd)
                         .2
                         .sandbox_mode;
-                    let sandboxed_command = match crate::tools::exec::sandbox::command(
-                        &command,
-                        crate::tools::exec::sandbox::SandboxPolicy {
-                            command_cwd: Some(&cwd),
-                            workspace_root: Some(&cwd),
-                            writable_roots: &writable_roots,
-                            session_scratch_roots: &[],
-                            one_shot_writable_roots: &[],
-                            write_access: sandbox_mode.allows_workspace_write(),
-                            network_access: sandbox_mode.allows_network(),
-                        },
-                    ) {
-                        Ok(command) => command,
-                        Err(error) => return permanent(error),
+                    // Trusted mode means the same thing on the scheduler path
+                    // as in a session: no OS sandbox wrapping, RustCode process
+                    // permissions. Approval above already refused a scheduled
+                    // command without stored authorization.
+                    let sandboxed_command = if sandbox_mode.is_trusted() {
+                        crate::tools::exec::sandbox::passthrough_command(&command)
+                    } else {
+                        match crate::tools::exec::sandbox::command(
+                            &command,
+                            crate::tools::exec::sandbox::SandboxPolicy {
+                                command_cwd: Some(&cwd),
+                                workspace_root: Some(&cwd),
+                                writable_roots: &writable_roots,
+                                session_scratch_roots: &[],
+                                one_shot_writable_roots: &[],
+                                write_access: sandbox_mode.allows_workspace_write(),
+                                network_access: sandbox_mode.allows_network(),
+                            },
+                        ) {
+                            Ok(command) => command,
+                            Err(error) => return permanent(error),
+                        }
                     };
                     let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
                     let captured = output.clone();
