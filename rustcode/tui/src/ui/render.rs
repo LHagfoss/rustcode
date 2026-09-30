@@ -123,7 +123,7 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let completion_dismissed =
         state.dismissed_completion() == state.completion_identity().as_deref();
-    let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
+    let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed || state.modal_open() {
         Vec::new()
     } else {
         rustcode::controller::filtered_commands(&state.input_buffer())
@@ -132,8 +132,10 @@ pub(crate) fn render_with_transcript_snapshot(
     let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
     let raw_input_lines = input_line_count(state, inner_width as usize);
-    let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
-    let question_active = *state.status() == AppStatus::AwaitingQuestion;
+    let approval_active =
+        *state.status() == AppStatus::AwaitingToolConfirmation && !state.user_overlay_open();
+    let question_active =
+        *state.status() == AppStatus::AwaitingQuestion && !state.user_overlay_open();
     // Keep a lone prior answer visible above the question. With a longer
     // transcript, overlay the question so the visible chat does not reflow.
     let question_in_bottom_pane = question_active && state.history().len() <= 1;
@@ -152,6 +154,7 @@ pub(crate) fn render_with_transcript_snapshot(
         rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
             .unwrap_or((0, String::new()));
     let at_files = if !completion_dismissed
+        && !state.modal_open()
         && (!at_query.is_empty()
             || state.input_buffer()
                 [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
@@ -290,12 +293,12 @@ pub(crate) fn render_with_transcript_snapshot(
         .horizontal_margin(0)
         .constraints([
             Constraint::Length(chat_height),
-            Constraint::Length(modal_height),
-            Constraint::Length(queue_block_height),
-            Constraint::Length(popup_height),
             Constraint::Length(activity_gap_top),
             Constraint::Length(activity_height),
             Constraint::Length(activity_gap_bottom),
+            Constraint::Length(queue_block_height),
+            Constraint::Length(modal_height),
+            Constraint::Length(popup_height),
             Constraint::Length(input_height),
             Constraint::Length(footer_height),
         ])
@@ -304,8 +307,9 @@ pub(crate) fn render_with_transcript_snapshot(
     render_live_conversation(f, chunks[0], lines, layout_width);
 
     // The composer indexes these as [chat, queue, popup, input, footer]; the
-    // reserved modal rows sit between the chat and the queue.
-    let composer_chunks = [chunks[0], chunks[2], chunks[3], chunks[7], chunks[8]];
+    // activity stays above the queue, panels and completions. Panels claim
+    // the rows directly above input, exactly where their anchor paints.
+    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[7], chunks[8]];
     render_queue_line(f, &composer_chunks, state);
     // Optional breathing room around live activity (#1494). Gaps are empty
     // background rows; they are omitted when activity is absent or the
@@ -313,19 +317,19 @@ pub(crate) fn render_with_transcript_snapshot(
     if activity_gap_top > 0 {
         f.render_widget(
             Paragraph::new("").style(Style::default().bg(COLOR_BG())),
-            chunks[4],
+            chunks[1],
         );
     }
     if activity_height > 0 {
         f.render_widget(
             Paragraph::new(activity_lines).style(Style::default().bg(COLOR_BG())),
-            chunks[5],
+            chunks[2],
         );
     }
     if activity_gap_bottom > 0 {
         f.render_widget(
             Paragraph::new("").style(Style::default().bg(COLOR_BG())),
-            chunks[6],
+            chunks[3],
         );
     }
     let question_area = if question_active && !question_in_bottom_pane {
@@ -383,87 +387,92 @@ pub(crate) fn render_with_transcript_snapshot(
         let input_inner = chunks[7].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[3].y,
+            chunks[6].y,
             input_inner.width,
-            chunks[3].height,
+            chunks[6].height,
         );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
         let input_inner = chunks[7].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[3].y,
+            chunks[6].y,
             input_inner.width,
-            chunks[3].height,
+            chunks[6].height,
         );
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 
     let input_box_area = question_area.unwrap_or(chunks[7]);
 
-    if state.show_model_picker() {
-        render_model_picker_modal(f, state, input_box_area);
-    }
+    f.render_in_area(chunks[5], |f| {
+        if state.show_model_picker() {
+            render_model_picker_modal(f, state, input_box_area);
+        }
 
-    if state.show_theme_picker() {
-        render_theme_picker_modal(f, state, input_box_area);
-    }
+        if state.show_theme_picker() {
+            render_theme_picker_modal(f, state, input_box_area);
+        }
 
-    if state.show_command_picker() {
-        render_command_picker_modal(f, state, input_box_area);
-    }
+        if state.show_command_picker() {
+            render_command_picker_modal(f, state, input_box_area);
+        }
 
-    if state.show_history_picker() {
-        render_history_picker_modal(f, state, input_box_area);
-    }
+        if state.show_history_picker() {
+            render_history_picker_modal(f, state, input_box_area);
+        }
 
-    if state.show_subagent_picker() {
-        render_subagent_picker_modal(f, state, input_box_area);
-    }
+        if state.show_subagent_picker() {
+            render_subagent_picker_modal(f, state, input_box_area);
+        }
 
-    if state.show_context_modal() {
-        render_context_modal(f, state, input_box_area);
-    }
+        if state.command_panel().is_some() {
+            render_command_panel(f, state, input_box_area);
+        }
+        if state.show_context_modal() {
+            render_context_modal(f, state, input_box_area);
+        }
 
-    if state.show_status_modal() {
-        render_status_modal(f, state, input_box_area);
-    }
+        if state.show_status_modal() {
+            render_status_modal(f, state, input_box_area);
+        }
 
-    if state.show_stats_modal() {
-        render_stats_modal(f, state, input_box_area);
-    }
+        if state.show_stats_modal() {
+            render_stats_modal(f, state, input_box_area);
+        }
 
-    if state.show_session_modal() {
-        render_session_modal(f, state, input_box_area);
-    }
+        if state.show_session_modal() {
+            render_session_modal(f, state, input_box_area);
+        }
 
-    if state.show_update_prompt() {
-        render_update_prompt_modal(f, state, input_box_area);
-    }
+        if state.show_update_prompt() {
+            render_update_prompt_modal(f, state, input_box_area);
+        }
 
-    if state.show_mcp_config() {
-        render_mcp_config_modal(f, state, input_box_area);
-    }
+        if state.show_mcp_config() {
+            render_mcp_config_modal(f, state, input_box_area);
+        }
 
-    if *state.status() == AppStatus::VerbosityPicker {
-        render_verbosity_picker_modal(f, state, input_box_area);
-    }
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Verbosity) {
+            render_verbosity_picker_modal(f, state, input_box_area);
+        }
 
-    if *state.status() == AppStatus::ThinkingPicker {
-        render_thinking_picker_modal(f, state, input_box_area);
-    }
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Thinking) {
+            render_thinking_picker_modal(f, state, input_box_area);
+        }
 
-    if *state.status() == AppStatus::EffortPicker {
-        render_effort_picker_modal(f, state, input_box_area);
-    }
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Effort) {
+            render_effort_picker_modal(f, state, input_box_area);
+        }
 
-    if *state.status() == AppStatus::ProtocolPicker {
-        render_protocol_picker_modal(f, state, input_box_area);
-    }
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Protocol) {
+            render_protocol_picker_modal(f, state, input_box_area);
+        }
 
-    if *state.status() == AppStatus::YoloPicker {
-        render_yolo_picker_modal(f, state, input_box_area);
-    }
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Yolo) {
+            render_yolo_picker_modal(f, state, input_box_area);
+        }
+    });
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(

@@ -289,3 +289,48 @@ mod tests {
         crate::ui::theme::set_active_theme("default");
     }
 }
+
+/// Scrollable command output uses the same bounded surface as the other panels.
+pub(in crate::ui) fn render_command_panel(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let Some(panel) = state.command_panel() else {
+        return;
+    };
+    let area = input_anchor_rect(f, input_area, 18);
+    let inner = render_padded_panel(f, area).inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new(Line::styled(
+            panel.title,
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        )),
+        chunks[0],
+    );
+    let mut lines =
+        super::super::markdown::render_markdown(&panel.content, inner.width as usize, false, true);
+    paint_panel_line_backgrounds(&mut lines, COLOR_PANEL());
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((state.modal_scroll_row(), 0)),
+        chunks[2],
+    );
+    f.render_widget(
+        Paragraph::new("↑/↓ scroll · enter / esc close").style(Style::default().fg(COLOR_MUTED())),
+        chunks[3],
+    );
+}

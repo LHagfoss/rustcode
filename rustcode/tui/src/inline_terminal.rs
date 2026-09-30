@@ -30,6 +30,18 @@ impl Frame<'_> {
         self.buffer
     }
 
+    /// Render a surface with its own viewport so anchored widgets cannot
+    /// claim rows reserved for another surface on short terminals.
+    pub(crate) fn render_in_area(&mut self, area: Rect, render: impl FnOnce(&mut Frame<'_>)) {
+        let mut frame = Frame {
+            cursor_position: self.cursor_position,
+            viewport_area: self.viewport_area.intersection(area),
+            buffer: self.buffer,
+        };
+        render(&mut frame);
+        self.cursor_position = frame.cursor_position;
+    }
+
     pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
         widget.render(area, self.buffer);
     }

@@ -184,6 +184,8 @@ pub struct AppState {
     pub pending_delete_session_idx: Option<usize>,
     pub show_subagent_picker: bool,
     pub subagent_picker_index: usize,
+    pub settings_picker: Option<crate::app::SettingsPicker>,
+    pub command_panel: Option<crate::app::CommandPanel>,
     pub show_context_modal: bool,
     pub show_status_modal: bool,
     pub show_stats_modal: bool,
@@ -1126,6 +1128,8 @@ impl AppState {
             pending_delete_session_idx: None,
             show_subagent_picker: false,
             subagent_picker_index: 0,
+            settings_picker: None,
+            command_panel: None,
             show_context_modal: false,
             show_status_modal: false,
             show_stats_modal: false,
@@ -1212,10 +1216,45 @@ impl AppState {
         self.show_stats_modal = true;
     }
 
+    /// Display command output outside the conversation/provider history.
+    pub fn show_command_panel(&mut self, title: &'static str, content: impl Into<String>) {
+        if self
+            .command_panel
+            .as_ref()
+            .is_none_or(|panel| panel.title != title)
+        {
+            self.modal_scroll_row = 0;
+        }
+        self.command_panel = Some(CommandPanel {
+            title,
+            content: content.into(),
+        });
+        self.request_redraw();
+    }
+
+    /// Refresh an asynchronous command without reopening a dismissed panel.
+    pub fn update_command_panel(&mut self, title: &'static str, content: impl Into<String>) {
+        if self
+            .command_panel
+            .as_ref()
+            .is_some_and(|panel| panel.title == title)
+        {
+            self.show_command_panel(title, content);
+        }
+    }
+
     /// True when any modal overlay is open (pickers or tool confirmation);
     /// the background content renders dimmed.
     pub fn modal_open(&self) -> bool {
-        self.show_model_picker
+        self.user_overlay_open()
+            || self.status == AppStatus::AwaitingToolConfirmation
+            || self.status == AppStatus::AwaitingQuestion
+    }
+
+    pub fn user_overlay_open(&self) -> bool {
+        self.settings_picker.is_some()
+            || self.command_panel.is_some()
+            || self.show_model_picker
             || self.show_theme_picker
             || self.show_command_picker
             || self.show_history_picker
@@ -1226,17 +1265,21 @@ impl AppState {
             || self.show_session_modal
             || self.show_update_prompt
             || self.show_mcp_config
-            || self.status == AppStatus::AwaitingToolConfirmation
-            || self.status == AppStatus::AwaitingQuestion
-            || self.status == AppStatus::VerbosityPicker
-            || self.status == AppStatus::ThinkingPicker
-            || self.status == AppStatus::EffortPicker
-            || self.status == AppStatus::ProtocolPicker
-            || self.status == AppStatus::YoloPicker
+            || matches!(
+                self.status,
+                AppStatus::VerbosityPicker
+                    | AppStatus::ThinkingPicker
+                    | AppStatus::EffortPicker
+                    | AppStatus::ProtocolPicker
+                    | AppStatus::YoloPicker
+            )
     }
 
     /// Restores status when closing a modal or picker, preserving running turns if active.
     pub fn close_modal_status(&mut self) {
+        if self.settings_picker.take().is_some() {
+            return;
+        }
         self.status = if self.orchestrator_running {
             AppStatus::Streaming
         } else if !self.pending_queue.is_empty() {

@@ -979,7 +979,8 @@ async fn test_goal_command_flow() {
     {
         let s = state.lock().await;
         assert!(!s.continuous_mode);
-        assert!(s.history.last().unwrap().content.contains("Usage:"));
+        assert!(s.history.is_empty());
+        assert!(s.command_panel.as_ref().unwrap().content.contains("Usage:"));
     }
 
     // Valid goal
@@ -1053,8 +1054,68 @@ async fn clear_and_new_preserve_history() {
 }
 
 #[tokio::test]
+async fn informational_commands_open_panels_without_history_even_while_busy() {
+    use crate::app::ChatMessage;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+    for command in [
+        "/help",
+        "/info",
+        "/about",
+        "/skills",
+        "/tools",
+        "/changelog",
+        "/ps",
+        "/memory",
+        "/sandbox",
+        "/verbosity invalid",
+        "/context invalid",
+        "/provider",
+        "/workspace",
+        "/workspace status",
+    ] {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        {
+            let mut s = state.lock().await;
+            s.status = crate::app::AppStatus::Streaming;
+            s.orchestrator_running = true;
+            s.history.push(ChatMessage::new("user", "active task"));
+            s.input_buffer = command.to_owned();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+        let s = state.lock().await;
+        assert_eq!(s.history.len(), 1, "{command} must not enter model history");
+        assert!(s.modal_open(), "{command} must open a panel");
+        assert_eq!(s.status, crate::app::AppStatus::Streaming);
+    }
+}
+
+#[tokio::test]
+async fn settings_commands_keep_the_running_turn_status() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+    for command in ["/verbosity", "/thinking", "/effort", "/protocol", "/yolo"] {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        {
+            let mut s = state.lock().await;
+            s.status = crate::app::AppStatus::Streaming;
+            s.orchestrator_running = true;
+            s.input_buffer = command.to_owned();
+        }
+        super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+        let s = state.lock().await;
+        assert_eq!(s.status, crate::app::AppStatus::Streaming, "{command}");
+        assert!(s.modal_open());
+    }
+}
+
+#[tokio::test]
 async fn verbosity_command_opens_picker_on_the_active_value() {
-    use crate::app::{AppStatus, Verbosity};
+    use crate::app::Verbosity;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
@@ -1072,13 +1133,15 @@ async fn verbosity_command_opens_picker_on_the_active_value() {
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
 
     let s = state.lock().await;
-    assert_eq!(s.status, AppStatus::VerbosityPicker);
+    assert_eq!(
+        s.settings_picker,
+        Some(crate::app::SettingsPicker::Verbosity)
+    );
     assert_eq!(s.modal_picker_index, 1);
 }
 
 #[tokio::test]
 async fn yolo_command_opens_picker_and_accepts_arguments() {
-    use crate::app::AppStatus;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
@@ -1091,7 +1154,7 @@ async fn yolo_command_opens_picker_and_accepts_arguments() {
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
-        assert_eq!(s.status, AppStatus::YoloPicker);
+        assert_eq!(s.settings_picker, Some(crate::app::SettingsPicker::Yolo));
         assert_eq!(s.modal_picker_index, 1);
     }
 
@@ -1138,7 +1201,13 @@ async fn sandbox_command_shows_and_sets_the_effective_mode() {
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     let s = state.lock().await;
     assert_eq!(s.config.sandbox_mode, SandboxMode::ReadOnly);
-    assert!(s.history.last().unwrap().content.contains("read-only"));
+    assert!(
+        s.command_panel
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("read-only")
+    );
 }
 
 #[tokio::test]
@@ -1156,7 +1225,13 @@ async fn sandbox_trusted_mode_can_be_selected_explicitly() {
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     let s = state.lock().await;
     assert_eq!(s.config.sandbox_mode, SandboxMode::Trusted);
-    assert!(s.history.last().unwrap().content.contains("trusted"));
+    assert!(
+        s.command_panel
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("trusted")
+    );
 }
 
 #[tokio::test]
@@ -1173,7 +1248,7 @@ async fn sandbox_command_without_an_argument_lists_every_mode_including_trusted(
     state.lock().await.input_buffer = "/sandbox".to_owned();
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     let s = state.lock().await;
-    let content = s.history.last().unwrap().content.clone();
+    let content = s.command_panel.as_ref().unwrap().content.clone();
     for mode in SandboxMode::ALL {
         assert!(
             content.contains(&format!("/sandbox {}", mode.as_str())),
@@ -1208,7 +1283,7 @@ async fn sandbox_rejects_an_unknown_mode_and_names_the_valid_ones() {
     state.lock().await.input_buffer = "/sandbox unrestricted_typo".to_owned();
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     let s = state.lock().await;
-    let content = s.history.last().unwrap().content.clone();
+    let content = s.command_panel.as_ref().unwrap().content.clone();
     assert!(content.contains("Invalid option"), "{content}");
     for mode in crate::config::SandboxMode::ALL {
         assert!(content.contains(mode.as_str()), "{content}");
@@ -1256,8 +1331,8 @@ async fn test_theme_command_flow() {
     {
         let s = state.lock().await;
         assert_eq!(s.config.theme, "nord");
-        assert_eq!(s.history.last().unwrap().role, "system");
-        assert!(s.history.last().unwrap().content.contains("nord"));
+        assert!(s.history.is_empty());
+        assert!(s.command_panel.as_ref().unwrap().content.contains("nord"));
     }
 
     // Switch to unknown theme
@@ -1271,8 +1346,8 @@ async fn test_theme_command_flow() {
         let s = state.lock().await;
         assert_eq!(s.config.theme, "nord");
         assert!(
-            s.history
-                .last()
+            s.command_panel
+                .as_ref()
                 .unwrap()
                 .content
                 .contains("Unknown theme 'unknown_theme'")
