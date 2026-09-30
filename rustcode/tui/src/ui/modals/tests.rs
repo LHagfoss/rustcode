@@ -745,3 +745,111 @@ fn history_picker_renders_borderless_full_width_options() {
     assert!(rendered.contains("6 msgs"));
     assert!(rendered.contains("17:35"));
 }
+
+#[test]
+fn context_panel_uses_theme_swatches_matching_the_grid() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    crate::ui::theme::set_active_theme("default");
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    let mut state = AppState::new();
+    state.history.push(rustcode::controller::ChatMessage::new(
+        "user",
+        "Hello assistant",
+    ));
+    state.history.push(rustcode::controller::ChatMessage::new(
+        "assistant",
+        "Hello! How can I help you today?",
+    ));
+    terminal
+        .draw(|frame| {
+            render_context_modal(frame, &render_snapshot(&state), Rect::new(0, 21, 120, 3))
+        })
+        .unwrap();
+    let rows = (0..24)
+        .map(|y| {
+            (0..120)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let rendered = rows.join("\n");
+    for category in [
+        "User messages",
+        "Agent responses",
+        "Tool calls",
+        "System prompt",
+        "System tools",
+        "Skills",
+        "Subagents",
+    ] {
+        assert!(
+            rendered.contains(&format!("● {category}")),
+            "legend swatch must match the grid glyph: {rendered:?}"
+        );
+    }
+    assert!(
+        !rendered.contains('⛃'),
+        "legend must not mix grid glyphs: {rendered:?}"
+    );
+    assert!(rendered.contains("● "), "grid should render used cells");
+    assert!(rendered.contains("□ "), "grid should render free cells");
+    crate::ui::theme::set_active_theme("default");
+}
+
+#[test]
+fn context_panel_emphasizes_over_threshold_categories() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    crate::ui::theme::set_active_theme("default");
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    let mut state = AppState::new();
+    // Tool traffic dominates a small window, pushing "Tool calls" over the
+    // over-threshold share while tiny categories stay muted.
+    let mut profile = rustcode::controller::ModelProfile::default();
+    profile.name = state.model_name.clone();
+    profile.model = state.model_name.clone();
+    profile.url = state.api_base_url.clone();
+    profile.context_window = Some(100_000);
+    state.config.models.clear();
+    state.config.models.push(profile);
+    state.history.push(rustcode::controller::ChatMessage::new(
+        "tool",
+        "The quick brown fox jumps over the lazy dog. ".repeat(4_400),
+    ));
+    let breakdown = calculate_context_breakdown(&render_snapshot(&state));
+    let tool_pct = breakdown.tool_tokens as f64 / breakdown.context_window.max(1) as f64 * 100.0;
+    assert!(
+        tool_pct >= super::panel::OVER_THRESHOLD_PCT,
+        "tool share should clear the threshold: {tool_pct:.1}%"
+    );
+    terminal
+        .draw(|frame| {
+            render_context_modal(frame, &render_snapshot(&state), Rect::new(0, 21, 120, 3))
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let row_of = |needle: &str| {
+        (0..24)
+            .find(|y| {
+                (0..120)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .unwrap_or_else(|| panic!("missing {needle:?}"))
+    };
+    let tool_row = row_of("Tool calls");
+    assert!(
+        (0..120).any(|x| buffer[(x, tool_row)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)),
+        "over-threshold category value should be emphasized"
+    );
+    let skills_row = row_of("Skills");
+    assert!(
+        (0..120).all(|x| !buffer[(x, skills_row)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)),
+        "under-threshold category value should stay muted"
+    );
+    crate::ui::theme::set_active_theme("default");
+}

@@ -27,6 +27,7 @@ mod advanced_settings;
 mod confirmation;
 mod context;
 mod navigation;
+mod panel;
 mod question;
 mod settings;
 
@@ -48,6 +49,10 @@ pub use navigation::{PALETTE_ITEMS, PaletteItem};
 pub(in crate::ui) use navigation::{
     render_command_picker_modal, render_history_picker_modal, render_mcp_config_modal,
     render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
+};
+pub(in crate::ui) use panel::{
+    HIGH_USAGE_PCT, PanelEmphasis, context_category_colors, emphasis_for_share, panel_line,
+    panel_value_spans,
 };
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
