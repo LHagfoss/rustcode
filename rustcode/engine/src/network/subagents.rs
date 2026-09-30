@@ -166,7 +166,8 @@ pub(crate) async fn run_subagent(
     );
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
-    let mut loop_detector = loop_detect::LoopDetector::new(6);
+    let loop_abort = { state.lock().await.config.loop_guard.effective_loop_abort() };
+    let mut loop_detector = loop_detect::LoopDetector::new(loop_abort);
     loop {
         if cancel_token.is_cancelled() {
             crate::logger::operational_event(

@@ -775,6 +775,13 @@ pub struct ProgressLedger {
     seen_verifications: HashSet<u64>,
     recent_states: VecDeque<u64>,
     no_progress_streak: usize,
+    /// Action that opened the current no-progress streak. A streak only grows
+    /// while the same action repeats or the same failure fingerprint recurs;
+    /// legitimate error recovery across different tools restarts the streak
+    /// instead of pooling into a spurious recovery injection.
+    streak_action: Option<String>,
+    streak_failure: Option<u64>,
+    recovery_streak: usize,
 }
 
 impl Default for ProgressLedger {
@@ -785,6 +792,9 @@ impl Default for ProgressLedger {
             seen_verifications: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
             no_progress_streak: 0,
+            streak_action: None,
+            streak_failure: None,
+            recovery_streak: Self::RECOVERY_STREAK,
         }
     }
 }
@@ -866,8 +876,25 @@ impl ProgressLedger {
 
         if meaningful {
             self.no_progress_streak = 0;
+            self.streak_action = None;
+            self.streak_failure = None;
         } else if !fresh_verification {
-            self.no_progress_streak = self.no_progress_streak.saturating_add(1);
+            // Corroboration gate: the streak only grows when the same action
+            // repeats or the same failure fingerprint recurs. A different
+            // tool failing differently is divergent error recovery, not a
+            // loop — restart the streak under the new action instead of
+            // pooling unrelated misses into one recovery injection.
+            let corroborated = self.streak_action.is_some()
+                && (self.streak_action.as_deref() == Some(observation.action.as_str())
+                    || observation.failure_fingerprint.is_some()
+                        && observation.failure_fingerprint == self.streak_failure);
+            if corroborated {
+                self.no_progress_streak = self.no_progress_streak.saturating_add(1);
+            } else {
+                self.no_progress_streak = 1;
+                self.streak_action = Some(observation.action.clone());
+                self.streak_failure = observation.failure_fingerprint;
+            }
         }
 
         ProgressAssessment {
@@ -884,6 +911,31 @@ impl ProgressLedger {
 
     pub fn no_progress_streak(&self) -> usize {
         self.no_progress_streak
+    }
+
+    /// Action that opened the current no-progress streak, if any. Recovery
+    /// prompts should name this origin instead of the last tool seen, which
+    /// misattributes a pooled streak to whatever ran most recently.
+    pub fn streak_action(&self) -> Option<&str> {
+        self.streak_action.as_deref()
+    }
+
+    /// Configured streak length that arms evidence-based recovery.
+    pub fn recovery_streak(&self) -> usize {
+        self.recovery_streak
+    }
+
+    pub fn set_recovery_streak(&mut self, streak: usize) {
+        self.recovery_streak = streak.max(1);
+    }
+
+    /// Drop the current streak without recording an observation. Harness
+    /// guardrail hits (workspace-boundary rejections, infrastructure outages)
+    /// are not model stagnation and must not feed recovery.
+    pub fn reset_streak(&mut self) {
+        self.no_progress_streak = 0;
+        self.streak_action = None;
+        self.streak_failure = None;
     }
 }
 
@@ -1227,6 +1279,7 @@ pub use reasoning::*;
 mod infrastructure;
 pub use infrastructure::{
     InfrastructureFailure, InfrastructureFailureDecision, InfrastructureFailureTracker,
+    WORKSPACE_BOUNDARY_FINGERPRINT, is_workspace_boundary_failure,
 };
 
 #[cfg(test)]

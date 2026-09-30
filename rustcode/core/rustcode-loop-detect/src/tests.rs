@@ -1029,7 +1029,9 @@ fn semantically_equivalent_failures_become_no_progress_despite_new_commands() {
 }
 
 #[test]
-fn distinct_failed_commands_do_not_reset_no_progress_streak() {
+fn uncorrelated_failures_across_tools_reset_no_progress_streak() {
+    // Divergent error recovery across different tools must not pool into one
+    // recovery injection: each new action restarts the streak at 1.
     let mut ledger = ProgressLedger::default();
     for (index, action) in ["curl /one", "curl /two", "curl /three"]
         .into_iter()
@@ -1041,9 +1043,45 @@ fn distinct_failed_commands_do_not_reset_no_progress_streak() {
         let assessment = ledger.observe(&failed);
         assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
         assert!(!assessment.meaningful);
+        assert_eq!(assessment.streak, 1, "tool change must restart the streak");
+    }
+    assert_eq!(ledger.no_progress_streak(), 1);
+    assert!(ledger.no_progress_streak() < ProgressLedger::RECOVERY_STREAK);
+}
+
+#[test]
+fn repeated_same_tool_failures_accumulate_no_progress_streak() {
+    let mut ledger = ProgressLedger::default();
+    for index in 0..ProgressLedger::RECOVERY_STREAK {
+        let mut failed = observation(&format!("failure {index}"), None, None);
+        failed.action = "run_command:stable".to_string();
+        failed.success = false;
+        let assessment = ledger.observe(&failed);
+        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
         assert_eq!(assessment.streak, index + 1);
     }
     assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
+    assert_eq!(ledger.streak_action(), Some("run_command:stable"));
+}
+
+#[test]
+fn streak_action_names_streak_origin_and_resets_with_it() {
+    let mut ledger = ProgressLedger::default();
+    let mut first = observation("miss", None, None);
+    first.action = "grep:foo".to_string();
+    first.search_result = true;
+    first.no_result = true;
+    ledger.observe(&first);
+    assert_eq!(ledger.streak_action(), Some("grep:foo"));
+    let mut other = observation("other miss", None, None);
+    other.action = "run_command:bar".to_string();
+    other.success = false;
+    ledger.observe(&other);
+    assert_eq!(ledger.no_progress_streak(), 1);
+    assert_eq!(ledger.streak_action(), Some("run_command:bar"));
+    ledger.reset_streak();
+    assert_eq!(ledger.no_progress_streak(), 0);
+    assert_eq!(ledger.streak_action(), None);
 }
 
 #[test]

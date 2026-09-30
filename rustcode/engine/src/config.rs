@@ -96,6 +96,70 @@ pub const MAX_CONFIGURED_READ_ONLY_CALLS_PER_RESPONSE: usize = 8;
 /// prefix and can amplify incomplete structured calls.
 pub const DEFAULT_MAX_TOOL_CONTINUATIONS: usize = 2;
 pub const MAX_CONFIGURED_TOOL_CONTINUATIONS: usize = 4;
+/// Default consecutive no-progress observations that arm evidence-based loop
+/// recovery. Scoped per tool/failure class: unrelated misses across different
+/// tools restart the streak instead of pooling into one injection.
+pub const DEFAULT_EVIDENCE_RECOVERY_STREAK: usize = 3;
+/// Default call-repetition abort threshold for the loop detector.
+pub const DEFAULT_LOOP_DETECTOR_ABORT: usize = 6;
+
+fn default_evidence_recovery_streak() -> usize {
+    DEFAULT_EVIDENCE_RECOVERY_STREAK
+}
+
+fn default_loop_detector_abort() -> usize {
+    DEFAULT_LOOP_DETECTOR_ABORT
+}
+
+/// Loop-guard budgets, configurable under `[loop_guard]` in config.toml.
+/// `evidence_recovery_streak` arms evidence-based recovery after that many
+/// corroborated (same tool or same failure class) no-progress observations;
+/// `loop_detector_abort` is the call-repetition abort threshold.
+/// `evidence_recovery_enabled = false` is the hatch that disables the
+/// evidence-recovery injection while keeping loop warnings. A checked-out
+/// project config must not change these safety budgets; only the user config
+/// may.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopGuardConfig {
+    #[serde(default = "default_evidence_recovery_streak")]
+    pub evidence_recovery_streak: usize,
+    #[serde(default = "default_loop_detector_abort")]
+    pub loop_detector_abort: usize,
+    #[serde(default = "default_true")]
+    pub evidence_recovery_enabled: bool,
+}
+
+impl Default for LoopGuardConfig {
+    fn default() -> Self {
+        Self {
+            evidence_recovery_streak: DEFAULT_EVIDENCE_RECOVERY_STREAK,
+            loop_detector_abort: DEFAULT_LOOP_DETECTOR_ABORT,
+            evidence_recovery_enabled: true,
+        }
+    }
+}
+
+impl LoopGuardConfig {
+    /// Zero means "not set": fall back to the default instead of firing on
+    /// the first miss.
+    pub fn effective_recovery_streak(self) -> usize {
+        if self.evidence_recovery_streak == 0 {
+            DEFAULT_EVIDENCE_RECOVERY_STREAK
+        } else {
+            self.evidence_recovery_streak
+        }
+    }
+
+    /// Clamp degenerate aborts: below 2 the detector would warn/abort on
+    /// nearly every repeat, including legitimate re-reads.
+    pub fn effective_loop_abort(self) -> usize {
+        if self.loop_detector_abort < 2 {
+            DEFAULT_LOOP_DETECTOR_ABORT
+        } else {
+            self.loop_detector_abort
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolSchedulingPolicy {
@@ -1031,6 +1095,9 @@ pub struct AppConfig {
     pub max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]
     pub subagent_concurrency_limit: usize,
+    /// Loop-guard budgets (`[loop_guard]` in config.toml). User config only.
+    #[serde(default)]
+    pub loop_guard: LoopGuardConfig,
     #[serde(default)]
     pub last_active_session_id: Option<String>,
     #[serde(default)]
@@ -1163,6 +1230,8 @@ struct TomlConfig {
     max_total_tool_rounds: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_concurrency_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    loop_guard: Option<LoopGuardConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_active_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1315,6 +1384,7 @@ impl Default for AppConfig {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_total_tool_rounds: DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
             subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
+            loop_guard: LoopGuardConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
             mcp_servers: vec![McpServerConfig {
@@ -1652,6 +1722,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         max_tool_rounds: Some(config.max_tool_rounds),
         max_total_tool_rounds: Some(config.max_total_tool_rounds),
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
+        loop_guard: Some(config.loop_guard),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
@@ -1721,6 +1792,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(limit) = file.subagent_concurrency_limit {
         config.subagent_concurrency_limit = limit;
+    }
+    if let Some(loop_guard) = file.loop_guard {
+        config.loop_guard = loop_guard;
     }
     if let Some(session_id) = file.last_active_session_id {
         config.last_active_session_id = Some(session_id);
@@ -1797,6 +1871,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     file.denied_command_prefixes = None;
     // A checked-out project must not widen the user's OS command permissions.
     file.sandbox_mode = None;
+    // Loop-guard budgets are user safety decisions, mirroring command
+    // permissions: a project file must not disable recovery guards.
+    file.loop_guard = None;
     // Legacy user data should remain attached to the global config, never a
     // checked-out project file.
     file.legacy_laya = None;
@@ -1883,6 +1960,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         max_tool_rounds: None,
         max_total_tool_rounds: None,
         subagent_concurrency_limit: None,
+        loop_guard: None,
         last_active_session_id: None,
         mcp_servers: None,
         approved_command_prefixes: None,
