@@ -804,8 +804,9 @@ fn format_number(value: u64) -> String {
     formatted
 }
 
-/// Printed after restoring the terminal and erasing the transient composer,
-/// matching Codex's compact usage and resume handoff.
+/// Printed after restoring the terminal and erasing the session projection
+/// (#1544), matching Codex's compact usage and resume handoff. The session id
+/// is the recovery path for the erased conversation.
 fn print_exit_summary(summary: &ExitSummary) {
     use std::io::{IsTerminal, Write};
 

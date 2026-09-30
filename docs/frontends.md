@@ -100,6 +100,30 @@ Fullscreen releases the alternate screen on normal exit, panic, Ctrl-Z
 suspension, and the terminal runtime's external-command handoff. The main
 screen scrollback is never cleared as part of fullscreen exit.
 
+### Inline exit clears the session projection (#1544)
+
+Inline sessions paint into the normal screen and commit finished transcript
+rows into native scrollback while they run, so an exit used to leave the whole
+conversation on screen above the handoff. The exit erase now covers every row
+the session painted: from the row the session started at, shifted up by the
+rows the session scrolled the screen, down to the bottom of the screen. After
+`/exit`, `Ctrl-C`, or `Ctrl-D` the terminal therefore shows only the exit
+handoff and the shell prompt.
+
+Two properties are deliberate, and hold on every terminal without probing it:
+
+- **Scrollback is preserved, never purged.** The erase is `ClearType::AfterCursor`
+  from the anchor, not `ESC[2J`+`ESC[3J`, so the conversation stays scrollable
+  and output from before the session survives. The erased rows are the
+  conversation's last screenful; `rustcode --resume <session>` in the handoff is
+  how the rest is read back.
+- **Rows the session never painted survive.** A session that fits on screen
+  erases only its own rows, so earlier terminal output above it stays.
+
+This is inline-mode behavior only. Fullscreen already discards everything via
+the alternate screen. A panic is not treated as an exit: the projection and
+the panic message stay on screen while the terminal is restored.
+
 ### Umbrella closeout (#1450, 2026-09-30)
 
 The umbrella's remaining scope is settled. Recorded here so it is not re-opened
