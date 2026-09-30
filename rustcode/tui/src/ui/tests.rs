@@ -952,6 +952,8 @@ fn inline_command_selection_is_distinct_from_typed_input() {
 
 #[test]
 fn inline_command_recommendations_style_unselected_rows_as_default_text() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, style::Modifier};
 
@@ -2695,6 +2697,8 @@ fn collapses_image_markers_to_chips() {
 
 #[test]
 fn pasted_image_and_text_chips_use_accent_text() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let mut state = AppState::new();
     state.history.push(ChatMessage::new(
         "user",
@@ -3294,6 +3298,8 @@ fn new_chat_separator_spans_width_and_centers_label() {
 
 #[test]
 fn resumed_session_separator_spans_width_and_centers_label() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     use unicode_width::UnicodeWidthStr;
 
     let mut lines = Vec::new();
@@ -4946,6 +4952,8 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
 
 #[test]
 fn committed_user_messages_keep_regular_body_text() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let mut state = AppState::new();
     state
         .history
@@ -5027,6 +5035,8 @@ fn committed_assistant_message_has_one_trailing_separator() {
 
 #[test]
 fn conversation_recap_renders_as_compact_labeled_block() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let mut state = AppState::new();
     state.history.push(
         ChatMessage::new(
@@ -5308,6 +5318,8 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
 
 #[test]
 fn empty_composer_has_painted_padding_and_external_model_footer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
