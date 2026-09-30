@@ -328,6 +328,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 #[cfg(test)]
 mod tests {
     use super::{COLOR_MUTED, render_file_preview, render_tool_result};
+    use crate::ui::tests::THEME_TEST_LOCK;
     use ratatui::style::Color;
 
     fn text_of(line: &ratatui::text::Line<'_>) -> String {
@@ -339,6 +340,8 @@ mod tests {
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "view_file",
             "[File: src/main.rs, Lines 4 to 5 of 5]\n4: fn main() {}",
@@ -358,6 +361,8 @@ mod tests {
 
     #[test]
     fn grep_results_distinguish_file_headers_and_matches() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "grep",
             "src/main.rs:\n  12: fn main() {}",
@@ -377,6 +382,8 @@ mod tests {
 
     #[test]
     fn directory_results_get_tree_markers() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "list_directory",
             "src/\nmain.rs",
@@ -390,6 +397,8 @@ mod tests {
 
     #[test]
     fn command_results_have_compact_status_and_output() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "run_command",
             "exit code: 0\nstdout:\ncargo test\nstderr:\n",
@@ -408,6 +417,8 @@ mod tests {
 
     #[test]
     fn failed_commands_use_error_status_and_stderr_marker() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "run_command",
             "exit code: 1\nstderr:\npermission denied",
@@ -421,6 +432,8 @@ mod tests {
 
     #[test]
     fn edit_results_show_only_a_compact_success_summary() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'",
@@ -438,6 +451,8 @@ mod tests {
 
     #[test]
     fn edit_results_preserve_embedded_diffs() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'\n\n```diff\n@@\n-old\n+new\n```",
@@ -463,6 +478,8 @@ mod tests {
 
     #[test]
     fn control_plane_results_are_hidden() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         assert!(
             render_tool_result(
                 "use_skill",
@@ -487,6 +504,8 @@ mod tests {
 
     #[test]
     fn tool_output_uses_darker_muted_color() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "run_command",
             "exit code: 0\nstdout:\nhello world",
@@ -501,6 +520,8 @@ mod tests {
 
     #[test]
     fn generic_results_are_muted_and_keep_errors_visible() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
         let lines = render_tool_result(
             "mcp_custom_tool",
             "completed\nerror: remote service failed",
