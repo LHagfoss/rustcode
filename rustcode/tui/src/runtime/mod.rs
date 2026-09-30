@@ -240,7 +240,7 @@ mod tests {
         let (revision, input_area) = {
             let state = runtime.app_state().await;
             (
-                render_snapshot(&state).revision(),
+                render_snapshot(&rustcode::controller::render_state(&state)).revision(),
                 ratatui::layout::Rect::new(1, 2, 30, 4),
             )
         };
@@ -316,7 +316,7 @@ mod tests {
             .push(rustcode::app::ChatMessage::new("assistant", "final answer"));
         state.clear_current_response();
         state.enter_idle();
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
         let mut cursor = crate::ui::scrollback::TranscriptCursor::default();
 
         let lines = super::render_finalized_assistant_scrollback(

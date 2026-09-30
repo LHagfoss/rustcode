@@ -23,8 +23,8 @@ pub(super) fn render_live_tail_snapshot(
 }
 
 #[cfg(test)]
-pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
-    let snapshot = render_snapshot(&state);
+pub(crate) fn render_live_tail(view: &RenderState, width: u16, height: u16) -> Vec<Line<'static>> {
+    let snapshot = render_snapshot(view);
     render_live_tail_snapshot(&snapshot, width, height)
 }
 
@@ -573,42 +573,42 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 pub(crate) fn render_committed_tool_result_group(
-    state: &AppState,
+    view: &RenderState,
     message_indices: &[usize],
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let snapshot = render_snapshot(&state);
+    let snapshot = render_snapshot(view);
     render_committed_tool_result_group_snapshot(&snapshot, message_indices, width, show_picker)
 }
 
 #[cfg(test)]
 pub(crate) fn render_work_separator_before_assistant(
-    state: &AppState,
+    view: &RenderState,
     assistant_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let snapshot = render_snapshot(&state);
+    let snapshot = render_snapshot(view);
     render_work_separator_before_assistant_snapshot(&snapshot, assistant_index, width)
 }
 
 #[cfg(test)]
 pub(crate) fn build_claude_startup_banner(
-    state: &AppState,
+    view: &RenderState,
     total_width: usize,
     max_height: usize,
 ) -> Vec<Line<'static>> {
-    let snapshot = render_snapshot(&state);
+    let snapshot = render_snapshot(view);
     build_claude_startup_banner_snapshot(&snapshot, total_width, max_height)
 }
 
 #[cfg(test)]
 pub(crate) fn render_committed_history_block(
-    state: &AppState,
+    view: &RenderState,
     message_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let snapshot = render_snapshot(&state);
+    let snapshot = render_snapshot(view);
     render_committed_history_block_snapshot(&snapshot, message_index, width)
 }
 
@@ -633,13 +633,13 @@ pub(super) fn render_committed_assistant_text_snapshot(
 
 #[cfg(test)]
 pub(crate) fn render_committed_assistant_chunk(
-    _state: &AppState,
+    view: &RenderState,
     content: &str,
     width: u16,
     is_continuation: bool,
 ) -> Vec<Line<'static>> {
     render_committed_assistant_chunk_snapshot(
-        &RenderSnapshot::new(_state),
+        &RenderSnapshot::new(view),
         content,
         width,
         is_continuation,
@@ -648,11 +648,11 @@ pub(crate) fn render_committed_assistant_chunk(
 
 #[cfg(test)]
 pub(crate) fn render_committed_assistant_text(
-    _state: &AppState,
+    view: &RenderState,
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
-    render_committed_assistant_text_snapshot(&RenderSnapshot::new(_state), content, width)
+    render_committed_assistant_text_snapshot(&RenderSnapshot::new(view), content, width)
 }
 
 #[cfg(test)]
@@ -687,11 +687,12 @@ pub(super) fn render_committed_assistant_text_with_metrics(
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+    use crate::ui::render_snapshot::set_current_response;
     use rustcode::controller::ChatMessage;
 
     #[test]
     fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state
             .history
             .push(ChatMessage::new("user", "first request"));
@@ -708,7 +709,7 @@ mod projection_tests {
         state
             .history
             .push(ChatMessage::new("assistant", "last answer"));
-        state.replace_current_response("live first line\nlive second line");
+        set_current_response(&mut state, "live first line\nlive second line");
         let snapshot = render_snapshot(&state);
         let width = 42;
         let height = 14;

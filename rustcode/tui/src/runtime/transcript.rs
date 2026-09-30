@@ -269,7 +269,7 @@ mod tests {
             tool_turn("call-2"),
             result("call-2"),
         ]);
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1, 3], 4));
     }
@@ -289,7 +289,7 @@ mod tests {
             ),
             result("call-2"),
         ]);
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
     }
@@ -308,7 +308,7 @@ mod tests {
                 }]),
             result("call-2"),
         ]);
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
         assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
     }
@@ -323,7 +323,7 @@ mod tests {
             ChatMessage::new("system", "a recovery boundary"),
             result("call-2"),
         ]);
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
         assert_eq!(tool_result_group(&snapshot, 1, 5, 80), (vec![1], 2));
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::render_snapshot::render_snapshot;
+use crate::ui::render_snapshot::{render_snapshot, set_current_response};
 
 fn spawn_background_task_for_test(
     task_id: &str,
@@ -13,47 +13,77 @@ fn spawn_background_task_for_test(
 
 pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String {
+fn render_state_to_text(state: &mut RenderState, width: u16, height: u16) -> String {
+    let (text, _) = render_state_to_text_with_composer_area(state, width, height);
+    text
+}
+
+/// Render one frame and report where the composer landed.
+///
+/// The view carries no engine-side layout metrics, so tests that assert the
+/// composer's screen position read the rect the renderer returned.
+fn render_state_to_text_with_composer_area(
+    state: &mut RenderState,
+    width: u16,
+    height: u16,
+) -> (String, ratatui::layout::Rect) {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|frame| render(frame, state)).unwrap();
+    let mut input_area = ratatui::layout::Rect::default();
+    terminal
+        .draw(|frame| input_area = render(frame, state).1)
+        .unwrap();
 
-    (0..height)
+    let text = (0..height)
         .map(|row| {
             (0..width)
                 .map(|column| terminal.backend().buffer()[(column, row)].symbol())
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    (text, input_area)
 }
 
 fn render_state_to_text_with_transcript(
-    state: &mut AppState,
+    state: &mut RenderState,
     transcript: &mut TranscriptState,
     width: u16,
     height: u16,
 ) -> String {
+    let (text, _) =
+        render_state_to_text_with_transcript_and_composer_area(state, transcript, width, height);
+    text
+}
+
+fn render_state_to_text_with_transcript_and_composer_area(
+    state: &mut RenderState,
+    transcript: &mut TranscriptState,
+    width: u16,
+    height: u16,
+) -> (String, ratatui::layout::Rect) {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut input_area = ratatui::layout::Rect::default();
     terminal
-        .draw(|frame| render_with_transcript(frame, state, transcript))
+        .draw(|frame| input_area = render_with_transcript(frame, state, transcript).1)
         .unwrap();
-    (0..height)
+    let text = (0..height)
         .map(|row| {
             (0..width)
                 .map(|column| terminal.backend().buffer()[(column, row)].symbol())
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    (text, input_area)
 }
 
-fn render_context_modal_to_text(state: &AppState, width: u16, height: u16) -> String {
+fn render_context_modal_to_text(state: &RenderState, width: u16, height: u16) -> String {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, layout::Rect};
 
@@ -79,7 +109,7 @@ fn render_context_modal_to_text(state: &AppState, width: u16, height: u16) -> St
         .join("\n")
 }
 
-fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String {
+fn render_snapshot_to_text(state: &RenderState, width: u16, height: u16) -> String {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
@@ -162,15 +192,15 @@ fn render_snapshot_preserves_existing_ui_output() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut states = Vec::new();
 
-    states.push(AppState::new());
+    states.push(RenderState::new());
 
-    let mut streaming = AppState::new();
+    let mut streaming = RenderState::new();
     streaming.history.push(ChatMessage::new("user", "hello"));
     streaming.status = AppStatus::Streaming;
-    streaming.replace_current_response("streamed output");
+    set_current_response(&mut streaming, "streamed output");
     states.push(streaming);
 
-    let mut approval = AppState::new();
+    let mut approval = RenderState::new();
     approval.status = AppStatus::AwaitingToolConfirmation;
     approval.pending_tool_confirmation = Some(vec![rustcode::controller::ToolConfirmation {
         request_id: None,
@@ -183,7 +213,7 @@ fn render_snapshot_preserves_existing_ui_output() {
     }]);
     states.push(approval);
 
-    let mut question = AppState::new();
+    let mut question = RenderState::new();
     question.status = AppStatus::AwaitingQuestion;
     question.pending_question = Some(rustcode::controller::PendingQuestion::new(
         "Proceed?".to_owned(),
@@ -192,28 +222,22 @@ fn render_snapshot_preserves_existing_ui_output() {
     ));
     states.push(question);
 
-    let mut picker = AppState::new();
+    let mut picker = RenderState::new();
     picker.show_model_picker = true;
     states.push(picker);
 
-    let mut selected_subagent = AppState::new();
-    selected_subagent
-        .subagents
-        .push(rustcode::controller::SubAgent {
-            id: 7,
-            name: "reviewer".to_owned(),
-            task: "review the patch".to_owned(),
-            model: Some("test-model".to_owned()),
-            history: std::sync::Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
-            status: rustcode::controller::SubAgentStatus::Running,
-            active_turn: true,
-            parent_id: Some(3),
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
+    let mut selected_subagent = RenderState::new();
+    let child = rustcode::controller::SubAgentView {
+        id: 7,
+        name: "reviewer".to_owned(),
+        task: "review the patch".to_owned(),
+        history: std::sync::Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
+        status: rustcode::controller::SubAgentStatus::Running,
+        active_turn: true,
+        parent_id: Some(3),
+    };
+    selected_subagent.subagents.push(child.clone());
+    selected_subagent.selected_subagent = Some(child);
     selected_subagent.selected_subagent_id = Some(7);
     states.push(selected_subagent);
 
@@ -293,7 +317,7 @@ fn render_snapshot_preserves_existing_ui_output() {
 
 #[test]
 fn acceptance_empty_session_has_welcome_and_composer() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let rendered = render_state_to_text(&mut state, 100, 28);
 
     assert!(
@@ -308,10 +332,10 @@ fn acceptance_empty_session_has_welcome_and_composer() {
 
 #[test]
 fn acceptance_streaming_session_has_working_surface_and_live_text() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     state.status = AppStatus::Streaming;
-    state.replace_current_response("streamed output");
+    set_current_response(&mut state, "streamed output");
 
     let rendered = render_state_to_text(&mut state, 100, 20);
 
@@ -324,18 +348,20 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
 
 #[test]
 fn working_status_is_fixed_immediately_above_the_composer() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.history.push(ChatMessage::new("user", "hello"));
-    state.replace_current_response(
+    set_current_response(
+        &mut state,
         (1..=20)
             .map(|index| format!("response line {index}"))
             .collect::<Vec<_>>()
             .join("\n"),
     );
     let mut transcript = TranscriptState::default();
-    let rendered = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
-    let composer_y = state.input_text_area.expect("composer area").y as usize;
+    let (rendered, input_area) =
+        render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 50, 12);
+    let composer_y = input_area.y as usize;
     let rows = rendered.lines().collect::<Vec<_>>();
     // #1494: live activity keeps one row of breathing room above the composer.
     assert!(rows[composer_y - 2].contains("Working"));
@@ -354,7 +380,7 @@ fn working_status_is_fixed_immediately_above_the_composer() {
 fn acceptance_tool_confirmation_replaces_composer_with_actions() {
     use rustcode::controller::ToolConfirmation;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::AwaitingToolConfirmation;
     state.pending_tool_confirmation = Some(vec![ToolConfirmation {
         request_id: None,
@@ -381,7 +407,7 @@ fn acceptance_tool_confirmation_replaces_composer_with_actions() {
 
 #[test]
 fn acceptance_narrow_terminal_keeps_the_composer_visible() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     let rendered = render_state_to_text(&mut state, 48, 8);
 
@@ -390,7 +416,7 @@ fn acceptance_narrow_terminal_keeps_the_composer_visible() {
 
 #[test]
 fn desired_height_keeps_the_composer_at_the_terminal_bottom() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     let mut transcript = TranscriptState::default();
 
@@ -400,9 +426,9 @@ fn desired_height_keeps_the_composer_at_the_terminal_bottom() {
 #[test]
 fn short_live_reply_follows_the_welcome_cell() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response("short reply");
+    set_current_response(&mut state, "short reply");
     let rendered = render_state_to_text(&mut state, 80, 24);
     let lines = rendered.lines().collect::<Vec<_>>();
     let reply_row = lines
@@ -424,9 +450,9 @@ fn short_live_reply_follows_the_welcome_cell() {
 #[test]
 fn streaming_reply_keeps_earlier_lines_visible_in_the_full_viewport() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response("First answer line\nSecond answer line");
+    set_current_response(&mut state, "First answer line\nSecond answer line");
 
     let rendered = render_state_to_text(&mut state, 80, 24);
     assert!(
@@ -442,7 +468,7 @@ fn streaming_reply_keeps_earlier_lines_visible_in_the_full_viewport() {
 #[test]
 fn static_slash_output_stays_visible_after_a_picker_closes() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("system", "RustCode build information"));
@@ -463,7 +489,7 @@ fn transcript_scroll_moves_chat_without_changing_the_composer() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..30 {
         state
             .history
@@ -484,12 +510,16 @@ fn transcript_scroll_moves_chat_without_changing_the_composer() {
             .join("\n")
     };
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let latest = render_text(&terminal);
     transcript.scroll_up(1);
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let older = render_text(&terminal);
     assert_ne!(latest, older);
@@ -501,8 +531,8 @@ fn transcript_scroll_moves_chat_without_changing_the_composer() {
 #[test]
 fn transient_notice_appears_below_input_without_entering_chat_history() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
-    state.set_transient_notice("YOLO mode enabled");
+    let mut state = RenderState::new();
+    state.transient_notice = Some("YOLO mode enabled".to_owned());
     let rendered = render_state_to_text(&mut state, 80, 24);
     assert!(rendered.contains("YOLO mode enabled"));
     assert!(state.history.is_empty());
@@ -512,7 +542,7 @@ fn transient_notice_appears_below_input_without_entering_chat_history() {
 fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -560,10 +590,10 @@ fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
 #[test]
 fn active_tool_does_not_repeat_a_committed_thought() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let thought = "<think>Plan the shell command.</think>";
     state.history.push(ChatMessage::new("assistant", thought));
-    state.replace_current_response(thought);
+    set_current_response(&mut state, thought);
     state.status = AppStatus::Streaming;
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new("call-1", None, "run_command", "Bash", "sleep 10"),
@@ -578,10 +608,11 @@ fn active_tool_does_not_repeat_a_committed_thought() {
 
 #[test]
 fn desired_height_grows_with_streaming_text_and_clamps_to_terminal() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     state.status = AppStatus::Streaming;
-    state.replace_current_response(
+    set_current_response(
+        &mut state,
         (0..50)
             .map(|line| format!("streamed line {line}"))
             .collect::<Vec<_>>()
@@ -600,7 +631,7 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.config.models = (1..=5)
         .map(|number| rustcode::controller::ModelProfile {
             name: format!("model-{number}"),
@@ -621,7 +652,11 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
     state.show_model_picker = true;
 
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
 
     let rendered: String = terminal
         .backend()
@@ -646,11 +681,15 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_command_picker = true;
 
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
 
     let rendered: String = terminal
         .backend()
@@ -676,13 +715,17 @@ fn inline_command_suggestions_render_above_the_composer() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.cursor_position = 1;
     state.active_suggestion_index = Some(0);
 
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
 
     let buffer = terminal.backend().buffer();
     let row_text = |row: u16| {
@@ -722,13 +765,15 @@ fn completion_footer_hint_replaces_session_metadata() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.cursor_position = 1;
     state.active_suggestion_index = Some(0);
     let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
     terminal
-        .draw(|frame| super::render(frame, &mut state))
+        .draw(|frame| {
+            super::render(frame, &mut state);
+        })
         .unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -755,7 +800,7 @@ fn completion_footer_hint_replaces_session_metadata() {
 #[test]
 fn command_popup_keeps_composer_on_the_same_bottom_row() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.cursor_position = 1;
     state.active_suggestion_index = Some(0);
@@ -782,7 +827,7 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 #[test]
 fn status_screen_uses_the_viewport_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_status_modal = true;
     state.active_session_id = "status-test".to_owned();
     let rendered = render_state_to_text(&mut state, 80, 24);
@@ -807,31 +852,31 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
             .unwrap_or_else(|| panic!("missing {needle:?} in {rendered:?}"))
     };
 
-    let cases: [(fn(&mut AppState), &str); 5] = [
+    let cases: [(fn(&mut RenderState), &str); 5] = [
         (
-            |state: &mut AppState| state.show_status_modal = true,
+            |state: &mut RenderState| state.show_status_modal = true,
             "Session status",
         ),
         (
-            |state: &mut AppState| state.show_model_picker = true,
+            |state: &mut RenderState| state.show_model_picker = true,
             "Select model",
         ),
         (
-            |state: &mut AppState| state.show_context_modal = true,
+            |state: &mut RenderState| state.show_context_modal = true,
             "context usage",
         ),
         (
-            |state: &mut AppState| state.show_stats_modal = true,
+            |state: &mut RenderState| state.show_stats_modal = true,
             "Token usage",
         ),
         (
-            |state: &mut AppState| state.show_session_modal = true,
+            |state: &mut RenderState| state.show_session_modal = true,
             "Session",
         ),
     ];
 
     for (open_modal, modal_title) in cases {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state
             .history
             .push(ChatMessage::new("system", "transcript stays above"));
@@ -847,14 +892,14 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
 #[test]
 fn stats_and_session_panels_render_their_details_without_touching_the_transcript() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_stats_modal = true;
     let rendered = render_state_to_text(&mut state, 80, 24);
     assert!(rendered.contains("Token usage"), "{rendered:?}");
     assert!(rendered.contains("no token data yet"), "{rendered:?}");
     assert!(rendered.contains("esc to close"), "{rendered:?}");
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_session_modal = true;
     state.active_session_id = "session-test".to_owned();
     state
@@ -877,7 +922,7 @@ fn inline_command_selection_is_distinct_from_typed_input() {
     use ratatui::{backend::TestBackend, style::Modifier};
 
     for input in ["/mo", "/model"] {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.input_buffer = input.to_owned();
         state.cursor_position = input.len();
         state.active_suggestion_index = Some(0);
@@ -887,7 +932,11 @@ fn inline_command_selection_is_distinct_from_typed_input() {
         ));
 
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &mut state);
+            })
+            .unwrap();
         let buffer = terminal.backend().buffer();
         let row_text = |row: u16| {
             (0..100)
@@ -942,7 +991,7 @@ fn inline_command_recommendations_style_unselected_rows_as_default_text() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, style::Modifier};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.cursor_position = 1;
     state.active_suggestion_index = Some(1);
@@ -981,7 +1030,7 @@ fn inline_command_popup_marks_selection_and_clips_descriptions_to_width() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::{backend::TestBackend, layout::Rect};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "/".to_owned();
     state.active_suggestion_index = Some(0);
     let commands = rustcode::controller::filtered_commands("/");
@@ -1009,9 +1058,13 @@ fn welcome_banner_renders_without_a_conversation() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
 
     let rendered: String = terminal
         .backend()
@@ -1050,9 +1103,11 @@ fn welcome_banner_renders_without_a_conversation() {
 
 #[test]
 fn welcome_banner_shows_active_model_effort_and_context_window() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.api_base_url = "http://localhost/test".to_string();
     state.model_name = "test-model".to_string();
+    // The engine resolves the active profile and window from `config.models`
+    // into the view (`controller::render_state`); seed both here.
     state.config.models = vec![rustcode::controller::ModelProfile {
         name: "test-profile".to_string(),
         url: state.api_base_url.clone(),
@@ -1061,6 +1116,8 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         reasoning_effort: Some("high".to_string()),
         ..Default::default()
     }];
+    state.active_model_profile = Some(state.config.models[0].clone());
+    state.active_context_window = 128_000;
 
     let lines = super::build_claude_startup_banner(&state, 100, 28);
     let rendered = lines
@@ -1082,7 +1139,7 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
 
 #[test]
 fn welcome_banner_pads_above_session_and_groups_session_with_model() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
     let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
     let session = rendered
@@ -1108,7 +1165,7 @@ fn welcome_banner_pads_above_session_and_groups_session_with_model() {
 
 #[test]
 fn welcome_wordmark_has_room_above_and_to_its_left() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let rendered = super::build_claude_startup_banner(&state, 100, 28)
         .into_iter()
         .map(|line| line.to_string())
@@ -1128,7 +1185,7 @@ fn welcome_wordmark_has_room_above_and_to_its_left() {
 
 #[test]
 fn welcome_wordmark_colors_the_whole_c_white() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
     let glyph_row = lines
         .iter()
@@ -1148,7 +1205,7 @@ fn welcome_wordmark_colors_the_whole_c_white() {
 
 #[test]
 fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
     let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
     for (value, command) in [
@@ -1197,7 +1254,7 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
 
 #[test]
 fn welcome_banner_includes_padding_below() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::render_live_tail(&state, 100, 28);
     assert!(!lines.is_empty());
     // The last line should be empty padding below the banner box
@@ -1210,7 +1267,7 @@ fn welcome_banner_includes_padding_below() {
 
 #[test]
 fn welcome_banner_includes_padding_before_bottom_border() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::render_live_tail(&state, 100, 28);
     let bottom_border = lines
         .iter()
@@ -1229,7 +1286,7 @@ fn welcome_banner_includes_padding_before_bottom_border() {
 
 #[test]
 fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
-    let state = AppState::new();
+    let state = RenderState::new();
     // Test with small height = 6
     let lines = super::render_live_tail(&state, 100, 6);
     let text = lines
@@ -1247,7 +1304,7 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
 
 #[test]
 fn welcome_banner_stays_inside_narrow_terminal_width() {
-    let state = AppState::new();
+    let state = RenderState::new();
     for width in [8, 16, 32] {
         let lines = super::build_claude_startup_banner(&state, width, 28);
 
@@ -1261,7 +1318,7 @@ fn welcome_banner_stays_inside_narrow_terminal_width() {
 
 #[test]
 fn welcome_banner_omits_hints_that_do_not_fit() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let lines = super::build_claude_startup_banner(&state, 32, 28);
     let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
 
@@ -1276,7 +1333,7 @@ fn welcome_banner_omits_hints_that_do_not_fit() {
 
 #[test]
 fn first_message_keeps_the_welcome_cell_in_the_transcript() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("user", "hello from the first turn"));
@@ -1302,7 +1359,7 @@ fn first_message_keeps_the_welcome_cell_in_the_transcript() {
 
 #[test]
 fn welcome_cell_remains_reachable_after_many_messages() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..40 {
         state
             .history
@@ -1327,7 +1384,7 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.pending_queue = vec![
         "first prompt".to_owned(),
         "second prompt".to_owned(),
@@ -1337,7 +1394,11 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
     ];
 
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
     let rendered: String = terminal
         .backend()
         .buffer()
@@ -1359,26 +1420,21 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
-    use rustcode::controller::PendingSteer;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = rustcode::controller::AppStatus::Streaming;
-    state.active_turn_steerable_session = Some(state.active_session_id.clone());
-    state.pending_steers = vec![
-        PendingSteer {
-            session_id: state.active_session_id.clone(),
-            text: "first steer".to_owned(),
-        },
-        PendingSteer {
-            session_id: state.active_session_id.clone(),
-            text: "second steer".to_owned(),
-        },
-    ];
+    state.steering_interruptible = true;
+    state.steering_escape_will_interrupt = true;
+    state.pending_steers = vec!["first steer".to_owned(), "second steer".to_owned()];
     state.pending_queue = vec!["follow-up one".to_owned(), "follow-up two".to_owned()];
     state.input_buffer = "draft text".to_owned();
 
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
     let rendered: String = terminal
         .backend()
         .buffer()
@@ -1403,28 +1459,32 @@ fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection(
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
-    use rustcode::controller::PendingSteer;
 
     for blocker in ["completion", "selection"] {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.status = rustcode::controller::AppStatus::Streaming;
-        state.active_turn_steerable_session = Some(state.active_session_id.clone());
-        state.pending_steers.push(PendingSteer {
-            session_id: state.active_session_id.clone(),
-            text: "apply this steer".to_owned(),
-        });
+        state.steering_interruptible = true;
+        state.pending_steers.push("apply this steer".to_owned());
         match blocker {
-            "completion" => state.input_buffer = "/mo".to_owned(),
+            // A completion or a transcript selection takes Escape first, so
+            // the engine resolves the interrupt hint to false.
+            "completion" => {
+                state.input_buffer = "/mo".to_owned();
+                state.steering_escape_will_interrupt = false;
+            }
             "selection" => {
                 state.input_buffer = "draft text".to_owned();
-                state.sel_start = Some((0, 0));
-                state.sel_end = Some((5, 0));
+                state.steering_escape_will_interrupt = false;
             }
             _ => unreachable!(),
         }
 
         let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
-        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &mut state);
+            })
+            .unwrap();
         let rendered: String = terminal
             .backend()
             .buffer()
@@ -1578,7 +1638,7 @@ fn mcp_tools_render_with_server_and_tool_name() {
 
 #[test]
 fn tool_path_formatting_uses_captured_snapshot_home() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let snapshot = render_snapshot(&state);
     let Some(home) = snapshot.home_path() else {
         return;
@@ -1630,7 +1690,7 @@ fn persisted_edit_result_resolves_tool_name_without_previous_call() {
 fn committed_tool_result_shows_action_status_and_indented_output() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1674,7 +1734,7 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
 fn committed_tool_result_shows_failure_status() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1717,7 +1777,7 @@ fn committed_tool_result_shows_failure_status() {
 fn ask_question_renders_prompt_and_answer_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1778,7 +1838,7 @@ fn ask_question_renders_prompt_and_answer_in_committed_history() {
 fn ask_question_cancellation_renders_visibly() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1819,7 +1879,7 @@ fn ask_question_cancellation_renders_visibly() {
 fn chained_ask_question_renders_count_and_every_answer() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1881,7 +1941,7 @@ fn chained_ask_question_renders_count_and_every_answer() {
 fn use_skill_renders_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -1917,7 +1977,7 @@ fn use_skill_renders_in_committed_history() {
 fn incremental_tool_round_continuation_has_no_second_group_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.extend([
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -1960,7 +2020,7 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
 fn high_verbosity_keeps_tool_call_summaries_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -1996,7 +2056,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
 fn completed_generic_tool_uses_ran_heading_and_indented_child() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -2026,7 +2086,7 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
 fn high_verbosity_batches_consecutive_commands_under_one_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::High;
     state
         .history
@@ -2081,7 +2141,7 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
 fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::High;
     state
         .history
@@ -2132,7 +2192,7 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
 fn worked_separator_only_labels_concrete_work_over_one_minute() {
     use rustcode::controller::{ChatMessage, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "fix it"));
     state.history.push(
         ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
@@ -2166,7 +2226,7 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
 fn work_separator_follows_tool_with_padding_gap() {
     use rustcode::controller::{ChatMessage, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "explore"));
     state.history.push(
         ChatMessage::new("tool", "view_file: read main.rs").with_tool_result(ToolResultRecord {
@@ -2193,7 +2253,7 @@ fn work_separator_follows_tool_with_padding_gap() {
 fn high_verbosity_hides_generic_tool_details() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -2234,7 +2294,7 @@ fn high_verbosity_hides_generic_tool_details() {
 fn high_verbosity_collapses_tool_output_without_mutating_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -2291,7 +2351,7 @@ fn default_verbosity_is_high() {
 fn completed_edits_have_a_distinct_transcript_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -2324,7 +2384,7 @@ fn completed_edits_have_a_distinct_transcript_heading() {
 fn committed_file_write_is_labeled_as_a_write() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -2355,7 +2415,7 @@ fn committed_file_write_is_labeled_as_a_write() {
 fn committed_batched_edits_with_casing_aliases_group_under_edited() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -2405,7 +2465,7 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
 fn exploration_results_group_and_deduplicate_child_rows() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -2470,7 +2530,7 @@ fn exploration_results_group_and_deduplicate_child_rows() {
 fn exploration_results_match_repeated_calls_without_ids_in_order() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -2513,7 +2573,7 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
 fn command_preview_preserves_the_output_tail() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -2562,7 +2622,7 @@ fn command_preview_preserves_the_output_tail() {
 fn expanded_generic_tool_preserves_its_result_body() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -2600,7 +2660,7 @@ fn expanded_generic_tool_preserves_its_result_body() {
 fn mixed_batch_command_entry_shows_expand_hint_and_body() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
     state
         .history
@@ -2684,7 +2744,7 @@ fn collapses_image_markers_to_chips() {
 fn pasted_image_and_text_chips_use_accent_text() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "user",
         "see ![image](file:///tmp/a.png) and <!--PASTE:12:pasted text-->",
@@ -3325,7 +3385,7 @@ fn new_chat_started_separator_spans_width_without_emoji() {
 
 #[test]
 fn resumed_session_committed_block_has_top_and_bottom_padding() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "system",
         "Resumed session \"My Test Session\"",
@@ -3365,7 +3425,7 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
 
 #[test]
 fn deferred_tool_batch_notice_explains_scheduling_without_a_failure_warning() {
-    let mut state = rustcode::app::AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "system",
         "[The model emitted 5 tool calls. 4 were executed this round; the remaining calls (get_status (call_123)) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
@@ -3388,7 +3448,7 @@ fn deferred_tool_batch_notice_explains_scheduling_without_a_failure_warning() {
 
 #[test]
 fn session_command_uses_the_bordered_status_panel() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "system",
         "Session ID: session-123\nActive model: deepseek-v4.1-flash",
@@ -3403,7 +3463,7 @@ fn session_command_uses_the_bordered_status_panel() {
 
 #[test]
 fn cancelled_turn_status_stays_out_of_the_chat() {
-    let mut state = rustcode::app::AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "system",
         "[harness: turn stopped — cancelled]",
@@ -3419,7 +3479,7 @@ fn cancelled_turn_status_stays_out_of_the_chat() {
 
 #[test]
 fn old_yolo_status_stays_out_of_the_chat() {
-    let mut state = rustcode::app::AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "system",
         "YOLO mode enabled",
@@ -3435,7 +3495,7 @@ fn old_yolo_status_stays_out_of_the_chat() {
 
 #[test]
 fn assistant_oversized_response_notice_renders_empty_block() {
-    let mut state = rustcode::app::AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "assistant",
         "[Oversized response: only the first 1 tool calls were kept (use_skill); 1 more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]",
@@ -3521,7 +3581,7 @@ fn footer_animation_pulse_center_reaches_both_edges() {
 
 #[test]
 fn activity_status_labels_idle_and_working_states() {
-    let state = AppState::new();
+    let state = RenderState::new();
     assert_eq!(activity_status_label(&render_snapshot(&state)), "Idle");
     assert_eq!(
         activity_status_line(&render_snapshot(&state), false)
@@ -3532,7 +3592,7 @@ fn activity_status_labels_idle_and_working_states() {
         " "
     );
 
-    let mut streaming_state = AppState::new();
+    let mut streaming_state = RenderState::new();
     streaming_state.status = AppStatus::Streaming;
     assert_eq!(
         activity_status_label(&render_snapshot(&streaming_state)),
@@ -3548,7 +3608,7 @@ fn activity_status_labels_idle_and_working_states() {
 
 #[test]
 fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time = Some(std::time::Instant::now());
     let mut tracker = rustcode::controller::StreamTracker::new();
@@ -3570,13 +3630,11 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
 
 #[test]
 fn background_terminal_activity_shows_management_hints_and_command() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     // Unique session: the shared test config dir reuses last-active sessions
     // across tests, and task snapshots are session-scoped.
     state.active_session_id = "ui-background-footer-session".to_owned();
-    state.background_turn_context = Some(Box::new(
-        rustcode::controller::TurnContext::with_max_tool_rounds(1),
-    ));
+    state.waiting_for_background_terminal = true;
     let session_id = state.active_session_id.clone();
     let task_id = "ui-background-footer";
     let long_command = if cfg!(target_os = "windows") {
@@ -3585,8 +3643,11 @@ fn background_terminal_activity_shows_management_hints_and_command() {
         "sleep 30"
     };
     spawn_background_task_for_test(task_id, &session_id, long_command).unwrap();
+    // The engine projects the live task manager into the view; see
+    // `controller::render_state`.
+    state.background_tasks = rustcode::controller::background_task_snapshots(&session_id);
     let snapshot = render_snapshot(&state);
-    state.background_turn_context = None;
+    state.waiting_for_background_terminal = false;
     let neutral_snapshot = render_snapshot(&state);
     rustcode::controller::stop_background_tasks(&session_id, None);
 
@@ -3623,7 +3684,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
 #[test]
 fn background_terminal_chip_compacts_more_than_three_tasks() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     // Unique session: the shared test config dir reuses last-active sessions
     // across tests, and task snapshots are session-scoped.
     state.active_session_id = "ui-background-chip-session".to_owned();
@@ -3642,6 +3703,7 @@ fn background_terminal_chip_compacts_more_than_three_tasks() {
         .unwrap();
     }
 
+    state.background_tasks = rustcode::controller::background_task_snapshots(&session_id);
     let snapshot = render_snapshot(&state);
     let summary = super::background_terminal_summary(&snapshot);
     rustcode::controller::stop_background_tasks(&session_id, None);
@@ -3653,7 +3715,7 @@ fn background_terminal_chip_compacts_more_than_three_tasks() {
 
 #[test]
 fn live_tool_activity_is_rendered_without_protocol_text() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time = Some(std::time::Instant::now());
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
@@ -3680,12 +3742,14 @@ fn composer_footer_stays_compact_when_busy() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.model_name = "streaming-model".to_string();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     terminal
-        .draw(|frame| super::render(frame, &mut state))
+        .draw(|frame| {
+            super::render(frame, &mut state);
+        })
         .unwrap();
 
     let rendered = terminal
@@ -3735,7 +3799,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
 
 #[test]
 fn live_tool_cell_is_a_projection_not_history() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new(
             "local:1",
@@ -3757,9 +3821,9 @@ fn live_tool_cell_is_a_projection_not_history() {
 
 #[test]
 fn live_tool_projection_does_not_hide_partial_assistant_stream() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response("partial assistant response");
+    set_current_response(&mut state, "partial assistant response");
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new(
             "local:1",
@@ -3785,16 +3849,19 @@ fn live_tool_projection_does_not_hide_partial_assistant_stream() {
 
 #[test]
 fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response(concat!(
-        "The edit is in progress.\n\n```tool\n",
-        r#"{"name":"replace_file_content","arguments":{"path":"src/main.rs","target_content":"old","replacement":"new"}}"#
-    ));
+    set_current_response(
+        &mut state,
+        concat!(
+            "The edit is in progress.\n\n```tool\n",
+            r#"{"name":"replace_file_content","arguments":{"path":"src/main.rs","target_content":"old","replacement":"new"}}"#
+        ),
+    );
     assert!(
         rustcode_tool_protocol::parse_tool_call(
             &state.current_response,
-            state.active_tool_protocol()
+            state.active_tool_protocol
         )
         .is_some()
     );
@@ -3824,9 +3891,9 @@ fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
 
 #[test]
 fn live_tool_and_assistant_cells_update_and_clear_independently() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response("partial response");
+    set_current_response(&mut state, "partial response");
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new(
             "local:1",
@@ -3862,7 +3929,7 @@ fn live_tool_and_assistant_cells_update_and_clear_independently() {
     assert!(assistant_only.contains("partial response"));
     assert!(!assistant_only.contains("src/main.rs"));
 
-    state.clear_current_response();
+    set_current_response(&mut state, "");
     let tools_and_assistant_cleared =
         super::render_live_tail_with_transcript(&render_snapshot(&state), 80, 24, &mut transcript)
             .into_iter()
@@ -4024,35 +4091,6 @@ fn speculative_file_write_uses_preparing_heading() {
 }
 
 #[test]
-fn deferred_speculative_projections_are_dropped_while_running_calls_remain() {
-    let mut state = AppState::new();
-    state.update_speculative_live_tool_call(
-        Some("call-a"),
-        "run_command",
-        &serde_json::json!({"command": "cargo test"}),
-    );
-    state.update_speculative_live_tool_call(
-        Some("call-b"),
-        "run_command",
-        &serde_json::json!({"command": "cargo lint"}),
-    );
-    // Adopt one call; the other represents a scheduler-deferred projection.
-    state.begin_live_tool_call(
-        Some("call-a"),
-        "run_command",
-        &serde_json::json!({"command": "cargo test"}),
-    );
-    assert_eq!(state.live_tool_calls.len(), 2);
-    state.clear_speculative_live_tool_calls();
-    assert_eq!(state.live_tool_calls.len(), 1);
-    assert!(state.live_tool_calls[0].execution_started);
-    assert_eq!(
-        state.live_tool_calls[0].provider_call_id.as_deref(),
-        Some("call-a")
-    );
-}
-
-#[test]
 fn speculative_tool_without_target_is_not_rendered() {
     let mut call = rustcode::controller::LiveToolCall::new("local:1", None, "list", "List", "");
     call.execution_started = false;
@@ -4064,9 +4102,13 @@ fn speculative_tool_without_target_is_not_rendered() {
 
 #[test]
 fn native_speculative_exploration_without_target_uses_preparing_heading() {
-    let mut state = AppState::new();
+    let mut call =
+        rustcode::controller::LiveToolCall::new("local:1", None, "grep", "Calling", "grep");
+    call.execution_started = false;
+
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.update_speculative_native_tool_call("grep", &serde_json::json!({}));
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
 
     let text = super::render_live_tail(&state, 80, 24)
         .into_iter()
@@ -4298,7 +4340,7 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "assistant",
         "The previous answer stays visible.",
@@ -4310,7 +4352,11 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
         false,
     ));
     let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
-    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &mut state);
+        })
+        .unwrap();
     let rendered = terminal
         .backend()
         .buffer()
@@ -4353,7 +4399,7 @@ fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..12 {
         state.history.push(ChatMessage::new(
             "user",
@@ -4363,7 +4409,9 @@ fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
     let mut transcript = TranscriptState::default();
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let before_cells = terminal.backend().buffer().content.clone();
     let before = (0..20)
@@ -4381,7 +4429,9 @@ fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
         false,
     ));
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let after = (0..20)
         .map(|row| {
@@ -4400,7 +4450,9 @@ fn opening_question_keeps_transcript_rows_in_place_above_the_panel() {
     state.status = AppStatus::Idle;
     state.pending_question = None;
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let restored = (0..20)
         .map(|row| {
@@ -4419,7 +4471,7 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..12 {
         state.history.push(ChatMessage::new(
             "user",
@@ -4430,10 +4482,13 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
     }
     let mut terminal = Terminal::new(TestBackend::new(36, 16)).unwrap();
     let mut transcript = TranscriptState::default();
+    let mut input_area = ratatui::layout::Rect::default();
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            input_area = render_with_transcript(frame, &mut state, &mut transcript).1;
+        })
         .unwrap();
-    let input_top = state.input_text_area.expect("composer area").y;
+    let input_top = input_area.y;
     let before = (0..input_top)
         .map(|row| {
             (0..36)
@@ -4444,7 +4499,9 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
 
     transcript.scroll_up(1);
     terminal
-        .draw(|frame| render_with_transcript(frame, &mut state, &mut transcript))
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
         .unwrap();
     let after = (0..input_top)
         .map(|row| {
@@ -4460,14 +4517,14 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
 #[test]
 fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..24 {
         state
             .history
             .push(ChatMessage::new("user", format!("reading item {index:02}")));
     }
     let mut transcript = TranscriptState::default();
-    let visible = |state: &AppState, transcript: &mut TranscriptState, height| {
+    let visible = |state: &RenderState, transcript: &mut TranscriptState, height| {
         let snapshot = render_snapshot(state);
         super::conversation_render::render_visible_conversation_with_transcript(
             &snapshot, 64, height, transcript,
@@ -4484,11 +4541,11 @@ fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
     let _ = visible(&state, &mut transcript, 8);
     transcript.scroll_up(6);
     let before = visible(&state, &mut transcript, 8);
-    state.replace_current_response("partial streaming answer");
+    set_current_response(&mut state, "partial streaming answer");
     assert_eq!(visible(&state, &mut transcript, 8), before);
-    state.replace_current_response("partial streaming answer with more text");
+    set_current_response(&mut state, "partial streaming answer with more text");
     assert_eq!(visible(&state, &mut transcript, 8), before);
-    state.clear_current_response();
+    set_current_response(&mut state, "");
     state
         .history
         .push(ChatMessage::new("tool", "new tool result"));
@@ -4519,9 +4576,9 @@ fn scrolled_transcript_keeps_its_reading_rows_when_history_grows() {
 #[test]
 fn first_committed_response_keeps_scrolled_welcome_until_follow_resumes() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut transcript = TranscriptState::default();
-    let visible = |state: &AppState, transcript: &mut TranscriptState| {
+    let visible = |state: &RenderState, transcript: &mut TranscriptState| {
         let snapshot = render_snapshot(state);
         super::conversation_render::render_visible_conversation_with_transcript(
             &snapshot, 64, 8, transcript,
@@ -4555,7 +4612,7 @@ fn first_committed_response_keeps_scrolled_welcome_until_follow_resumes() {
 #[test]
 fn scrolled_transcript_keeps_top_row_when_viewport_shrinks() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     for index in 0..24 {
         state
             .history
@@ -4629,7 +4686,7 @@ fn active_transcript_cell_updates_in_place_and_clears_without_history() {
 
 #[test]
 fn action_required_status_wins_over_a_live_question_tool() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::AwaitingQuestion;
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new(
@@ -4803,12 +4860,12 @@ fn transcript_cursor_releases_completed_fence_and_replays_after_resize() {
 
 #[test]
 fn live_tail_excludes_committed_history() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("assistant", "old completed answer"));
     state.status = AppStatus::Streaming;
-    state.replace_current_response("stable line\nunclosed tail");
+    set_current_response(&mut state, "stable line\nunclosed tail");
 
     let text = super::render_live_tail(&state, 80, 24)
         .iter()
@@ -4823,9 +4880,10 @@ fn live_tail_excludes_committed_history() {
 
 #[test]
 fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response(
+    set_current_response(
+        &mut state,
         "<think>\nPlanning\n</think>\n\nFirst answer line\nSecond answer line",
     );
 
@@ -4844,9 +4902,9 @@ fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
 
 #[test]
 fn bare_thought_stream_stays_in_the_compact_reasoning_preview() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response("thoughtPlanning the response\n");
+    set_current_response(&mut state, "thoughtPlanning the response\n");
 
     let text = super::render_live_tail(&state, 80, 24)
         .iter()
@@ -4894,7 +4952,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
 
 #[test]
 fn streamed_assistant_chunks_only_bullet_the_first_chunk() {
-    let state = AppState::new();
+    let state = RenderState::new();
     let first = super::render_committed_assistant_chunk(&state, "first line\n", 80, false);
     let continuation = super::render_committed_assistant_chunk(&state, "second line\n", 80, true);
 
@@ -4939,7 +4997,7 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
 fn committed_user_messages_keep_regular_body_text() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("user", "inspect the parser"));
@@ -4976,7 +5034,7 @@ fn committed_user_messages_keep_regular_body_text() {
 
 #[test]
 fn committed_user_message_has_trailing_blank_line() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("user", "check latest 10 commits"));
@@ -5009,7 +5067,7 @@ fn committed_user_message_has_trailing_blank_line() {
 
 #[test]
 fn committed_assistant_message_has_one_trailing_separator() {
-    let state = AppState::new();
+    let state = RenderState::new();
 
     let block = super::render_committed_assistant_text(&state, "Finished.", 80);
 
@@ -5022,7 +5080,7 @@ fn committed_assistant_message_has_one_trailing_separator() {
 fn conversation_recap_renders_as_compact_labeled_block() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new(
             "assistant",
@@ -5057,7 +5115,7 @@ fn conversation_recap_renders_as_compact_labeled_block() {
 
 #[test]
 fn conversation_recap_renders_sanitized_plain_text() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new(
             "assistant",
@@ -5081,7 +5139,7 @@ fn conversation_recap_renders_sanitized_plain_text() {
 
 #[test]
 fn conversation_recap_wraps_inside_its_message_gutter() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(
         ChatMessage::new(
             "assistant",
@@ -5110,7 +5168,7 @@ fn conversation_recap_wraps_inside_its_message_gutter() {
 
 #[test]
 fn committed_assistant_message_uses_saved_thought_metrics() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut message = ChatMessage::new("assistant", "<think>Planning.</think>Finished.");
     message.thought_time_ms = Some(1250);
     message.thought_tokens = Some(42);
@@ -5123,7 +5181,7 @@ fn committed_assistant_message_uses_saved_thought_metrics() {
 
 #[test]
 fn committed_thought_only_message_has_a_separator_before_tools() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut message = ChatMessage::new(
         "assistant",
         "<think>Find the Rust files before reading them.</think>",
@@ -5149,7 +5207,7 @@ fn committed_thought_only_message_has_a_separator_before_tools() {
 
 #[test]
 fn live_tail_uses_formatted_working_status() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
 
     let text = super::render_live_tail(&state, 80, 24)
@@ -5165,7 +5223,7 @@ fn live_tail_uses_formatted_working_status() {
 
 #[test]
 fn live_tail_includes_working_status_with_trailing_gap() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
 
     let lines = super::render_live_tail(&state, 80, 24);
@@ -5182,9 +5240,10 @@ fn live_tail_includes_working_status_with_trailing_gap() {
 
 #[test]
 fn visible_streaming_text_keeps_working_status_until_completion() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
-    state.replace_current_response(
+    set_current_response(
+        &mut state,
         (1..=10)
             .map(|line| format!("streamed line {line}"))
             .collect::<Vec<_>>()
@@ -5258,7 +5317,7 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
 
 #[test]
 fn active_turn_uses_only_the_history_separator_above_working() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     assert_eq!(
         super::live_surface_padding(&render_snapshot(&state)),
         (1, 1)
@@ -5284,18 +5343,18 @@ fn activity_spacing_adds_gaps_only_when_active_and_tall_enough() {
 
 #[test]
 fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
-    let mut idle = AppState::new();
+    let mut idle = RenderState::new();
     let idle_text = render_state_to_text(&mut idle, 80, 20);
     assert!(idle_text.contains("context left"));
 
-    let mut streaming = AppState::new();
+    let mut streaming = RenderState::new();
     streaming.status = AppStatus::Streaming;
     let streaming_text = render_state_to_text(&mut streaming, 80, 20);
     assert!(streaming_text.contains("esc interrupt"));
     assert!(streaming_text.contains("context left"));
 
     // Constrained height must not clip composer/footer for spacing.
-    let mut short = AppState::new();
+    let mut short = RenderState::new();
     short.status = AppStatus::Streaming;
     let short_text = render_state_to_text(&mut short, 80, 8);
     assert!(short_text.contains("context left"));
@@ -5308,10 +5367,13 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    let mut input_area = ratatui::layout::Rect::default();
     terminal
-        .draw(|frame| super::render(frame, &mut state))
+        .draw(|frame| {
+            input_area = super::render(frame, &mut state).1;
+        })
         .unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -5331,7 +5393,7 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
     let footer_row = bottom_border_row.expect("composer footer should be rendered");
     assert_eq!(
-        state.input_text_area.map(|area| area.y),
+        Some(input_area.y),
         Some(prompt_row - 1),
         "shutdown should know where the transient composer begins"
     );
@@ -5359,9 +5421,8 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
 
 #[test]
 fn armed_ctrl_c_is_visible_in_the_production_composer_footer() {
-    let mut state = AppState::new();
-    state.ctrl_c_exit_deadline =
-        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+    let mut state = RenderState::new();
+    state.ctrl_c_exit_armed = true;
 
     let rendered = render_state_to_text(&mut state, 100, 12);
 
@@ -5390,12 +5451,14 @@ fn composer_footer_shows_path_and_truncates_long_branch() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.cwd_and_branch =
         "~/code/rustcode:feature/a-branch-name-that-is-definitely-too-long".to_string();
     let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
     terminal
-        .draw(|frame| super::render(frame, &mut state))
+        .draw(|frame| {
+            super::render(frame, &mut state);
+        })
         .unwrap();
 
     let footer_row = (0..12)
@@ -5422,11 +5485,13 @@ fn composer_footer_is_hidden_while_a_picker_is_open() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.show_model_picker = true;
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     terminal
-        .draw(|frame| super::render(frame, &mut state))
+        .draw(|frame| {
+            super::render(frame, &mut state);
+        })
         .unwrap();
 
     let rendered = terminal
@@ -5477,10 +5542,10 @@ fn reduced_motion_renders_the_activity_label_without_a_sweep() {
 #[test]
 fn reduced_motion_is_read_from_the_active_config() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = rustcode::controller::AppStatus::Streaming;
     state.running_tools = vec!["run_command".to_owned()];
-    state.replace_current_response("partial");
+    set_current_response(&mut state, "partial");
 
     // The animated label emits one span per character; the reduced-motion one
     // is a single flat span. Span shape, not color, is what proves the config
@@ -5567,19 +5632,38 @@ fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
     );
 }
 
+/// A render-visible subagent row for picker / context-modal fixtures.
+///
+/// Tests seed the view directly: `SubagentController` mutates a live session,
+/// which the render layer cannot name.
+fn subagent_row(
+    name: &str,
+    task: &str,
+    history: Vec<ChatMessage>,
+    status: rustcode::controller::SubAgentStatus,
+    active_turn: bool,
+) -> rustcode::controller::SubAgentView {
+    rustcode::controller::SubAgentView {
+        id: 1,
+        name: name.to_owned(),
+        task: task.to_owned(),
+        history: std::sync::Arc::new(history),
+        status,
+        active_turn,
+        parent_id: None,
+    }
+}
+
 #[test]
 fn subagent_picker_renders_context_status_and_navigation_hint() {
-    let mut state = AppState::new();
-    rustcode::controller::SubagentController.spawn(
-        &mut state,
+    let mut state = RenderState::new();
+    state.subagents.push(subagent_row(
+        "agent-1",
         "inspect the parser",
-        Some("high".to_owned()),
-        None,
-        false,
         Vec::new(),
-        None,
-        None,
-    );
+        rustcode::controller::SubAgentStatus::Running,
+        true,
+    ));
     state.show_subagent_picker = true;
 
     let rendered = render_state_to_text(&mut state, 100, 30);
@@ -5592,27 +5676,24 @@ fn subagent_picker_renders_context_status_and_navigation_hint() {
 
 #[test]
 fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "user",
         "parent task",
     ));
-    let id = rustcode::controller::SubagentController.spawn(
-        &mut state,
+    let child = subagent_row(
+        "agent-1",
         "child task",
-        None,
-        None,
-        false,
-        Vec::new(),
-        None,
-        None,
+        vec![rustcode::controller::ChatMessage::new(
+            "assistant",
+            "child result",
+        )],
+        rustcode::controller::SubAgentStatus::Running,
+        true,
     );
-    std::sync::Arc::make_mut(&mut state.subagents[0].history).push(
-        rustcode::controller::ChatMessage::new("assistant", "child result"),
-    );
-    rustcode::controller::SubagentController
-        .select(&mut state, id)
-        .unwrap();
+    state.subagents.push(child.clone());
+    state.selected_subagent = Some(child);
+    state.selected_subagent_id = Some(1);
 
     let rendered = render_state_to_text(&mut state, 100, 30);
 
@@ -5623,20 +5704,17 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
 
 #[test]
 fn active_subagent_context_is_named_in_the_composer_footer() {
-    let mut state = AppState::new();
-    let id = rustcode::controller::SubagentController.spawn(
-        &mut state,
+    let mut state = RenderState::new();
+    let child = subagent_row(
+        "agent-1",
         "child task",
-        None,
-        None,
-        false,
         Vec::new(),
-        None,
-        None,
+        rustcode::controller::SubAgentStatus::Running,
+        true,
     );
-    rustcode::controller::SubagentController
-        .select(&mut state, id)
-        .unwrap();
+    state.subagents.push(child.clone());
+    state.selected_subagent = Some(child);
+    state.selected_subagent_id = Some(1);
 
     let rendered = render_state_to_text(&mut state, 100, 30);
 
@@ -5648,7 +5726,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "test prompt"));
     state.config.models = vec![
         rustcode::controller::ModelProfile {
@@ -5695,7 +5773,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
     );
     terminal
         .draw_height(h1, |f| {
-            render_with_transcript(f, &mut state, &mut transcript)
+            render_with_transcript(f, &mut state, &mut transcript);
         })
         .unwrap();
 
@@ -5708,7 +5786,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
     );
     terminal
         .draw_height(h2, |f| {
-            render_with_transcript(f, &mut state, &mut transcript)
+            render_with_transcript(f, &mut state, &mut transcript);
         })
         .unwrap();
 
@@ -5737,7 +5815,7 @@ fn viewport_expansion_followed_by_shrink_clears_stale_rows() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut transcript = TranscriptState::default();
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
 
@@ -5772,7 +5850,7 @@ fn multiline_input_indentation_aligns_continuation_lines() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.input_buffer = "first line\nsecond line\nthird line".to_string();
     state.cursor_position = state.input_buffer.len();
 
@@ -5884,14 +5962,14 @@ fn input_wraps_at_word_boundaries_before_splitting_long_words() {
 
 #[test]
 fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time =
         Some(std::time::Instant::now() - std::time::Duration::from_secs(555));
     state.current_thought_started_at =
         Some(std::time::Instant::now() - std::time::Duration::from_millis(2300));
     state.current_thought_tokens = 106;
-    state.replace_current_response("<think>\nAnalyzing the project\n");
+    set_current_response(&mut state, "<think>\nAnalyzing the project\n");
 
     let lines = super::render_live_tail(&state, 80, 24);
     let rendered = lines
@@ -5915,14 +5993,15 @@ fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time
 
 #[test]
 fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_streams() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time =
         Some(std::time::Instant::now() - std::time::Duration::from_secs(555));
     state.current_thought_started_at = None;
     state.current_thought_time_ms = 43000;
     state.current_thought_tokens = 1400;
-    state.replace_current_response(
+    set_current_response(
+        &mut state,
         "<think>\nAnalyzing the project\n</think>\nHere is the rest of the stream",
     );
 
@@ -5950,7 +6029,7 @@ fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_st
 fn command_child_lines_wrap_with_indentation() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.verbosity = Verbosity::High;
     let long_cmd = "curl -sS https://example.com/api/v1/organizations/test -H 'Authorization: Bearer test_token' --data '{\"field\":\"very long content here\"}'";
     state.history.push(
@@ -6009,7 +6088,7 @@ fn default_turn_separator_is_lighter_color() {
 
 #[test]
 fn acceptance_context_modal_renders_usage_and_breakdown() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state
         .history
         .push(ChatMessage::new("user", "Hello assistant"));
@@ -6080,14 +6159,16 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
 
 #[test]
 fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     let mut profile = rustcode::controller::ModelProfile::default();
     profile.name = state.model_name.clone();
     profile.model = state.model_name.clone();
     profile.url = state.api_base_url.clone();
     profile.context_window = Some(100_000);
     state.config.models.clear();
-    state.config.models.push(profile);
+    state.config.models.push(profile.clone());
+    state.active_model_profile = Some(profile);
+    state.active_context_window = 100_000;
     state
         .history
         .push(ChatMessage::new("tool", "x".repeat(80_000)));
@@ -6138,27 +6219,23 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
 
 #[test]
 fn selected_subagent_context_usage_and_categories_use_child_history() {
-    let mut state = AppState::new();
+    let mut state = RenderState::new();
     state.history.push(ChatMessage::new(
         "assistant",
         "parent history that is not active",
     ));
     let child_history = vec![ChatMessage::new("user", "child task")];
-    state.subagents.push(rustcode::controller::SubAgent {
+    let child = rustcode::controller::SubAgentView {
         id: 7,
         name: "reviewer".to_owned(),
         task: "review".to_owned(),
-        model: None,
         history: std::sync::Arc::new(child_history.clone()),
         status: rustcode::controller::SubAgentStatus::Completed,
         active_turn: false,
         parent_id: None,
-        write_access: false,
-        allowed_paths: Vec::new(),
-        verification_command: None,
-        workspace_root: None,
-        review_manifest: None,
-    });
+    };
+    state.selected_subagent = Some(child.clone());
+    state.subagents.push(child);
     state.selected_subagent_id = Some(7);
     state.show_context_modal = true;
 

@@ -100,7 +100,7 @@ pub(super) async fn render_frame(
             .iter()
             .find(|m| m.role == "user" && !m.content.starts_with('/'))
             .map(|_| rustcode::config::session_title(&guard.history));
-        let snapshot = render_snapshot(&guard);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&guard));
         let activity =
             rustcode::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
         let animation_frame = std::time::SystemTime::now()
@@ -263,7 +263,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n\n"),
         ));
-        let snapshot = render_snapshot(&state);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
         let mut transcript = TranscriptState::default();
         let mut terminal = InlineTerminal::new(TestBackend::new(32, 14)).unwrap();
         terminal
@@ -278,7 +278,7 @@ mod tests {
                 area.x + 2,
                 area.bottom() - 1,
             ),
-            render_snapshot(&state),
+            render_snapshot(&rustcode::controller::render_state(&state)),
             transcript.scroll_rows(),
         );
         transcript.selection.mouse(mouse(

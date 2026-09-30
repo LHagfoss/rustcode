@@ -46,11 +46,11 @@ fn provider_prompt_usage(usage: &TokenUsage) -> ContextUsage {
 mod tests {
     use super::{ContextUsage, ContextUsageSource, context_usage};
     use crate::ui::render_snapshot::render_snapshot;
-    use rustcode::app::{AppState, ChatMessage, TokenUsage};
+    use rustcode::controller::{ChatMessage, RenderState, TokenUsage};
 
     #[test]
     fn cleared_current_usage_does_not_reuse_a_previous_provider_prompt() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         assert_eq!(
             context_usage(&render_snapshot(&state)),
             ContextUsage {
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn selected_subagent_usage_uses_history_estimate_without_current_usage() {
-        let mut state = AppState::new();
+        let mut state = RenderState::new();
         state.current_token_usage = Some(TokenUsage {
             prompt_tokens: 12,
             completion_tokens: 99,
@@ -103,21 +103,17 @@ mod tests {
             total_tokens: 7,
             ..Default::default()
         });
-        state.subagents.push(rustcode::controller::SubAgent {
+        let child = rustcode::controller::SubAgentView {
             id: 7,
             name: "reviewer".to_owned(),
             task: "review".to_owned(),
-            model: None,
             history: std::sync::Arc::new(vec![child_message]),
             status: rustcode::controller::SubAgentStatus::Completed,
             active_turn: false,
             parent_id: None,
-            write_access: false,
-            allowed_paths: Vec::new(),
-            verification_command: None,
-            workspace_root: None,
-            review_manifest: None,
-        });
+        };
+        state.subagents.push(child.clone());
+        state.selected_subagent = Some(child);
         state.selected_subagent_id = Some(7);
 
         assert_eq!(
