@@ -192,7 +192,11 @@ impl SessionController {
                 {
                     Ok(live)
                 } else {
-                    crate::config::latest_resumable_session_meta()
+                    // Bare `--resume` stays in the current workspace
+                    // (parent/child match, legacy included). Explicit
+                    // `SessionAction::Id` bypasses scoping entirely.
+                    let cwd = crate::config::current_workspace_dir();
+                    crate::config::latest_resumable_session_meta_scoped(cwd.as_deref())
                         .ok_or(SessionError::NoSessionToResume)
                 }
             }
