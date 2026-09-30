@@ -18,6 +18,11 @@ use std::sync::{
 };
 
 static FULLSCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Set while a panic unwinds, so the restore that runs on `Drop` leaves the
+/// inline projection alone. A panic is an emergency, not an exit: the
+/// conversation and the panic message are the only context the user has, and
+/// the clean exit of #1544 must not delete them on the way out.
+static PANIC_UNWINDING: AtomicBool = AtomicBool::new(false);
 static PANIC_HOOK: Once = Once::new();
 
 #[derive(Debug, Default)]
@@ -56,6 +61,7 @@ fn install_panic_restore() {
     PANIC_HOOK.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
+            PANIC_UNWINDING.store(true, Ordering::SeqCst);
             if FULLSCREEN_ACTIVE.load(Ordering::SeqCst) {
                 let mut out = io::stdout();
                 let _ = execute!(out, PopKeyboardEnhancementFlags);
@@ -75,6 +81,20 @@ fn install_panic_restore() {
             previous(info);
         }));
     });
+}
+
+/// Whether a restore should erase the inline session projection before the
+/// shell takes the screen back.
+///
+/// Fullscreen sessions paint on the alternate screen: leaving it below
+/// restores the shell view, so there are no main-screen rows to erase. A
+/// panic is not an exit, so the projection and the panic message stay.
+fn should_erase_session_projection(
+    alternate_screen: bool,
+    fullscreen: bool,
+    panicking: bool,
+) -> bool {
+    !panicking && !alternate_screen && !fullscreen
 }
 
 fn restore_partial_start(out: &mut impl Write, screen: &mut AlternateScreen) {
@@ -156,8 +176,11 @@ impl TerminalRuntime {
             )
         );
 
+        // Both modes need the hook: fullscreen to release the alternate screen
+        // before the message prints, inline to arm `PANIC_UNWINDING` so the
+        // restore on `Drop` keeps the projection and the panic message.
+        install_panic_restore();
         if fullscreen_requested {
-            install_panic_restore();
             FULLSCREEN_ACTIVE.store(true, Ordering::SeqCst);
             if alternate_screen.enter(&mut stdout).is_err() {
                 if let Err(error) = alternate_screen.leave(&mut stdout) {
@@ -210,18 +233,23 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn restore_at(&mut self, cursor_y: Option<u16>) -> io::Result<()> {
-        // Erase the transient inline projection on every restore — exit,
-        // Ctrl-Z suspend, editor handoff — not just the first. Returning
-        // early for an already-restored lifecycle left stale viewport rows
-        // above the exit handoff whenever the viewport had grown or scrolled
-        // since. The erase is exact (committed scrollback above stays) and
-        // idempotent, so repeats are safe. Fullscreen sessions paint on the
-        // alternate screen: leaving it below restores the shell view, so
-        // there are no main-screen rows to erase.
-        let erase_result = if self.alternate_screen.is_active() || self.fullscreen {
-            Ok(())
+        // Erase the whole inline projection on every restore — exit, Ctrl-Z
+        // suspend, editor handoff — not just the first. Returning early for
+        // an already-restored lifecycle left stale rows above the exit handoff
+        // whenever the viewport had grown or scrolled since. The erase covers
+        // every row this session painted, from the row it started at (kept
+        // correct by scroll distance, so growth, `scroll_screen_up` and a
+        // mid-session resize cannot strand it) down to the bottom of the
+        // screen, while native scrollback is preserved. It is exact and
+        // idempotent, so repeats are safe.
+        let erase_result = if should_erase_session_projection(
+            self.alternate_screen.is_active(),
+            self.fullscreen,
+            PANIC_UNWINDING.load(Ordering::SeqCst),
+        ) {
+            self.terminal.erase_session_projection(cursor_y)
         } else {
-            self.terminal.erase_transient_projection(cursor_y)
+            Ok(())
         };
         if self.lifecycle.is_restored() && !self.alternate_screen.is_active() {
             return erase_result;
@@ -248,7 +276,7 @@ impl TerminalRuntime {
             }
             result
         } else {
-            // The transient inline projection was already erased above.
+            // The inline session projection was already erased above.
             Ok(())
         };
         let cursor_result = self.terminal.show_cursor();
@@ -354,7 +382,18 @@ impl Drop for TerminalRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlternateScreen, Lifecycle};
+    use super::{AlternateScreen, Lifecycle, should_erase_session_projection};
+
+    #[test]
+    fn inline_restore_erases_the_projection_but_fullscreen_and_panics_do_not() {
+        assert!(should_erase_session_projection(false, false, false));
+        assert!(!should_erase_session_projection(true, false, false));
+        assert!(!should_erase_session_projection(false, true, false));
+        // A panic is not an exit: the conversation and the panic message are
+        // the only context the user has, so nothing is erased.
+        assert!(!should_erase_session_projection(false, false, true));
+        assert!(!should_erase_session_projection(true, true, true));
+    }
 
     #[test]
     fn alternate_screen_enter_leave_writes_only_screen_switches() {
