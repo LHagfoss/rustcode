@@ -849,18 +849,6 @@ fn format_number(value: u64) -> String {
     formatted
 }
 
-/// Printed after restoring the terminal and erasing the session projection
-/// (#1544), matching Codex's compact usage and resume handoff. The session id
-/// is the recovery path for the erased conversation.
-fn print_exit_summary(summary: &ExitSummary) {
-    use std::io::{IsTerminal, Write};
-
-    let mut out = std::io::stdout();
-    let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let wide = crossterm::terminal::size().is_ok_and(|(width, _)| width >= 50);
-    write_exit_summary(&mut out, summary, color, wide);
-}
-
 /// Exit handoff written to an injectable sink. `color` and `wide` are
 /// resolved by the caller — production asks the real stdout and terminal —
 /// so a test can capture the transcript without a TTY.
@@ -905,10 +893,11 @@ fn write_exit_summary(out: &mut dyn Write, summary: &ExitSummary, color: bool, w
     }
 }
 
-/// Printed after restoring the terminal and erasing the transient composer,
-/// matching Codex's compact usage and resume handoff.
+/// Printed after restoring the terminal and erasing the session projection
+/// (#1544), matching Codex's compact usage and resume handoff. The session id
+/// is the recovery path for the erased conversation.
 fn print_exit_summary(summary: &ExitSummary) {
-    use std::io::IsTerminal;
+    use std::io::{IsTerminal, Write};
 
     let mut out = std::io::stdout();
     let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
