@@ -133,30 +133,14 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// and how many bytes it pulled in, not just how long it took. Counters only
 /// exist in test builds; the read helpers below are the single point every
 /// listing read site goes through, so nothing on that path is uncounted.
+///
+/// The counters are per thread on purpose. Rust runs the test binary's tests
+/// concurrently in one process, and a process-wide counter would let an
+/// unrelated test's reads land in a measurement. A listing only ever reads on
+/// the thread that called it, so thread-local counts are exact.
 #[cfg(test)]
 mod read_metrics {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// `fs::read`/`read_to_string` calls, including the ones that miss.
-    static FILE_READS: AtomicUsize = AtomicUsize::new(0);
-    static FILE_BYTES: AtomicUsize = AtomicUsize::new(0);
-    /// `read_dir` calls issued while discovering sessions.
-    static DIRECTORY_SCANS: AtomicUsize = AtomicUsize::new(0);
-    /// Per-file breakdown, so a benchmark can tell the cheap workspace record
-    /// apart from the expensive transcript.
-    static TRANSCRIPT_READS: AtomicUsize = AtomicUsize::new(0);
-    static TRANSCRIPT_BYTES: AtomicUsize = AtomicUsize::new(0);
-    static WORKSPACE_RECORD_READS: AtomicUsize = AtomicUsize::new(0);
-    static WORKSPACE_RECORD_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-    /// Which file a read belongs to. Only the two listing costs are broken
-    /// out; every other read lands in the totals.
-    #[derive(Debug, Clone, Copy)]
-    pub enum Kind {
-        Other,
-        Transcript,
-        WorkspaceRecord,
-    }
+    use std::cell::Cell;
 
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub struct ReadProfile {
@@ -169,59 +153,103 @@ mod read_metrics {
         pub workspace_record_bytes: usize,
     }
 
-    const COUNTERS: [&AtomicUsize; 7] = [
-        &FILE_READS,
-        &FILE_BYTES,
-        &DIRECTORY_SCANS,
-        &TRANSCRIPT_READS,
-        &TRANSCRIPT_BYTES,
-        &WORKSPACE_RECORD_READS,
-        &WORKSPACE_RECORD_BYTES,
-    ];
+    /// Which file a read belongs to. Only the two listing costs are broken
+    /// out; every other read lands in the totals.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Kind {
+        Other,
+        Transcript,
+        WorkspaceRecord,
+    }
 
-    pub fn record(bytes: usize, kind: Kind) {
-        let bump = |counter: &AtomicUsize| {
-            counter.fetch_add(1, Ordering::Relaxed);
-        };
-        let bump_bytes = |counter: &AtomicUsize| {
-            counter.fetch_add(bytes, Ordering::Relaxed);
-        };
-        bump(&FILE_READS);
-        bump_bytes(&FILE_BYTES);
-        match kind {
-            Kind::Other => {}
-            Kind::Transcript => {
-                bump(&TRANSCRIPT_READS);
-                bump_bytes(&TRANSCRIPT_BYTES);
-            }
-            Kind::WorkspaceRecord => {
-                bump(&WORKSPACE_RECORD_READS);
-                bump_bytes(&WORKSPACE_RECORD_BYTES);
+    #[derive(Default)]
+    struct Counters {
+        file_reads: Cell<usize>,
+        file_bytes: Cell<usize>,
+        directory_scans: Cell<usize>,
+        transcript_reads: Cell<usize>,
+        transcript_bytes: Cell<usize>,
+        workspace_record_reads: Cell<usize>,
+        workspace_record_bytes: Cell<usize>,
+    }
+
+    thread_local! {
+        static COUNTERS: Counters = const { Counters::new() };
+    }
+
+    impl Counters {
+        const fn new() -> Self {
+            Self {
+                file_reads: Cell::new(0),
+                file_bytes: Cell::new(0),
+                directory_scans: Cell::new(0),
+                transcript_reads: Cell::new(0),
+                transcript_bytes: Cell::new(0),
+                workspace_record_reads: Cell::new(0),
+                workspace_record_bytes: Cell::new(0),
             }
         }
+
+        fn record(&self, bytes: usize, kind: Kind) {
+            self.file_reads.set(self.file_reads.get() + 1);
+            self.file_bytes.set(self.file_bytes.get() + bytes);
+            match kind {
+                Kind::Other => {}
+                Kind::Transcript => {
+                    self.transcript_reads.set(self.transcript_reads.get() + 1);
+                    self.transcript_bytes
+                        .set(self.transcript_bytes.get() + bytes);
+                }
+                Kind::WorkspaceRecord => {
+                    self.workspace_record_reads
+                        .set(self.workspace_record_reads.get() + 1);
+                    self.workspace_record_bytes
+                        .set(self.workspace_record_bytes.get() + bytes);
+                }
+            }
+        }
+
+        fn record_directory_scan(&self) {
+            self.directory_scans.set(self.directory_scans.get() + 1);
+        }
+
+        fn reset(&self) {
+            self.file_reads.set(0);
+            self.file_bytes.set(0);
+            self.directory_scans.set(0);
+            self.transcript_reads.set(0);
+            self.transcript_bytes.set(0);
+            self.workspace_record_reads.set(0);
+            self.workspace_record_bytes.set(0);
+        }
+
+        fn profile(&self) -> ReadProfile {
+            ReadProfile {
+                file_reads: self.file_reads.get(),
+                file_bytes: self.file_bytes.get(),
+                directory_scans: self.directory_scans.get(),
+                transcript_reads: self.transcript_reads.get(),
+                transcript_bytes: self.transcript_bytes.get(),
+                workspace_record_reads: self.workspace_record_reads.get(),
+                workspace_record_bytes: self.workspace_record_bytes.get(),
+            }
+        }
+    }
+
+    pub fn record(bytes: usize, kind: Kind) {
+        COUNTERS.with(|counters| counters.record(bytes, kind));
     }
 
     pub fn record_directory_scan() {
-        DIRECTORY_SCANS.fetch_add(1, Ordering::Relaxed);
+        COUNTERS.with(Counters::record_directory_scan);
     }
 
     pub fn reset() {
-        for counter in COUNTERS {
-            counter.store(0, Ordering::Relaxed);
-        }
+        COUNTERS.with(Counters::reset);
     }
 
     pub fn snapshot() -> ReadProfile {
-        let load = |counter: &AtomicUsize| counter.load(Ordering::Relaxed);
-        ReadProfile {
-            file_reads: load(&FILE_READS),
-            file_bytes: load(&FILE_BYTES),
-            directory_scans: load(&DIRECTORY_SCANS),
-            transcript_reads: load(&TRANSCRIPT_READS),
-            transcript_bytes: load(&TRANSCRIPT_BYTES),
-            workspace_record_reads: load(&WORKSPACE_RECORD_READS),
-            workspace_record_bytes: load(&WORKSPACE_RECORD_BYTES),
-        }
+        COUNTERS.with(|counters| counters.profile())
     }
 }
 
