@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "source_session_id": "01a0eed269ed-7000-9dda-4d40-4d4078a20034",
+  "captured_at": "2026-09-29T22:42:35Z",
+  "issue": 1532,
+  "task": "what mcp servers or tools do you have, can you check if vercel works?",
+  "provenance": {
+    "history": "~/.config/rustcode/sessions/2026/09/29/01a0eed269ed-7000-9dda-4d40-4d4078a20034/history.json",
+    "log": "~/.config/rustcode/sessions/2026/09/29/01a0eed269ed-7000-9dda-4d40-4d4078a20034/logs/debug.log",
+    "events": ["turn.progress", "turn.recovery_decision", "turn.summary"]
+  },
+  "notes": [
+    "Every entry under baseline.turn_progress is copied verbatim from the turn.progress operational events of the first turn, in emission order.",
+    "rounds replays all 6 baseline tool calls of that turn in order. The baseline reported tool_rounds=7 because 2 of those rounds were the evidence-recovery round-trips themselves (the model answered the injected prompt before issuing the next call); they ran no tool and therefore fed nothing to the progress ledger.",
+    "{{ARTIFACT}} is the baseline path '/Users/lagos/.config/rustcode/tool_output/1790714541854_0_list_mcp_tools.txt'. The replay writes the artifact fixture below to a temp directory outside the workspace root, preserving the two properties that made the baseline interesting: the artifact is unreachable by the read-only search tools, and the shell commands do find server names but no 'vercel'.",
+    "Round 1 substitutes list_directory for list_mcp_tools: the MCP registry is not reachable from a unit test, and the loop guard only sees 'a read-only tool returned novel output'. Every other round replays the exact baseline call.",
+    "expected records the decision-relevant inputs the baseline harness observed (tool, success, exit_code, error_kind) for that call. The replay asserts them so a fixture that stops reproducing the baseline's inputs fails loudly instead of silently passing."
+  ],
+  "baseline": {
+    "turn_summary": {
+      "tool_rounds": 7,
+      "tool_calls": 6,
+      "evidence_recoveries": 2,
+      "no_progress_results": 4,
+      "tokens_used": 121988,
+      "completed_task": true,
+      "stop_reason": "completed"
+    },
+    "turn_progress": [
+      { "round": 1, "tool": "list_mcp_tools", "reason": "fresh_read", "streak": 0, "success": true },
+      { "round": 2, "tool": "grep", "reason": "repeated_failure", "streak": 1, "success": false },
+      { "round": 2, "tool": "grep", "reason": "repeated_failure", "streak": 2, "success": false },
+      { "round": 3, "tool": "run_command", "reason": "repeated_failure", "streak": 3, "success": false },
+      { "round": 5, "tool": "run_command", "reason": "repeated_failure", "streak": 4, "success": false },
+      { "round": 7, "tool": "run_command", "reason": "new_information", "streak": 0, "success": true }
+    ],
+    "recovery_decisions": [
+      { "round": 3, "source": "evidence", "reason": "repeated_failure" },
+      { "round": 5, "source": "evidence", "reason": "repeated_failure" }
+    ]
+  },
+  "artifact": {
+    "filename": "0_list_mcp_tools.txt",
+    "content": "list_mcp_tools: {\n  \"servers\": [\n    {\n      \"name\": \"app-store-connect\",\n      \"tools\": [\n        {\"name\": \"list-apps\", \"description\": \"List App Store apps.\"},\n        {\"name\": \"list-builds\", \"description\": \"List uploaded builds.\"}\n      ]\n    },\n    {\n      \"name\": \"chrome-devtools\",\n      \"tools\": [\n        {\"name\": \"navigate\", \"description\": \"Navigate the browser.\"},\n        {\"name\": \"evaluate_script\", \"description\": \"Evaluate page script.\"}\n      ]\n    },\n    {\n      \"name\": \"socraticode\",\n      \"tools\": [\n        {\"name\": \"codebase_status\", \"description\": \"Index status.\"}\n      ]\n    },\n    {\n      \"name\": \"vinmonopolet\",\n      \"tools\": [\n        {\"name\": \"search_products\", \"description\": \"Search the catalog.\"}\n      ]\n    }\n  ]\n}\n"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "baseline_tool": "list_mcp_tools",
+      "replayed_as": "list_directory",
+      "rationale": "MCP registry is not reachable in a unit test; the loop guard only observes a successful read-only tool with novel output.",
+      "calls": [
+        {
+          "tool": "list_directory",
+          "arguments": { "path": "{{WORKSPACE}}" },
+          "expected": { "success": true, "exit_code": null, "error_kind": null }
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "baseline_tool": "grep",
+      "replayed_as": "grep",
+      "rationale": "Both baseline calls in this batch were rejected by the workspace-boundary guardrail with identical text.",
+      "calls": [
+        {
+          "tool": "grep",
+          "arguments": {
+            "pattern": "\"name\": \"([a-z0-9_-]+)\",",
+            "path": "{{ARTIFACT}}"
+          },
+          "expected": { "success": false, "exit_code": null, "error_kind": "InvalidArguments" }
+        },
+        {
+          "tool": "grep",
+          "arguments": { "pattern": "(?i)vercel", "path": "{{ARTIFACT}}" },
+          "expected": { "success": false, "exit_code": null, "error_kind": "InvalidArguments" }
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "baseline_tool": "run_command",
+      "replayed_as": "run_command",
+      "rationale": "The model adapted to the unreachable path by shelling out. ';' chains keep this out of the benign no-match exemption, so it is a real model-visible failure.",
+      "calls": [
+        {
+          "tool": "run_command",
+          "arguments": {
+            "command": "grep -i vercel {{ARTIFACT}} | head; echo \"---SERVERS---\"; grep -n '\"name\"' {{ARTIFACT}} | grep -i -E 'server|mcp' ; echo \"---top-level---\"; grep -nE '^  \\{' {{ARTIFACT}}"
+          },
+          "expected": { "success": false, "exit_code": 1, "error_kind": "CommandFailed" }
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "baseline_tool": "run_command",
+      "replayed_as": "run_command",
+      "rationale": "A different search against the same unreachable artifact: a new command, a new failure, exit 1.",
+      "calls": [
+        {
+          "tool": "run_command",
+          "arguments": {
+            "command": "F={{ARTIFACT}}; grep -nE '^    \"name\"' \"$F\"; echo \"---count---\"; grep -cE '^    \"name\"' \"$F\""
+          },
+          "expected": { "success": false, "exit_code": 1, "error_kind": "CommandFailed" }
+        }
+      ]
+    },
+    {
+      "round": 7,
+      "baseline_tool": "run_command",
+      "replayed_as": "run_command",
+      "rationale": "The turn terminates on a shell read that returns the server names. This is the round the baseline reached only after two recovery injections.",
+      "calls": [
+        {
+          "tool": "run_command",
+          "arguments": {
+            "command": "F={{ARTIFACT}}; echo \"=== vercel matches ===\"; grep -in vercel \"$F\" || echo \"(none)\"; echo \"=== server name lines (indent-normalized) ===\"; grep -nE '^[[:space:]]*\"name\": \"[a-z0-9_-]+\",[[:space:]]*$' \"$F\" | grep -viE 'list_|get_|create_|update_|delete_|send|reply|search|read_|download|upload|set_|add_|remove|insert|merge|unmerge|reorder|duplicate|format|export|close_|click|drag|type_|navigate|take_|execute|evaluate|new_|resize|wait_'"
+          },
+          "expected": { "success": true, "exit_code": 0, "error_kind": null }
+        }
+      ]
+    }
+  ]
+}

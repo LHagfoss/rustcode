@@ -2230,6 +2230,400 @@ async fn workspace_boundary_rejections_skip_evidence_recovery_for_infra_guard() 
     assert_eq!(ctx.progress.ledger.no_progress_streak(), 0);
 }
 
+/// The exact tool-call sequence of session `01a0eed269ed-7000-9dda-4d40-4d4078a20034`,
+/// the turn that motivated #1513: a `grep` the workspace boundary refused, the
+/// shell fallback that correctly reported no match, a second differently-worded
+/// shell search that also reported no match, and the read that ended the turn.
+/// Captured verbatim from the session's `turn.progress`, `turn.recovery_decision`
+/// and `turn.summary` events so the regression is pinned to a real session
+/// rather than a synthetic one. Issue #1532.
+const LOOP_GUARD_SESSION_REPLAY: &str = include_str!("fixtures/loop_guard_session_01a0eed26.json");
+
+#[derive(serde::Deserialize)]
+struct SessionReplayBaselineSummary {
+    tool_rounds: usize,
+    tool_calls: usize,
+    evidence_recoveries: usize,
+    tokens_used: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayBaselineProgress {
+    tool: String,
+    streak: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayBaseline {
+    turn_summary: SessionReplayBaselineSummary,
+    turn_progress: Vec<SessionReplayBaselineProgress>,
+    recovery_decisions: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayArtifact {
+    filename: String,
+    content: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayExpected {
+    success: bool,
+    exit_code: Option<i32>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayCall {
+    tool: String,
+    arguments: serde_json::Value,
+    expected: SessionReplayExpected,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayRound {
+    baseline_tool: String,
+    calls: Vec<SessionReplayCall>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionReplayFixture {
+    source_session_id: String,
+    task: String,
+    baseline: SessionReplayBaseline,
+    artifact: SessionReplayArtifact,
+    rounds: Vec<SessionReplayRound>,
+}
+
+/// Substitute the replay's placeholders in a recorded call's arguments. The
+/// baseline referenced an absolute path under the user's `~/.config`; the replay
+/// points at a temp artifact outside the workspace root so the read-only tools
+/// are refused by the same boundary guardrail the baseline hit.
+fn expand_replay_arguments(value: &serde_json::Value, artifact: &str, workspace: &str) -> String {
+    serde_json::to_string(value)
+        .expect("replay arguments serialize")
+        .replace("{{ARTIFACT}}", artifact)
+        .replace("{{WORKSPACE}}", workspace)
+}
+
+#[tokio::test]
+async fn session_01a0eed26_replay_injects_no_evidence_recovery() {
+    // Replays the #1513 session against the current loop guard. The baseline
+    // pooled four failures across two different tools into a `repeated_failure`
+    // streak of 4 and paid two evidence-recovery injections for it; the fix must
+    // make that exact sequence produce no recovery at all.
+    let fixture: SessionReplayFixture =
+        serde_json::from_str(LOOP_GUARD_SESSION_REPLAY).expect("replay fixture parses");
+    let baseline = &fixture.baseline.turn_summary;
+    let baseline_report = format!(
+        "session {}: {} tool_rounds, {} tool_calls, {} evidence_recoveries, {} tokens",
+        fixture.source_session_id,
+        baseline.tool_rounds,
+        baseline.tool_calls,
+        baseline.evidence_recoveries,
+        baseline.tokens_used,
+    );
+    assert_eq!(
+        fixture.baseline.recovery_decisions.len(),
+        baseline.evidence_recoveries,
+        "fixture must record the baseline's recovery injections"
+    );
+    assert_eq!(
+        fixture
+            .baseline
+            .turn_progress
+            .iter()
+            .map(|entry| entry.streak)
+            .max()
+            .expect("baseline has progress records"),
+        4,
+        "fixture must record the baseline streak that crossed the recovery threshold"
+    );
+    assert!(
+        fixture
+            .baseline
+            .turn_progress
+            .iter()
+            .any(|entry| entry.tool == "grep")
+            && fixture
+                .baseline
+                .turn_progress
+                .iter()
+                .any(|entry| entry.tool == "run_command"),
+        "the pooled baseline streak must span both tools, otherwise this replay is not the regression"
+    );
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let workspace = {
+        let state = state.lock().await;
+        state
+            .effective_workspace_root()
+            .expect("test workspace root")
+    };
+    let workspace_dir = tempfile::tempdir_in(&workspace).expect("temp workspace read root");
+    // The baseline artifact lived in the harness tool-output directory, i.e.
+    // outside the workspace root, which is precisely why `grep` could not
+    // reach it. Keep that property: the replay must not be rescued by making
+    // the path readable.
+    let artifact_dir = tempfile::tempdir().expect("temp artifact root outside workspace");
+    let artifact = artifact_dir
+        .path()
+        .join(&fixture.artifact.filename)
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        !artifact.starts_with(workspace.to_string_lossy().as_ref()),
+        "the replay artifact must stay outside the workspace root"
+    );
+    std::fs::write(&artifact, &fixture.artifact.content).expect("write replay artifact");
+
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+    let mut streaks = Vec::new();
+    let mut calls = 0usize;
+
+    for round in &fixture.rounds {
+        let envelopes = round
+            .calls
+            .iter()
+            .map(|call| {
+                calls += 1;
+                crate::tools::ToolCallEnvelope {
+                    call_id: format!("replay-{calls}"),
+                    tool_name: call.tool.clone(),
+                    arguments: serde_json::from_str(&expand_replay_arguments(
+                        &call.arguments,
+                        &artifact,
+                        &workspace_dir.path().to_string_lossy(),
+                    ))
+                    .expect("replay arguments parse"),
+                }
+            })
+            .collect::<Vec<_>>();
+        super::turn_engine::tools::handle_tool_response(
+            &client,
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            envelopes,
+            "",
+        )
+        .await;
+        ctx.response.final_content = format!(
+            "Continuing the {} recovery for {}.",
+            round.baseline_tool, fixture.task
+        );
+        streaks.push((
+            round.baseline_tool.clone(),
+            ctx.progress.ledger.no_progress_streak(),
+            ctx.recovery.infrastructure_failures.streak(),
+        ));
+    }
+
+    // The fixture must still reproduce the baseline's decision inputs, otherwise
+    // a green result would prove nothing about that session.
+    assert_eq!(
+        calls, baseline.tool_calls,
+        "replay must issue every tool call the baseline turn made ({baseline_report})"
+    );
+    let history = state.lock().await;
+    let records = history
+        .history
+        .iter()
+        .filter_map(|message| message.tool_result.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records.len(),
+        calls,
+        "every replayed call must produce one recorded result ({baseline_report})"
+    );
+    for (call, record) in fixture
+        .rounds
+        .iter()
+        .flat_map(|round| &round.calls)
+        .zip(&records)
+    {
+        assert_eq!(
+            record.tool_name, call.tool,
+            "replayed tool order must match the baseline"
+        );
+        assert_eq!(
+            record.success, call.expected.success,
+            "replayed success flag for {} must match the baseline",
+            call.tool
+        );
+        assert_eq!(
+            record.exit_code, call.expected.exit_code,
+            "replayed exit code for {} must match the baseline",
+            call.tool
+        );
+    }
+
+    let bodies = history
+        .history
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("[Evidence-based recovery:")),
+        "the #1513 session must not reproduce an evidence-recovery injection ({baseline_report}): {bodies:?}"
+    );
+    assert_eq!(
+        ctx.metrics.evidence_recoveries, 0,
+        "evidence_recoveries must go {} -> 0 for this exact sequence ({baseline_report})",
+        baseline.evidence_recoveries
+    );
+
+    // The streak must not form across the tool boundary: the boundary
+    // rejections reset it, and the two distinct shell searches restart it
+    // instead of pooling into one corroborated miss.
+    let shell_streaks = streaks
+        .iter()
+        .filter(|(tool, _, _)| tool == "run_command")
+        .map(|(_, ledger, _)| *ledger)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shell_streaks,
+        vec![1, 1, 0],
+        "distinct failing searches must restart the streak, not extend it (baseline pooled them into 3, 4)"
+    );
+    let boundary_round = streaks
+        .iter()
+        .find(|(tool, _, _)| tool == "grep")
+        .expect("the baseline hit the workspace boundary");
+    assert_eq!(
+        boundary_round.1, 0,
+        "workspace-boundary rejections must reset the progress streak, not feed it"
+    );
+    assert_eq!(
+        boundary_round.2, 2,
+        "both boundary rejections must be counted by the infrastructure guard"
+    );
+    let peak = streaks
+        .iter()
+        .map(|(_, ledger, _)| *ledger)
+        .max()
+        .expect("replay recorded streaks");
+    assert!(
+        peak < ctx.progress.evidence_recovery_streak,
+        "peak streak {peak} reached the recovery threshold {}",
+        ctx.progress.evidence_recovery_streak
+    );
+    assert_eq!(
+        ctx.progress.ledger.no_progress_streak(),
+        0,
+        "the turn ended on a meaningful read"
+    );
+    assert_eq!(
+        ctx.recovery.infrastructure_failures.streak(),
+        0,
+        "the terminal successful read cleared the infrastructure streak"
+    );
+}
+
+#[tokio::test]
+async fn session_01a0eed26_replay_still_catches_a_genuinely_repeating_search() {
+    // The counterpart to the replay above, and the guard against the per-tool
+    // scoping being too permissive: the *same* failing search from the #1513
+    // session, re-issued verbatim against the same unreachable artifact, is a
+    // real loop and must still reach evidence-based recovery. The replay is
+    // green precisely because the baseline changed its search between rounds.
+    let fixture: SessionReplayFixture =
+        serde_json::from_str(LOOP_GUARD_SESSION_REPLAY).expect("replay fixture parses");
+    let looping = &fixture.rounds[2].calls[0];
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let workspace = {
+        let state = state.lock().await;
+        state
+            .effective_workspace_root()
+            .expect("test workspace root")
+    };
+    let artifact_dir = tempfile::tempdir().expect("temp artifact root outside workspace");
+    let artifact = artifact_dir
+        .path()
+        .join(&fixture.artifact.filename)
+        .to_string_lossy()
+        .to_string();
+    std::fs::write(&artifact, &fixture.artifact.content).expect("write replay artifact");
+
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let mut ctx = TurnContext::new();
+    let mut peak = 0usize;
+    let mut recoveries = 0usize;
+
+    for round in 0..ctx.progress.evidence_recovery_streak + 1 {
+        super::turn_engine::tools::handle_tool_response(
+            &client,
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            vec![crate::tools::ToolCallEnvelope {
+                call_id: format!("looping-{round}"),
+                tool_name: looping.tool.clone(),
+                arguments: serde_json::from_str(&expand_replay_arguments(
+                    &looping.arguments,
+                    &artifact,
+                    &workspace.to_string_lossy(),
+                ))
+                .expect("replay arguments parse"),
+            }],
+            "",
+        )
+        .await;
+        ctx.response.final_content = "Still looking for the server registry.".to_string();
+        peak = peak.max(ctx.progress.ledger.no_progress_streak());
+        recoveries = ctx.metrics.evidence_recoveries;
+    }
+
+    assert!(
+        peak >= ctx.progress.evidence_recovery_streak,
+        "repeating one failing search must reach the recovery threshold {} (peak {peak})",
+        ctx.progress.evidence_recovery_streak
+    );
+    assert!(
+        recoveries > 0,
+        "a genuinely repeating search must inject a recovery notice"
+    );
+    let history = state.lock().await;
+    assert!(
+        history
+            .history
+            .iter()
+            .any(|message| message.content.contains("[Evidence-based recovery:")),
+        "a genuinely repeating search must still produce a model-visible recovery notice"
+    );
+}
+
 #[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
