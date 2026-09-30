@@ -157,7 +157,7 @@ fn render_live_tail_mode(
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
-        lines.push(activity_status_line(state, false));
+        lines.push(activity_status_line(state, false, width as usize));
         lines.extend(background_command_lines(state));
         lines.push(Line::from(""));
     }

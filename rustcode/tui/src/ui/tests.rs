@@ -13,6 +13,11 @@ fn spawn_background_task_for_test(
 
 pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Width handed to `activity_status_line` by tests that assert hint content
+/// rather than how the line degrades: wide enough that every clause survives
+/// (#1529).
+const ROOMY_ACTIVITY_WIDTH: usize = 200;
+
 fn render_state_to_text(state: &mut RenderState, width: u16, height: u16) -> String {
     let (text, _) = render_state_to_text_with_composer_area(state, width, height);
     text
@@ -795,6 +800,119 @@ fn completion_footer_hint_replaces_session_metadata() {
         (0..20).any(|row| row_text(row).contains("esc dismiss")),
         "the hint should say how to dismiss the popup"
     );
+}
+
+/// The completion hint degrades by content as the row narrows: the keys that
+/// act survive, the trailing clauses go first, and nothing is left half-printed
+/// with an ellipsis (#1529).
+#[test]
+fn completion_hint_degrades_by_content_at_narrow_widths() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let hint_row = |terminal: &Terminal<TestBackend>, width: u16| {
+        let buffer = terminal.backend().buffer();
+        (0..terminal.backend().buffer().area.height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .find(|text| text.contains("navigate"))
+            .unwrap_or_else(|| panic!("completion hint should be rendered at {width} columns"))
+    };
+
+    // The right-hand percentage is 19 columns wide in a fresh session, so the
+    // hint has `width - 19` columns to work with before that text has to go.
+    for (width, expected) in [
+        (
+            100u16,
+            "  ↑/↓ navigate · enter select · tab complete · esc dismiss",
+        ),
+        (
+            80,
+            "  ↑/↓ navigate · enter select · tab complete · esc dismiss",
+        ),
+        (60, "  ↑/↓ navigate · enter select"),
+        // Too narrow for the hint beside the percentage: the percentage yields.
+        (30, "  ↑/↓ navigate · enter select"),
+    ] {
+        let mut state = RenderState::new();
+        state.input_buffer = "/".to_owned();
+        state.cursor_position = 1;
+        state.active_suggestion_index = Some(0);
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::render(frame, &mut state);
+            })
+            .unwrap();
+
+        let row = hint_row(&terminal, width);
+        assert!(
+            row.starts_with(expected),
+            "expected the hint to read {expected:?} at {width} columns, got {row:?}"
+        );
+        assert!(
+            !row.contains('…'),
+            "a hint must be omitted whole, never clipped with an ellipsis: {row:?}"
+        );
+        assert_eq!(
+            row.chars().count(),
+            width as usize,
+            "the footer row must fill the viewport exactly once"
+        );
+    }
+}
+
+/// The context percentage is informational, so it is the first thing to go when
+/// the hint needs the whole row (#1529).
+#[test]
+fn composer_footer_drops_the_context_percentage_before_a_hint_clause() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let footer_rows = |width: u16| {
+        let mut state = RenderState::new();
+        state.input_buffer = "/".to_owned();
+        state.cursor_position = 1;
+        state.active_suggestion_index = Some(0);
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::render(frame, &mut state);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..20)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // 30 columns cannot fit "↑/↓ navigate" (14) beside "100% context left  "
+    // (19), so the percentage is dropped rather than a hint clause.
+    let narrow = footer_rows(30);
+    let hint = narrow
+        .iter()
+        .find(|row| row.contains("navigate"))
+        .expect("hint row at 30 columns");
+    assert!(hint.contains("enter select"));
+    assert!(
+        !narrow.iter().any(|row| row.contains("context left")),
+        "the context percentage must yield to the hint: {narrow:?}"
+    );
+
+    // At 60 columns both fit, so neither is sacrificed.
+    let roomy = footer_rows(60);
+    assert!(roomy.iter().any(|row| row.contains("context left")));
+    assert!(roomy.iter().any(|row| row.contains("enter select")));
 }
 
 #[test]
@@ -3584,7 +3702,7 @@ fn activity_status_labels_idle_and_working_states() {
     let state = RenderState::new();
     assert_eq!(activity_status_label(&render_snapshot(&state)), "Idle");
     assert_eq!(
-        activity_status_line(&render_snapshot(&state), false)
+        activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH)
             .spans
             .last()
             .unwrap()
@@ -3616,7 +3734,8 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
     tracker.record_chunk();
     state.stream_tracker = Some(tracker);
 
-    let status = activity_status_line(&render_snapshot(&state), false).to_string();
+    let status =
+        activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH).to_string();
     let rendered = render_state_to_text(&mut state, 100, 12);
     let footer = rendered
         .lines()
@@ -3626,6 +3745,77 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
     assert!(!status.contains("Tokens/s"), "{status}");
     assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
     assert!(status.contains("esc interrupt"), "{status}");
+}
+
+/// The esc and steer-mode hints follow the same drop-don't-clip rule as the
+/// footer hint: a clause that does not fit is omitted whole (#1529).
+#[test]
+fn activity_hints_are_dropped_rather_than_clipped_at_narrow_widths() {
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.generation_start_time = Some(std::time::Instant::now());
+    let snapshot = render_snapshot(&state);
+
+    let roomy = activity_status_line(&snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
+    assert!(roomy.contains(" · esc interrupt"), "{roomy}");
+
+    // The label alone already overruns the row, so the hint has no room and is
+    // omitted instead of being cut off mid-word.
+    for width in [1, 4, 10] {
+        let narrow = activity_status_line(&snapshot, false, width).to_string();
+        assert!(
+            !narrow.contains("esc"),
+            "the esc hint must be dropped, not clipped, at width {width}: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains('…'),
+            "no hint may end in a truncated ellipsis: {narrow:?}"
+        );
+    }
+}
+
+/// One row, one rule: the footer and the activity line share the clause-fitting
+/// helper, and the percentage has the lower priority.
+#[test]
+fn hint_clauses_drop_from_the_tail_and_never_clip() {
+    use super::composer_render::{
+        COMMAND_COMPLETION_HINT_CLAUSES, COMPLETION_HINT_CLAUSES, fit_hint_clauses,
+    };
+
+    let clauses = &COMMAND_COMPLETION_HINT_CLAUSES;
+    assert_eq!(
+        fit_hint_clauses("  ", clauses, 200).as_deref(),
+        Some("  ↑/↓ navigate · enter select · tab complete · esc dismiss")
+    );
+    // 44 columns hold the two leading clauses plus `tab complete`.
+    assert_eq!(
+        fit_hint_clauses("  ", clauses, 44).as_deref(),
+        Some("  ↑/↓ navigate · enter select · tab complete")
+    );
+    assert_eq!(
+        fit_hint_clauses("  ", clauses, 29).as_deref(),
+        Some("  ↑/↓ navigate · enter select")
+    );
+    assert_eq!(
+        fit_hint_clauses("  ", clauses, 28).as_deref(),
+        Some("  ↑/↓ navigate")
+    );
+    assert_eq!(fit_hint_clauses("  ", clauses, 13), None);
+
+    // The file-completion popup has no `tab complete` clause to begin with.
+    assert_eq!(
+        fit_hint_clauses("  ", &COMPLETION_HINT_CLAUSES, 200).as_deref(),
+        Some("  ↑/↓ navigate · enter select · esc dismiss")
+    );
+    assert_eq!(
+        fit_hint_clauses("  ", &COMPLETION_HINT_CLAUSES, 29).as_deref(),
+        Some("  ↑/↓ navigate · enter select")
+    );
+    assert_eq!(
+        fit_hint_clauses("  ", &COMPLETION_HINT_CLAUSES, 28).as_deref(),
+        Some("  ↑/↓ navigate")
+    );
+    assert_eq!(fit_hint_clauses("  ", &COMPLETION_HINT_CLAUSES, 13), None);
 }
 
 #[test]
@@ -3651,14 +3841,15 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     let neutral_snapshot = render_snapshot(&state);
     rustcode::controller::stop_background_tasks(&session_id, None);
 
-    let status = super::activity_status_line(&snapshot, false).to_string();
+    let status = super::activity_status_line(&snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
     assert!(status.contains("Idle"), "{status}");
     assert!(!status.contains("Waiting for background terminal"));
     assert!(!status.contains("esc to interrupt"));
     assert!(status.contains("⠋ 1 running ("), "{status}");
     assert!(status.contains(long_command), "{status}");
     assert!(status.contains("/ps · /stop"), "{status}");
-    let neutral_status = super::activity_status_line(&neutral_snapshot, false).to_string();
+    let neutral_status =
+        super::activity_status_line(&neutral_snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
     assert!(neutral_status.contains("Idle"));
     assert!(neutral_status.contains("1 running ("));
     assert!(!neutral_status.contains("Waiting for background terminal"));
@@ -3728,7 +3919,8 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
         ),
     );
 
-    let line = super::activity_status_line(&render_snapshot(&state), false).to_string();
+    let line = super::activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH)
+        .to_string();
 
     assert!(line.contains("Working"));
     assert!(line.contains("esc interrupt"));
@@ -5557,9 +5749,9 @@ fn reduced_motion_is_read_from_the_active_config() {
             .map(|span| (span.content.to_string(), span.style.fg))
             .collect::<Vec<_>>()
     };
-    let animated = activity_status_line(&render_snapshot(&state), false);
+    let animated = activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH);
     state.config.reduced_motion = true;
-    let still = activity_status_line(&render_snapshot(&state), false);
+    let still = activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH);
 
     assert_eq!(animated.to_string(), still.to_string());
     assert_eq!(label_spans(&animated).len(), "Working".len());

@@ -19,6 +19,28 @@ pub(crate) struct Composer {
     keymap: KeyMap,
 }
 
+/// Pasted text at or above this many characters is framed as a
+/// `<!--PASTE:<chars>:<payload>-->` marker. The engine expands the marker at
+/// the provider boundary (`rustcode_core::paste`), so a short paste sends the
+/// verbatim text while a large one travels as a single cheap marker.
+///
+/// Single owner of the threshold and the marker format: every paste insert
+/// path frames its payload through `frame_pasted_text` (#1527).
+const PASTE_THRESHOLD: usize = 300;
+
+/// Normalize a pasted payload's newlines and frame it when it is large enough
+/// to be worth a marker. Both the clipboard read and a bracketed-paste event
+/// hand raw text, which may carry `\r\n`; normalizing here keeps the composer
+/// buffer identical whichever path delivered it.
+fn frame_pasted_text(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.chars().count() >= PASTE_THRESHOLD {
+        format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
+    } else {
+        normalized
+    }
+}
+
 impl Composer {
     pub(crate) fn new() -> Self {
         Self {
@@ -142,15 +164,12 @@ impl Composer {
         }
     }
 
+    /// Insert a pasted payload into the composer. Every insert path — keymap
+    /// paste, Ctrl/Cmd+V fallback and bracketed paste — goes through here, so
+    /// the newline normalization and the large-paste marker are framed in
+    /// exactly one place (#1527).
     pub(crate) fn handle_paste(&self, state: &mut AppState, text: &str) {
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        const PASTE_THRESHOLD: usize = 300;
-        let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
-            format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
-        } else {
-            normalized
-        };
-        for c in text_to_insert.chars() {
+        for c in frame_pasted_text(text).chars() {
             state.insert_char(c);
         }
         state.reset_suggestion_cycle();
@@ -310,6 +329,18 @@ mod tests {
         let mut large = AppState::new();
         Composer::default().handle_paste(&mut large, &"x".repeat(300));
         assert!(large.input_buffer.starts_with("<!--PASTE:300:"));
+    }
+
+    /// The marker framed at insert time must still expand at the provider
+    /// boundary, so a threshold or format change cannot strand a paste (#1527).
+    #[test]
+    fn framed_large_paste_round_trips_through_the_provider_boundary() {
+        let payload = "å→".repeat(150);
+        let mut state = AppState::new();
+        Composer::default().handle_paste(&mut state, &payload);
+
+        assert!(state.input_buffer.starts_with("<!--PASTE:"));
+        assert_eq!(rustcode_core::paste::expand(&state.input_buffer), payload);
     }
 
     #[test]

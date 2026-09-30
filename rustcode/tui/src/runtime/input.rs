@@ -68,6 +68,23 @@ fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> b
     true
 }
 
+/// Payload a clipboard paste should insert: an image becomes
+/// `![image](file://…)` markdown and wins over plain text, so pasting a
+/// screenshot still renders as [Image #N].
+fn clipboard_paste_payload() -> Option<String> {
+    rustcode::clipboard::paste_image_from_clipboard()
+        .or_else(rustcode::clipboard::read_text_from_clipboard)
+}
+
+/// Insert one clipboard payload into the composer.
+///
+/// Both the keymap paste and the Ctrl/Cmd+V fallback route through this, so
+/// `Composer::handle_paste` stays the only place that normalizes newlines and
+/// frames a large paste (#1527).
+fn insert_clipboard_paste(composer: &ui::Composer, state: &mut AppState, payload: &str) {
+    composer.handle_paste(state, payload);
+}
+
 async fn report_selection_copy(
     app_state: &Arc<Mutex<AppState>>,
     text: &str,
@@ -1536,14 +1553,9 @@ pub(super) async fn handle_app_event(
                         return Ok(InputFlow::ContinueIteration);
                     }
                     ui::ComposerAction::Paste => {
-                        if let Some(img_markdown) =
-                            rustcode::clipboard::paste_image_from_clipboard()
-                        {
+                        if let Some(payload) = clipboard_paste_payload() {
                             let mut state = app_state.lock().await;
-                            composer.handle_paste(&mut state, &img_markdown);
-                        } else if let Some(text) = rustcode::clipboard::read_text_from_clipboard() {
-                            let mut state = app_state.lock().await;
-                            composer.handle_paste(&mut state, &text);
+                            insert_clipboard_paste(composer, &mut state, &payload);
                         }
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
@@ -1722,31 +1734,13 @@ pub(super) async fn handle_app_event(
                             || key.modifiers.contains(event::KeyModifiers::SUPER)
                             || key.modifiers.contains(event::KeyModifiers::META) =>
                     {
-                        if let Some(img_markdown) =
-                            rustcode::clipboard::paste_image_from_clipboard()
-                        {
+                        // Terminals without bracketed paste deliver Ctrl/Cmd+V
+                        // as a key. Route it through the same helper the keymap
+                        // paste uses so the large-paste marker cannot drift
+                        // between the two (#1527).
+                        if let Some(payload) = clipboard_paste_payload() {
                             let mut s = app_state.lock().await;
-                            for c in img_markdown.chars() {
-                                s.insert_char(c);
-                            }
-                            s.reset_suggestion_cycle();
-                        } else if let Some(text) = rustcode::clipboard::read_text_from_clipboard() {
-                            let mut s = app_state.lock().await;
-                            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-                            const PASTE_THRESHOLD: usize = 300;
-                            let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
-                                format!(
-                                    "<!--PASTE:{}:{}-->",
-                                    normalized.chars().count(),
-                                    normalized
-                                )
-                            } else {
-                                normalized
-                            };
-                            for c in text_to_insert.chars() {
-                                s.insert_char(c);
-                            }
-                            s.reset_suggestion_cycle();
+                            insert_clipboard_paste(composer, &mut s, &payload);
                         }
                     }
                     KeyCode::Char('p') | KeyCode::Char('n')
@@ -2028,10 +2022,7 @@ pub(super) async fn handle_app_event(
                 {
                     let mut s = app_state.lock().await;
                     if !s.show_mcp_config && s.status != AppStatus::AwaitingQuestion {
-                        for c in img_markdown.chars() {
-                            s.insert_char(c);
-                        }
-                        s.reset_suggestion_cycle();
+                        composer.handle_paste(&mut s, &img_markdown);
                     }
                     *needs_redraw = true;
                     return Ok(InputFlow::ContinueIteration);
@@ -2072,11 +2063,11 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_selection_for_composer_key, is_keyboard_range_key, is_shift_tab,
-        is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
+        clear_selection_for_composer_key, insert_clipboard_paste, is_keyboard_range_key,
+        is_shift_tab, is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
         selection_owns_key,
     };
-    use crate::ui::TranscriptState;
+    use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -2243,5 +2234,41 @@ mod tests {
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         );
         assert!(!transcript.selection.is_active());
+    }
+
+    /// The Ctrl/Cmd+V fallback and the keymap paste share one insert helper,
+    /// so both land the same buffer for the same clipboard text at and just
+    /// below the large-paste threshold (#1527).
+    #[test]
+    fn clipboard_paste_paths_agree_on_threshold_and_newlines() {
+        let composer = Composer::default();
+        for payload in [
+            "y".repeat(299),
+            "z".repeat(300),
+            "one\r\ntwo\rthree".to_owned(),
+        ] {
+            let mut fallback = AppState::new();
+            insert_clipboard_paste(&composer, &mut fallback, &payload);
+
+            let mut keymap = AppState::new();
+            composer.handle_paste(&mut keymap, &payload);
+
+            assert_eq!(
+                fallback.input_buffer, keymap.input_buffer,
+                "fallback and keymap paste must insert the same buffer for {payload:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_paste_below_threshold_inserts_verbatim() {
+        let mut state = AppState::new();
+        insert_clipboard_paste(&Composer::default(), &mut state, &"y".repeat(299));
+        assert_eq!(state.input_buffer, "y".repeat(299));
+
+        let mut large = AppState::new();
+        insert_clipboard_paste(&Composer::default(), &mut large, &"y".repeat(300));
+        assert!(large.input_buffer.starts_with("<!--PASTE:300:"));
+        assert!(large.input_buffer.ends_with("-->"));
     }
 }
