@@ -62,9 +62,10 @@ pub use tasks::{
     background_task_snapshots, has_background_tasks, spawn_background_task, stop_background_tasks,
 };
 pub use transcript::{
-    AgentUiEvent, AppStatus, ChatMessage, History, LiveToolCall, LiveToolOutputChunk, PendingSteer,
-    StreamTracker, SubAgent, SubAgentStatus, TokenUsage, ToolCallRef, ToolResultRecord, Verbosity,
-    is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
+    AgentUiEvent, AppStatus, ChatMessage, ExpandOutcome, History, LiveToolCall,
+    LiveToolOutputChunk, PendingSteer, StreamTracker, SubAgent, SubAgentStatus, TokenUsage,
+    ToolCallRef, ToolResultRecord, Verbosity, is_compaction_summary, mcp_tool_display_name,
+    sanitize_recap_content, toggle_expanded_thought,
 };
 
 pub use worker::InteractiveController;

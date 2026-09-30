@@ -39,6 +39,22 @@ pub fn sanitize_recap_content(content: &str) -> String {
     crate::app::sanitize_recap_content(content)
 }
 
+/// What one expand/collapse request did to the collapsed tool bodies.
+pub use crate::app::ExpandOutcome;
+
+/// Toggle the collapsed tool body the expand key points at.
+///
+/// `candidates` are the message indices the frontend rendered with a collapsed
+/// body, oldest first. The frontend owns that classification — only it knows
+/// which rows it actually collapsed — so it passes the list in and the engine
+/// owns the state transition and the feedback (#1541).
+pub fn toggle_expanded_thought(
+    state: &mut crate::app::AppState,
+    candidates: &[usize],
+) -> ExpandOutcome {
+    crate::app::toggle_expanded_thought(state, candidates)
+}
+
 /// PascalCase display name for an MCP tool, if it follows the prefix convention.
 pub fn mcp_tool_display_name(name: &str) -> Option<String> {
     crate::tools::mcp_tool_display_name(name)

@@ -122,6 +122,40 @@ pub fn check_memory_usage(s: &mut AppState) {
     }
 }
 
+/// Outcome of one `ctrl+o` press against the collapsed tool bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpandOutcome {
+    /// The focused entry now renders its body inline.
+    Expanded(usize),
+    /// The focused entry is collapsed again.
+    Collapsed(usize),
+    /// Nothing in the transcript is collapsible, so the press was a no-op.
+    NothingToExpand,
+}
+
+/// Toggle the collapsed tool body `candidates` points at.
+///
+/// `candidates` are the message indices the frontend rendered with a collapsed
+/// body, newest last. The last one wins, so `ctrl+o` always acts on the most
+/// recent collapsed entry, and a second press collapses exactly what the first
+/// expanded (#1541).
+pub fn toggle_expanded_thought(s: &mut AppState, candidates: &[usize]) -> ExpandOutcome {
+    let Some(&focus) = candidates.last() else {
+        s.set_transient_notice("Nothing to expand");
+        return ExpandOutcome::NothingToExpand;
+    };
+    if s.expanded_thoughts.remove(&focus) {
+        s.expanded_thought_focus = None;
+        s.set_transient_notice("Collapsed tool output");
+        ExpandOutcome::Collapsed(focus)
+    } else {
+        s.expanded_thoughts.insert(focus);
+        s.expanded_thought_focus = Some(focus);
+        s.set_transient_notice("Expanded tool output");
+        ExpandOutcome::Expanded(focus)
+    }
+}
+
 pub fn toggle_auto_confirm(s: &mut AppState) {
     s.auto_confirm = !s.auto_confirm;
     let status = if s.auto_confirm {
@@ -176,6 +210,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.expanded_thoughts.clear();
+    s.expanded_thought_focus = None;
     s.enter_idle();
     s.subagents.clear();
     s.selected_subagent_id = None;
