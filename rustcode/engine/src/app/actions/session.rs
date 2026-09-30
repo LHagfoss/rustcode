@@ -302,9 +302,25 @@ pub fn parse_token_count(input: &str) -> Option<u32> {
 /// Sessions available to resume: archived ones plus the live history file
 /// from the previous run (only when the current chat has no real prompt yet,
 /// otherwise the live file just mirrors what's already on screen).
+/// Defaults to current-workspace only (parent/child match); legacy sessions
+/// with no workspace recorded are included and should be labeled
+/// "no workspace recorded". Explicit `--resume <id>` bypasses this filter.
 pub fn build_session_list_with_truncation(s: &AppState) -> (Vec<crate::config::SessionMeta>, bool) {
+    build_session_list_scoped_with_truncation(s, false)
+}
+
+/// Scoped session list with an explicit `--all` escape hatch. When
+/// `show_all` is true, sessions from every workspace are returned with
+/// their workspace per entry.
+pub fn build_session_list_scoped_with_truncation(
+    s: &AppState,
+    show_all: bool,
+) -> (Vec<crate::config::SessionMeta>, bool) {
     const MAX_SESSIONS: usize = 50;
-    let (mut list, mut truncated) = crate::config::list_sessions_limited(MAX_SESSIONS);
+    let cwd = crate::config::current_workspace_dir();
+    let scope = if show_all { None } else { cwd.as_deref() };
+    let (mut list, mut truncated) =
+        crate::config::list_sessions_limited_scoped(MAX_SESSIONS, scope);
     if !crate::config::session_has_content(&s.history)
         && let Some(live) = crate::config::live_session_meta()
         && !list.iter().any(|m| m.path == live.path)
@@ -327,6 +343,53 @@ pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
 #[allow(dead_code)]
 pub fn is_session_list_truncated(total_sessions: usize) -> bool {
     total_sessions > 50
+}
+
+/// Adopt the recorded session workspace on resume. Prefers the session's
+/// isolated task worktree when it can be reattached (#1496), otherwise the
+/// recorded cwd when it still exists. Missing records keep the current
+/// directory. Reports whether the working directory changed.
+pub fn adopt_session_workspace(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
+    let session_id = crate::config::session_id_from_path(&meta.path).unwrap_or_default();
+    // Prefer the embedded cwd so resume costs no extra workspace read;
+    // fall back to a store lookup for metas constructed without it.
+    let workspace = meta
+        .workspace_cwd
+        .clone()
+        .map(|cwd| crate::config::SessionWorkspace {
+            cwd,
+            additional_directories: Vec::new(),
+            task_workspace_id: None,
+        })
+        .or_else(|| {
+            if session_id.is_empty() {
+                None
+            } else {
+                crate::config::load_session_workspace(&session_id)
+            }
+        });
+    let Some(workspace) = workspace else {
+        return false;
+    };
+    // Reattach an isolated task worktree first so resume reuses its
+    // writable roots instead of starting over in the source checkout.
+    if let Some(descriptor_id) = workspace.task_workspace_id.as_deref()
+        && let Some(manager) = crate::config::workspace_manager()
+        && let Ok(descriptor) = manager.resume(descriptor_id)
+    {
+        s.workspace_root = Some(descriptor.workspace_path.clone());
+        s.task_working_directory = Some(descriptor.workspace_path);
+        return true;
+    }
+    // Only adopt existing directories; a deleted project keeps the current cwd.
+    if workspace.cwd.is_dir() {
+        let current = std::env::current_dir().ok();
+        let changed = current.as_deref() != Some(workspace.cwd.as_path());
+        s.workspace_root = Some(workspace.cwd.clone());
+        s.task_working_directory = Some(workspace.cwd);
+        return changed;
+    }
+    false
 }
 pub fn resume_latest_session(s: &mut AppState) {
     let list = build_session_list(s);
@@ -372,9 +435,20 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
 
     s.history.replace(loaded);
     reset_active_session_state(s);
+    // Adopt the recorded workspace when resuming across directories, like
+    // the desktop "Choose project folder" flow. An explicit `--resume <id>`
+    // overrides workspace scoping and lands in the session's cwd when it
+    // still exists; otherwise the current directory is kept.
+    let workspace_switched = adopt_session_workspace(s, meta);
     restore_segment_checkpoint(s);
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
+    if workspace_switched && let Some(cwd) = s.task_working_directory.as_deref() {
+        s.history.push(ChatMessage::new(
+            "system",
+            format!("Switched to the session's workspace {}", cwd.display()),
+        ));
+    }
     s.history.push(ChatMessage::new(
         "system",
         format!("Resumed session \"{}\"", meta.title),
@@ -521,5 +595,59 @@ mod copy_tests {
             Some("No assistant reply found to copy")
         );
         assert!(state.history.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::{AppState, adopt_session_workspace};
+
+    fn meta_with_workspace(
+        path: &std::path::Path,
+        cwd: Option<std::path::PathBuf>,
+    ) -> crate::config::SessionMeta {
+        crate::config::SessionMeta {
+            path: path.to_path_buf(),
+            title: "test".to_owned(),
+            when: String::new(),
+            message_count: 2,
+            workspace_cwd: cwd,
+        }
+    }
+
+    #[test]
+    fn adopting_an_existing_workspace_sets_task_directories() {
+        let dir = tempfile::tempdir().expect("temp workspace");
+        let mut state = AppState::new();
+        let meta = meta_with_workspace(
+            std::path::Path::new("/tmp/sessions/id/history.json"),
+            Some(dir.path().to_path_buf()),
+        );
+        assert!(adopt_session_workspace(&mut state, &meta));
+        assert_eq!(state.task_working_directory, Some(dir.path().to_path_buf()));
+        assert_eq!(state.workspace_root, Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn adopting_a_missing_workspace_keeps_current_directories() {
+        let mut state = AppState::new();
+        let before_task = state.task_working_directory.clone();
+        let before_root = state.workspace_root.clone();
+        let meta = meta_with_workspace(
+            std::path::Path::new("/tmp/sessions/id/history.json"),
+            Some(std::path::PathBuf::from(
+                "/definitely/not/a/rustcode/workspace",
+            )),
+        );
+        assert!(!adopt_session_workspace(&mut state, &meta));
+        assert_eq!(state.task_working_directory, before_task);
+        assert_eq!(state.workspace_root, before_root);
+    }
+
+    #[test]
+    fn legacy_sessions_without_workspace_keep_current_directories() {
+        let mut state = AppState::new();
+        let meta = meta_with_workspace(std::path::Path::new("/tmp/sessions/id/history.json"), None);
+        assert!(!adopt_session_workspace(&mut state, &meta));
     }
 }
