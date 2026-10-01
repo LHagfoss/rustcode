@@ -1675,8 +1675,8 @@ pub(crate) fn tool_system_prompt_for_policy(
 
     p.push_str(
         "\n# Skills\n\
-Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
-If the request context names a skill, load it first. For a likely specialized workflow, call `list_skills` once, then `use_skill` for the exact match. \
+Skills stay on demand. If the request names a skill, load it first; for specialized workflows, call `list_skills` once, then `use_skill` for a match. \
+For live local app/device state without a matching tool or route hint, check `list_skills` before shell guesses or claiming unsupported. \
 `list_skills` returns metadata only; `use_skill` loads the selected SKILL.md.\n\n",
     );
 
