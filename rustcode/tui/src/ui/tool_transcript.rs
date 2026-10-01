@@ -855,7 +855,12 @@ pub(super) fn tool_transcript_entry(
             show_picker,
         );
         if !preview.is_empty() {
-            body.extend(preview);
+            // Keep the synthesized code at the head of the capped body so the
+            // five-row preview shows its beginning before the omitted marker.
+            // The title row already carries the edited path.
+            let status = std::mem::take(&mut body);
+            body = preview;
+            body.extend(status);
         }
     }
 
