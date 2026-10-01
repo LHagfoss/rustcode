@@ -208,6 +208,30 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     {
         msg.token_usage = usage.clone();
     }
+    // Stamp only the final visible response at the actual turn boundary.
+    // Persist this once; restoring history must never fabricate a new finish time.
+    if ctx.lifecycle.task_completed
+        && !cancel_token.is_cancelled()
+        && let Some(user_index) = latest_user_index
+    {
+        let duration_ms = prompt_start_time.elapsed().as_millis() as u64;
+        if let Some(message) = s
+            .history
+            .iter_mut()
+            .skip(user_index + 1)
+            .rev()
+            .find(|message| {
+                message.role == "assistant"
+                    && !message.conversation_recap
+                    && !message.unexecuted_tool_call_checkpoint
+                    && message.tool_calls.is_empty()
+                    && !message.content.trim().is_empty()
+            })
+        {
+            message.response_time_ms = Some(duration_ms);
+            message.completed_at = Some(chrono::Local::now().to_rfc3339());
+        }
+    }
     let active_id = s.active_session_id.clone();
     crate::config::save_session_history(&active_id, &s.history);
     crate::config::flush_history_async();
