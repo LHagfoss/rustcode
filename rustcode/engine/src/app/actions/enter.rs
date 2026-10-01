@@ -303,12 +303,16 @@ async fn handle_enter_inner(
                 let current = s.effective_sandbox_mode();
                 match tokens.get(1).copied() {
                     None => {
+                        // Two spaces separate the columns so the panel renderer
+                        // owns the label column: Markdown collapses the padding a
+                        // `format!` width would give, and `•` keeps the current
+                        // marker out of the list syntax it used to look like.
                         let modes = crate::config::SandboxMode::ALL
                             .iter()
                             .map(|mode| {
-                                let marker = if *mode == current { "*" } else { " " };
+                                let marker = if *mode == current { "•" } else { " " };
                                 format!(
-                                    " {marker} /sandbox {:<22} {}",
+                                    " {marker} /sandbox {}  {}",
                                     mode.as_str(),
                                     mode.description()
                                 )
@@ -316,7 +320,7 @@ async fn handle_enter_inner(
                             .collect::<Vec<_>>()
                             .join("\n");
                         s.show_command_panel("OS sandbox", format!(
-                            "OS sandbox mode: {} ({})\n{modes}\n* current. `trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nRestricted command failures name effective permissions and possible sandbox restrictions.",
+                            "OS sandbox mode: {} ({})\n{modes}\nThe current mode is marked with •. `trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.\nRestricted command failures name effective permissions and possible sandbox restrictions.",
                             current.description(), current.effective_description()
                         ));
                     }

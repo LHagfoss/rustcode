@@ -3,6 +3,7 @@ pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision
 pub mod actions;
 pub mod activity;
 pub mod composer;
+pub mod fuzzy;
 pub mod geometry;
 pub mod overlays;
 pub mod session_controller;
@@ -15,6 +16,7 @@ pub use state::Verbosity;
 pub mod suggestion;
 
 pub use actions::*;
+pub use fuzzy::{fuzzy_match_positions, fuzzy_matches};
 pub use geometry::UiRect;
 pub use state::*;
 pub use subagent_controller::{

@@ -217,6 +217,11 @@ pub fn command_token(input: &str) -> Option<&str> {
     Some(&first_line[..end])
 }
 
+/// Commands matching the token in the composer popup, best match first.
+///
+/// The tiers are the search rule of `app::fuzzy`: an exact name, then a
+/// prefix, then anything the fuzzy matcher accepts. The fuzzy tier is what
+/// makes `/modle` find `/model` instead of matching nothing (#1588).
 pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
     let Some(token) = command_token(input) else {
         return Vec::new();
@@ -224,15 +229,18 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
     let token = token.to_lowercase();
     let mut exact = Vec::new();
     let mut prefixes = Vec::new();
+    let mut fuzzy = Vec::new();
     for command in COMMANDS {
         let name = command.name.to_lowercase();
         if name == token {
             exact.push(command);
         } else if name.starts_with(&token) {
             prefixes.push(command);
+        } else if crate::app::fuzzy::fuzzy_matches(command.name, &token) {
+            fuzzy.push(command);
         }
     }
-    exact.into_iter().chain(prefixes).collect()
+    exact.into_iter().chain(prefixes).chain(fuzzy).collect()
 }
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
@@ -378,6 +386,49 @@ mod tests {
         let commands = filtered_commands("/MODEL");
 
         assert!(commands.iter().any(|command| command.name == "/model"));
+    }
+
+    /// A misspelled token used to match nothing, so a command nobody spelled
+    /// exactly was invisible in the popup (#1588).
+    #[test]
+    fn command_completion_falls_back_to_fuzzy_matching() {
+        for typo in ["/modle", "/mdel", "/compact"] {
+            let commands = filtered_commands(typo);
+            let expected = match typo {
+                "/modle" | "/mdel" => "/model",
+                _ => "/compact",
+            };
+            assert_eq!(
+                commands.first().map(|command| command.name),
+                Some(expected),
+                "{typo} must rank {expected} first: {:?}",
+                commands.iter().map(|c| c.name).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// Prefix matches still win over fuzzy ones, so the closest command keeps
+    /// the selection.
+    #[test]
+    fn prefix_matches_outrank_fuzzy_matches() {
+        let commands = filtered_commands("/mo");
+
+        assert_eq!(
+            commands.first().map(|command| command.name),
+            Some("/model"),
+            "{:?}",
+            commands.iter().map(|c| c.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn fuzzy_completion_keeps_the_exact_token_winning() {
+        let commands = filtered_commands("/models");
+
+        assert_eq!(
+            commands.first().map(|command| command.name),
+            Some("/models")
+        );
     }
 
     #[test]
