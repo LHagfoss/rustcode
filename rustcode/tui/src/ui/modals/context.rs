@@ -1,5 +1,86 @@
 use super::*;
 
+/// Rectangle containing the selectable body of the active read-only info
+/// modal. The geometry mirrors the corresponding render function below, while
+/// excluding panel borders and outer padding from mouse selection and copy.
+pub(in crate::ui) fn panel_selection_surface(
+    f: &Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) -> Option<(ratatui::layout::Rect, Vec<bool>)> {
+    if state.show_context_modal() {
+        let area = input_anchor_rect(f, input_area, CONTEXT_MODAL_HEIGHT);
+        let inner = area.inner(Margin {
+            vertical: 0,
+            horizontal: 2,
+        });
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(6),
+            ])
+            .split(inner);
+        let area = chunks[2];
+        return Some((area, vec![false; usize::from(area.height)]));
+    }
+
+    let height = if state.show_status_modal() {
+        STATUS_MODAL_HEIGHT
+    } else if state.show_stats_modal() {
+        STATS_MODAL_HEIGHT
+    } else if state.show_session_modal() {
+        SESSION_MODAL_HEIGHT
+    } else if state.command_panel().is_some() {
+        let area = input_anchor_rect(f, input_area, super::panel::COMMAND_PANEL_HEIGHT);
+        let inner = area
+            .inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            })
+            .inner(Margin {
+                vertical: 0,
+                horizontal: 2,
+            });
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+        let body = chunks[2];
+        let Some(panel) = state.command_panel() else {
+            return None;
+        };
+        let lines = super::panel::render_panel_content(&panel.content, inner.width as usize);
+        let scroll = usize::from(state.modal_scroll_row());
+        let soft_wrap_before = lines
+            .iter()
+            .flat_map(|line| {
+                let count = Paragraph::new(line.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(body.width.max(1))
+                    .max(1);
+                std::iter::once(false).chain(std::iter::repeat_n(true, count - 1))
+            })
+            .skip(scroll)
+            .take(usize::from(body.height))
+            .collect::<Vec<_>>();
+        let mut visible_wraps = soft_wrap_before;
+        visible_wraps.resize(usize::from(body.height), false);
+        return Some((body, visible_wraps));
+    } else {
+        return None;
+    };
+    let inner = input_anchor_rect(f, input_area, height).inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    (inner.width > 0 && inner.height > 0).then_some((inner, vec![false; usize::from(inner.height)]))
+}
+
 pub(in crate::ui) fn render_status_modal(
     f: &mut Frame,
     state: &RenderSnapshot,
