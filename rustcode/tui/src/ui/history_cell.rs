@@ -17,8 +17,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
-    highlight_shell_command, push_wrapped_with_continuation,
-    tool_transcript::COLLAPSED_TOOL_BODY_MAX_LINES,
+    highlight_shell_command, push_wrapped_with_continuation, tool_transcript::tool_preview_window,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -697,16 +696,10 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                 format!("{}B", call.omitted_output_bytes)
             }
         });
-        const MAX_PREVIEW_ROWS: usize = COLLAPSED_TOOL_BODY_MAX_LINES;
-        let needs_marker = body.len() > MAX_PREVIEW_ROWS || byte_note.is_some();
-        if needs_marker {
-            let output_omitted = body.len() + 1 > MAX_PREVIEW_ROWS;
-            let head = MAX_PREVIEW_ROWS / 2;
-            let tail = MAX_PREVIEW_ROWS - head - 1;
-            let omitted_rows = body.len().saturating_sub(head + tail);
-            let mut marker = match (omitted_rows > 0, byte_note) {
-                (true, Some(note)) => format!("… +{omitted_rows} lines · {note}"),
-                (true, None) => format!("… +{omitted_rows} lines"),
+        if let Some(window) = tool_preview_window(body.len(), byte_note.is_some()) {
+            let mut marker = match (window.omitted_rows > 0, byte_note) {
+                (true, Some(note)) => format!("… +{} lines · {note}", window.omitted_rows),
+                (true, None) => format!("… +{} lines", window.omitted_rows),
                 (false, Some(note)) => format!("… {note} omitted"),
                 (false, None) => String::new(),
             };
@@ -726,14 +719,11 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                     ),
                 ),
             ]);
-            if output_omitted {
-                let tail_rows = body.split_off(body.len().saturating_sub(tail));
-                body.truncate(head);
-                body.push(marker);
-                body.extend(tail_rows);
-            } else {
-                body.push(marker);
-            }
+            let tail_start = body.len().saturating_sub(window.tail_rows);
+            let tail_rows = body.split_off(tail_start);
+            body.truncate(window.head_rows);
+            body.push(marker);
+            body.extend(tail_rows);
         }
         lines.extend(body);
         return lines;
@@ -912,6 +902,31 @@ mod tests {
         );
         assert_eq!(visible.len(), 30);
         assert!(visible.iter().any(|line| line.to_string().contains("0999")));
+    }
+
+    #[test]
+    fn live_tool_preview_keeps_all_short_output_before_forced_byte_marker() {
+        let mut call = rustcode::controller::LiveToolCall::new(
+            "local:1",
+            None,
+            "run_command",
+            "Bash",
+            "echo ok",
+        );
+        call.output
+            .push_back(rustcode::controller::LiveToolOutputChunk {
+                stderr: false,
+                text: "visible output\n".to_owned(),
+            });
+        call.omitted_output_bytes = 1;
+
+        let rendered = super::render_live_tool_cell(&[call], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(rendered.len(), 4, "{rendered:?}");
+        assert!(rendered[2].contains("visible output"), "{rendered:?}");
+        assert!(rendered[3].contains("1B omitted"), "{rendered:?}");
     }
 
     /// #1595: follow is a two-input state, not one flag. A reading offset or a
