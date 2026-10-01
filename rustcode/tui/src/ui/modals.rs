@@ -48,6 +48,8 @@ pub(in crate::ui) use navigation::{
     render_command_picker_modal, render_history_picker_modal, render_mcp_config_modal,
     render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
 };
+#[cfg(test)]
+pub(super) use panel::{COMMAND_PANEL_HEIGHT, render_panel_content};
 pub(in crate::ui) use panel::{
     HIGH_USAGE_PCT, OVER_THRESHOLD_PCT, PanelEmphasis, context_category_colors, emphasis_for_share,
     panel_line, panel_value_spans, render_command_panel,
@@ -139,6 +141,7 @@ pub(super) fn render_popup_menu(
         .max()
         .unwrap_or(0)
         .min(picker_column_budget(area.width as usize, 0));
+    let search = state.input_buffer();
     for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index()
@@ -150,11 +153,9 @@ pub(super) fn render_popup_menu(
         // columns is the shared picker gap, so this menu measures its rows with
         // the same rule as the inline pickers (#1528).
         let marker = if is_selected { "› " } else { "  " };
-        let left_text = truncate_to_width(
-            &format!("{marker}{:<name_width$}   ", cmd.name),
-            area.width as usize,
-        );
-        let description_width = (area.width as usize).saturating_sub(left_text.width());
+        let name = format!("{:<name_width$}", truncate_to_width(cmd.name, name_width));
+        let description_width = (area.width as usize)
+            .saturating_sub(PICKER_MARKER_WIDTH + name_width + PICKER_COLUMN_GAP);
         let desc_text = truncate_to_width(cmd.desc, description_width);
         let padding_len = description_width.saturating_sub(desc_text.width());
         let background = if is_selected {
@@ -162,45 +163,114 @@ pub(super) fn render_popup_menu(
         } else {
             COLOR_PANEL()
         };
-        let line = Line::from(vec![
-            Span::styled(
-                left_text,
-                Style::default()
-                    .fg(if is_selected {
-                        Color::Black
-                    } else {
-                        COLOR_TEXT()
-                    })
-                    .bg(background)
-                    .add_modifier(if is_selected {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ),
-            Span::styled(
-                desc_text,
-                Style::default()
-                    .fg(if is_selected {
-                        Color::Black
-                    } else {
-                        COLOR_MUTED()
-                    })
-                    .bg(background)
-                    .add_modifier(if is_selected {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ),
-            Span::styled(" ".repeat(padding_len), Style::default().bg(background)),
-        ]);
-        popup_lines.push(line);
+        let foreground = if is_selected {
+            Color::Black
+        } else {
+            COLOR_TEXT()
+        };
+        let modifier = if is_selected {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        // The matched characters of the command name are marked in place, so a
+        // fuzzy hit shows why it matched. The selected row is already marked in
+        // full by its background, so it needs no match marking (#1588).
+        let name_style = Style::default()
+            .fg(foreground)
+            .bg(background)
+            .add_modifier(modifier);
+        let mut spans = vec![Span::styled(marker.to_owned(), name_style)];
+        spans.extend(highlight_match_spans(
+            &name,
+            if is_selected { "" } else { search },
+            name_width,
+            name_style,
+        ));
+        spans.push(Span::styled(" ".repeat(PICKER_COLUMN_GAP), name_style));
+        spans.push(Span::styled(
+            desc_text,
+            Style::default()
+                .fg(if is_selected {
+                    Color::Black
+                } else {
+                    COLOR_MUTED()
+                })
+                .bg(background)
+                .add_modifier(modifier),
+        ));
+        spans.push(Span::styled(
+            " ".repeat(padding_len),
+            Style::default().bg(background),
+        ));
+        popup_lines.push(Line::from(spans));
     }
     f.render_widget(
         Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
+}
+
+/// True when a panel row matches its search field, using the shared fuzzy rule
+/// so a typo or a subsequence still finds the row (#1588).
+pub(super) fn panel_row_matches(text: &str, search: &str) -> bool {
+    rustcode::controller::fuzzy_matches(text, search)
+}
+
+/// Split `text` into spans with the characters that matched `search` marked in
+/// the primary color, so a fuzzy hit shows why it matched instead of appearing
+/// out of nowhere (#1588). `max_width` truncates the text the way
+/// [`truncate_to_width`] does, keeping the marked positions valid because
+/// truncation keeps a prefix.
+///
+/// A query of one character marks nothing: it would light up the same character
+/// in every row and tell the reader nothing. Callers pass an empty search for
+/// the selected row, which already marks itself in full.
+pub(super) fn highlight_match_spans(
+    text: &str,
+    search: &str,
+    max_width: usize,
+    base: Style,
+) -> Vec<Span<'static>> {
+    if search.trim_start_matches('/').chars().take(2).count() < 2 {
+        return vec![Span::styled(truncate_to_width(text, max_width), base)];
+    }
+    let Some(positions) = rustcode::controller::fuzzy_match_positions(text, search) else {
+        return vec![Span::styled(truncate_to_width(text, max_width), base)];
+    };
+    let marked = base.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_marked = false;
+    let mut used = 0;
+    let mut truncated = false;
+    for (index, character) in text.chars().enumerate() {
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + width > max_width.saturating_sub(usize::from(text.width() > max_width)) {
+            truncated = true;
+            break;
+        }
+        let is_marked = positions.contains(&index);
+        if is_marked != run_marked && !run.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                if run_marked { marked } else { base },
+            ));
+        }
+        run_marked = is_marked;
+        run.push(character);
+        used += width;
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, if run_marked { marked } else { base }));
+    }
+    if truncated {
+        spans.push(Span::styled("…", base));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), base));
+    }
+    spans
 }
 
 fn truncate_to_width(text: &str, max_width: usize) -> String {
@@ -301,6 +371,8 @@ fn picker_group_for_url(url: &str) -> &'static str {
 
 /// Model picker rows for the current config profiles, filtered by the
 /// active search string. Shared by rendering (ui) and selection (main).
+/// The filter uses the shared fuzzy rule, so a typo still finds its profile
+/// and the row list agrees with the engine's selection rule (#1588).
 pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
     let search = state.model_picker_search().to_lowercase();
     state
@@ -313,9 +385,9 @@ pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
             desc: p.model.clone(),
         })
         .filter(|item| {
-            item.name.to_lowercase().contains(&search)
-                || item.group.to_lowercase().contains(&search)
-                || item.desc.to_lowercase().contains(&search)
+            panel_row_matches(&item.name, search.as_str())
+                || panel_row_matches(&item.group, search.as_str())
+                || panel_row_matches(&item.desc, search.as_str())
         })
         .collect()
 }

@@ -607,8 +607,9 @@ fn settings_picker_uses_unified_modal_picker_style() {
     assert!(rendered.contains("Pure model text output"));
 }
 
-/// Every inline picker measures itself with the same rules, so the whole
-/// picker family agrees on width, height floor and column budget (#1528).
+/// Every inline picker and the scrollable command panels measure themselves with
+/// the same rules, so the whole family agrees on width, height floor and column
+/// budget (#1528, #1588).
 #[test]
 fn every_inline_picker_shares_the_measurement_rules() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
@@ -659,6 +660,7 @@ fn every_inline_picker_shares_the_measurement_rules() {
             COMMAND_PICKER_HEIGHT,
         ),
         ("mcp", render_mcp_config_modal, MCP_CONFIG_HEIGHT),
+        ("command-panel", render_command_panel, COMMAND_PANEL_HEIGHT),
     ];
 
     for (case, composer_width) in [("wide", 100u16), ("narrow", 40u16)] {
@@ -736,6 +738,13 @@ fn picker_state() -> RenderState {
     state.subagent_picker_index = 0;
     state.command_picker_index = 0;
     state.mcp_picker_index = 0;
+    // A label column wide enough to be truncated at a narrow composer, plus a
+    // value long enough to wrap: the command panel must stay inside its frame
+    // for both (#1588).
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Memory",
+        content: "Keys\n  short  one\n  a-much-longer-label  two\n  mid  a description long enough that it has to wrap somewhere in a narrow frame\n".to_owned(),
+    });
     state.history_picker_sessions = vec![rustcode::controller::SessionMeta {
         path: std::path::PathBuf::from("/tmp/picker-sizing.json"),
         title: "A deliberately long session title that will not fit a narrow frame".to_owned(),
@@ -1015,5 +1024,106 @@ fn context_panel_emphasizes_over_threshold_categories() {
             .contains(ratatui::style::Modifier::BOLD)),
         "under-threshold category value should stay muted"
     );
+    crate::ui::theme::set_active_theme("default");
+}
+
+/// The command panel paints its label column through the shared row helper, so
+/// the values line up in the frame and not only in the source (#1588).
+#[test]
+fn command_panel_paints_an_aligned_label_column() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Memory",
+        content: "  short  one\n  a-much-longer-label  two\n".to_owned(),
+    });
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    terminal
+        .draw(|frame| render_command_panel(frame, &snapshot, Rect::new(0, 12, 60, 2)))
+        .unwrap();
+
+    let row = |y: u16| {
+        (0..60)
+            .map(|column| terminal.backend().buffer()[(column, y)].symbol())
+            .collect::<String>()
+    };
+    let one = row(3).find("one").expect("first value painted");
+    let two = row(4).find("two").expect("second value painted");
+    assert_eq!(
+        one,
+        two,
+        "both values must start on one column:\n{}\n{}",
+        row(3),
+        row(4)
+    );
+}
+
+/// The palette filters with the shared fuzzy rule, so a half-remembered command
+/// is still reachable (#1588).
+#[test]
+fn command_palette_matches_a_mistyped_query() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_picker_search = "show ram usge".to_owned();
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    terminal
+        .draw(|frame| render_command_picker_modal(frame, &snapshot, Rect::new(0, 9, 60, 3)))
+        .unwrap();
+
+    let rendered = (0..14)
+        .map(|y| {
+            (0..60)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Show RAM usage"),
+        "the typo must still find the command:\n{rendered}"
+    );
+}
+
+/// Match marking is per character, so a fuzzy hit explains itself: the query
+/// letters stand out and the rest of the row stays in the row's own style
+/// (#1588).
+#[test]
+fn highlight_match_spans_marks_only_the_matched_characters() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    crate::ui::theme::set_active_theme("default");
+    let base = Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL());
+
+    let spans = highlight_match_spans("Show RAM usage", "show ram usge", 40, base);
+    let marked: String = spans
+        .iter()
+        .filter(|span| span.style.fg == Some(COLOR_PRIMARY()))
+        .map(|span| span.content.as_ref())
+        .collect();
+    let plain: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(plain, "Show RAM usage", "marking never changes the text");
+    assert_eq!(marked, "ShowRAMusge", "only the query letters are marked");
+    assert!(
+        spans
+            .iter()
+            .filter(|span| span.style.fg == Some(COLOR_PRIMARY()))
+            .all(|span| span.style.add_modifier.contains(Modifier::BOLD)),
+        "a matched character is bold"
+    );
+
+    // A one-character query would mark the same cell in every row.
+    let plain_row = highlight_match_spans("Show RAM usage", "s", 40, base);
+    assert!(
+        plain_row
+            .iter()
+            .all(|span| span.style.fg == Some(COLOR_TEXT())),
+        "a single character query marks nothing"
+    );
+
+    // Truncation keeps a prefix, so the marked positions stay valid.
+    let clipped = highlight_match_spans("Show RAM usage", "usge", 6, base);
+    let clipped_text: String = clipped.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(clipped_text, "Show …");
     crate::ui::theme::set_active_theme("default");
 }
