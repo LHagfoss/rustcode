@@ -65,7 +65,9 @@ use modals::{
     render_update_prompt_modal, render_verbosity_picker_modal, render_yolo_picker_modal,
     tool_confirmation_height,
 };
-use tool_result::render_tool_result;
+use tool_result::{
+    edit_result_is_noop, render_tool_result, result_has_embedded_diff, synthesized_edit_preview,
+};
 
 use crate::inline_terminal::Frame;
 use ratatui::{
