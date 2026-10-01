@@ -133,9 +133,9 @@ pub enum ExpandOutcome {
 /// Toggle the collapsed tool body `candidates` points at.
 ///
 /// `candidates` are the message indices the frontend rendered with a collapsed
-/// body, newest last. The last one wins, so `ctrl+o` always acts on the most
-/// recent collapsed entry, and a second press collapses exactly what the first
-/// expanded (#1541).
+/// body, oldest first. A second press collapses what the first expanded: when
+/// the focused entry is still a candidate it wins, even if newer tool output
+/// arrived in between. Otherwise the newest candidate wins (#1581).
 pub fn toggle_expanded_thought(s: &mut AppState, candidates: &[usize]) -> ExpandOutcome {
     let (outcome, notice) = toggle_expanded_bodies(
         &mut s.expanded_thoughts,
@@ -151,15 +151,24 @@ pub fn toggle_expanded_thought(s: &mut AppState, candidates: &[usize]) -> Expand
 /// Split out of [`toggle_expanded_thought`] so the frontend seam can drive the
 /// same press over the render-visible expand state a frontend already holds,
 /// instead of needing an `AppState` to own it (frontend seam #1431). `focus` is
-/// the last expanded index the session keeps in step with the set. Returns what
+/// the last expanded index the session keeps in step with the set. When it is
+/// still a candidate it is the press target, so a second press collapses what
+/// the first expanded even after newer output arrived (#1581). Returns what
 /// the press did plus the feedback text to surface.
 pub(crate) fn toggle_expanded_bodies(
     expanded: &mut std::collections::HashSet<usize>,
     focus: &mut Option<usize>,
     candidates: &[usize],
 ) -> (ExpandOutcome, &'static str) {
-    let Some(&target) = candidates.last() else {
+    if candidates.is_empty() {
         return (ExpandOutcome::NothingToExpand, "Nothing to expand");
+    };
+    // Prefer the focused entry when it is still collapsible; otherwise fall
+    // back to the newest candidate. Candidate selection is explicit, not an
+    // emergent property of list ordering.
+    let target = match *focus {
+        Some(focused) if candidates.contains(&focused) => focused,
+        _ => candidates[candidates.len() - 1],
     };
     if expanded.remove(&target) {
         *focus = None;
