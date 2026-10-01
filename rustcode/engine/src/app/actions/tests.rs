@@ -709,8 +709,8 @@ fn toggle_expanded_thought_expands_then_collapses_the_last_candidate() {
     assert_eq!(state.active_transient_notice(), Some("Nothing to expand"));
     assert!(state.expanded_thoughts.is_empty());
 
-    // The newest collapsed entry wins, so a second press collapses exactly
-    // what the first one expanded.
+    // The focused entry wins, so a second press collapses exactly
+    // what the first one expanded, even after newer output arrived (#1581).
     assert_eq!(
         super::toggle_expanded_thought(&mut state, &[1, 2]),
         super::ExpandOutcome::Expanded(2)
@@ -732,17 +732,36 @@ fn toggle_expanded_thought_expands_then_collapses_the_last_candidate() {
         Some("Collapsed tool output")
     );
 
-    // Each entry is keyed on its own message index, so a batch of collapsed
-    // entries expands independently rather than as one group.
+    // Each entry is keyed on its own message index. With focus on the last
+    // expanded entry, a newer candidate does not steal the next press: it
+    // collapses the focused entry instead of opening the new one (#1581).
     super::toggle_expanded_thought(&mut state, &[1, 2]);
     assert_eq!(
         super::toggle_expanded_thought(&mut state, &[1, 2, 3]),
-        super::ExpandOutcome::Expanded(3)
+        super::ExpandOutcome::Collapsed(2)
     );
+    assert_eq!(state.expanded_thoughts, std::collections::HashSet::new());
+}
+
+#[test]
+fn toggle_expanded_thought_second_press_collapses_focused_after_newer_arrived() {
+    let mut state = crate::app::AppState::new();
+
     assert_eq!(
-        state.expanded_thoughts,
-        std::collections::HashSet::from([2, 3])
+        super::toggle_expanded_thought(&mut state, &[1, 2]),
+        super::ExpandOutcome::Expanded(2)
     );
+    assert_eq!(state.expanded_thought_focus, Some(2));
+
+    // A newer tool result arrives between presses; the second press must
+    // collapse the focused entry, not open the newcomer.
+    assert_eq!(
+        super::toggle_expanded_thought(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::Collapsed(2)
+    );
+    assert!(!state.expanded_thoughts.contains(&2));
+    assert!(!state.expanded_thoughts.contains(&3));
+    assert_eq!(state.expanded_thought_focus, None);
 }
 
 #[test]
