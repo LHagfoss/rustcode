@@ -282,6 +282,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.session_title_tool_available = false;
     s.background_wakeup_ids.clear();
     s.background_turn_context = None;
+    s.clear_deferred_tool_calls();
     s.last_turn_had_model_final_response = false;
     s.last_summary_history_len = None;
     s.image_analysis_cache.clear();

@@ -90,6 +90,12 @@ pub struct AppState {
     /// restart can resume the same in-memory task without creating a second
     /// planning or verification ledger.
     pub background_turn_context: Option<Box<crate::network::TurnContext>>,
+    /// Valid tool calls the scheduler held back from a model response because
+    /// the per-round mutation budget ran out (#1590). They execute in a later
+    /// round without another provider request, so the model is never asked to
+    /// reissue them. Cleared with the turn that queued them: on a session
+    /// switch, on cancellation, and when a turn ends without draining.
+    pub deferred_tool_calls: Vec<crate::tools::ToolCall>,
     pub status: AppStatus,
     /// Single-flight guard for the agent loop. `status` transiently reads Idle
     /// in windows where an orchestrator is still alive, so gating spawns on it
@@ -983,6 +989,14 @@ impl AppState {
         self.request_redraw();
     }
 
+    /// Drop the calls the scheduler is holding for a later round (#1590).
+    /// Nothing owed to the model survives the turn that queued it, so a
+    /// session switch, a cancellation, and a turn that ends before draining
+    /// all release the batch here.
+    pub fn clear_deferred_tool_calls(&mut self) {
+        self.deferred_tool_calls.clear();
+    }
+
     pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
         let max = self
             .pending_tool_confirmation
@@ -1078,6 +1092,7 @@ impl AppState {
             background_wakeup_ids: std::collections::BTreeSet::new(),
             pending_background_outputs: Vec::new(),
             background_turn_context: None,
+            deferred_tool_calls: Vec::new(),
             status: AppStatus::Idle,
             orchestrator_running: false,
             orchestrator_generation: 0,

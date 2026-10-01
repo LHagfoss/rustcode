@@ -221,10 +221,25 @@ pub fn final_transcript_content(
     } else if matches!(reason, StopReason::BackgroundPending) {
         None
     } else if content_already_persisted || content.trim().is_empty() {
-        Some(format!("[harness: turn stopped — {reason}]"))
+        Some(stop_marker(reason))
     } else {
         Some(content.to_string())
     }
+}
+
+/// Durable transcript marker for a turn that ended without a model answer.
+pub fn stop_marker(reason: &StopReason) -> String {
+    format!("[harness: turn stopped — {reason}]")
+}
+
+/// Classify the cancellation marker written by [`stop_marker`] (#1592).
+///
+/// The marker is user-facing — the terminal renders it as `User Stopped` — but
+/// it is turn bookkeeping, not conversation, so the provider projection drops
+/// it while history keeps it verbatim. The predicate lives next to the writer so
+/// the engine cannot drift from the marker it produces.
+pub fn is_turn_cancelled_marker(content: &str) -> bool {
+    content.trim() == stop_marker(&StopReason::Cancelled).trim()
 }
 
 #[cfg(test)]
@@ -273,6 +288,26 @@ mod transcript_tests {
             ),
             Some("[harness: turn stopped — cancelled]".to_string())
         );
+    }
+
+    // #1592: one predicate decides whether the cancellation marker is turn
+    // bookkeeping. History keeps it for the terminal; the provider projection
+    // drops it.
+    #[test]
+    fn only_the_cancellation_marker_classifies_as_cancelled() {
+        assert!(is_turn_cancelled_marker(
+            "[harness: turn stopped — cancelled]"
+        ));
+        assert!(is_turn_cancelled_marker(
+            "  [harness: turn stopped — cancelled]\n"
+        ));
+        assert!(!is_turn_cancelled_marker(
+            "[harness: turn stopped — loop_escalation]"
+        ));
+        assert!(!is_turn_cancelled_marker(
+            "error: tool execution cancelled by user"
+        ));
+        assert!(!is_turn_cancelled_marker(""));
     }
 }
 

@@ -69,6 +69,7 @@ pub async fn handle_escape(
         }
     }
     s.background_turn_context = None;
+    s.clear_deferred_tool_calls();
     if had_active_turn {
         s.set_transient_notice("Turn stopped");
     } else if had_draft {
