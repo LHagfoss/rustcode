@@ -214,7 +214,7 @@ pub(super) fn render_popup_menu(
 /// True when a panel row matches its search field, using the shared fuzzy rule
 /// so a typo or a subsequence still finds the row (#1588).
 pub(super) fn panel_row_matches(text: &str, search: &str) -> bool {
-    rustcode::app::fuzzy::fuzzy_matches(text, search)
+    rustcode::controller::fuzzy_matches(text, search)
 }
 
 /// Split `text` into spans with the characters that matched `search` marked in
@@ -235,7 +235,7 @@ pub(super) fn highlight_match_spans(
     if search.trim_start_matches('/').chars().take(2).count() < 2 {
         return vec![Span::styled(truncate_to_width(text, max_width), base)];
     }
-    let Some(positions) = rustcode::app::fuzzy::fuzzy_match_positions(text, search) else {
+    let Some(positions) = rustcode::controller::fuzzy_match_positions(text, search) else {
         return vec![Span::styled(truncate_to_width(text, max_width), base)];
     };
     let marked = base.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
