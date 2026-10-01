@@ -44,6 +44,55 @@ pub fn render(f: &mut Frame, view: &RenderState) -> (u16, ratatui::layout::Rect)
     render_with_transcript_snapshot(f, &snapshot, &mut transcript)
 }
 
+// Memoized wrap measurement for the visible viewport.
+//
+// `lines` is already viewport-bounded, but `Paragraph::new(line.clone())`
+// per line per frame still allocates. Hash the contents (no allocation) and
+// reuse the last counts when width + hash match; the height is the sum so no
+// second full `lines.clone()` is needed (#1582).
+thread_local! {
+    static WRAP_CACHE: std::cell::RefCell<Option<(u16, u64, Vec<usize>, u16)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn lines_content_hash(lines: &[Line<'static>]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lines.len().hash(&mut hasher);
+    for line in lines {
+        line.width().hash(&mut hasher);
+        for span in &line.spans {
+            span.content.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+fn cached_wrap_counts(lines: &[Line<'static>], layout_width: u16) -> (Vec<usize>, u16) {
+    let hash = lines_content_hash(lines);
+    if let Some((w, h, counts, total)) = WRAP_CACHE.with(|c| c.borrow().clone())
+        && w == layout_width
+        && h == hash
+    {
+        return (counts, total);
+    }
+    let mut counts = Vec::with_capacity(lines.len());
+    let mut total: usize = 0;
+    for line in lines {
+        let count = Paragraph::new(line.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(layout_width)
+            .max(1);
+        total += count;
+        counts.push(count);
+    }
+    let height = total.min(u16::MAX as usize) as u16;
+    WRAP_CACHE.with(|c| {
+        *c.borrow_mut() = Some((layout_width, hash, counts.clone(), height));
+    });
+    (counts, height)
+}
+
 pub(super) fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
     let active = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
         || !state.running_tools().is_empty()
@@ -273,20 +322,19 @@ pub(crate) fn render_with_transcript_snapshot(
         chat_height,
         transcript,
     );
-    let soft_wrap_before = lines
+    // Wrap measurement is memoized by width + content hash: repeated frames
+    // with the same viewport reuse counts without cloning Lines per line.
+    // The content height is the sum of the same counts (no second full
+    // `lines.clone()`) (#1582).
+    let (wrapped_counts, conversation_content_height) =
+        cached_wrap_counts(&lines, layout_width);
+    let soft_wrap_before: Vec<bool> = wrapped_counts
         .iter()
-        .flat_map(|line| {
-            let count = Paragraph::new(line.clone())
-                .wrap(Wrap { trim: false })
-                .line_count(layout_width)
-                .max(1);
+        .flat_map(|&count| {
             std::iter::once(false).chain(std::iter::repeat_n(true, count.saturating_sub(1)))
         })
         .take(chat_height as usize)
-        .collect::<Vec<_>>();
-    let conversation_content_height = Paragraph::new(lines.clone())
-        .wrap(Wrap { trim: false })
-        .line_count(layout_width) as u16;
+        .collect();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
