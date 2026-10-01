@@ -1174,6 +1174,9 @@ pub struct AppConfig {
     /// so project config may set it like `theme` and `fullscreen`.
     #[serde(default)]
     pub reduced_motion: bool,
+    /// Generate a catch-up recap after 30 minutes idle. Manual `/recap` remains available.
+    #[serde(default = "default_true")]
+    pub auto_recap: bool,
     /// Opaque legacy values retained through config rewrites, but never read
     /// by runtime behavior or written to the JSON compatibility config.
     #[doc(hidden)]
@@ -1301,6 +1304,8 @@ struct TomlConfig {
     preserve_transcript_scrollback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reduced_motion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_recap: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
     /// delete user data left by the removed Laya sidecar.
     #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
@@ -1457,6 +1462,7 @@ impl Default for AppConfig {
             fullscreen: false,
             preserve_transcript_scrollback: false,
             reduced_motion: false,
+            auto_recap: true,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1787,6 +1793,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         fullscreen: Some(config.fullscreen),
         preserve_transcript_scrollback: Some(config.preserve_transcript_scrollback),
         reduced_motion: Some(config.reduced_motion),
+        auto_recap: Some(config.auto_recap),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
@@ -1880,6 +1887,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(reduced_motion) = file.reduced_motion {
         config.reduced_motion = reduced_motion;
+    }
+    if let Some(auto_recap) = file.auto_recap {
+        config.auto_recap = auto_recap;
     }
     if file.legacy_laya.is_some() {
         config.legacy_laya = file.legacy_laya;
@@ -2029,6 +2039,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         fullscreen: None,
         preserve_transcript_scrollback: None,
         reduced_motion: None,
+        auto_recap: None,
         legacy_laya: None,
         agent_mode: None,
         verbosity: None,

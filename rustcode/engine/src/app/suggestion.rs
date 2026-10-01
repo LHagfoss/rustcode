@@ -157,8 +157,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Manually compact session history to save context space",
     },
     CommandInfo {
+        name: "/recap",
+        desc: "Generate a brief conversation catch-up and next step",
+    },
+    CommandInfo {
         name: "/summarize",
-        desc: "Summarize the current chat session now (also runs after inactivity)",
+        desc: "Summarize the current chat session now",
     },
     CommandInfo {
         name: "/sync",

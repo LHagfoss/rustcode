@@ -86,6 +86,17 @@ async fn handle_enter_inner(
             "/clear" => {
                 let _ = crate::app::session_controller::SessionController::default().clear(&mut s);
             }
+            "/recap" => {
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                drop(s);
+                let state_clone = Arc::clone(state);
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    generate_conversation_recap(&state_clone, &client_clone, true).await;
+                });
+                return false;
+            }
             "/summarize" => {
                 // summarize_session locks the state itself and runs a full
                 // streaming request. handle_enter holds the lock here, so calling
