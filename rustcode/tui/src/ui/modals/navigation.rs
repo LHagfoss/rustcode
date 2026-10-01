@@ -886,12 +886,14 @@ pub(in crate::ui) fn render_command_picker_modal(
     input_area: ratatui::layout::Rect,
 ) {
     let search = state.command_picker_search().to_lowercase();
+    // Fuzzy matching, shared with the slash-command popup, so the palette finds
+    // a command whose name the user only half remembers (#1588).
     let filtered_items: Vec<&PaletteItem> = PALETTE_ITEMS
         .iter()
         .filter(|item| {
-            item.name.to_lowercase().contains(&search)
-                || item.group.to_lowercase().contains(&search)
-                || item.shortcut.to_lowercase().contains(&search)
+            panel_row_matches(&item.name, search.as_str())
+                || panel_row_matches(&item.group, search.as_str())
+                || panel_row_matches(&item.shortcut, search.as_str())
         })
         .collect();
 
@@ -951,41 +953,46 @@ pub(in crate::ui) fn render_command_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let line = if is_selected {
-            let left_text = format!("› {}", item.name);
-            let padding_len =
-                picker_row_padding(inner_area.width as usize, &left_text, &item.shortcut);
-            Line::from(vec![
-                Span::styled(
-                    left_text,
-                    Style::default()
-                        .fg(COLOR_TEXT())
-                        .bg(COLOR_HOVER_BG())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    " ".repeat(padding_len),
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
-                ),
-                Span::styled(
-                    item.shortcut.to_string(),
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG()),
-                ),
-            ])
+        let marker = if is_selected { "› " } else { "  " };
+        let name_budget = picker_column_budget(inner_area.width as usize, item.shortcut.width());
+        let name_display = truncate_to_width(&item.name, name_budget);
+        let left_style = if is_selected {
+            Style::default()
+                .fg(COLOR_TEXT())
+                .bg(COLOR_HOVER_BG())
+                .add_modifier(Modifier::BOLD)
         } else {
-            let left_text = format!("  {}", item.name);
-            let padding_len =
-                picker_row_padding(inner_area.width as usize, &left_text, &item.shortcut);
-            Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
-                Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(
-                    item.shortcut.to_string(),
-                    Style::default().fg(COLOR_MUTED()),
-                ),
-            ])
+            Style::default().fg(COLOR_TEXT())
         };
-        list_lines.push(line);
+        let left_text = format!("{marker}{name_display}");
+        let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &item.shortcut);
+        let mut spans = vec![Span::styled(marker.to_owned(), left_style)];
+        // The matched characters are marked in place, so a fuzzy hit shows why
+        // the row is in the list. The selected row is already marked in full by
+        // its background (#1588).
+        spans.extend(highlight_match_spans(
+            &name_display,
+            if is_selected { "" } else { search.as_str() },
+            name_budget,
+            left_style,
+        ));
+        spans.push(Span::styled(
+            " ".repeat(padding_len),
+            if is_selected {
+                left_style
+            } else {
+                Style::default()
+            },
+        ));
+        spans.push(Span::styled(
+            item.shortcut.to_string(),
+            if is_selected {
+                left_style
+            } else {
+                Style::default().fg(COLOR_MUTED())
+            },
+        ));
+        list_lines.push(Line::from(spans));
     }
 
     let list_height = modal_chunks[2].height as usize;

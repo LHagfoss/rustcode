@@ -9,6 +9,9 @@
 //! rendered with `highlight::highlight_code_line`, whose syntect theme is
 //! built from the active palette. Panel rows keep their exact text and
 //! column alignment; only the styling is themed.
+//!
+//! [`render_panel_content`] applies the same row format to the scrollable
+//! command panels, whose content is still a `String` (#1588).
 
 use super::*;
 use crate::ui::categorical::{self, CATEGORY_COUNT};
@@ -288,9 +291,457 @@ mod tests {
         }
         crate::ui::theme::set_active_theme("default");
     }
+
+    /// The crux of #1588: the label column has to survive rendering. Markdown
+    /// reflows the rows into one wrapped paragraph, so this asserts the column
+    /// directly instead of trusting the row format.
+    #[test]
+    fn command_panel_rows_keep_the_label_column_aligned() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let content = "Keys\n  short         one\n  a-much-longer-label    two\n  mid    three\n";
+        let lines = render_panel_content(content, 60);
+        let rows: Vec<String> = lines.iter().map(plain_text).collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                "Keys".to_owned(),
+                "  short                one".to_owned(),
+                "  a-much-longer-label  two".to_owned(),
+                "  mid                  three".to_owned(),
+            ],
+            "every row must start its value on the same cell"
+        );
+        let columns: Vec<usize> = rows[1..]
+            .iter()
+            .zip(["one", "two", "three"])
+            .map(|(row, value)| row.find(value).expect("value column"))
+            .collect();
+        assert!(
+            columns.windows(2).all(|pair| pair[0] == pair[1]),
+            "values must start on one column, got {columns:?} in {rows:?}"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    /// What the Markdown path the panels used before does to the same rows: it
+    /// merges them into one reflowed paragraph, so the row structure, the
+    /// indent and the value column are all gone (#1588).
+    #[test]
+    fn markdown_reflows_the_rows_into_one_paragraph() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let content = "  short    one\n  longer-label   two\n  mid    three\n";
+        let collapsed = crate::ui::markdown::render_markdown(content, 28, false, false);
+        let rows: Vec<String> = collapsed
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        assert!(
+            rows.len() < 3,
+            "markdown merges the source lines, so a table stops being rows: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .skip(1)
+                .any(|row| row.starts_with(|c: char| c != ' ')),
+            "a wrapped continuation starts at the panel edge, not the value column: {rows:?}"
+        );
+
+        // The same content through the panel renderer keeps one row per source
+        // line, indented, with its value on the shared column.
+        let rendered: Vec<String> = render_panel_content(content, 28)
+            .iter()
+            .map(plain_text)
+            .collect();
+        assert!(
+            rendered.iter().all(|row| row.starts_with("  ")),
+            "rows keep their indent: {rendered:?}"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    #[test]
+    fn command_panel_rows_mark_over_threshold_percentages() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let lines = render_panel_content("  small    12.5%\n  large   85.5%\n", 60);
+
+        assert_eq!(panel_value_emphasis("12.5%"), PanelEmphasis::Normal);
+        assert_eq!(panel_value_emphasis("85.5%"), PanelEmphasis::OverThreshold);
+        assert_eq!(
+            panel_value_emphasis("85.5% of the window"),
+            PanelEmphasis::OverThreshold
+        );
+        assert_eq!(panel_value_emphasis("model gpt-5"), PanelEmphasis::Normal);
+        assert_eq!(panel_value_emphasis("2x faster"), PanelEmphasis::Normal);
+
+        let colors: Vec<Option<Color>> = lines[0]
+            .spans
+            .iter()
+            .skip(1)
+            .map(|span| span.style.fg)
+            .collect();
+        assert_eq!(colors[0], Some(COLOR_TEXT()), "under threshold stays plain");
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .skip(1)
+                .any(|span| span.style.fg == Some(COLOR_TIP())),
+            "over-threshold share must be marked: {:?}",
+            lines[1]
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    /// `/about` writes its labels with a trailing colon, and its bullets with
+    /// `•`; both belong in the same column as everything else (#1588).
+    #[test]
+    fn colon_labels_and_bullets_are_rows() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let content = "• Version:      v0.56.2\n• Repository:   https://example.test/repo\n";
+        let rows: Vec<String> = render_panel_content(content, 60)
+            .iter()
+            .map(plain_text)
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                "• Version:     v0.56.2".to_owned(),
+                "• Repository:  https://example.test/repo".to_owned(),
+            ],
+            "colon labels share one column: {rows:?}"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    #[test]
+    fn a_single_double_space_line_stays_prose() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let lines = render_panel_content("Nothing to see here.  Move on.\n", 60);
+
+        assert!(
+            plain_text(&lines[0]).contains("Move on."),
+            "a lone double space is prose, not a table: {:?}",
+            lines
+        );
+        assert!(
+            split_panel_row("Done.  Ready.").is_none(),
+            "a label ending a sentence is prose"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    #[test]
+    fn markdown_structures_are_left_to_the_markdown_renderer() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        for line in [
+            "# Heading",
+            "> quoted",
+            "| a | b |",
+            "```rust",
+            "- bullet   item",
+            "* bullet   item",
+            "1. ordered   item",
+        ] {
+            assert!(
+                split_panel_row(line).is_none(),
+                "{line:?} is Markdown, not a label/value row"
+            );
+        }
+        // A one-character label is a row: the shortcuts block names the help key
+        // `?`, and it belongs to the same column as every other shortcut.
+        assert!(split_panel_row("  ?                Show help").is_some());
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    /// A label too wide for the frame is truncated in place: past half the
+    /// frame the value would have no room and the wrap would break the row into
+    /// one-character fragments.
+    #[test]
+    fn a_label_too_wide_for_the_frame_is_truncated() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let content = "  short  one\n  a-much-longer-label  two\n";
+        let rows: Vec<String> = render_panel_content(content, 20)
+            .iter()
+            .map(plain_text)
+            .collect();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "a narrow frame must not fragment rows: {rows:?}"
+        );
+        // Cell, not byte: a truncated label ends in a multi-byte ellipsis.
+        let column = |row: &str, value: &str| row.chars().count() - value.chars().count();
+        assert_eq!(
+            column(&rows[1], "two"),
+            column(&rows[0], "one"),
+            "both values stay on one column: {rows:?}"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+
+    #[test]
+    fn a_wrapped_value_stays_under_the_value_column() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        crate::ui::theme::set_active_theme("default");
+        let content =
+            "  key    a description long enough that it has to wrap somewhere\n  other  short\n";
+        let lines = render_panel_content(content, 40);
+        let rows: Vec<String> = lines.iter().map(plain_text).collect();
+
+        let first_value = rows[0].find("a description").expect("value column");
+        let continuation = rows[1]
+            .find(|character: char| character != ' ')
+            .expect("wrap");
+        assert_eq!(
+            first_value, continuation,
+            "a wrapped value must continue under the value column: {rows:?}"
+        );
+        crate::ui::theme::set_active_theme("default");
+    }
+}
+
+/// Cells between a command panel's label column and its value column.
+///
+/// The panel owns the padding, so the value column lands on the same cell for
+/// every row no matter how the content spaced its own columns.
+const PANEL_COLUMN_GAP: usize = 2;
+
+/// Widest label a panel row may claim before its value is pushed out of view.
+const MAX_LABEL_WIDTH: usize = 28;
+
+/// Shortest run of consecutive label/value rows treated as a table. One stray
+/// double space in a sentence is not a table, so a single row falls back to
+/// Markdown instead of claiming a label column of its own.
+const MIN_TABLE_ROWS: usize = 2;
+
+/// Rows a command panel claims above the composer. Bound to the rows the modal
+/// layer reserves, so a panel never paints over the transcript (#1588).
+pub(in crate::ui) const COMMAND_PANEL_HEIGHT: u16 = 18;
+
+/// One `label<gap>value` row recovered from a raw panel line.
+struct PanelRow<'a> {
+    /// Leading whitespace, kept so an indented table keeps its indent.
+    indent: &'a str,
+    label: &'a str,
+    value: &'a str,
+    /// The source line, so a run too short to be a table can fall back to
+    /// Markdown with its own spacing intact.
+    raw: &'a str,
+}
+
+/// Start of the first whitespace run that separates a label from a value: two
+/// or more spaces, or a single tab, with a value behind it.
+///
+/// Two spaces are the delimiter because Markdown treats them as ordinary prose
+/// whitespace, so an author writing an aligned table needs no new syntax. The
+/// scan is over bytes, which is safe here because ASCII whitespace bytes never
+/// occur inside a multi-byte UTF-8 sequence.
+fn panel_column_gap(body: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b' ' && bytes[index] != b'\t' {
+            index += 1;
+            continue;
+        }
+        let run_start = index;
+        while index < bytes.len() && (bytes[index] == b' ' || bytes[index] == b'\t') {
+            index += 1;
+        }
+        if index < bytes.len() && (index - run_start >= 2 || bytes[run_start] == b'\t') {
+            return Some(run_start);
+        }
+    }
+    None
+}
+
+/// Split a raw panel line into its label and value columns, or [`None`] when the
+/// line is prose or a Markdown block.
+///
+/// Block markers stay with the Markdown renderer: a leading `#`, `>`, `|`,
+/// fence, bullet or ordered marker is prose or a list, not a table row.
+fn split_panel_row(line: &str) -> Option<PanelRow<'_>> {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let body = trimmed.trim_end();
+    if body.is_empty() {
+        return None;
+    }
+    let first = body.chars().next()?;
+    if matches!(first, '#' | '>' | '|' | '`' | '~' | '-' | '+' | '*') {
+        return None;
+    }
+    if body.starts_with(|character: char| character.is_ascii_digit())
+        && body
+            .find(|character: char| !character.is_ascii_digit())
+            .is_some_and(|index| body[index..].starts_with(". "))
+    {
+        return None;
+    }
+
+    let separator = panel_column_gap(body)?;
+    let label = &body[..separator];
+    let value = body[separator..].trim_start();
+    // A multi-character label that ends a sentence is prose that happened to
+    // carry two spaces, not a table row, and must keep its Markdown rendering.
+    // A trailing colon is allowed, because that is how `/about` writes its
+    // labels, and a one-character label stays a row: `?` is how the shortcuts
+    // block names the help key.
+    if label.is_empty()
+        || value.is_empty()
+        || (label.chars().count() > 1 && label.ends_with(['.', ',', ';', '!', '?']))
+        || label.width() > MAX_LABEL_WIDTH
+    {
+        return None;
+    }
+    Some(PanelRow {
+        indent,
+        label,
+        value,
+        raw: line,
+    })
+}
+
+/// Render a scrollable command panel's content.
+///
+/// Label/value rows bypass Markdown and render through [`panel_line`], so the
+/// label column survives. Markdown cannot carry a column: it reflows a
+/// paragraph, so consecutive source lines merge into one wrapped line, the
+/// indent is dropped, and a wrap restarts at the panel edge instead of the
+/// value column (#1588). Everything else still goes through `render_markdown`,
+/// so prose, lists, tables and fenced code keep their formatting, and a panel
+/// that mixes the two gets both.
+///
+/// Percentage values take their emphasis from [`emphasis_for_share`], so an
+/// over-threshold share in any command panel is marked like `/context`.
+pub(in crate::ui) fn render_panel_content(content: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut prose = String::new();
+    let mut rows: Vec<PanelRow<'_>> = Vec::new();
+    for line in content.lines() {
+        match split_panel_row(line) {
+            Some(row) => {
+                flush_panel_prose(&mut lines, &mut prose, width);
+                rows.push(row);
+            }
+            None => {
+                flush_panel_rows(&mut lines, &mut rows, width);
+                prose.push_str(line);
+                prose.push('\n');
+            }
+        }
+    }
+    flush_panel_prose(&mut lines, &mut prose, width);
+    flush_panel_rows(&mut lines, &mut rows, width);
+    lines
+}
+
+fn flush_panel_prose(lines: &mut Vec<Line<'static>>, prose: &mut String, width: usize) {
+    if prose.trim().is_empty() {
+        prose.clear();
+        return;
+    }
+    lines.extend(crate::ui::markdown::render_markdown(
+        prose.trim_end_matches('\n'),
+        width,
+        false,
+        true,
+    ));
+    prose.clear();
+}
+
+fn flush_panel_rows(lines: &mut Vec<Line<'static>>, rows: &mut Vec<PanelRow<'_>>, width: usize) {
+    if rows.len() < MIN_TABLE_ROWS {
+        // Too short to be a table: hand the line back to Markdown unchanged
+        // rather than inventing a column for it.
+        for row in rows.drain(..) {
+            lines.extend(crate::ui::markdown::render_markdown(
+                row.raw, width, false, true,
+            ));
+        }
+        return;
+    }
+
+    // One column for the whole run, measured from the widest label including
+    // its indent, so every value starts on the same cell.
+    let column = rows
+        .iter()
+        .map(|row| row.indent.width() + row.label.width())
+        .max()
+        .unwrap_or(0)
+        .min(MAX_LABEL_WIDTH)
+        + PANEL_COLUMN_GAP;
+    // A label column may claim at most half the frame. Past that the value has
+    // no room left, and the wrap breaks the row into one-character fragments.
+    let column = column.min((width / 2).max(1));
+    let continuation = Span::styled(" ".repeat(column), Style::default().fg(COLOR_TEXT()));
+    for row in rows.drain(..) {
+        let line = panel_line(
+            &panel_label_column(row.indent, row.label, column),
+            row.value,
+            panel_value_emphasis(row.value),
+        );
+        // A value wider than the frame wraps under the value column instead of
+        // back at the panel edge, so a long description stays readable.
+        crate::ui::markdown::push_wrapped_with_continuation(
+            lines,
+            line.spans,
+            width,
+            Some(continuation.clone()),
+        );
+    }
+}
+
+/// Indent plus a label padded to `column`, truncated when the label alone
+/// would push the value off the frame.
+fn panel_label_column(indent: &str, label: &str, column: usize) -> String {
+    let budget = column.saturating_sub(indent.width());
+    let label = truncate_to_width(label, budget);
+    format!(
+        "{indent}{label}{}",
+        " ".repeat(budget.saturating_sub(label.width()))
+    )
+}
+
+/// Emphasis for a command-panel value.
+///
+/// A leading `NN%` is a share of some budget, so it takes the same threshold
+/// marking `/context` uses instead of rendering as plain text (#1588). A panel
+/// that reports a *remaining* percentage stays out of the row format on
+/// purpose: the threshold runs the other way there, as `/quota` does.
+fn panel_value_emphasis(value: &str) -> PanelEmphasis {
+    match percentage_prefix(value) {
+        Some(share) => emphasis_for_share(share),
+        None => PanelEmphasis::Normal,
+    }
+}
+
+/// Parse a leading `NN%` value, with or without decimals.
+fn percentage_prefix(value: &str) -> Option<f64> {
+    value
+        .split_whitespace()
+        .next()?
+        .strip_suffix('%')?
+        .parse()
+        .ok()
 }
 
 /// Scrollable command output uses the same bounded surface as the other panels.
+///
+/// The panel is an output surface, not a picker: it has no rows to activate, so
+/// it carries no selection marker and no selection state, and the footer below
+/// is the whole of its affordance (#1588).
 pub(in crate::ui) fn render_command_panel(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -299,7 +750,7 @@ pub(in crate::ui) fn render_command_panel(
     let Some(panel) = state.command_panel() else {
         return;
     };
-    let area = input_anchor_rect(f, input_area, 18);
+    let area = input_anchor_rect(f, input_area, COMMAND_PANEL_HEIGHT);
     let inner = render_padded_panel(f, area).inner(Margin {
         vertical: 0,
         horizontal: 2,
@@ -320,8 +771,7 @@ pub(in crate::ui) fn render_command_panel(
         )),
         chunks[0],
     );
-    let mut lines =
-        super::super::markdown::render_markdown(&panel.content, inner.width as usize, false, true);
+    let mut lines = render_panel_content(&panel.content, inner.width as usize);
     paint_panel_line_backgrounds(&mut lines, COLOR_PANEL());
     f.render_widget(
         Paragraph::new(lines)

@@ -498,16 +498,19 @@ async fn summarize_session_inner(
 }
 
 pub fn build_info_text() -> String {
+    // Two spaces minimum before each value: the panel renderer treats a run of
+    // two or more spaces as the column gap, so the widest row must not sit one
+    // space away from its value (#1588).
     format!(
         "RustCode Info\n\
         AI-powered agentic coding assistant for terminal workflows.\n\n\
         • Version:      v{}\n\
         • Repository:   https://github.com/LHagfoss/rustcode\n\n\
         Quick Commands:\n\
-        • /help      - View full command list & keybindings\n\
-        • /status    - View active session status & model info\n\
-        • /update    - Upgrade rustcode via Homebrew tap\n\
-        • /changelog - View recent version releases",
+        • /help        - View full command list & keybindings\n\
+        • /status      - View active session status & model info\n\
+        • /update      - Upgrade rustcode via Homebrew tap\n\
+        • /changelog   - View recent version releases",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -598,7 +601,7 @@ pub fn get_picker_items_count(s: &AppState) -> usize {
     s.config
         .models
         .iter()
-        .filter(|m| m.name.to_lowercase().contains(&search))
+        .filter(|m| crate::app::fuzzy::fuzzy_matches(&m.name, &search))
         .count()
 }
 
@@ -608,7 +611,7 @@ pub fn select_picker_model(s: &mut AppState) {
         .config
         .models
         .iter()
-        .filter(|m| m.name.to_lowercase().contains(&search))
+        .filter(|m| crate::app::fuzzy::fuzzy_matches(&m.name, &search))
         .collect();
 
     let idx = s.model_picker_index.min(filtered.len().saturating_sub(1));

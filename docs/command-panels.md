@@ -73,3 +73,50 @@ cancellation, clipboard actions, compaction, summaries, sync and upgrades are
 immediate actions; opening a result/help panel never delays their execution.
 The desktop controller has its own smaller native command parser; this audit
 covers the terminal frontend registry.
+
+## Panel rendering
+
+Every panel renders through the one row format in `ui/modals/panel.rs`, the same
+format `/status`, `/stats`, `/session` and `/context` build by hand. A content
+line carrying a label, two or more spaces (or a tab) and a value is a
+label/value row: the panel pads the label to the widest label of the run so
+every value starts on the same cell, renders `` `code` `` and `**strong**` in
+the value, and takes the emphasis of a leading `NN%` from `emphasis_for_share`,
+so an over-threshold share is marked wherever it appears. A value wider than the
+frame wraps under the value column, and a label wider than half the frame is
+truncated rather than fragmented.
+
+Two spaces are the delimiter because Markdown treats them as prose whitespace,
+so a panel gets an aligned column by writing one instead of by hand-padding a
+`format!` width that Markdown would reflow away. The widest row of a block must
+therefore keep two spaces before its value too, not one. `/help`, `/about` and
+`/sandbox` are written that way; `/sandbox` marks the current mode with `•`
+rather than `*`, which would be read as a list bullet. A run shorter than two
+rows, or a line that opens a Markdown block (heading, quote, table, fence,
+bullet, ordered item), stays with the Markdown renderer, so prose, lists, tables
+and fenced code keep their formatting.
+
+A leading `NN%` in a value is read as a share of a budget and takes
+`emphasis_for_share`, which crosses its threshold at 20%. A panel that reports a
+*remaining* percentage stays out of the row format on purpose, because the
+threshold runs the other way there; `/quota` remains a bullet list for that
+reason.
+
+Panels are output surfaces, not pickers. They scroll with Up/Down and close with
+Enter, Escape or q, and deliberately carry no `› ` selection marker and no
+selection state: there is no row to activate and no action bound to it. Every
+surface that does take a selection (the completion popup, `@file` popup, the
+inline pickers, the command palette, the question and confirmation prompts) uses
+the shared marker, column gap and column budget in `ui/modals.rs`, so the
+absence here is a deliberate distinction and not a missing convention.
+
+## Panel search
+
+The slash-command popup, the command palette (Ctrl+P) and the model picker share
+one search rule (`app::fuzzy`): a query matches a row when its characters appear
+in order, or when a small edit budget covers a typo, so `/modle` finds `/model`
+and `show ram usge` finds "Show RAM usage". Command results are ranked exact,
+then prefix, then fuzzy. The popup and the palette mark the matched characters in
+the primary color on unselected rows, so a fuzzy hit shows why it matched; a
+single-character query marks nothing, and the selected row is already marked in
+full by its background.
