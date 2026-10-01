@@ -17,7 +17,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
-    highlight_shell_command,
+    highlight_shell_command, push_wrapped_with_continuation,
+    tool_transcript::COLLAPSED_TOOL_BODY_MAX_LINES,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -669,55 +670,83 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                     .map(|line| (line.to_owned(), chunk.stderr)),
             );
         }
-        const MAX_PREVIEW_LINES: usize = 5;
-        let omitted_lines = output.len().saturating_sub(MAX_PREVIEW_LINES);
-        let visible = if omitted_lines == 0 {
-            output
-        } else {
-            output[..2]
-                .iter()
-                .chain(output[output.len() - 2..].iter())
-                .cloned()
-                .collect()
-        };
-        for (index, (text, stderr)) in visible.into_iter().enumerate() {
-            if omitted_lines > 0 && index == 2 {
-                lines.push(Line::from(Span::styled(
-                    format!("    … +{omitted_lines} lines"),
+        let mut body = Vec::new();
+        for (text, stderr) in output {
+            let mut spans = vec![Span::styled(
+                "    ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+            )];
+            spans.push(Span::styled(
+                text,
+                get_themed_style(
+                    if stderr { COLOR_TIP() } else { COLOR_MUTED() },
+                    COLOR_BG(),
+                    if stderr {
+                        Modifier::empty()
+                    } else {
+                        Modifier::DIM
+                    },
+                    show_picker,
+                ),
+            ));
+            let continuation = Span::styled(
+                "    ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+            );
+            push_wrapped_with_continuation(
+                &mut body,
+                spans,
+                (width as usize).max(10),
+                Some(continuation),
+            );
+        }
+
+        let byte_note = (call.omitted_output_bytes > 0).then(|| {
+            if call.omitted_output_bytes >= 1024 {
+                format!("{}K", call.omitted_output_bytes.div_ceil(1024))
+            } else {
+                format!("{}B", call.omitted_output_bytes)
+            }
+        });
+        const MAX_PREVIEW_ROWS: usize = COLLAPSED_TOOL_BODY_MAX_LINES;
+        let needs_marker = body.len() > MAX_PREVIEW_ROWS || byte_note.is_some();
+        if needs_marker {
+            let output_omitted = body.len() + 1 > MAX_PREVIEW_ROWS;
+            let head = MAX_PREVIEW_ROWS / 2;
+            let tail = MAX_PREVIEW_ROWS - head - 1;
+            let omitted_rows = body.len().saturating_sub(head + tail);
+            let mut marker = match (omitted_rows > 0, byte_note) {
+                (true, Some(note)) => format!("… +{omitted_rows} lines · {note}"),
+                (true, None) => format!("… +{omitted_rows} lines"),
+                (false, Some(note)) => format!("… {note} omitted"),
+                (false, None) => String::new(),
+            };
+            marker = truncate_to_width(&marker, (width as usize).saturating_sub(4).max(1));
+            let marker = Line::from(vec![
+                Span::styled(
+                    "    ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                ),
+                Span::styled(
+                    marker,
                     get_themed_style(
                         COLOR_MUTED(),
                         COLOR_BG(),
                         Modifier::ITALIC | Modifier::DIM,
                         show_picker,
                     ),
-                )));
+                ),
+            ]);
+            if output_omitted {
+                let tail_rows = body.split_off(body.len().saturating_sub(tail));
+                body.truncate(head);
+                body.push(marker);
+                body.extend(tail_rows);
+            } else {
+                body.push(marker);
             }
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "    ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                ),
-                Span::styled(
-                    truncate_to_width(&text, (width as usize).saturating_sub(4).max(1)),
-                    get_themed_style(
-                        if stderr { COLOR_TIP() } else { COLOR_MUTED() },
-                        COLOR_BG(),
-                        if stderr {
-                            Modifier::empty()
-                        } else {
-                            Modifier::DIM
-                        },
-                        show_picker,
-                    ),
-                ),
-            ]));
         }
-        if call.omitted_output_bytes > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("    … {} earlier bytes omitted", call.omitted_output_bytes),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-            )));
-        }
+        lines.extend(body);
         return lines;
     }
 

@@ -3263,6 +3263,106 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
 }
 
 #[test]
+fn collapsed_tool_bodies_cap_wrapped_unicode_output_at_five_rows() {
+    use rustcode::controller::Verbosity;
+    use unicode_width::UnicodeWidthStr;
+
+    let body = (0..8)
+        .map(|index| Line::from(format!("{index}: {}", "日本語の出力".repeat(5))))
+        .collect::<Vec<_>>();
+    let width = 24;
+
+    let generic =
+        super::indent_generic_tool_body(body.clone(), &Verbosity::Low, width, false, false);
+    let command =
+        super::indent_tool_result_body(body, "run_command", &Verbosity::Low, width, false);
+
+    for (kind, rendered) in [("generic", generic), ("command", command)] {
+        assert!(
+            rendered.len() <= 5,
+            "collapsed {kind} output must occupy at most five visual rows: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .all(|line| line.to_string().width() <= width as usize),
+            "collapsed {kind} output must wrap to the terminal width: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|line| line.to_string().contains('日')),
+            "Unicode output remains intact: {rendered:?}"
+        );
+    }
+}
+
+#[test]
+fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"spotify-cli p --help"}"#.to_owned(),
+        }]),
+    );
+    let body = (0..12)
+        .map(|index| format!("status {index}: {}", "日本語の出力".repeat(5)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            format!("run_command: exit code: 0\nstdout:\n{body}"),
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
+    );
+
+    let collapsed = super::render_committed_tool_result_group(&state, &[1], 36, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(collapsed[0].contains("ctrl+o to expand"), "{collapsed:?}");
+    let body_start = collapsed
+        .iter()
+        .position(|line| line.contains("│"))
+        .expect("rendered shell output begins below its command header");
+    assert!(
+        collapsed.len() - body_start <= 5,
+        "collapsed body rows: {collapsed:?}"
+    );
+    assert!(collapsed.iter().any(|line| line.contains("lines")));
+    assert!(collapsed.iter().any(|line| line.contains('日')));
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1], 36, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for index in 0..12 {
+        assert!(
+            expanded
+                .iter()
+                .any(|line| line.contains(&format!("status {index}:"))),
+            "expanded output preserves status {index}: {expanded:?}"
+        );
+    }
+    assert!(
+        !expanded
+            .iter()
+            .any(|line| line.contains("ctrl+o to expand"))
+    );
+}
+
+#[test]
 fn low_verbosity_keeps_errors_and_exit_status_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
@@ -3289,8 +3389,8 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         }),
     );
 
-    // A homogeneous command-only result renders inline (no collapse), but the
-    // failure status and stderr stay visible without protocol noise (#1568).
+    // The shell invocation and exit status stay visible while output is
+    // collapsed; expanding reveals stderr without protocol noise (#1568).
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -3300,11 +3400,27 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         "exit status stays: {rendered:?}"
     );
     assert!(
-        rendered.iter().any(|line| line.contains("build failed")),
-        "stderr stays: {rendered:?}"
+        rendered
+            .iter()
+            .any(|line| line.contains("ctrl+o to expand")),
+        "collapsed shell result has an expand hint: {rendered:?}"
     );
     assert!(
-        !rendered.iter().any(|line| line.contains("stdout:")),
+        rendered.iter().any(|line| line.contains("build failed")),
+        "short error output remains visible while collapsed: {rendered:?}"
+    );
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        expanded.iter().any(|line| line.contains("build failed")),
+        "expanded shell result reveals stderr: {expanded:?}"
+    );
+    assert!(
+        !expanded.iter().any(|line| line.contains("stdout:")),
         "protocol labels are stripped: {rendered:?}"
     );
 }
@@ -3445,7 +3561,7 @@ fn expanded_command_body_renders_full_not_window() {
 }
 
 #[test]
-fn homogeneous_command_batch_renders_full_with_no_hint() {
+fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3475,30 +3591,42 @@ fn homogeneous_command_batch_renders_full_with_no_hint() {
         }),
     );
 
-    // Homogeneous batches are not collapsible, so they must not truncate
-    // without an affordance: full body, no hint, no omission marker (#1580).
+    // Homogeneous command output stays compact until the user expands it.
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("ctrl+o to expand"))
+    );
+    assert!(rendered.iter().any(|line| line.contains("homo line 0")));
+    assert!(rendered.iter().any(|line| line.contains("homo line 19")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("lines")),
+        "collapsed command output has an omission marker: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("ctrl+o")),
+        "collapsed command output has an expand hint: {rendered:?}"
+    );
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     for i in 0..20 {
         assert!(
-            rendered
+            expanded
                 .iter()
                 .any(|line| line.contains(&format!("homo line {i}"))),
-            "line {i} present: {rendered:?}"
+            "expanded line {i} is present: {expanded:?}"
         );
     }
-    assert!(
-        !rendered
-            .iter()
-            .any(|line| line.contains("+") && line.contains("lines")),
-        "no omission marker without affordance: {rendered:?}"
-    );
-    assert!(
-        !rendered.iter().any(|line| line.contains("ctrl+o")),
-        "no hint when nothing is collapsed: {rendered:?}"
-    );
 }
 
 #[test]
@@ -4038,25 +4166,32 @@ fn command_preview_preserves_the_output_tail() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    // Homogeneous command batches are not collapsible, so they render the
-    // full body with no truncation marker and no expand affordance (#1580).
+    // The collapsed window keeps the beginning and actionable error tail.
     assert!(
-        !rendered.iter().any(|line| line.contains("… +")),
-        "no omission marker without affordance: {rendered:?}"
+        rendered.iter().any(|line| line.contains("… +")),
+        "collapsed output reports omitted rows: {rendered:?}"
     );
-    for index in 0..20 {
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains(&format!("line {index}"))),
-            "line {index} present: {rendered:?}"
-        );
-    }
+    assert!(rendered.iter().any(|line| line.contains("line 0")));
+    assert!(rendered.iter().any(|line| line.contains("line 19")));
     assert!(
         rendered
             .iter()
             .any(|line| line.contains("error: build failed"))
     );
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for index in 0..20 {
+        assert!(
+            expanded
+                .iter()
+                .any(|line| line.contains(&format!("line {index}"))),
+            "expanded output keeps line {index}: {expanded:?}"
+        );
+    }
 }
 
 #[test]
@@ -4302,7 +4437,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
 }
 
 #[test]
-fn homogeneous_command_batch_has_no_collapsible_candidates() {
+fn homogeneous_command_batch_has_independent_collapsible_candidates() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4340,15 +4475,15 @@ fn homogeneous_command_batch_has_no_collapsible_candidates() {
         );
     }
 
-    // Homogeneous command-only batches render summary+bodies inline with no
-    // collapse affordance (#1563), so neither row is an expand candidate.
+    // Homogeneous command-only batches expose each result as an independent
+    // expand candidate, preserving single-entry targeting.
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert!(
-        candidates.is_empty(),
-        "command-only batch is not collapsible"
+        candidates == [1, 2],
+        "each command result is independently collapsible: {candidates:?}"
     );
 
-    // Both commands still render stably, one summary each, with no hint.
+    // Both commands still render stably, one summary each, with an action hint.
     let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -4362,13 +4497,15 @@ fn homogeneous_command_batch_has_no_collapsible_candidates() {
         "each homogeneous command keeps its own summary: {rendered:?}"
     );
     assert!(
-        !rendered.iter().any(|line| line.contains("ctrl+o")),
-        "command-only batch carries no expand hint: {rendered:?}"
+        rendered
+            .iter()
+            .any(|line| line.contains("ctrl+o to expand")),
+        "command-only batch carries expand hints: {rendered:?}"
     );
 }
 
 #[test]
-fn later_command_only_group_does_not_absorb_earlier_generic_expand() {
+fn later_command_only_group_is_independently_expandable_after_generic() {
     use rustcode::controller::{
         ChatMessage, ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity,
     };
@@ -4410,10 +4547,10 @@ fn later_command_only_group_does_not_absorb_earlier_generic_expand() {
             }),
     );
 
-    // The later command-only group (index 4) must not appear in candidates, so
-    // Ctrl+O targets the earlier collapsed generic group (index 1).
+    // Both are candidates, and the existing no-focus rule targets the newest
+    // one. A focused generic entry remains independently addressable.
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1], "only the generic group is collapsible");
+    assert_eq!(candidates, [1, 4], "candidate ordering is stable");
 
     let mut focus = None;
     let (outcome, _) = rustcode::controller::toggle_expanded_bodies(
@@ -4421,15 +4558,17 @@ fn later_command_only_group_does_not_absorb_earlier_generic_expand() {
         &mut focus,
         &candidates,
     );
-    assert_eq!(outcome, ExpandOutcome::Expanded(1));
-    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+    assert_eq!(outcome, ExpandOutcome::Expanded(4));
+    let rendered = super::render_committed_tool_result_group(&state, &[4], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     assert!(
-        rendered.iter().any(|line| line.contains("Thursday, 08:30")),
-        "expanding reveals the generic body: {rendered:?}"
+        rendered.iter().any(|line| line.contains("M src/main.rs")),
+        "expanding reveals the later command body: {rendered:?}"
     );
+    assert!(state.expanded_thoughts.contains(&4));
+    assert!(!state.expanded_thoughts.contains(&1));
 }
 
 #[test]
@@ -6287,14 +6426,45 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
     assert_eq!(rendered[1], "  └ Bash $ cargo test");
     assert!(rendered.iter().any(|line| line.contains("compiler error")));
     assert!(rendered.iter().any(|line| line.contains("lines")));
+    assert!(rendered.iter().any(|line| line.contains("4K")));
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("4096 earlier bytes omitted"))
+        rendered.len() <= 7,
+        "live output must fit a five-row body below its two-row header: {rendered:?}"
     );
+}
+
+#[test]
+fn live_shell_output_wraps_japanese_and_keeps_omission_inside_five_rows() {
+    use unicode_width::UnicodeWidthStr;
+
+    let mut call = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "spotify-cli p status",
+    );
+    call.output
+        .push_back(rustcode::controller::LiveToolOutputChunk {
+            stderr: false,
+            text: format!(
+                "{}\n{}\n",
+                "日本語の長い状態".repeat(8),
+                "次の状態".repeat(8)
+            ),
+        });
+    call.omitted_output_bytes = 2048;
+
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 24, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(rendered.len() - 2 <= 5, "live body rows: {rendered:?}");
+    assert!(rendered.iter().any(|line| line.contains('日')));
+    assert!(rendered.iter().any(|line| line.contains("2K")));
     assert!(
-        rendered.len() <= 8,
-        "live output must remain bounded: {rendered:?}"
+        rendered.iter().all(|line| line.width() <= 24),
+        "live Japanese output wraps by display width: {rendered:?}"
     );
 }
 
