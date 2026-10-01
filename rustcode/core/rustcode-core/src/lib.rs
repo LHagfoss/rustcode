@@ -330,6 +330,9 @@ pub struct ChatMessage {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_time_ms: Option<u64>,
+    /// Persisted wall-clock time when the complete agent turn finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thought_time_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,6 +369,7 @@ impl ChatMessage {
             token_usage: None,
             timestamp: current_timestamp(),
             response_time_ms: None,
+            completed_at: None,
             thought_time_ms: None,
             thought_tokens: None,
             diff: None,
