@@ -186,20 +186,145 @@ fn shell_call_is_read_only(call: &crate::tools::ToolCall) -> bool {
     crate::tools::is_read_only_call(call)
 }
 
+/// Outcome of scheduling one model response: the calls to execute now, the
+/// valid calls the harness takes over so they run in a later round, and the
+/// ones it refuses to take over.
+///
+/// Dropping an over-budget call and telling the model to reissue it cost a
+/// whole provider round trip for work the harness already held (#1590). Queued
+/// calls keep their identity, execute under their own budget, and never ask
+/// the model for them again. Invalid and duplicate calls are neither queued nor
+/// reissued: they are answered in this round instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScheduledCalls {
+    selected: Vec<usize>,
+    queued: Vec<usize>,
+    reissue: Vec<usize>,
+}
+
+impl ScheduledCalls {
+    fn selected_only(selected: Vec<usize>) -> Self {
+        Self {
+            selected,
+            queued: Vec::new(),
+            reissue: Vec::new(),
+        }
+    }
+}
+
+/// Per-round mutation allowance for one scheduling decision. A drain of the
+/// deferred queue uses the same cap so it can never re-enter a round's budget.
+fn mutation_cap(policy: crate::config::ToolSchedulingPolicy) -> usize {
+    if policy.allow_batching {
+        policy.max_mutating_calls.max(1)
+    } else {
+        1
+    }
+}
+
+/// Whether the harness may run this call later instead of asking the model to
+/// reissue it (#1590).
+///
+/// A completion request answers the model rather than the workspace, and it
+/// arrives over budget because `complete_task` is deliberately not
+/// read-only. Queueing it would park the end of the turn behind a queued edit
+/// and — with the "do not reissue" notice — leave the task unable to finish, so
+/// it stays with the model.
+fn is_queueable(call: &crate::tools::ToolCall) -> bool {
+    call.name != "complete_task"
+}
+
+/// The calls the harness is holding for this round (#1590), in queue order,
+/// together with the length of the queue prefix they cover.
+///
+/// The prefix is always a strict prefix and the batch is bounded by a fresh
+/// mutation allowance, so a non-empty queue always shrinks and the drain can
+/// never re-enter the current round's budget or spin. A queued call the model
+/// re-issued anyway is covered by that round's execution instead of running
+/// twice. Only calls queued by *earlier* rounds are eligible: the point of the
+/// mutation limit is that the model reads one mutation's result before the
+/// next one runs.
+fn take_deferred_batch(
+    queued: &[crate::tools::ToolCall],
+    policy: crate::config::ToolSchedulingPolicy,
+    selected: &[crate::tools::ToolCall],
+) -> (Vec<crate::tools::ToolCall>, usize) {
+    let cap = mutation_cap(policy);
+    let mut seen = selected
+        .iter()
+        .map(crate::tools::duplicate_tool_call_key)
+        .collect::<std::collections::HashSet<_>>();
+    let mut mutating = 0;
+    let mut batch = Vec::new();
+    let mut prefix = 0;
+    for call in queued {
+        if mutating >= cap && !shell_call_is_read_only(call) {
+            break;
+        }
+        prefix += 1;
+        if shell_call_is_read_only(call) {
+            if seen.insert(crate::tools::duplicate_tool_call_key(call)) {
+                batch.push(call.clone());
+            }
+            continue;
+        }
+        mutating += 1;
+        if seen.insert(crate::tools::duplicate_tool_call_key(call)) {
+            batch.push(call.clone());
+        }
+    }
+    (batch, prefix)
+}
+
+/// One executable unit of a round's batch.
+///
+/// `announced` is the call's index in the model's announcement, which is both
+/// its transcript position and the provider call id its result must answer.
+/// Harness-queued calls (#1590) have no announcement of their own: their
+/// earlier announcement was already closed, so their result is harness-authored
+/// and carries no call id.
+struct BatchEntry {
+    call: crate::tools::ToolCall,
+    answered_call: Option<String>,
+    announced: usize,
+}
+
+impl BatchEntry {
+    fn from_announcement(
+        call: &crate::tools::ToolCall,
+        index: usize,
+        call_refs: &[crate::app::ToolCallRef],
+    ) -> Self {
+        Self {
+            call: call.clone(),
+            answered_call: call_refs.get(index).map(|call_ref| call_ref.id.clone()),
+            announced: index,
+        }
+    }
+
+    fn from_deferred(call: crate::tools::ToolCall) -> Self {
+        Self {
+            call,
+            answered_call: None,
+            announced: usize::MAX,
+        }
+    }
+}
+
 #[cfg(test)]
 fn selected_tool_call_indices(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
     policy: crate::config::ToolSchedulingPolicy,
 ) -> Vec<usize> {
-    selected_tool_call_indices_with_policy(calls, validation_errors, policy)
+    scheduled_tool_calls(calls, validation_errors, policy).selected
 }
 
-fn selected_tool_call_indices_with_policy(
+fn scheduled_tool_calls(
     calls: &[crate::tools::ToolCall],
     validation_errors: &[Option<String>],
     policy: crate::config::ToolSchedulingPolicy,
-) -> Vec<usize> {
+) -> ScheduledCalls {
     let first_control = calls.iter().enumerate().find(|(index, call)| {
         validation_errors[*index].is_none()
             && matches!(
@@ -213,25 +338,42 @@ fn selected_tool_call_indices_with_policy(
         // costing a whole extra model round-trip for reissue. The executor
         // runs the batch sequentially, so the control result still lands
         // before any companion starts. Mutating companions, duplicates, and
-        // invalid calls never ride along.
+        // invalid calls never ride along: the mutating ones are queued for the
+        // harness instead (#1590).
         let mut selected = vec![index];
+        let mut queued = Vec::new();
+        let mut reissue = Vec::new();
         let mut seen = std::collections::HashSet::new();
         seen.insert(crate::tools::duplicate_tool_call_key(control));
         for (other, call) in calls.iter().enumerate() {
-            if other == index
-                || validation_errors[other].is_some()
-                || matches!(
-                    crate::tools::tool_safety(&call.name),
-                    crate::tools::ToolSafety::ControlPlane
-                )
-                || !seen.insert(crate::tools::duplicate_tool_call_key(call))
-                || !shell_call_is_read_only(call)
-            {
+            if other == index || validation_errors[other].is_some() {
                 continue;
             }
-            selected.push(other);
+            if matches!(
+                crate::tools::tool_safety(&call.name),
+                crate::tools::ToolSafety::ControlPlane
+            ) {
+                // The control-plane barrier runs one call per round; a second
+                // one waits for the model rather than for the harness.
+                reissue.push(other);
+                continue;
+            }
+            if !seen.insert(crate::tools::duplicate_tool_call_key(call)) {
+                continue;
+            }
+            if shell_call_is_read_only(call) {
+                selected.push(other);
+            } else if is_queueable(call) {
+                queued.push(other);
+            } else {
+                reissue.push(other);
+            }
         }
-        return selected;
+        return ScheduledCalls {
+            selected,
+            queued,
+            reissue,
+        };
     }
 
     let first_valid = calls
@@ -240,26 +382,25 @@ fn selected_tool_call_indices_with_policy(
         .find(|(index, _)| validation_errors[*index].is_none())
         .map(|(index, _)| index);
     let Some(first_valid) = first_valid else {
-        return if calls.is_empty() {
+        return ScheduledCalls::selected_only(if calls.is_empty() {
             Vec::new()
         } else {
             vec![0]
-        };
+        });
     };
     // Permissive scheduling: every valid read-only call runs — batching
     // independent inspection is the fast path, not a policy violation.
     // Workspace mutations stay ordered at one per round by default (more
     // only for explicitly trusted batching profiles), and control-plane
-    // calls still execute alone above. Invalid or over-budget calls remain
-    // in the transcript as non-executed results.
+    // calls still execute alone above. Over-budget calls are queued for the
+    // harness (#1590); invalid and duplicate calls remain in the transcript as
+    // non-executed results.
     let mut selected = Vec::new();
+    let mut queued = Vec::new();
+    let mut reissue = Vec::new();
     let mut mutating = 0;
     let mut seen = std::collections::HashSet::new();
-    let mutation_cap = if policy.allow_batching {
-        policy.max_mutating_calls.max(1)
-    } else {
-        1
-    };
+    let cap = mutation_cap(policy);
     for (index, call) in calls.iter().enumerate() {
         if validation_errors[index].is_some()
             || matches!(
@@ -273,7 +414,12 @@ fn selected_tool_call_indices_with_policy(
             continue;
         }
         if !shell_call_is_read_only(call) {
-            if mutating >= mutation_cap {
+            if mutating >= cap {
+                if is_queueable(call) {
+                    queued.push(index);
+                } else {
+                    reissue.push(index);
+                }
                 continue;
             }
             mutating += 1;
@@ -281,10 +427,14 @@ fn selected_tool_call_indices_with_policy(
         selected.push(index);
     }
     if selected.is_empty() {
-        return vec![first_valid];
+        return ScheduledCalls::selected_only(vec![first_valid]);
     }
 
-    selected
+    ScheduledCalls {
+        selected,
+        queued,
+        reissue,
+    }
 }
 
 const MAX_MALFORMED_TOOL_HISTORY_BYTES: usize = 4096;
@@ -571,18 +721,12 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     populate_shell_assessments(state, ctx, &parsed_tool_calls).await;
     // Preserve control-plane priority (for example, load a requested skill
     // before acting). The default policy selects one valid call; explicitly
-    // trusted profiles may select a bounded read/mutation batch. Invalid or
-    // over-budget calls remain in the transcript as non-executed results.
-    let selected_call_indices = selected_tool_call_indices_with_policy(
-        &parsed_tool_calls,
-        &validation_errors,
-        scheduling_policy,
-    );
+    // trusted profiles may select a bounded read/mutation batch. Invalid calls
+    // remain in the transcript as non-executed results, and over-budget calls
+    // are handed to the harness queue instead of being dropped (#1590).
+    let scheduled = scheduled_tool_calls(&parsed_tool_calls, &validation_errors, scheduling_policy);
+    let selected_call_indices = scheduled.selected;
     let selected_call_index = selected_call_indices.first().copied();
-    let executable_tool_calls = selected_call_indices
-        .iter()
-        .map(|index| parsed_tool_calls[*index].clone())
-        .collect::<Vec<_>>();
     if let Some(reason) = selected_call_index.and_then(|index| validation_errors[index].clone()) {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
@@ -633,7 +777,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     }
     ctx.recovery.oversized_batch_rejections = 0;
     let tool_calls = parsed_tool_calls;
-    let deferred_call_count = tool_calls.len().saturating_sub(executable_tool_calls.len());
+    let deferred_call_count = tool_calls.len().saturating_sub(selected_call_indices.len());
     let unexecuted_call_count = deferred_call_count;
     let read_only_batch = !selected_call_indices.is_empty()
         && selected_call_indices.iter().all(|index| {
@@ -642,6 +786,28 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .is_some_and(|call| shell_call_is_read_only(call))
         });
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
+    // Hand the calls this round's mutation budget could not take to the
+    // harness queue. They keep their identity and are executed automatically
+    // in a later round, so the model never pays a round trip to reissue them
+    // (#1590). A new user prompt or turn end releases the queue.
+    let queued_call_count = scheduled.queued.len();
+    let queued_before = {
+        let mut s = state.lock().await;
+        let before = s.deferred_tool_calls.len();
+        s.deferred_tool_calls.extend(
+            scheduled
+                .queued
+                .iter()
+                .map(|index| tool_calls[*index].clone()),
+        );
+        before
+    };
+    if queued_call_count > 0 {
+        dbg_log!(
+            "Scheduler queued {} over-budget call(s) for a later round",
+            queued_call_count
+        );
+    }
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
         ctx.recovery.force_final,
@@ -778,6 +944,45 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         if !cancel_token.is_cancelled() {
             ctx.budget.tool_rounds += 1;
 
+            // Run the calls the harness has been holding since an earlier round
+            // (#1590) after this round's own selections, under a fresh mutation
+            // allowance. Peeking here — after every early return above — means
+            // an abandoned round leaves the queue intact instead of dropping
+            // calls it never ran.
+            let announced_calls = selected_call_indices
+                .iter()
+                .map(|index| tool_calls[*index].clone())
+                .collect::<Vec<_>>();
+            let (deferred_batch, deferred_prefix) = {
+                let s = state.lock().await;
+                // A cancellation can clear the queue between rounds; never read
+                // past whatever is still held.
+                let held = queued_before.min(s.deferred_tool_calls.len());
+                take_deferred_batch(
+                    &s.deferred_tool_calls[..held],
+                    scheduling_policy,
+                    &announced_calls,
+                )
+            };
+            let mut batch = announced_calls
+                .iter()
+                .zip(&selected_call_indices)
+                .map(|(call, index)| BatchEntry::from_announcement(call, *index, &call_refs))
+                .collect::<Vec<_>>();
+            let auto_executed_count = deferred_batch.len();
+            batch.extend(deferred_batch.into_iter().map(BatchEntry::from_deferred));
+            let executable_tool_calls = batch
+                .iter()
+                .map(|entry| entry.call.clone())
+                .collect::<Vec<_>>();
+            if auto_executed_count > 0 {
+                populate_shell_assessments(state, ctx, &executable_tool_calls).await;
+                dbg_log!(
+                    "Executing {} harness-queued call(s) from an earlier round",
+                    auto_executed_count
+                );
+            }
+
             let approved = policy
                 .should_approve_with_assessments(
                     state,
@@ -836,13 +1041,24 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 &ctx.shell_assessments,
             )
             .await;
+            // The peeked prefix is answered one way or another — result,
+            // denial, or cancellation — so retire it now. A cancellation may
+            // have released the queue while the batch ran.
+            if deferred_prefix > 0 {
+                let mut s = state.lock().await;
+                let retire = deferred_prefix.min(s.deferred_tool_calls.len());
+                s.deferred_tool_calls.drain(..retire);
+            }
             let mut executed_results = results.into_iter();
-            let results = selected_call_indices
+            let results = batch
                 .iter()
-                .map(|index| {
+                .map(|entry| {
                     executed_results.next().unwrap_or_else(|| ToolResult {
-                        tool_name: tool_calls[*index].name.clone(),
-                        content: format!("error: tool execution missing for this call ({index})"),
+                        tool_name: entry.call.name.clone(),
+                        content: format!(
+                            "error: tool execution missing for this call ({})",
+                            entry.announced
+                        ),
                         diff: None,
                         file_preview: None,
                         metadata: crate::network::events::ToolResultMetadata {
@@ -856,13 +1072,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .collect::<Vec<_>>();
 
             ctx.metrics.tool_calls += results.len();
-            ctx.metrics.mutating_tool_calls += selected_call_indices
+            ctx.metrics.mutating_tool_calls += batch
                 .iter()
-                .filter(|index| {
-                    tool_calls
-                        .get(**index)
-                        .is_some_and(|call| !crate::tools::is_read_only_call(call))
-                })
+                .filter(|entry| !crate::tools::is_read_only_call(&entry.call))
                 .count();
             let mutation_batch = results
                 .iter()
@@ -897,6 +1109,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "requested": requested_calls,
                     "executed": results.len(),
                     "deferred": unexecuted_call_count,
+                    // Calls handed to the harness queue this round, and how many
+                    // of the previously queued ones ran automatically (#1590).
+                    "queued": queued_call_count,
+                    "auto_executed": auto_executed_count,
                     "successes": results.iter().filter(|result| result.metadata.success).count(),
                     "failed": results.iter().filter(|result| !result.metadata.success).count(),
                     "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
@@ -910,12 +1126,43 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     loop_signal_event(None, None, None, false, None, true),
                 );
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
+                // A cancelled round returns before the per-result loop, so
+                // `last_reason` and `no_progress_results` still describe an
+                // earlier round of this turn. Clearing the per-round reason and
+                // counting the cancelled calls keeps the turn summary a
+                // measurement of this turn instead of a carry-over (#1592).
+                ctx.progress.last_reason = None;
+                ctx.metrics.cancelled_tool_calls = ctx
+                    .metrics
+                    .cancelled_tool_calls
+                    .saturating_add(results.len());
                 let mut s = state.lock().await;
-                let selected_refs = selected_call_indices
-                    .iter()
-                    .filter_map(|index| call_refs.get(*index).cloned())
-                    .collect::<Vec<_>>();
-                append_cancelled_batch_results(s.history.as_mut_vec(), results, &selected_refs);
+                // Pair by call id rather than position: harness-queued results
+                // (#1590) share the batch but own no provider announcement.
+                let mut announced_refs = Vec::new();
+                let mut announced_results = Vec::new();
+                let mut harness_results = Vec::new();
+                for (entry, result) in batch.iter().zip(results) {
+                    match entry.answered_call.clone() {
+                        Some(call_id) => {
+                            announced_refs.push(crate::app::ToolCallRef {
+                                id: call_id,
+                                name: entry.call.name.clone(),
+                                arguments: entry.call.arguments.to_string(),
+                            });
+                            announced_results.push(result);
+                        }
+                        None => harness_results.push(result),
+                    }
+                }
+                append_cancelled_batch_results(
+                    s.history.as_mut_vec(),
+                    announced_results,
+                    &announced_refs,
+                );
+                for result in harness_results {
+                    s.history.push(tool_result_history_message(result, None));
+                }
                 for (index, call_ref) in call_refs.iter().enumerate() {
                     if !selected_call_indices.contains(&index) {
                         s.history.extend(unanswered_call_results_with_kind(
@@ -985,12 +1232,15 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut infrastructure_stop: Option<(String, String, usize)> = None;
             let mut result_messages = Vec::with_capacity(results.len() + deferred_call_count);
             for (position, result) in results.into_iter().enumerate() {
-                let call_position = selected_call_indices
-                    .get(position)
-                    .copied()
-                    .unwrap_or(position);
-                let call = tool_calls.get(call_position);
-                let answered_call = call_refs.get(call_position).map(|call| call.id.clone());
+                // `results` is built one entry per `batch` element, so the
+                // lookup always succeeds. Harness-queued calls (#1590) occupy
+                // the tail of `batch`, which keeps every announced position
+                // mapped to its announcement and sorts their results after the
+                // round's own answers.
+                let entry = &batch[position];
+                let call_position = entry.announced;
+                let call = Some(&entry.call);
+                let answered_call = entry.answered_call.clone();
                 let name = result.tool_name;
                 let mut metadata = result.metadata.clone();
                 // The provider call id is attached at the orchestration
@@ -1523,13 +1773,25 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 if selected_call_indices.contains(&index) {
                     continue;
                 }
-                let (reason, error_kind) = validation_errors[index]
-                    .as_deref()
-                    .map(|reason| (reason, crate::tools::ToolErrorKind::Validation))
-                    .unwrap_or((
-                        "intentionally deferred by the scheduler; reissue it only if still needed after reviewing the executed results",
+                let (reason, error_kind) = match validation_errors[index].as_deref() {
+                    Some(reason) => (reason, crate::tools::ToolErrorKind::Validation),
+                    // Queued calls stay closed with a typed result so the
+                    // announcement keeps its provider pairing, but the model is
+                    // never asked to reissue what the harness already holds
+                    // (#1590).
+                    None if scheduled.queued.contains(&index) => (
+                        "held by the harness and queued for automatic execution in a later round; do not reissue it",
                         crate::tools::ToolErrorKind::Deferred,
-                    ));
+                    ),
+                    None if scheduled.reissue.contains(&index) => (
+                        "not scheduled by the harness; reissue it only if still needed after reviewing the executed results",
+                        crate::tools::ToolErrorKind::Deferred,
+                    ),
+                    None => (
+                        "an identical call in this response already ran; its result above answers this call too",
+                        crate::tools::ToolErrorKind::Deferred,
+                    ),
+                };
                 if let Some(message) = unanswered_call_results_with_kind(
                     std::slice::from_ref(call_ref),
                     reason,
@@ -1551,22 +1813,51 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .collect(),
             );
             if deferred_call_count > 0 {
-                let deferred = tool_calls
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| !selected_call_indices.contains(index))
-                    .map(|(index, call)| {
-                        call_refs
-                            .get(index)
-                            .map(|call_ref| format!("{} ({})", call.name, call_ref.id))
-                            .unwrap_or_else(|| call.name.clone())
+                let describe = |indices: &[usize]| {
+                    indices
+                        .iter()
+                        .map(|index| {
+                            call_refs
+                                .get(*index)
+                                .map(|call_ref| {
+                                    format!("{} ({})", tool_calls[*index].name, call_ref.id)
+                                })
+                                .unwrap_or_else(|| tool_calls[*index].name.clone())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let closed = (0..tool_calls.len())
+                    .filter(|index| {
+                        !selected_call_indices.contains(index) && !scheduled.queued.contains(index)
                     })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let notice = format!(
-                    "[The model emitted {requested_calls} tool calls. {} were executed this round; the remaining calls ({deferred}) were not executed or scheduled. Reissue deferred calls only after reviewing the real results.]",
+                    .collect::<Vec<_>>();
+                let mut notice = format!(
+                    "[The model emitted {requested_calls} tool calls. {} were executed this round.",
                     selected_call_indices.len()
                 );
+                if !scheduled.queued.is_empty() {
+                    notice.push_str(&format!(
+                        " The scheduler held {} over the per-response workspace-change limit and queued them for automatic execution in a later round ({}); do not reissue them, their real results arrive without another request from you.",
+                        scheduled.queued.len(),
+                        describe(&scheduled.queued),
+                    ));
+                }
+                if !scheduled.reissue.is_empty() {
+                    notice.push_str(&format!(
+                        " The harness did not schedule {} call(s) ({}); reissue them only after reviewing the real results.",
+                        scheduled.reissue.len(),
+                        describe(&scheduled.reissue),
+                    ));
+                }
+                if !closed.is_empty() {
+                    notice.push_str(&format!(
+                        " The remaining {} call(s) ({}) were not executed: review the real results above.",
+                        closed.len(),
+                        describe(&closed),
+                    ));
+                }
+                notice.push(']');
                 dbg_log!("Deferred tool-call diagnostic: {notice}");
                 s.history.push(ChatMessage::new("system", notice));
                 // Deferred calls never adopt their speculative projections;
@@ -2127,8 +2418,9 @@ mod tests {
         append_finalized_tool_batch, apply_round_stagnation, batch_invalidates_read_recovery,
         benign_shell_wrapper_failure, bounded_malformed_tool_history,
         content_bearing_inspection_status, grounded_artifact_recovery_message,
-        incomplete_tool_result, loop_signal_event, mutation_batch_guidance,
-        selected_tool_call_indices, should_apply_loop_recovery, targeted_no_progress_guidance,
+        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, scheduled_tool_calls,
+        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
+        targeted_no_progress_guidance,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -2157,6 +2449,30 @@ mod tests {
 
         fn should_verify_completion(&self) -> bool {
             false
+        }
+    }
+
+    struct ApproveAll;
+
+    impl TurnPolicy for ApproveAll {
+        fn should_approve(
+            &self,
+            _state: &Arc<Mutex<AppState>>,
+            _tool_calls: &[ToolCall],
+        ) -> impl std::future::Future<Output = bool> + Send {
+            async { true }
+        }
+
+        fn should_verify_completion(&self) -> bool {
+            false
+        }
+    }
+
+    fn write_call(path: &std::path::Path, content: &str) -> ToolCall {
+        ToolCall {
+            name: "write_to_file".to_string(),
+            arguments: serde_json::json!({"path": path, "content": content}),
+            call_id: None,
         }
     }
 
@@ -2449,6 +2765,10 @@ mod tests {
         let policy = Arc::new(CancelAfterApproval(cancel_token.clone()));
         let mut ctx = TurnContext::new();
         ctx.response.final_content = "I will make a bounded update.".to_owned();
+        // Seed an earlier round's measurement so the assertions below prove the
+        // cancelled round does not present it as its own (#1592).
+        ctx.progress.last_reason = Some(loop_detect::ProgressReason::NewInformation);
+        ctx.metrics.no_progress_results = 4;
         let calls = ["call-first", "call-second", "call-third"]
             .into_iter()
             .enumerate()
@@ -2499,6 +2819,10 @@ mod tests {
                 .as_ref()
                 .is_some_and(|result| result.error_kind.as_deref() == Some("Cancelled"))
         }));
+        // #1590: the calls the mutation budget could not take are held by the
+        // harness, not dropped. Cancellation stops the turn before they can
+        // run, so Esc/turn end is what releases them.
+        assert_eq!(state.lock().await.deferred_tool_calls.len(), 2);
         let last_result = history
             .iter()
             .rposition(|message| message.tool_result.is_some())
@@ -2516,6 +2840,20 @@ mod tests {
         assert!(last_result < steer_positions[0]);
         assert!(steer_positions[0] < steer_positions[1]);
         assert!(state.lock().await.pending_steers.is_empty());
+        // #1592: the cancelled turn reports what it cancelled, never a stale
+        // progress reason carried over from an earlier round of the same turn.
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::Cancelled)
+        );
+        assert_eq!(ctx.progress.last_reason, None);
+        let summary = ctx.benchmark_summary();
+        assert_eq!(summary["last_progress_reason"], serde_json::Value::Null);
+        assert_eq!(summary["cancelled_tool_calls"], 1);
+        assert_eq!(
+            summary["no_progress_results"], 4,
+            "cancelled results are counted separately, never judged for progress"
+        );
 
         crate::config::flush_history();
         let persisted = crate::config::load_session_history_direct(&session_id);
@@ -2546,6 +2884,284 @@ mod tests {
         assert!(persisted_last_result < persisted_steer_positions[0]);
         assert!(persisted_steer_positions[0] < persisted_steer_positions[1]);
         assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
+
+    fn approving_state() -> (Arc<Mutex<AppState>>, String) {
+        let mut app_state = AppState::new();
+        let session_id = app_state.active_session_id.clone();
+        app_state
+            .history
+            .push(ChatMessage::new("user", "Apply both edits"));
+        app_state.status = AppStatus::Streaming;
+        app_state.auto_confirm = true;
+        let api_base_url = app_state.api_base_url.clone();
+        app_state.record_function_calling_support(&api_base_url, true);
+        (Arc::new(Mutex::new(app_state)), session_id)
+    }
+
+    fn envelope(call_id: &str, call: &ToolCall) -> crate::tools::ToolCallEnvelope {
+        crate::tools::ToolCallEnvelope {
+            call_id: call_id.to_owned(),
+            tool_name: call.name.clone(),
+            arguments: call.arguments.clone(),
+        }
+    }
+
+    async fn run_round(
+        state: &Arc<Mutex<AppState>>,
+        policy: &Arc<ApproveAll>,
+        ctx: &mut TurnContext,
+        content: &str,
+        calls: Vec<crate::tools::ToolCallEnvelope>,
+        session_id: &str,
+    ) -> super::ToolHandlingOutcome {
+        ctx.response.final_content = content.to_owned();
+        ctx.response.streamed_call_ids = calls.iter().map(|call| call.call_id.clone()).collect();
+        super::handle_tool_response(
+            &reqwest::Client::new(),
+            state,
+            &tokio_util::sync::CancellationToken::new(),
+            policy,
+            ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            calls,
+            session_id,
+        )
+        .await
+    }
+
+    // #1590: an over-budget call is queued and answered, not dropped and
+    // bounced back to the model. The harness runs it on a later round.
+    #[tokio::test]
+    async fn over_budget_calls_are_queued_and_executed_without_a_model_reissue() {
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let (state, session_id) = approving_state();
+        let policy = Arc::new(ApproveAll);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let mut ctx = TurnContext::new();
+        let first = write_call(&temp.path().join("first.txt"), "one");
+        let second = write_call(&temp.path().join("second.txt"), "two");
+
+        let outcome = super::handle_tool_response(
+            &reqwest::Client::new(),
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("tool_calls"),
+            0,
+            None,
+            None,
+            None,
+            vec![
+                envelope("call-first", &first),
+                envelope("call-second", &second),
+            ],
+            &session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, super::ToolHandlingOutcome::Continue);
+        assert_eq!(state.lock().await.deferred_tool_calls.len(), 1);
+        assert_eq!(
+            state.lock().await.deferred_tool_calls[0].arguments["content"],
+            "two",
+            "the over-budget call is held intact"
+        );
+        let round_one = state.lock().await.history.as_slice().to_vec();
+        let deferred_result = round_one
+            .iter()
+            .find(|message| message.tool_call_id.as_deref() == Some("call-second"))
+            .expect("the queued call is still answered");
+        assert!(
+            deferred_result.content.contains("do not reissue"),
+            "{}",
+            deferred_result.content
+        );
+        let notice = round_one
+            .iter()
+            .find(|message| message.role == "system" && message.content.contains("queued"))
+            .expect("the scheduling notice");
+        assert!(
+            notice.content.contains("do not reissue"),
+            "{}",
+            notice.content
+        );
+        assert!(
+            !notice.content.contains("Reissue deferred calls"),
+            "the model must not be told to reissue held calls"
+        );
+        assert!(temp.path().join("first.txt").exists());
+        assert!(
+            !temp.path().join("second.txt").exists(),
+            "the queued call must not run in the same round as its budget peer"
+        );
+
+        // Second round: no reissue, one new call. The harness runs the queued
+        // call alongside it under its own budget.
+        let third = ToolCall {
+            name: "get_time".to_string(),
+            arguments: serde_json::json!({}),
+            call_id: None,
+        };
+        let outcome = run_round(
+            &state,
+            &policy,
+            &mut ctx,
+            "checking the clock",
+            vec![envelope("call-third", &third)],
+            &session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, super::ToolHandlingOutcome::Continue);
+        assert!(
+            state.lock().await.deferred_tool_calls.is_empty(),
+            "the queue drains once its call runs"
+        );
+        let history = state.lock().await.history.as_slice().to_vec();
+        let auto_result = history
+            .iter()
+            .find(|message| {
+                message.role == "tool"
+                    && message.tool_call_id.is_none()
+                    && message.content.starts_with("write_to_file:")
+            })
+            .expect("the harness-authored result for the queued call");
+        assert!(
+            auto_result
+                .tool_result
+                .as_ref()
+                .is_some_and(|record| record.success),
+            "{}",
+            auto_result.content
+        );
+        assert!(
+            temp.path().join("second.txt").exists(),
+            "the queued call ran without the model reissuing it"
+        );
+        // The queued call already owns an answer under its provider id, so the
+        // auto-executed result must not claim that id again (#1590 pairing).
+        assert_eq!(ctx.metrics.tool_calls, 3, "two writes and one clock read");
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_stops_releases_the_calls_it_was_holding() {
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let (state, _session_id) = approving_state();
+        let held = || write_call(&temp.path().join("held.txt"), "never written");
+
+        state.lock().await.deferred_tool_calls.push(held());
+        let mut guard = state.lock().await;
+        super::super::take_turn_context_for_prompt(&mut guard, false, 40);
+        drop(guard);
+        assert!(
+            state.lock().await.deferred_tool_calls.is_empty(),
+            "a new user prompt releases the previous task's held calls"
+        );
+
+        state.lock().await.deferred_tool_calls.push(held());
+        crate::app::actions::handle_escape(&state, &mut tokio_util::sync::CancellationToken::new())
+            .await;
+        assert!(
+            state.lock().await.deferred_tool_calls.is_empty(),
+            "Esc must not leave calls for the next turn to run"
+        );
+        assert!(!temp.path().join("held.txt").exists());
+    }
+
+    // The drain is a strict prefix bounded by a fresh mutation allowance: a
+    // non-empty queue always shrinks, so it can never re-enter the round's
+    // budget or spin (#1590).
+    #[test]
+    fn draining_the_queue_shrinks_it_by_a_bounded_prefix() {
+        let policy = crate::config::ToolSchedulingPolicy::default();
+        let queued = vec![
+            write_call(std::path::Path::new("a"), "a"),
+            write_call(std::path::Path::new("b"), "b"),
+            write_call(std::path::Path::new("c"), "c"),
+        ];
+
+        let (batch, prefix) = take_deferred_batch(&queued, policy, &[]);
+
+        assert_eq!(batch.len(), 1, "one mutation per round");
+        assert_eq!(prefix, 1);
+        assert!(prefix < queued.len(), "the queue keeps making progress");
+
+        let total = queued.len();
+        let mut remaining = queued;
+        let mut drains = 0;
+        while !remaining.is_empty() {
+            let (batch, prefix) = take_deferred_batch(&remaining, policy, &[]);
+            assert!(!batch.is_empty(), "a non-empty queue always drains");
+            remaining.drain(..prefix);
+            drains += 1;
+            assert!(drains <= total, "the drain terminates");
+        }
+        assert_eq!(drains, total);
+    }
+
+    #[test]
+    fn draining_never_reruns_a_call_the_model_already_reissued() {
+        let policy = crate::config::ToolSchedulingPolicy::default();
+        let queued = vec![
+            write_call(std::path::Path::new("a"), "a"),
+            read_call("git status"),
+        ];
+
+        let (batch, prefix) = take_deferred_batch(
+            &queued,
+            policy,
+            &[write_call(std::path::Path::new("a"), "a")],
+        );
+
+        assert_eq!(prefix, 2, "the reissued call is covered by this round");
+        assert_eq!(
+            batch.len(),
+            1,
+            "only the call the model did not reissue is executed again"
+        );
+        assert_eq!(batch[0].name, "run_command");
+    }
+
+    #[test]
+    fn over_budget_calls_are_reported_as_queued_not_deferred_for_reissue() {
+        let calls = vec![
+            write_call(std::path::Path::new("a"), "a"),
+            write_call(std::path::Path::new("b"), "b"),
+            read_call("git status"),
+        ];
+
+        let scheduled = scheduled_tool_calls(&calls, &[None, None, None], Default::default());
+
+        assert_eq!(scheduled.selected, vec![0, 2]);
+        assert_eq!(scheduled.queued, vec![1]);
+        assert!(scheduled.reissue.is_empty());
+    }
+
+    // A completion request is not workspace work and must stay with the model:
+    // queueing it would park the end of the turn behind a queued edit and, with
+    // the "do not reissue" notice, leave the task unable to finish (#1590).
+    #[test]
+    fn a_completion_request_over_budget_is_left_to_the_model() {
+        let calls = vec![
+            write_call(std::path::Path::new("a"), "a"),
+            ToolCall {
+                name: "complete_task".to_string(),
+                arguments: serde_json::json!({"result": "done"}),
+                call_id: None,
+            },
+        ];
+
+        let scheduled = scheduled_tool_calls(&calls, &[None, None], Default::default());
+
+        assert_eq!(scheduled.selected, vec![0]);
+        assert!(scheduled.queued.is_empty());
+        assert_eq!(scheduled.reissue, vec![1]);
     }
 
     #[test]
@@ -2882,7 +3498,7 @@ mod tests {
             },
         ];
         let errors = vec![None, None, None, None];
-        let selected = selected_tool_call_indices(
+        let scheduled = scheduled_tool_calls(
             &calls,
             &errors,
             crate::config::ToolSchedulingPolicy {
@@ -2891,8 +3507,10 @@ mod tests {
             },
         );
         // Control first for ordering; valid reads ride along in the same
-        // round (issue #1230). The mutating companion still waits.
-        assert_eq!(selected, vec![1, 0, 2]);
+        // round (issue #1230). The mutating companion still waits — for the
+        // harness, not the model (#1590).
+        assert_eq!(scheduled.selected, vec![1, 0, 2]);
+        assert_eq!(scheduled.queued, vec![3]);
     }
 
     #[test]

@@ -125,6 +125,10 @@ pub struct MetricsState {
     pub mutating_tool_calls: usize,
     pub malformed_calls: usize,
     pub no_progress_results: usize,
+    /// Tool results produced by a cancelled turn. They were never evaluated
+    /// for progress, so they are reported separately instead of leaking into
+    /// `no_progress_results` as if the harness had judged them (#1592).
+    pub cancelled_tool_calls: usize,
     pub failure_replans: usize,
     pub evidence_recoveries: usize,
     pub grounded_recoveries: usize,
@@ -260,6 +264,7 @@ impl TurnContext {
                 mutating_tool_calls: 0,
                 malformed_calls: 0,
                 no_progress_results: 0,
+                cancelled_tool_calls: 0,
                 failure_replans: 0,
                 evidence_recoveries: 0,
                 grounded_recoveries: 0,
@@ -435,7 +440,9 @@ impl TurnContext {
                 .then_some(self.budget.max_total_tool_rounds),
             "continuation_pending": self.budget.continuation_pending,
             "tokens_used": self.budget.tokens_used, "malformed_calls": self.metrics.malformed_calls,
-            "no_progress_results": self.metrics.no_progress_results, "failure_replans": self.metrics.failure_replans,
+            "no_progress_results": self.metrics.no_progress_results,
+            "cancelled_tool_calls": self.metrics.cancelled_tool_calls,
+            "failure_replans": self.metrics.failure_replans,
             "evidence_recoveries": self.metrics.evidence_recoveries,
             "grounded_recoveries": self.metrics.grounded_recoveries,
             "progress_no_information_streak": self.progress.ledger.no_progress_streak(),

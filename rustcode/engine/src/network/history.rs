@@ -228,6 +228,35 @@ fn has_late_tool_result(history: &[ChatMessage], announcement_index: usize, call
     false
 }
 
+/// A tool result that only records a cancelled turn (#1592).
+///
+/// History keeps it verbatim so the transcript still shows what the turn was
+/// doing when the user stopped it, but replaying it re-sent
+/// `error: tool execution cancelled by user` plus `error_kind: "Cancelled"` on
+/// every later prompt and permanently painted that tool as a failing call.
+fn is_cancelled_tool_result(message: &ChatMessage) -> bool {
+    message
+        .tool_result
+        .as_ref()
+        .and_then(|record| record.parsed_error_kind())
+        == Some(crate::tools::ToolErrorKind::Cancelled)
+}
+
+/// Provider text for a call the harness never ran. The cancelled result itself
+/// is replaced by this stub rather than dropped: the announcement still needs
+/// exactly one answer, and rewriting only the rendered payload keeps history
+/// append-only (#985) while removing the cancellation noise from every later
+/// prompt (#1592).
+const UNRUN_CALL_RESULT: &str = "error: this call did not run — the turn ended before it could";
+
+/// The harness stop marker the terminal renders as `User Stopped`. It is turn
+/// bookkeeping rather than conversation, so it stays in history for the user
+/// and leaves the provider projection (#1592).
+fn is_turn_cancelled_marker_message(message: &ChatMessage) -> bool {
+    message.role == "system"
+        && crate::network::lifecycle::is_turn_cancelled_marker(&message.content)
+}
+
 /// A bounded, named piece of turn-varying context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContextFragment {
@@ -514,7 +543,7 @@ fn to_messages_with_scope(
                 let content = if has_late_tool_result(history, index, &call.id) {
                     "error: this call's result arrived after the conversation moved on"
                 } else {
-                    "error: this call did not run — the turn ended before it could"
+                    UNRUN_CALL_RESULT
                 };
                 messages.push(serde_json::json!({
                     "role": "tool",
@@ -530,6 +559,14 @@ fn to_messages_with_scope(
         let entry = normalize_message(message_for_render);
         messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
+            // A cancelled result is answered with the neutral stub so the
+            // cancellation record never reaches the provider (#1592). History
+            // keeps the original bytes for the user.
+            let (content, metadata) = if is_cancelled_tool_result(message_for_render) {
+                (UNRUN_CALL_RESULT, None)
+            } else {
+                (content, metadata)
+            };
             let metadata_line = metadata
                 .map(|value| format!("\nmetadata: {}", compact_tool_result_metadata(value)))
                 .unwrap_or_default();
@@ -617,6 +654,14 @@ fn should_include_request_message(
     if message.conversation_recap {
         return false;
     }
+    // The cancellation marker is turn bookkeeping, not conversation (#1592).
+    // Dropping it here — not in storage — honors the immutable-history
+    // contract (#985): the terminal still renders it, the provider never sees
+    // it. Cancelled tool results are handled one layer down, where only their
+    // rendered payload is replaced so the announcement keeps its answer.
+    if is_turn_cancelled_marker_message(message) {
+        return false;
+    }
     match scope {
         RequestHistoryScope::Full => true,
         RequestHistoryScope::RecentTurns => {
@@ -688,6 +733,16 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
         }
         "tool" => {
             let call_id = message.tool_call_id.as_ref()?;
+            // A cancelled result keeps its slot — the announcement needs
+            // exactly one answer — but the provider sees the neutral stub
+            // instead of the cancellation record (#1592).
+            if is_cancelled_tool_result(message) {
+                return Some(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": UNRUN_CALL_RESULT,
+                }));
+            }
             let content = message
                 .content
                 .split_once(": ")
@@ -2004,5 +2059,146 @@ mod tests {
         let rendered = serde_json::to_string(&messages).expect("render history");
         assert!(rendered.contains("1: original"));
         assert!(rendered.contains("Unchanged read replay"));
+    }
+
+    fn cancelled_history() -> Vec<ChatMessage> {
+        let cancelled_result = ChatMessage::new(
+            "tool",
+            "run_command: error: tool execution cancelled by user",
+        )
+        .answering(Some("call_cancelled".into()))
+        .with_tool_result(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: false,
+            error_kind: Some("Cancelled".into()),
+            ..Default::default()
+        });
+        vec![
+            ChatMessage::new("user", "start the task"),
+            ChatMessage::new("assistant", "running a command").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: "call_cancelled".into(),
+                    name: "run_command".into(),
+                    arguments: r#"{"command":"cargo test"}"#.into(),
+                },
+            ]),
+            cancelled_result,
+            ChatMessage::new("system", "[harness: turn stopped — cancelled]"),
+            ChatMessage::new("user", "actually, do this instead"),
+        ]
+    }
+
+    // #1592: a cancelled turn's error records stay in history for the user and
+    // never reach the provider again. The announcement keeps exactly one
+    // answer, so the native request still validates.
+    #[test]
+    fn cancelled_turn_records_are_replaced_in_the_request_but_kept_in_history() {
+        let history = cancelled_history();
+        let before = serde_json::to_string(&history).expect("serialize history");
+
+        let messages = to_messages(&history, "system");
+        let rendered = serde_json::to_string(&messages).expect("render history");
+
+        // History is untouched: the append-only contract (#985) forbids
+        // rewriting it, and the terminal still renders the stop marker.
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        assert!(is_turn_cancelled_marker_message(&history[3]));
+        assert!(is_cancelled_tool_result(&history[2]));
+        // The request carries neither the cancellation text, the typed error,
+        // nor the marker the user sees.
+        assert!(!rendered.contains("cancelled by user"));
+        assert!(!rendered.contains("Cancelled"));
+        assert!(!rendered.contains("harness: turn stopped"));
+        // It still answers the announcement, using the unanswered-call stub.
+        assert_native_tool_call_results(&messages);
+        let answer = messages
+            .iter()
+            .find(|message| message["tool_call_id"] == "call_cancelled")
+            .expect("the cancelled call is still answered");
+        assert_eq!(answer["role"], "tool");
+        assert_eq!(answer["content"], UNRUN_CALL_RESULT);
+    }
+
+    // Dropping the cancelled result instead of stubbing it would leave the
+    // assistant announcement unanswered and reorder the batch.
+    #[test]
+    fn a_cancelled_batch_still_pairs_every_announced_call() {
+        let executed = ChatMessage::new("tool", "grep: found 3 matches")
+            .answering(Some("call_first".into()))
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "grep".into(),
+                success: true,
+                ..Default::default()
+            });
+        let cancelled = ChatMessage::new("tool", "run_command: error: interrupted by the user")
+            .answering(Some("call_second".into()))
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "run_command".into(),
+                success: false,
+                error_kind: Some("Cancelled".into()),
+                ..Default::default()
+            });
+        let history = vec![
+            ChatMessage::new("user", "inspect then build"),
+            ChatMessage::new("assistant", "two calls").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: "call_first".into(),
+                    name: "grep".into(),
+                    arguments: "{}".into(),
+                },
+                crate::app::ToolCallRef {
+                    id: "call_second".into(),
+                    name: "run_command".into(),
+                    arguments: "{}".into(),
+                },
+            ]),
+            executed,
+            cancelled,
+            ChatMessage::new("user", "stop, do something else"),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        assert_native_tool_call_results(&messages);
+        let rendered = serde_json::to_string(&messages).expect("render history");
+        assert!(rendered.contains("found 3 matches"));
+        assert!(!rendered.contains("interrupted by the user"));
+        // Order is preserved: the executed answer precedes the stub.
+        let first = messages
+            .iter()
+            .position(|message| message["tool_call_id"] == "call_first")
+            .expect("executed answer");
+        let second = messages
+            .iter()
+            .position(|message| message["tool_call_id"] == "call_second")
+            .expect("cancelled stub");
+        assert!(first < second);
+    }
+
+    // The text-protocol projection carries no call id, so the cancellation is
+    // scrubbed there too.
+    #[test]
+    fn text_protocol_cancelled_results_are_scrubbed_without_a_call_id() {
+        let history = vec![
+            ChatMessage::new("user", "start"),
+            ChatMessage::new(
+                "tool",
+                "run_command: error: tool call cancelled before execution",
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "run_command".into(),
+                success: false,
+                error_kind: Some("Cancelled".into()),
+                ..Default::default()
+            }),
+            ChatMessage::new("user", "next"),
+        ];
+
+        let messages = to_messages(&history, "system");
+        let rendered = serde_json::to_string(&messages).expect("render history");
+
+        assert!(rendered.contains(UNRUN_CALL_RESULT));
+        assert!(!rendered.contains("cancelled before execution"));
+        assert!(!rendered.contains("error_kind"));
     }
 }
