@@ -70,6 +70,9 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // background result inherit the previous task's loop or verification
         // budgets.
         state.background_turn_context = None;
+        // Held-over tool calls belong to the previous task (#1590); the new
+        // prompt's transcript never promised them.
+        state.clear_deferred_tool_calls();
         crate::config::clear_segment_checkpoint(&state.active_session_id);
         TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds)
     }
@@ -106,6 +109,9 @@ pub(crate) fn save_turn_context_after_run(
     } else {
         crate::config::clear_segment_checkpoint(&state.active_session_id);
         state.background_turn_context = None;
+        // The turn is over: anything the scheduler still held for it is
+        // released rather than executed against the next task (#1590).
+        state.clear_deferred_tool_calls();
     }
 }
 

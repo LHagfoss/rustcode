@@ -1647,7 +1647,8 @@ pub(crate) fn append_tool_response_policy(
             "\n\n# Tool response limit\n\
 This trusted profile permits a bounded batch of up to {} read-only calls and {} workspace-changing calls in one assistant response. \
 Control-plane calls first, reads follow; workspace changes grounded and sequential; never assume an unexecuted call ran. \
-Read-only calls do not consume the workspace-changing limit.\n",
+Read-only calls do not consume the workspace-changing limit. \
+Calls beyond the limit are held by the harness and executed automatically in a later round: never reissue them.\n",
             policy.max_read_only_calls, policy.max_mutating_calls
         )
     } else {
@@ -1657,7 +1658,8 @@ Read-only calls do not consume the workspace-changing limit.\n",
 The effective max_mutating_calls_per_response is {}. \
 Batch independent read-only calls freely in one assistant response and wait for their results before choosing the next action. \
 Keep workspace-changing calls to one per response: this includes mutating `run_command` calls, file writes/edits, \
-and other tools with side effects. Read-only inspection never consumes this limit. Never assume an unexecuted call ran.\n",
+and other tools with side effects. Read-only inspection never consumes this limit. Never assume an unexecuted call ran. \
+Calls beyond the limit are held by the harness and executed automatically in a later round: never reissue them.\n",
             policy.max_mutating_calls
         )
     }
