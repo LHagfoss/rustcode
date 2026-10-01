@@ -3679,6 +3679,7 @@ async fn stream_request_with_timeouts(
                 "phase": format!("{:?}", mcp_selection.phase),
                 "builtin_available": mcp_selection.builtin_available,
                 "builtin_selected": mcp_selection.builtin_selected,
+                "withheld_builtin_names": mcp_selection.withheld_builtin_names,
             }),
         );
     }

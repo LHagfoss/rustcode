@@ -519,6 +519,9 @@ pub(crate) struct McpSchemaSelectionStats {
     pub phase: ToolSchemaPhase,
     pub builtin_available: usize,
     pub builtin_selected: usize,
+    /// Built-ins the measured byte budget had to drop from this request. They
+    /// remain executable by exact name, so the model must be told. (#1589)
+    pub withheld_builtin_names: Vec<String>,
     pub builtin_schema_bytes: usize,
     pub mcp_schema_bytes: usize,
     pub mcp_schema_budget_bytes: usize,
@@ -568,47 +571,6 @@ const TEXT_CODING_TOOLS: &[&str] = &[
     "use_skill",
 ];
 
-const EDIT_TOOL_TERMS: &[&str] = &[
-    "add",
-    "change",
-    "chunk",
-    "code",
-    "create",
-    "edit",
-    "fix",
-    "implement",
-    "insert",
-    "large",
-    "modify",
-    "patch",
-    "refactor",
-    "replace",
-    "resumable",
-    "update",
-    "write",
-];
-
-const DELETE_TOOL_TERMS: &[&str] = &["copy", "delete", "remove", "rename", "move"];
-
-const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
-    "grep",
-    "glob",
-    "list_directory",
-    "delete_file",
-    "move_file",
-    "copy_file",
-    "run_command",
-    "manage_task",
-    "view_file",
-    "replace_file_content",
-    "multi_replace_file_content",
-    "write_to_file",
-    "write_file_chunk",
-    "complete_task",
-    "list_skills",
-    "use_skill",
-];
-
 const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
     "grep",
     "glob",
@@ -620,25 +582,31 @@ const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
 
 const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 
+/// Built-in tools a policy may advertise, before the measured byte budget.
+///
+/// This is the single membership rule for both protocols. Membership used to be
+/// narrowed by transcript keywords and by a Bootstrap/Established phase flip in
+/// the native path only, which hid tools the textual contract listed and made
+/// the `tools` block drift mid-session as `context_terms` grew. (#1589)
+fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
+    !((tool.name == "set_session_title" && !policy.include_session_title_tool)
+        || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&tool.name)))
+        && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
+            && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
+        && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
+            && !policy.include_agent_tools)
+}
+
 fn text_builtin_is_advertised(
     tool: &super::Tool,
     policy: ToolSchemaPolicy,
     agent_mode: crate::config::AgentMode,
 ) -> bool {
-    if (tool.name == "set_session_title" && !policy.include_session_title_tool)
-        || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&tool.name))
-    {
-        return false;
-    }
-    if policy.profile == ToolSchemaProfile::ReadOnlyInspection
-        && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name)
-    {
-        return false;
-    }
-    if tool.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools {
-        return false;
-    }
-    agent_mode != crate::config::AgentMode::Plan || allowed_in_plan_mode(tool.name)
+    // Plan mode is already encoded in the policy as the ReadOnlyInspection
+    // profile, which is strictly narrower than `allowed_in_plan_mode`, so this
+    // adds nothing the native path would have to duplicate.
+    builtin_is_advertised(tool, policy)
+        && (agent_mode != crate::config::AgentMode::Plan || allowed_in_plan_mode(tool.name))
 }
 
 pub(crate) fn textual_tool_surface(
@@ -770,80 +738,16 @@ pub(crate) fn tool_schema_phase(
         })
 }
 
-fn builtin_tool_is_relevant(
-    name: &str,
-    terms: &std::collections::HashSet<String>,
-    phase: ToolSchemaPhase,
-) -> bool {
-    let coding_tools = match phase {
-        ToolSchemaPhase::Bootstrap => BOOTSTRAP_CODING_TOOLS,
-        ToolSchemaPhase::Established => CORE_CODING_TOOLS,
-    };
-    if coding_tools.contains(&name) {
-        return true;
-    }
-    let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
-    match name {
-        "replace_file_content"
-        | "multi_replace_file_content"
-        | "write_to_file"
-        | "write_file_chunk" => relevant(EDIT_TOOL_TERMS),
-        "delete_file" | "move_file" | "copy_file" => relevant(DELETE_TOOL_TERMS),
-        "find_symbol" | "get_project_map" => {
-            phase == ToolSchemaPhase::Established
-                || relevant(&[
-                    "symbol",
-                    "symbols",
-                    "architecture",
-                    "dependency",
-                    "dependencies",
-                    "impact",
-                    "callers",
-                    "callees",
-                    "trace",
-                ])
-        }
-        "search_web" => relevant(&[
-            "web", "internet", "online", "research", "latest", "docs", "http", "https",
-        ]),
-        "get_time" => relevant(&["time", "timezone", "clock", "date"]),
-        "remember" | "recall_memory" | "forget_memory" => {
-            relevant(&["memory", "remember", "recall", "forget", "preference"])
-        }
-        "generate_sound_effect" | "generate_music" | "inspect_audio" => {
-            relevant(&["audio", "sound", "music", "voice", "song"])
-        }
-        "inspect_media" | "validate_video_project" | "render_video" => {
-            relevant(&["video", "media", "render", "movie", "animation"])
-        }
-        "wait_agent" | "cancel_agent" => relevant(&["agent", "subagent", "delegate", "parallel"]),
-        _ => true,
-    }
-}
-
-fn build_builtin_native_tools_schema(
-    policy: ToolSchemaPolicy,
-    terms: Option<&std::collections::HashSet<String>>,
-    phase: ToolSchemaPhase,
-) -> Vec<Value> {
+/// Build the built-in half of the native `tools` block plus the names the
+/// measured byte budget had to drop.
+///
+/// The membership rule is [`builtin_is_advertised`], the same one the textual
+/// contract uses, so the two protocols cannot disagree and a fixed policy always
+/// yields a byte-identical block. (#1589)
+fn build_builtin_native_tools_schema(policy: ToolSchemaPolicy) -> (Vec<Value>, Vec<String>) {
     let mut tools = Vec::new();
     for t in TOOLS {
-        if t.name == "set_session_title" && !policy.include_session_title_tool {
-            continue;
-        }
-        if policy.profile == ToolSchemaProfile::ReadOnlyInspection
-            && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
-        {
-            continue;
-        }
-        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
-        {
-            continue;
-        }
-        if !(policy.include_agent_tools
-            && t.capabilities.contains(&ToolCapability::AgentDelegation))
-            && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms, phase))
-        {
+        if !builtin_is_advertised(t, policy) {
             continue;
         }
         tools.push(serde_json::json!({
@@ -858,20 +762,26 @@ fn build_builtin_native_tools_schema(
     // Preserve the core menu and deterministic TOOLS order, but drop the last
     // specialized entries if the measured provider contract exceeds its
     // budget. This is only schema pruning; execution validation remains based
-    // on the complete authoritative registry.
+    // on the complete authoritative registry, so a pruned tool is still
+    // callable and the model must be told it exists. (#1589)
+    let mut withheld = Vec::new();
     while serialized_schema_bytes(&tools) > MAX_BUILTIN_NATIVE_SCHEMA_BYTES {
-        let removable = tools.iter().rposition(|tool| {
+        let Some(index) = tools.iter().rposition(|tool| {
             tool["function"]["name"]
                 .as_str()
                 .is_some_and(|name| !CORE_CODING_TOOLS.contains(&name))
-        });
-        let Some(index) = removable.or_else(|| (!tools.is_empty()).then_some(tools.len() - 1))
-        else {
+        }) else {
             break;
         };
-        tools.remove(index);
+        if let Some(name) = tools.remove(index)["function"]["name"]
+            .as_str()
+            .map(str::to_owned)
+        {
+            withheld.push(name);
+        }
     }
-    tools
+    withheld.sort_unstable();
+    (tools, withheld)
 }
 
 fn serialized_schema_bytes(schemas: &[Value]) -> usize {
@@ -884,20 +794,10 @@ fn mcp_schema_bytes(name: &str, description: &str, schema: &Value) -> usize {
 
 #[cfg(test)]
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
-    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-        build_builtin_native_tools_schema(
-            ToolSchemaPolicy::root(false),
-            None,
-            ToolSchemaPhase::Established,
-        )
-    });
-    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-        build_builtin_native_tools_schema(
-            ToolSchemaPolicy::root(true),
-            None,
-            ToolSchemaPhase::Established,
-        )
-    });
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_builtin_native_tools_schema(ToolSchemaPolicy::root(false)).0);
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_builtin_native_tools_schema(ToolSchemaPolicy::root(true)).0);
 
     if include_agent_tools {
         WITH_AGENT_TOOLS.clone()
@@ -1240,6 +1140,16 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
     )
 }
 
+/// Which candidate bucket admitted a tool into this request's `tools` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admitted {
+    /// Carried over from the previous request's pinned menu.
+    Retained,
+    Requested,
+    Previous,
+    Relevant,
+}
+
 pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
     tools: &[(String, String, Value)],
     owners: &[String],
@@ -1323,26 +1233,48 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         }
     }
 
-    let candidates = requested
-        .iter()
-        .copied()
-        .filter(|index| !rejected_indices.contains(index))
-        .chain(previous.iter().copied())
-        .filter(|index| !rejected_indices.contains(index))
-        .chain(
-            sticky_names
-                .iter()
-                .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky)),
-        )
-        .filter(|index| !rejected_indices.contains(index))
-        .chain(
-            relevant
-                .iter()
-                .map(|(index, _)| *index)
-                .filter(|index| !rejected_indices.contains(index)),
-        );
-    let mut previously_used_count = 0;
-    for index in candidates {
+    // Explicitly requested tools stay first: naming one is a hard requirement, so it
+    // must outrank a pinned menu from a previous turn. Retention then follows.
+    // Because the pinned menu is itself the previous request's whole `tools` block,
+    // a requested name is almost always already pinned, so this ordering cannot
+    // shrink the pinned set — it only re-seats its members. Chaining retention last
+    // instead left it as a mere preference competing for an already-full budget,
+    // which is why consecutive requests selected disjoint name sets. (#1591)
+    let mut candidates = Vec::new();
+    candidates.extend(
+        requested
+            .iter()
+            .copied()
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| (index, Admitted::Requested)),
+    );
+    candidates.extend(
+        sticky_names
+            .iter()
+            .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky))
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| (index, Admitted::Retained)),
+    );
+    candidates.extend(
+        previous
+            .iter()
+            .copied()
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| (index, Admitted::Previous)),
+    );
+    candidates.extend(
+        relevant
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| (index, Admitted::Relevant)),
+    );
+    // Attribute by the bucket that actually admitted the tool. Deriving the
+    // counts from the candidate lists instead skipped tools a reservation had
+    // already inserted, so a `previous` tool admitted by a reservation was
+    // selected but never reported as previously used. (#1591)
+    let mut admitted = std::collections::HashMap::new();
+    for (index, bucket) in candidates {
         if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
             break;
         }
@@ -1356,23 +1288,18 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
             schema_budget_exhausted = true;
             continue;
         }
-        if previous.contains(&index) {
-            previously_used_count += 1;
-        }
+        admitted.entry(index).or_insert(bucket);
         selected.push(index);
         selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
     }
 
     let relevant_count = selected
         .iter()
-        .filter(|index| {
-            !explicitly_requested.contains(&tools[**index].0)
-                && !previous.contains(index)
-                && !sticky_names.contains(&tools[**index].0)
-                && !reserved_servers
-                    .iter()
-                    .any(|server| owners.get(**index).is_some_and(|owner| owner == server))
-        })
+        .filter(|index| admitted.get(index) == Some(&Admitted::Relevant))
+        .count();
+    let previously_used_count = selected
+        .iter()
+        .filter(|index| previous.contains(index))
         .count();
 
     let mut fallback_count = 0;
@@ -1567,18 +1494,14 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     #[cfg(test)]
     maybe_pause_native_schema_test_gate(messages);
     let phase = tool_schema_phase(messages, workspace_root);
-    let terms = context_terms(messages);
-    let mut tools = build_builtin_native_tools_schema(policy, Some(&terms), phase);
+    // The built-in half depends only on the policy, so a fixed policy produces a
+    // byte-identical block for the whole session regardless of transcript
+    // growth or a Bootstrap/Established flip. (#1589)
+    let (mut tools, withheld_builtin_names) = build_builtin_native_tools_schema(policy);
     let builtin_schema_bytes = serialized_schema_bytes(&tools);
     let builtin_available = TOOLS
         .iter()
-        .filter(|tool| {
-            (policy.include_session_title_tool || tool.name != "set_session_title")
-                && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
-                    && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
-                && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
-                    && !policy.include_agent_tools)
-        })
+        .filter(|tool| builtin_is_advertised(tool, policy))
         .count();
     let builtin_selected = tools.len();
     // MCP tools are selected from the current request context. The registry is
@@ -1619,6 +1542,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     stats.builtin_selected =
         builtin_selected + usize::from(policy.include_agent_tools) * AGENT_TOOL_SPECS.len();
     stats.builtin_schema_bytes = builtin_schema_bytes;
+    stats.withheld_builtin_names = withheld_builtin_names;
     (tools, stats)
 }
 
@@ -1635,6 +1559,32 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     tools.extend(agent_native_tools_schema(include_agent_tools));
     tools
 }
+
+/// Request-local notice naming what this request's `tools` block withheld.
+///
+/// Selection is bounded by a count and a byte budget, so some registered tools
+/// never reach the payload. Execution validates against the complete registry,
+/// so an omitted tool still executes by exact name and the model must not
+/// conclude from its absence that the capability is missing — the previous
+/// behaviour surfaced nothing and left a post-hoc "unknown or unavailable tool"
+/// rejection as the only feedback. (#1589)
+pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<String> {
+    let mut lines = Vec::new();
+    if !stats.withheld_builtin_names.is_empty() {
+        lines.push(format!(
+            "Withheld built-ins, callable by exact name: {}.",
+            stats.withheld_builtin_names.join(", ")
+        ));
+    }
+    if stats.available > stats.selected {
+        lines.push(format!(
+            "{} registered MCP tools are not in this request's schema block; call `list_mcp_tools` for their live names instead of guessing.",
+            stats.available - stats.selected
+        ));
+    }
+    (!lines.is_empty()).then(|| format!("# Tools Not Listed\n{}\n", lines.join("\n")))
+}
+
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 pub(super) fn schema_for_tool(name: &str) -> Value {
@@ -1761,12 +1711,18 @@ If the request context names a skill, load it first. For a likely specialized wo
 - Use `todo_write` only for complex 3+ step work, not routine edits, git, or simple questions; update it at milestones.\n\n"
     );
 
-    p.push_str(
-        "# Delegation Policy\n\\
+    // Gate on the same condition as the agent tool list below: promising a
+    // delegation workflow with zero callable subagent tools made the model
+    // probe `run_command` and `list_mcp_tools` for a `spawn_agent` that was
+    // never offered. (#1589)
+    if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
+        p.push_str(
+            "# Delegation Policy\n\\
 - Do not spawn subagents unless the user explicitly requests delegation/parallel agent work or applicable project instructions require it.\n\\
 - Before delegating, identify the critical path and keep blockers in the main agent. Delegate only bounded, self-contained side tasks with clear outputs and disjoint write scopes.\n\\
 - Review every subagent result and inspect its workspace changes before treating the task as complete.\n\\n",
-    );
+        );
+    }
 
     p.push_str("# Tool Format\n");
     match protocol {
@@ -1801,8 +1757,16 @@ If the request context names a skill, load it first. For a likely specialized wo
 
     // Text protocols enumerate tools in the prompt. ApiNative carries the full
     // tool schema in the request's `tools` field instead, so listing them here
-    // would only duplicate that and waste context.
+    // would only duplicate that and waste context. That also means a filtered
+    // `tools` block is the model's only view of the surface, so state the
+    // filtering and the discovery route before returning; it used to mention
+    // neither and left a silent-drop rejection as the only feedback. (#1589)
     if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        p.push_str(
+            "# Tool Surface\n\
+This request's tool list is filtered, not exhaustive. A listed tool is the only one carrying its argument schema here, and the list stays fixed for the whole turn. \
+Call `list_mcp_tools` for the live MCP server and tool names instead of guessing; any registered tool also works when called by its exact name.\n\n",
+        );
         return p;
     }
 
