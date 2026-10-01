@@ -5,6 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
+    text::Line,
     widgets::{Paragraph, Wrap},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
@@ -28,6 +29,98 @@ struct PaintedRow {
     cells: Vec<String>,
     soft_wrap_before: bool,
     text_end: usize,
+}
+
+/// Lazily rendered committed blocks for the immutable history behind an
+/// active selection. Blocks are stored newest-first with cumulative row
+/// counts, so scrolling deeper adds only newly exposed history and painting a
+/// viewport does not revisit the selected prefix.
+pub(super) struct SelectedHistoryProjection {
+    blocks: Vec<Arc<Vec<Line<'static>>>>,
+    rows_from_tail: Vec<usize>,
+    next_index: usize,
+    display_start: usize,
+    width: u16,
+    height: u16,
+    finished: bool,
+}
+
+impl SelectedHistoryProjection {
+    fn new(history_len: usize, display_start: usize, width: u16, height: u16) -> Self {
+        Self {
+            blocks: Vec::new(),
+            rows_from_tail: vec![0],
+            next_index: history_len,
+            display_start,
+            width,
+            height,
+            finished: false,
+        }
+    }
+
+    pub(super) fn total_rows(&self) -> usize {
+        self.rows_from_tail.last().copied().unwrap_or_default()
+    }
+
+    pub(super) fn next_index(&self) -> usize {
+        self.next_index
+    }
+
+    pub(super) fn display_start(&self) -> usize {
+        self.display_start
+    }
+
+    pub(super) fn finished(&self) -> bool {
+        self.finished
+    }
+
+    pub(super) fn append(&mut self, block: Arc<Vec<Line<'static>>>, next_index: usize) {
+        self.next_index = next_index;
+        if block.is_empty() {
+            return;
+        }
+        let total_rows = self.total_rows().saturating_add(block.len());
+        self.blocks.push(block);
+        self.rows_from_tail.push(total_rows);
+    }
+
+    pub(super) fn finish(&mut self) {
+        self.finished = true;
+    }
+
+    /// Return a chronological line slice measured from the newest history row.
+    pub(super) fn rows_from_tail_range(&self, start: usize, end: usize) -> Vec<Line<'static>> {
+        let end = end.min(self.total_rows());
+        if start >= end || self.blocks.is_empty() {
+            return Vec::new();
+        }
+        let start = start.min(end);
+        let newest = self
+            .rows_from_tail
+            .partition_point(|rows| *rows <= start)
+            .saturating_sub(1)
+            .min(self.blocks.len().saturating_sub(1));
+        let oldest = self
+            .rows_from_tail
+            .partition_point(|rows| *rows < end)
+            .saturating_sub(1)
+            .min(self.blocks.len().saturating_sub(1));
+        let mut rows = Vec::with_capacity(end - start);
+        for index in (newest..=oldest).rev() {
+            let block_start = self.rows_from_tail[index];
+            let block_end = self.rows_from_tail[index + 1];
+            let from_tail = start.max(block_start);
+            let through_tail = end.min(block_end);
+            if from_tail >= through_tail {
+                continue;
+            }
+            let block = &self.blocks[index];
+            let start_in_block = block.len() - (through_tail - block_start);
+            let end_in_block = block.len() - (from_tail - block_start);
+            rows.extend_from_slice(&block[start_in_block..end_in_block]);
+        }
+        rows
+    }
 }
 
 impl PaintedRow {
@@ -113,6 +206,7 @@ pub(crate) struct TranscriptSelection {
     pending_keyboard_move: Option<(KeyCode, i64, usize)>,
     dragging: bool,
     snapshot: Option<Arc<RenderSnapshot>>,
+    selected_projection: Option<SelectedHistoryProjection>,
     pinned_width: u16,
     pinned_height: u16,
     pinned_scroll: usize,
@@ -140,6 +234,7 @@ impl TranscriptSelection {
         self.pending_keyboard_move = None;
         self.dragging = false;
         self.snapshot = None;
+        self.selected_projection = None;
         self.captured.clear();
         self.pointer = None;
         self.moved_vertically = false;
@@ -158,6 +253,38 @@ impl TranscriptSelection {
 
     pub(crate) fn is_active(&self) -> bool {
         self.snapshot.is_some()
+    }
+
+    pub(super) fn ensure_selected_projection(
+        &mut self,
+        history_len: usize,
+        display_start: usize,
+        width: u16,
+        height: u16,
+    ) {
+        let stale = self
+            .selected_projection
+            .as_ref()
+            .is_some_and(|projection| projection.width != width || projection.height != height);
+        if stale {
+            self.selected_projection = None;
+        }
+        if self.snapshot.is_some() && self.selected_projection.is_none() {
+            self.selected_projection = Some(SelectedHistoryProjection::new(
+                history_len,
+                display_start,
+                width,
+                height,
+            ));
+        }
+    }
+
+    pub(super) fn selected_projection(&self) -> Option<&SelectedHistoryProjection> {
+        self.selected_projection.as_ref()
+    }
+
+    pub(super) fn selected_projection_mut(&mut self) -> Option<&mut SelectedHistoryProjection> {
+        self.selected_projection.as_mut()
     }
 
     pub(crate) fn is_keyboard_mode(&self) -> bool {
@@ -1108,6 +1235,40 @@ mod tests {
     use crate::ui::WHEEL_SCROLL_LINES;
     use crossterm::event::KeyModifiers;
     use rustcode::controller::{ChatMessage, RenderState};
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    struct CountingAllocator;
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    // Keep the ignored end-to-end benchmark honest about renderer allocations.
+    #[global_allocator]
+    static TEST_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    // SAFETY: every allocation is delegated unchanged to the system allocator.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            // SAFETY: the system allocator accepts the caller's layout.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: this pointer and layout came from the delegated system allocator.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+            // SAFETY: this pointer and layout came from the delegated system allocator.
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
 
     fn rendered_transcript(
         state: &RenderState,
@@ -1143,6 +1304,90 @@ mod tests {
             .join("\n\n");
         state.history.push(ChatMessage::new("assistant", text));
         state
+    }
+
+    #[test]
+    fn selected_history_projection_slices_rows_in_chronological_order() {
+        let mut projection = SelectedHistoryProjection::new(4, 0, 42, 18);
+        projection.append(
+            Arc::new(vec![Line::from("newer row"), Line::from("newest row")]),
+            2,
+        );
+        projection.append(
+            Arc::new(vec![Line::from("oldest row"), Line::from("older row")]),
+            0,
+        );
+
+        let text =
+            |rows: Vec<Line<'static>>| rows.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            text(projection.rows_from_tail_range(0, 4)),
+            ["oldest row", "older row", "newer row", "newest row"]
+        );
+        assert_eq!(text(projection.rows_from_tail_range(0, 1)), ["newest row"]);
+        assert_eq!(
+            text(projection.rows_from_tail_range(1, 3)),
+            ["older row", "newer row"]
+        );
+        assert_eq!(projection.rows_from_tail_range(4, 8).len(), 0);
+    }
+
+    #[test]
+    fn selected_projection_matches_unselected_view_with_tool_groups_and_welcome() {
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let mut state = RenderState::new();
+        for index in 0..24 {
+            state.history.push(ChatMessage::new(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                format!("history entry {index:02}"),
+            ));
+            if index == 11 {
+                state
+                    .history
+                    .push(ChatMessage::new("tool", "first grouped tool result"));
+                state
+                    .history
+                    .push(ChatMessage::new("tool", "second grouped tool result"));
+            }
+        }
+
+        let symbols = |buffer: &Buffer, width: u16, height: u16| {
+            (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        for requested_scroll in [0, 8, 24, 10_000] {
+            let mut unselected = super::super::history_cell::TranscriptState::default();
+            unselected.scroll_up(requested_scroll);
+            let expected = rendered_transcript_size(&state, &mut unselected, 42, 18);
+            let scroll = unselected.scroll_rows();
+
+            let mut selected = super::super::history_cell::TranscriptState::default();
+            selected.scroll_up(requested_scroll);
+            let _ = rendered_transcript_size(&state, &mut selected, 42, 18);
+            let area = selected.selection.area;
+            selected.selection.begin_with_snapshot(
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    area.x + 2,
+                    area.y + 2,
+                ),
+                super::super::render_snapshot::render_snapshot(&state),
+                selected.scroll_rows(),
+            );
+            let actual = rendered_transcript_size(&state, &mut selected, 42, 18);
+            assert_eq!(
+                symbols(&actual, 42, 18),
+                symbols(&expected, 42, 18),
+                "selection changed visible rows at scroll offset {scroll}"
+            );
+        }
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
@@ -2423,6 +2668,81 @@ mod tests {
 
         bench_selection_frame_cost(painted, area);
         bench_wheel_step_cost(&state);
+    }
+
+    #[test]
+    #[ignore = "manual end-to-end deep selection scroll benchmark"]
+    fn bench_deep_selection_scroll_many_history_entries() {
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let mut state = RenderState::new();
+        for index in 0..10_000 {
+            state.history.push(ChatMessage::new(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                format!("history entry {index:04}: read this line and keep scrolling"),
+            ));
+        }
+
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let area = {
+            let _ = rendered_transcript_size(&state, &mut transcript, 132, 48);
+            transcript.selection.area
+        };
+        transcript.scroll_up(5_000);
+        let _ = rendered_transcript_size(&state, &mut transcript, 132, 48);
+        transcript.selection.begin_with_snapshot(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.bottom() - 1,
+            ),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 2,
+            area.y,
+        ));
+
+        // Measure one cold projection frame separately, then 100 incremental
+        // scroll frames so p95 describes the repeated interaction.
+        let mut frames = Vec::with_capacity(101);
+        let mut allocation_counts = Vec::with_capacity(101);
+        let mut allocated_bytes = Vec::with_capacity(101);
+        for _ in 0..101 {
+            let before_allocations = ALLOCATIONS.load(Ordering::Relaxed);
+            let before_bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
+            let started = Instant::now();
+            assert!(transcript.step_selection_scroll());
+            let _ = rendered_transcript_size(&state, &mut transcript, 132, 48);
+            frames.push(started.elapsed());
+            allocation_counts.push(ALLOCATIONS.load(Ordering::Relaxed) - before_allocations);
+            allocated_bytes.push(ALLOCATED_BYTES.load(Ordering::Relaxed) - before_bytes);
+        }
+
+        let first_frame = frames[0];
+        let mut warm_frames = frames[1..].to_vec();
+        let mut warm_allocations = allocation_counts[1..].to_vec();
+        let mut warm_bytes = allocated_bytes[1..].to_vec();
+        warm_frames.sort_unstable();
+        warm_allocations.sort_unstable();
+        warm_bytes.sort_unstable();
+        let percentile_index = |len: usize, p: usize| len.saturating_mul(p).div_ceil(100) - 1;
+        let percentile = |sorted: &[Duration], p: usize| sorted[percentile_index(sorted.len(), p)];
+        eprintln!(
+            "deep many-entry selection frames (10,000 history entries, 5,000-row initial offset, 132x48, TestBackend + buffer clone): cold={first_frame:?}; 100 warm frames p50/p95/p99={:?}/{:?}/{:?}; warm allocations/frame p50/p95/p99={}/{}/{}, requested bytes/frame p50/p95/p99={}/{}/{}",
+            percentile(&warm_frames, 50),
+            percentile(&warm_frames, 95),
+            percentile(&warm_frames, 99),
+            warm_allocations[percentile_index(warm_allocations.len(), 50)],
+            warm_allocations[percentile_index(warm_allocations.len(), 95)],
+            warm_allocations[percentile_index(warm_allocations.len(), 99)],
+            warm_bytes[percentile_index(warm_bytes.len(), 50)],
+            warm_bytes[percentile_index(warm_bytes.len(), 95)],
+            warm_bytes[percentile_index(warm_bytes.len(), 99)],
+        );
     }
 
     /// Times the same number of scrolled *lines* at several wheel step sizes.
