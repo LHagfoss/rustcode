@@ -51,8 +51,12 @@ fn is_keyboard_range_key(key: crossterm::event::KeyEvent) -> bool {
 /// live. When no selection exists this returns false, so `ctrl+c` falls
 /// through to the interrupt/exit path.
 fn selection_owns_key(transcript: &TranscriptState, key: crossterm::event::KeyEvent) -> bool {
-    let has_range_or_mode =
-        transcript.selection.has_selection() || transcript.selection.is_keyboard_mode();
+    let selection = if transcript.panel_selection_area.is_some() {
+        &transcript.panel_selection
+    } else {
+        &transcript.selection
+    };
+    let has_range_or_mode = selection.has_selection() || selection.is_keyboard_mode();
     has_range_or_mode
         && (key.code == KeyCode::Esc
             || (matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
@@ -65,9 +69,37 @@ fn clear_selection_for_composer_key(
     transcript: &mut TranscriptState,
     key: crossterm::event::KeyEvent,
 ) {
-    if transcript.selection.is_active() && !is_transcript_navigation(key) {
-        transcript.selection.clear();
+    let selection = if transcript.panel_selection_area.is_some() {
+        &mut transcript.panel_selection
+    } else {
+        &mut transcript.selection
+    };
+    if (selection.is_active() || selection.has_selection() || selection.is_keyboard_mode())
+        && !is_transcript_navigation(key)
+    {
+        selection.clear();
     }
+}
+
+/// Let scrollable output panels own wheel input without discarding a text
+/// selection in fixed info panels.
+fn scroll_panel_selection(
+    transcript: &mut TranscriptState,
+    modal_scroll_row: &mut u16,
+    direction: isize,
+) -> bool {
+    if transcript.panel_selection_area.is_none() {
+        return false;
+    }
+    if transcript.panel_selection_scrollable {
+        transcript.panel_selection.clear();
+        if direction < 0 {
+            *modal_scroll_row = modal_scroll_row.saturating_sub(3);
+        } else {
+            *modal_scroll_row = modal_scroll_row.saturating_add(3);
+        }
+    }
+    true
 }
 
 /// Esc re-enters follow when the transcript is not already showing the newest
@@ -220,7 +252,9 @@ pub(super) async fn handle_app_event(
                         .begin_keyboard_with_snapshot(snapshot, transcript_state.scroll_rows());
                     return Ok(InputFlow::ContinueIteration);
                 }
-                if transcript_state.selection.is_keyboard_mode() {
+                if transcript_state.panel_selection_area.is_none()
+                    && transcript_state.selection.is_keyboard_mode()
+                {
                     if is_keyboard_range_key(key) {
                         transcript_state.selection.move_keyboard(key.code);
                         return Ok(InputFlow::ContinueIteration);
@@ -228,11 +262,16 @@ pub(super) async fn handle_app_event(
                 }
 
                 if selection_owns_key(transcript_state, key) {
+                    let selection = if transcript_state.panel_selection_area.is_some() {
+                        &mut transcript_state.panel_selection
+                    } else {
+                        &mut transcript_state.selection
+                    };
                     if key.code == KeyCode::Esc {
-                        transcript_state.selection.clear();
+                        selection.clear();
                         return Ok(InputFlow::ContinueIteration);
                     }
-                    if let Some(text) = transcript_state.selection.selected_text() {
+                    if let Some(text) = selection.selected_text() {
                         report_selection_copy(
                             app_state,
                             &text,
@@ -1827,6 +1866,20 @@ pub(super) async fn handle_app_event(
                         transcript_state.jump_to_latest();
                         frame_requester.schedule_frame();
                     }
+                    event::MouseEventKind::ScrollUp
+                        if transcript_state.panel_selection_area.is_some() =>
+                    {
+                        let mut state = app_state.lock().await;
+                        scroll_panel_selection(transcript_state, &mut state.modal_scroll_row, -1);
+                        frame_requester.schedule_frame();
+                    }
+                    event::MouseEventKind::ScrollDown
+                        if transcript_state.panel_selection_area.is_some() =>
+                    {
+                        let mut state = app_state.lock().await;
+                        scroll_panel_selection(transcript_state, &mut state.modal_scroll_row, 1);
+                        frame_requester.schedule_frame();
+                    }
                     event::MouseEventKind::ScrollUp if transcript_state.selection.is_active() => {
                         transcript_state
                             .selection
@@ -1944,6 +1997,19 @@ pub(super) async fn handle_app_event(
                                 state.clear_composer_selection();
                             }
                         }
+                        if transcript_state.panel_selection_area.is_some() {
+                            let selected = transcript_state.panel_selection.mouse(mouse);
+                            if let Some(text) = selected {
+                                report_selection_copy(
+                                    app_state,
+                                    &text,
+                                    rustcode::clipboard::copy_to_clipboard,
+                                )
+                                .await;
+                            }
+                            frame_requester.schedule_frame();
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         let selected = if mouse.kind
                             == event::MouseEventKind::Down(event::MouseButton::Left)
                             && !(mouse.modifiers.contains(KeyModifiers::SHIFT)
@@ -2048,7 +2114,7 @@ mod tests {
     use super::{
         clear_selection_for_composer_key, insert_clipboard_paste, is_keyboard_range_key,
         is_shift_tab, is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
-        selection_owns_key,
+        scroll_panel_selection, selection_owns_key,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2219,6 +2285,83 @@ mod tests {
         let idle = TranscriptState::default();
         assert!(!idle.selection.has_selection());
         assert!(!selection_owns_key(&idle, copy));
+    }
+
+    #[test]
+    fn informational_panel_selection_owns_copy_without_replacing_transcript_range() {
+        let copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let area = Rect::new(0, 0, 12, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "panel text", ratatui::style::Style::default());
+
+        let mut transcript = TranscriptState::default();
+        transcript.selection.refresh(area, &buffer, &[false]);
+        transcript.selection.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        transcript.selection.mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 2,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        transcript.selection.mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 2,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        let transcript_text = transcript.selection.selected_text();
+
+        transcript.panel_selection_area = Some(area);
+        transcript.panel_selection.refresh(area, &buffer, &[false]);
+        transcript.panel_selection.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        transcript.panel_selection.mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 9,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        transcript.panel_selection.mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 9,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            transcript.panel_selection.selected_text().as_deref(),
+            Some("text")
+        );
+        assert_eq!(transcript.selection.selected_text(), transcript_text);
+        assert!(selection_owns_key(&transcript, copy));
+        let mut modal_scroll_row = 0;
+        assert!(scroll_panel_selection(
+            &mut transcript,
+            &mut modal_scroll_row,
+            1,
+        ));
+        assert_eq!(modal_scroll_row, 0);
+        assert_eq!(
+            transcript.panel_selection.selected_text().as_deref(),
+            Some("text"),
+            "wheel input over a fixed info panel preserves the copyable range"
+        );
+        assert!(selection_owns_key(&transcript, copy));
+        clear_selection_for_composer_key(
+            &mut transcript,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert!(!transcript.panel_selection.has_selection());
+        assert_eq!(transcript.selection.selected_text(), transcript_text);
     }
 
     #[test]

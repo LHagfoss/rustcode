@@ -488,7 +488,7 @@ pub(crate) fn render_with_transcript_snapshot(
             chunks[9],
             state,
             popup_hint,
-            transcript.selection.has_selection(),
+            transcript.selection.has_selection() || transcript.panel_selection.has_selection(),
         );
     }
 
@@ -607,6 +607,20 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.scroll_rows(),
     );
     transcript.selection.highlight(f.buffer_mut());
+
+    let panel_selection = panel_selection_surface(f, state, input_box_area);
+    transcript.panel_selection_area = panel_selection.as_ref().map(|(area, _)| *area);
+    transcript.panel_selection_scrollable = state.command_panel().is_some();
+    if let Some((area, soft_wrap_before)) = panel_selection {
+        transcript
+            .panel_selection
+            .refresh_view(area, f.buffer(), &soft_wrap_before, 0);
+        transcript.panel_selection.highlight(f.buffer_mut());
+    } else {
+        // Closing the panel must not leave its selection available over the
+        // conversation on the next frame.
+        transcript.panel_selection.clear();
+    }
 
     (conversation_content_height, input_box_area)
 }

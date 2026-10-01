@@ -40,8 +40,8 @@ pub(in crate::ui) use confirmation::{question_height, render_tool_confirmation_m
 #[cfg(test)]
 pub(super) use context::calculate_context_breakdown;
 pub(in crate::ui) use context::{
-    render_context_modal, render_session_modal, render_stats_modal, render_status_modal,
-    render_theme_picker_modal,
+    panel_selection_surface, render_context_modal, render_session_modal, render_stats_modal,
+    render_status_modal, render_theme_picker_modal,
 };
 pub use navigation::{PALETTE_ITEMS, PaletteItem};
 pub(in crate::ui) use navigation::{
