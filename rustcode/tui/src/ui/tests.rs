@@ -3130,7 +3130,9 @@ fn low_verbosity_long_generic_body_renders_full_when_expanded() {
     // omission marker.
     for i in 0..50 {
         assert!(
-            rendered.iter().any(|line| line.contains(&format!("line {i}"))),
+            rendered
+                .iter()
+                .any(|line| line.contains(&format!("line {i}"))),
             "line {i} present when expanded: {rendered:?}"
         );
     }
@@ -3148,8 +3150,9 @@ fn expanded_command_body_renders_full_not_window() {
 
     let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
-    state.history.push(
-        ChatMessage::new("assistant", "").with_tool_calls(vec![
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
             ToolCallRef {
                 id: "call-1".to_owned(),
                 name: "run_command".to_owned(),
@@ -3160,21 +3163,23 @@ fn expanded_command_body_renders_full_not_window() {
                 name: "get_time".to_owned(),
                 arguments: "{}".to_owned(),
             },
-        ]),
-    );
+        ]));
     let body = (0..30)
         .map(|i| format!("output line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     state.history.push(
-        ChatMessage::new("tool", format!("run_command: exit code: 0\nstdout:\n{body}"))
-            .answering(Some("call-1".to_owned()))
-            .with_tool_result(ToolResultRecord {
-                tool_name: "run_command".to_owned(),
-                success: true,
-                exit_code: Some(0),
-                ..Default::default()
-            }),
+        ChatMessage::new(
+            "tool",
+            format!("run_command: exit code: 0\nstdout:\n{body}"),
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
     );
     state.history.push(
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
@@ -3242,14 +3247,17 @@ fn homogeneous_command_batch_renders_full_with_no_hint() {
         .collect::<Vec<_>>()
         .join("\n");
     state.history.push(
-        ChatMessage::new("tool", format!("run_command: exit code: 0\nstdout:\n{body}"))
-            .answering(Some("call-1".to_owned()))
-            .with_tool_result(ToolResultRecord {
-                tool_name: "run_command".to_owned(),
-                success: true,
-                exit_code: Some(0),
-                ..Default::default()
-            }),
+        ChatMessage::new(
+            "tool",
+            format!("run_command: exit code: 0\nstdout:\n{body}"),
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
     );
 
     // Homogeneous batches are not collapsible, so they must not truncate
@@ -3815,7 +3823,20 @@ fn command_preview_preserves_the_output_tail() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("… +")));
+    // Homogeneous command batches are not collapsible, so they render the
+    // full body with no truncation marker and no expand affordance (#1580).
+    assert!(
+        !rendered.iter().any(|line| line.contains("… +")),
+        "no omission marker without affordance: {rendered:?}"
+    );
+    for index in 0..20 {
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains(&format!("line {index}"))),
+            "line {index} present: {rendered:?}"
+        );
+    }
     assert!(
         rendered
             .iter()
