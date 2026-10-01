@@ -12,6 +12,14 @@ use rustcode::app::AppState;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+/// Hard cap on the rows one committed block may push into terminal scrollback.
+///
+/// Independent of the engine's `MAX_TOOL_OUTPUT_LINES` and of the per-tool
+/// transcript cap in `ui::tool_result`: this is the last bound before a block
+/// becomes terminal output, so a regression in either render layer still
+/// cannot make scrollback grow without limit. (#1593)
+pub(crate) const MAX_SCROLLBACK_BLOCK_LINES: usize = 400;
+
 pub(crate) fn insert_scrollback_lines<B: Backend>(
     terminal: &mut crate::inline_terminal::InlineTerminal<B>,
     lines: Vec<ratatui::text::Line<'static>>,
@@ -20,6 +28,7 @@ pub(crate) fn insert_scrollback_lines<B: Backend>(
     if lines.is_empty() {
         return Ok(());
     }
+    let lines = cap_scrollback_block(lines);
     let height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(width)
@@ -29,6 +38,22 @@ pub(crate) fn insert_scrollback_lines<B: Backend>(
             .wrap(Wrap { trim: false })
             .render(buffer.area, buffer);
     })
+}
+
+/// Truncate a committed block to [`MAX_SCROLLBACK_BLOCK_LINES`], naming the
+/// omitted count so scrollback never silently misrepresents the transcript.
+pub(crate) fn cap_scrollback_block(
+    mut lines: Vec<ratatui::text::Line<'static>>,
+) -> Vec<ratatui::text::Line<'static>> {
+    if lines.len() <= MAX_SCROLLBACK_BLOCK_LINES {
+        return lines;
+    }
+    let omitted = lines.len() - MAX_SCROLLBACK_BLOCK_LINES;
+    lines.truncate(MAX_SCROLLBACK_BLOCK_LINES);
+    lines.push(ratatui::text::Line::from(format!(
+        "… +{omitted} more transcript lines"
+    )));
+    lines
 }
 
 pub(crate) fn should_clear_mutable_viewport_before_history(
@@ -916,8 +941,9 @@ fn print_exit_summary(summary: &ExitSummary) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExitSummary, StartupResume, format_number, resolve_startup_resume,
-        should_clear_mutable_viewport_before_history, write_exit_summary,
+        ExitSummary, MAX_SCROLLBACK_BLOCK_LINES, StartupResume, cap_scrollback_block,
+        format_number, resolve_startup_resume, should_clear_mutable_viewport_before_history,
+        write_exit_summary,
     };
     use rustcode::app::AppState;
 
@@ -1087,6 +1113,29 @@ mod tests {
             summary.warnings.as_slice(),
             ["[mcp] timed out starting server test after 10.0s; continuing"]
         );
+    }
+
+    #[test]
+    fn committed_scrollback_blocks_are_capped_independently_of_the_engine() {
+        // #1593: the engine bounds a payload at 1000 lines; the commit path
+        // needs its own bound so a render regression cannot make scrollback
+        // grow without limit.
+        let block = (0..MAX_SCROLLBACK_BLOCK_LINES + 50)
+            .map(|index| ratatui::text::Line::from(format!("row {index}")))
+            .collect();
+        let capped = cap_scrollback_block(block);
+
+        assert_eq!(capped.len(), MAX_SCROLLBACK_BLOCK_LINES + 1);
+        assert!(
+            capped
+                .last()
+                .is_some_and(|line| line.to_string().contains("+50 more transcript lines")),
+            "{:?}",
+            capped.last()
+        );
+
+        let short = vec![ratatui::text::Line::from("only row")];
+        assert_eq!(cap_scrollback_block(short).len(), 1);
     }
 
     #[test]

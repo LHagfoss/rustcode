@@ -104,7 +104,48 @@ pub(super) fn render_tool_result<'a>(
         _ => render_generic_result(result, show_picker),
     };
 
-    lines
+    cap_transcript_lines(lines, show_picker)
+}
+
+/// Hard cap on the transcript rows one tool result may claim.
+///
+/// The engine bounds a payload at `MAX_TOOL_OUTPUT_LINES` (1000) and
+/// `MAX_TOOL_OUTPUT_BYTES` (50 KiB), which is a transport limit, not a
+/// presentation one: before this cap a single `cat` or a 1000-line diff could
+/// take over the viewport, and expanding it was irreversible because the body
+/// was written straight into terminal scrollback. Capping here — the one
+/// choke point every per-tool renderer already returns through — bounds the
+/// body for commands, edits, greps and generic tools alike, expanded or not.
+/// The remainder stays in the session log; the marker says so. (#1593)
+pub(crate) const TOOL_RESULT_TRANSCRIPT_MAX_LINES: usize = 120;
+
+/// Truncate to [`TOOL_RESULT_TRANSCRIPT_MAX_LINES`], leaving one marker row
+/// that names the omitted count so a truncated body never reads as complete.
+///
+/// The kept rows are the oldest and the newest, with the marker between them.
+/// A generic result's first rows are its summary and a failed command's last
+/// rows are the error, so dropping the middle is the only cut that cannot
+/// discard the part the user opened the result to read (#1593).
+fn cap_transcript_lines<'a>(lines: Vec<Line<'a>>, show_picker: bool) -> Vec<Line<'a>> {
+    if lines.len() <= TOOL_RESULT_TRANSCRIPT_MAX_LINES {
+        return lines;
+    }
+    let tail = TOOL_RESULT_TRANSCRIPT_MAX_LINES / 4;
+    let head = TOOL_RESULT_TRANSCRIPT_MAX_LINES - tail;
+    let omitted = lines.len() - TOOL_RESULT_TRANSCRIPT_MAX_LINES;
+    let mut capped = Vec::with_capacity(TOOL_RESULT_TRANSCRIPT_MAX_LINES + 1);
+    capped.extend_from_slice(&lines[..head]);
+    capped.push(Line::from(Span::styled(
+        format!("… +{omitted} more lines · full output in the session log"),
+        get_themed_style(
+            COLOR_MUTED(),
+            COLOR_BG(),
+            Modifier::ITALIC | Modifier::DIM,
+            show_picker,
+        ),
+    )));
+    capped.extend_from_slice(&lines[lines.len() - tail..]);
+    capped
 }
 
 fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
@@ -438,7 +479,9 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{COLOR_MUTED, render_file_preview, render_tool_result};
+    use super::{
+        COLOR_MUTED, TOOL_RESULT_TRANSCRIPT_MAX_LINES, render_file_preview, render_tool_result,
+    };
     use crate::ui::tests::THEME_TEST_LOCK;
     use ratatui::style::Color;
 
@@ -730,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn large_results_keep_all_stored_lines_for_transcript_rendering() {
+    fn large_results_are_capped_for_transcript_rendering() {
         let result = (0..350)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
@@ -743,16 +786,28 @@ mod tests {
             false,
         );
 
-        assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
+        // #1593: the transcript no longer promises every stored line. A body
+        // that outgrows the cap keeps its head and its tail, names the omitted
+        // count between them, and points at the session log for the rest.
+        assert_eq!(lines.len(), TOOL_RESULT_TRANSCRIPT_MAX_LINES + 1);
+        assert!(text_of(&lines[0]).contains("line 0"));
+        let head = TOOL_RESULT_TRANSCRIPT_MAX_LINES - TOOL_RESULT_TRANSCRIPT_MAX_LINES / 4;
+        let marker = text_of(&lines[head]);
+        assert!(marker.contains("more lines"), "{marker}");
+        assert!(marker.contains("session log"), "{marker}");
+        // The newest rows are the ones a reader opened the result for, so the
+        // cap drops the middle rather than the end.
+        let last = text_of(lines.last().expect("a body is never empty"));
+        assert!(last.contains("line 349"), "{last}");
         assert!(
-            !lines
+            !lines[head + 1..lines.len() - TOOL_RESULT_TRANSCRIPT_MAX_LINES / 4]
                 .iter()
-                .any(|line| text_of(line).contains("more lines"))
+                .any(|line| text_of(line).contains("line 200"))
         );
     }
 
     #[test]
-    fn command_and_generic_results_keep_complete_line_counts() {
+    fn command_and_generic_results_share_the_same_cap() {
         let result = (0..350)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
@@ -773,20 +828,21 @@ mod tests {
         );
 
         assert_eq!(command.len(), generic.len());
+        assert!(command.len() <= TOOL_RESULT_TRANSCRIPT_MAX_LINES + 1);
         assert!(
             command
                 .iter()
-                .any(|line| text_of(line).contains("line 349"))
+                .any(|line| text_of(line).contains("more lines"))
         );
         assert!(
             generic
                 .iter()
-                .any(|line| text_of(line).contains("line 349"))
+                .any(|line| text_of(line).contains("more lines"))
         );
     }
 
     #[test]
-    fn long_command_results_keep_all_stored_lines() {
+    fn long_command_results_are_capped_like_every_other_tool() {
         let result = (0..350)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
@@ -799,9 +855,9 @@ mod tests {
             false,
         );
 
-        assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
+        assert_eq!(lines.len(), TOOL_RESULT_TRANSCRIPT_MAX_LINES + 1);
         assert!(
-            !lines
+            lines
                 .iter()
                 .any(|line| text_of(line).contains("more lines"))
         );
@@ -875,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_diffs_are_not_truncated() {
+    fn embedded_diffs_survive_whole_inside_the_transcript_cap() {
         let diff = (0..8)
             .map(|index| format!("-removed line {index}"))
             .collect::<Vec<_>>()
@@ -892,6 +948,27 @@ mod tests {
         assert!(lines.len() > 5);
         assert!(
             !lines
+                .iter()
+                .any(|line| text_of(line).contains("more lines"))
+        );
+
+        // The old assertion was that a diff is *never* truncated. The contract
+        // is now bounded rather than absolute: a diff that fits the cap stays
+        // whole, and one that does not is cut with a marker (#1593).
+        let oversized = (0..TOOL_RESULT_TRANSCRIPT_MAX_LINES + 40)
+            .map(|index| format!("-removed line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let capped = render_tool_result(
+            "replace_file_content",
+            &format!("successfully edited file\n\n```diff\n{oversized}\n```"),
+            80,
+            &rustcode::controller::Verbosity::Low,
+            false,
+        );
+        assert_eq!(capped.len(), TOOL_RESULT_TRANSCRIPT_MAX_LINES + 1);
+        assert!(
+            capped
                 .iter()
                 .any(|line| text_of(line).contains("more lines"))
         );

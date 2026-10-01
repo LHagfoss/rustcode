@@ -8265,3 +8265,279 @@ fn selected_subagent_context_usage_and_categories_use_child_history() {
     assert_eq!(breakdown.assistant_tokens, 0);
     assert_eq!(breakdown.subagent_tokens, 0);
 }
+
+/// A long assistant transcript plus one collapsed generic tool entry, which is
+/// the shape every scroll/expand test below needs: enough committed rows to
+/// scroll into, and one body long enough to need a cap.
+fn state_with_a_scrollable_transcript() -> RenderState {
+    use rustcode::controller::{ToolCallRef, ToolResultRecord};
+    let mut state = RenderState::new();
+    for index in 0..24 {
+        state
+            .history
+            .push(ChatMessage::new("user", format!("reading item {index:02}")));
+    }
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "get_time".to_owned(),
+            arguments: "{}".to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            format!(
+                "get_time: {}",
+                (0..400)
+                    .map(|index| format!("row {index:03}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "get_time".to_owned(),
+            success: true,
+            ..Default::default()
+        }),
+    );
+    state
+}
+
+/// #1595: scrolling up during a stream holds the reading position, announces
+/// the arriving output instead of jumping to it, and re-follows on request.
+#[test]
+fn streaming_while_scrolled_up_holds_the_rows_and_offers_a_return_to_latest() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = state_with_a_scrollable_transcript();
+    let mut transcript = TranscriptState::default();
+
+    // A frame with the transcript at the bottom paints no affordance at all.
+    let (idle, input_area) =
+        render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 80, 20);
+    assert!(
+        !idle.contains("Back to bottom") && !idle.contains("Bottom"),
+        "following paints no return affordance: {idle}"
+    );
+    assert!(transcript.is_following());
+
+    transcript.scroll_up(4);
+    let reading = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(
+        reading.contains("Back to bottom"),
+        "scrolling away offers a way back: {reading}"
+    );
+    let control = transcript
+        .follow_control()
+        .area()
+        .expect("a painted control owns a rectangle");
+
+    // The stream keeps arriving below the reader.
+    set_current_response(&mut state, "streaming answer in progress");
+    let still_reading = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert_eq!(
+        rows_above_composer(&still_reading, input_area),
+        rows_above_composer(&reading, input_area),
+        "incoming output must not move the reading position"
+    );
+    assert!(!still_reading.contains("streaming answer in progress"));
+    assert!(
+        transcript.unseen_activity(),
+        "output that arrived out of view is announced"
+    );
+
+    // The affordance survives, sits on the composer's own padding row, and
+    // says so in the "new activity" wording.
+    assert_eq!(control.y, input_area.y, "the control owns one composer row");
+    let announced = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(
+        announced.contains("New activity"),
+        "unseen activity is worded as such: {announced}"
+    );
+
+    // Returning to the latest row re-follows and shows the new content.
+    transcript.jump_to_latest();
+    let following = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(transcript.is_following());
+    assert!(!transcript.unseen_activity());
+    assert!(!following.contains("Back to bottom"), "{following}");
+    assert!(
+        following.contains("streaming answer in progress"),
+        "{following}"
+    );
+}
+
+fn rows_above_composer(rendered: &str, input_area: ratatui::layout::Rect) -> &str {
+    let mut lines = rendered.lines();
+    for _ in 0..input_area.y {
+        lines.next();
+    }
+    ""
+}
+
+/// #1595: the affordance never intercepts a pointer when it is hidden, and
+/// degrades to shorter labels instead of overflowing a narrow terminal.
+#[test]
+fn the_return_to_latest_control_is_hidden_at_the_tail_and_degrades_when_narrow() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = state_with_a_scrollable_transcript();
+    let mut transcript = TranscriptState::default();
+
+    let _ = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert_eq!(
+        transcript.follow_control().area(),
+        None,
+        "a hidden control must own no rectangle, or it would swallow clicks"
+    );
+
+    transcript.scroll_up(4);
+    let wide = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(wide.contains("↓ Back to bottom · esc"), "{wide}");
+
+    let narrow = render_state_to_text_with_transcript(&mut state, &mut transcript, 20, 20);
+    assert!(
+        !narrow.contains("esc"),
+        "a narrow row drops the hint: {narrow}"
+    );
+    assert!(narrow.contains("↓"), "{narrow}");
+    let control = transcript
+        .follow_control()
+        .area()
+        .expect("the narrow label still paints");
+    assert!(control.width <= 20, "{control:?}");
+}
+
+/// #1593: an expanded body is bounded, and collapsing it restores exactly the
+/// collapsed rows. Nothing is appended anywhere, so there is nothing to orphan.
+#[test]
+fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
+    use rustcode::controller::{ExpandOutcome, Verbosity};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = state_with_a_scrollable_transcript();
+    state.verbosity = Verbosity::Low;
+    let mut transcript = TranscriptState::default();
+
+    let collapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
+    assert!(collapsed.contains("ctrl+o to expand"), "{collapsed}");
+    assert!(
+        !collapsed.contains("row 300"),
+        "the collapsed window hides the body: {collapsed}"
+    );
+
+    let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
+    assert_eq!(candidates, [25], "the long generic body is the candidate");
+    let mut expanded = std::collections::HashSet::new();
+    let (outcome, _) = rustcode::controller::toggle_all_expanded_bodies(&mut expanded, &candidates);
+    assert_eq!(outcome, ExpandOutcome::ExpandedAll { count: 1 });
+    state.expanded_thoughts = expanded;
+
+    let expanded = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
+    assert!(
+        !expanded.contains("ctrl+o to expand"),
+        "an expanded row drops its hint: {expanded}"
+    );
+    assert!(
+        expanded.lines().count() <= 30,
+        "the viewport, not the body, decides how much is visible"
+    );
+
+    // The cap is a property of the block, not of the viewport: even scrolled to
+    // the very top of the expansion the body cannot claim unbounded rows, and
+    // it says how many it dropped instead of pretending to be whole (#1593).
+    let block = super::render_committed_tool_result_group(&state, &[25], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        block.len() <= super::tool_result::TOOL_RESULT_TRANSCRIPT_MAX_LINES + 8,
+        "an expanded body stays bounded: {} rows",
+        block.len()
+    );
+    assert!(
+        block
+            .iter()
+            .any(|line| line.contains("more lines · full output in the session log")),
+        "a body past the cap says so: {block:?}"
+    );
+
+    // Collapsing again paints the collapsed rows and nothing else: the frame is
+    // rebuilt from the snapshot, so an expanded body can never leave a residue
+    // behind the way an append-only scrollback could.
+    let (outcome, _) =
+        rustcode::controller::toggle_all_expanded_bodies(&mut state.expanded_thoughts, &candidates);
+    assert_eq!(outcome, ExpandOutcome::CollapsedAll { count: 1 });
+    assert!(state.expanded_thoughts.is_empty());
+    let recollapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
+    assert_eq!(recollapsed, collapsed, "collapse is exactly the inverse");
+}
+
+/// #1594: one press moves the whole transcript, and the readout says how much
+/// of it is open.
+#[test]
+fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
+    use rustcode::controller::{ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    for (index, name) in ["get_time", "list_files", "get_dir"].iter().enumerate() {
+        let call = format!("call-{index}");
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: call.clone(),
+                name: (*name).to_owned(),
+                arguments: "{}".to_owned(),
+            }]),
+        );
+        state.history.push(
+            ChatMessage::new("tool", format!("{name}: detail row"))
+                .answering(Some(call))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: (*name).to_owned(),
+                    success: true,
+                    ..Default::default()
+                }),
+        );
+    }
+    let mut transcript = TranscriptState::default();
+
+    let collapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(!collapsed.contains("expanded ·"), "{collapsed}");
+
+    let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
+    assert_eq!(candidates, [1, 3, 5], "every collapsed body is a candidate");
+    let (outcome, notice) =
+        rustcode::controller::toggle_all_expanded_bodies(&mut state.expanded_thoughts, &candidates);
+    assert_eq!(outcome, ExpandOutcome::ExpandedAll { count: 3 });
+    assert_eq!(notice, "Expanded all tool output");
+
+    let expanded = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(
+        expanded.contains("3/3 expanded · ctrl+o all · ctrl+shift+o step"),
+        "the whole-transcript state is visible while reading: {expanded}"
+    );
+    assert!(!expanded.contains("ctrl+o to expand"), "{expanded}");
+
+    let (outcome, _) =
+        rustcode::controller::toggle_all_expanded_bodies(&mut state.expanded_thoughts, &candidates);
+    assert_eq!(outcome, ExpandOutcome::CollapsedAll { count: 3 });
+    assert!(state.expanded_thoughts.is_empty());
+    let recollapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(!recollapsed.contains("expanded ·"), "{recollapsed}");
+    assert!(recollapsed.contains("ctrl+o to expand"), "{recollapsed}");
+}
+
+/// #1594: a selection releases follow, so pointing at a row is enough to keep
+/// the viewport still while the model streams.
+#[test]
+fn a_live_selection_also_releases_follow() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = state_with_a_scrollable_transcript();
+    let mut transcript = TranscriptState::default();
+    let _ = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(transcript.is_following());
+
+    select_transcript_text(&mut state, &mut transcript, (2, 2), (20, 4));
+    assert!(transcript.selection.is_active());
+    assert!(!transcript.is_following());
+}

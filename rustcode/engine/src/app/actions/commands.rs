@@ -576,13 +576,16 @@ pub fn build_help_text() -> String {
     help.push_str("Keyboard Shortcuts:\n");
     help.push_str("  Enter            Send prompt\n");
     help.push_str("  Shift+Enter      Insert newline\n");
-    help.push_str("  Esc              Clear input or cancel generation\n");
+    help.push_str(
+        "  Esc              Clear input, cancel generation, or return to the newest row\n",
+    );
     help.push_str("  Up/Down          Cycle prompt history\n");
     help.push_str("  Ctrl+P           Open command picker\n");
     help.push_str("  Ctrl+V           Paste image or text from clipboard\n");
     help.push_str("  Ctrl+L           Clear screen\n");
     help.push_str("  ?                Show help and keyboard shortcuts\n");
-    help.push_str("  Ctrl+O           Expand/collapse the last tool output\n");
+    help.push_str("  Ctrl+O           Expand/collapse every truncated tool output\n");
+    help.push_str("  Ctrl+Shift+O     Expand/collapse one tool output\n");
     help.push_str("  Ctrl+J           Insert newline\n");
     help.push_str("  Ctrl+A / Ctrl+E  Move cursor to start / end of line\n");
     help.push_str("  Alt+F / Alt+B    Move cursor word right / left\n");

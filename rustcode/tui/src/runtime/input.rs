@@ -70,11 +70,14 @@ fn clear_selection_for_composer_key(
     }
 }
 
+/// Esc re-enters follow when the transcript is not already showing the newest
+/// row. Routed through [`TranscriptState::jump_to_latest`] so the keyboard and
+/// the "back to bottom" control clear the same state (#1595).
 fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
     if key != KeyCode::Esc || transcript.scroll_rows() == 0 {
         return false;
     }
-    transcript.scroll_down(usize::MAX);
+    transcript.jump_to_latest();
     true
 }
 
@@ -1479,16 +1482,39 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
-                    ui::ComposerAction::ToggleExpand => {
+                    action @ (ui::ComposerAction::ToggleExpandAll
+                    | ui::ComposerAction::ToggleExpandStep) => {
+                        let step = matches!(action, ui::ComposerAction::ToggleExpandStep);
                         let mut state = app_state.lock().await;
                         let width = terminal_runtime.terminal().area().width;
-                        let candidates = {
-                            let snapshot = ui::render_snapshot::render_snapshot(
-                                &rustcode::controller::render_state(&state),
+                        let snapshot = ui::render_snapshot::render_snapshot(
+                            &rustcode::controller::render_state(&state),
+                        );
+                        let high_verbosity =
+                            matches!(snapshot.verbosity(), rustcode::controller::Verbosity::High);
+                        let candidates = ui::collapsible_tool_indices(&snapshot, width);
+                        if candidates.is_empty() {
+                            // A press at high verbosity used to be a silent
+                            // no-op: the renderers already show bodies inline,
+                            // so there is nothing to expand. Say so instead of
+                            // reporting the misleading "Nothing to expand"
+                            // (#1594).
+                            let notice = if high_verbosity {
+                                "Tool bodies are already shown at high verbosity"
+                            } else {
+                                "No collapsed tool output"
+                            };
+                            state.set_transient_notice(notice);
+                        } else if step {
+                            // The single-entry step keeps the focus-driven walk
+                            // that the whole-transcript toggle replaced.
+                            rustcode::controller::toggle_expanded_thought(&mut state, &candidates);
+                        } else {
+                            rustcode::controller::toggle_all_expanded_thoughts(
+                                &mut state,
+                                &candidates,
                             );
-                            ui::collapsible_tool_indices(&snapshot, width)
-                        };
-                        rustcode::controller::toggle_expanded_thought(&mut state, &candidates);
+                        }
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
@@ -1784,6 +1810,23 @@ pub(super) async fn handle_app_event(
             }
             TuiEvent::Mouse(mouse) => {
                 match mouse.kind {
+                    // The return-to-bottom control owns its rectangle only while
+                    // it is painted, so a hidden control can never swallow this
+                    // click (#1595).
+                    event::MouseEventKind::Down(event::MouseButton::Left)
+                        if transcript_state
+                            .follow_control()
+                            .area()
+                            .is_some_and(|area| {
+                                area.contains(ratatui::layout::Position::new(
+                                    mouse.column,
+                                    mouse.row,
+                                ))
+                            }) =>
+                    {
+                        transcript_state.jump_to_latest();
+                        frame_requester.schedule_frame();
+                    }
                     event::MouseEventKind::ScrollUp if transcript_state.selection.is_active() => {
                         transcript_state
                             .selection

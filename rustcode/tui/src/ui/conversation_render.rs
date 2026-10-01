@@ -11,7 +11,7 @@ pub(super) fn conversation_area_height(content_height: u16, available_height: u1
 }
 
 /// Render only the mutable portion of the current turn. Completed history is
-/// deliberately excluded: it will be committed to terminal scrollback.
+/// deliberately excluded: the projection above already includes it.
 #[cfg(test)]
 pub(super) fn render_live_tail_snapshot(
     state: &RenderSnapshot,
@@ -194,6 +194,10 @@ pub(crate) fn render_visible_conversation_with_transcript(
 ) -> Vec<Line<'static>> {
     let history_len = state.history().len();
     let history_revision = state.history().revision();
+    // Anything that can add rows below the reader: committed history and the
+    // live stream both land at the tail of the same projection.
+    let content_mark = (history_revision, state.current_response().len());
+    let content_changed = transcript.last_content() != Some(content_mark);
     let display_start = state.history_display_start().min(history_len);
     let mut measured_tail = None;
     if height > 0
@@ -253,9 +257,9 @@ pub(crate) fn render_visible_conversation_with_transcript(
         blocks.push(block);
         index = next_index;
     }
-    // The welcome cell is the first item in the projected transcript. It is
-    // also committed to terminal scrollback, but the full-height viewport
-    // must include it so a notice or turn cannot make it disappear.
+    // The welcome cell is the first item in the projected transcript, and the
+    // full-height viewport must include it so a notice or turn cannot make it
+    // disappear.
     if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
         let banner = build_claude_startup_banner_snapshot(state, width as usize, height as usize);
         rows += banner.len();
@@ -279,6 +283,11 @@ pub(crate) fn render_visible_conversation_with_transcript(
             tail_rows,
         });
     }
+    // Tail visibility is a fact about the offset this frame clamped to, so it
+    // is recomputed here rather than tracked; a revision change while the user
+    // is reading only raises the "new activity" flag, it never moves the
+    // viewport (#1595).
+    transcript.note_projection(scroll == 0, content_changed, content_mark);
     let end = rows.saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
     let mut lines = Vec::with_capacity(capacity);
