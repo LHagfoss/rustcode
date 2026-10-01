@@ -1,3 +1,10 @@
+## [v0.56.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.2) - 2026-10-01
+
+### Fixes
+- fix(engine): prefer focused entry for ctrl+o toggle (#1583) — closes #1581. Second press collapses what the first expanded even after newer tool output arrives.
+- perf(tui): skip unchanged selection frames and memoize wrap (#1585) — closes #1582. Static frames reuse the last scan (200 unpinned capture frames 88ms → 41ms); scrolling unchanged. Wrap counts memoized; committed cache 4 → 32.
+- fix(tui): render full tool bodies when expanded (#1584) — closes #1580. Expanded Command/Tool bodies render in full, not the 6-line window (now COLLAPSED_TOOL_BODY_MAX_LINES); homogeneous command batches render full with no dangling truncation marker.
+- mcp: live OAuth verification (#1536) remains open for the human browser-login step; automated mcp:: suite 41 passed.
 ## [v0.56.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.1) - 2026-10-01
 
 ### Features
