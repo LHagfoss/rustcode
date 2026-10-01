@@ -124,10 +124,8 @@ pub(super) struct ReadingAnchor {
 /// release — so three rows per tick buys three times the travel for the price
 /// of one frame.
 ///
-/// Keyboard scrolling is untouched. `PageUp`/`PageDown` still step a page, the
-/// selection caret still walks one row at a time, and `step_selection_scroll`
-/// must keep advancing a single row per frame so that every row a scroll
-/// crosses is captured before it leaves the screen.
+/// Selected wheel scrolling applies the same delta in the next frame.
+/// Keyboard and edge-drag scrolling still advance one row at a time.
 pub(crate) const WHEEL_SCROLL_LINES: usize = 3;
 
 impl TranscriptState {
@@ -142,16 +140,16 @@ impl TranscriptState {
         }
     }
 
-    /// Advance at most one selected row before painting so every crossed row is cached.
+    /// Apply queued wheel movement, or one edge-drag row, before painting.
     pub(crate) fn step_selection_scroll(&mut self) -> bool {
         let before = self.scroll_rows;
         let Some(direction) = self.selection.take_scroll_step(before) else {
             return false;
         };
         if direction < 0 {
-            self.scroll_up(1);
+            self.scroll_up(direction.unsigned_abs());
         } else {
-            self.scroll_down(1);
+            self.scroll_down(direction.unsigned_abs());
         }
         if self.scroll_rows == before {
             self.selection.cancel_pending_scroll();
