@@ -846,13 +846,37 @@ pub(super) fn tool_transcript_entry(
         tool_result_action(state, message_index, &tool_name)
     };
     let (success, status) = tool_result_status(message, &tool_name, result);
-    let body = cached_tool_result(
+    let mut body = cached_tool_result(
         &tool_name,
         result,
         width as usize,
         &state.verbosity(),
         show_picker,
     );
+    // Write/edit calls whose result carries no embedded diff (e.g.
+    // `write_to_file` reports only `wrote 'path' (N lines, M bytes)`) still
+    // need their changed lines at low verbosity (#1567). Synthesize an
+    // added-lines preview from the call arguments; no-op and failed changes
+    // keep their truthful single-line status.
+    if kind == ToolTranscriptKind::Edit
+        && success
+        && !edit_result_is_noop(result)
+        && !result_has_embedded_diff(result)
+        && body.len() <= 1
+    {
+        let args = tool_call_arguments(state, message_index, &tool_name);
+        let preview = synthesized_edit_preview(
+            &tool_name,
+            &args,
+            result,
+            success,
+            width as usize,
+            show_picker,
+        );
+        if !preview.is_empty() {
+            body.extend(preview);
+        }
+    }
 
     Some(ToolTranscriptEntry {
         message_index,
@@ -1207,6 +1231,50 @@ pub(super) fn indent_generic_tool_body(
     indented
 }
 
+/// Indent a body without truncating it: the expanded form of an edit preview.
+///
+/// The collapsed edit preview reuses [`indent_generic_tool_body`] (6-line
+/// head/tail window with an omitted count). Once expanded, the full changed
+/// lines render inline so Ctrl+O visibly changes the chosen body (#1567).
+pub(super) fn indent_full_tool_body(
+    lines: Vec<Line<'static>>,
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let max_w = (width as usize).max(10);
+    let mut indented = Vec::new();
+    for line in lines {
+        if line.spans.is_empty() {
+            indented.push(line);
+            continue;
+        }
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+        spans.extend(line.spans);
+        let continuation = Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        );
+        push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
+    }
+    indented
+}
+
+/// Whether an edit entry carries an expandable diff body.
+///
+/// Successful edits with changed lines (embedded or synthesized diffs, #1567)
+/// expand; no-op (`already applied`) and failed changes keep their truthful
+/// single-line status with no hint.
+pub(super) fn edit_entry_is_expandable(entry: &ToolTranscriptEntry) -> bool {
+    entry.kind == ToolTranscriptKind::Edit
+        && entry.success
+        && !entry.body.is_empty()
+        && entry.body.len() > 1
+}
+
 pub(crate) fn render_committed_tool_result_group_snapshot(
     state: &RenderSnapshot,
     message_indices: &[usize],
@@ -1312,13 +1380,16 @@ fn render_tool_result_group_snapshot(
                 let identity = format!("{}\0{}", entry.action, entry.target);
                 if entry.kind != ToolTranscriptKind::Explored || seen.insert(identity) {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                    // Command and generic Tool entries both collapse their
-                    // bodies with the same expand affordance; Explored/Edit
-                    // rows keep their kind-specific formatting.
+                    // Command, generic Tool, and Edit-with-diff entries collapse
+                    // their bodies with the same expand affordance; Explored
+                    // rows keep their kind-specific formatting. Edit previews
+                    // differ: the collapsed form already shows a compact diff
+                    // window (#1567) while Tool/Command hide the body until
+                    // expanded.
                     let expandable = matches!(
                         entry.kind,
                         ToolTranscriptKind::Tool | ToolTranscriptKind::Command
-                    );
+                    ) || edit_entry_is_expandable(entry);
                     let show_hint = expandable
                         && !entry.body.is_empty()
                         && !is_expanded
@@ -1341,10 +1412,26 @@ fn render_tool_result_group_snapshot(
                         ));
                     }
                     first_child = false;
-                    if expandable
-                        && is_expanded
-                        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
+                    let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
+                    if entry.kind == ToolTranscriptKind::Edit
+                        && edit_entry_is_expandable(entry)
+                        && low
                     {
+                        if is_expanded {
+                            lines.extend(indent_full_tool_body(
+                                entry.body.clone(),
+                                width,
+                                show_picker,
+                            ));
+                        } else {
+                            lines.extend(indent_generic_tool_body(
+                                entry.body.clone(),
+                                &state.verbosity(),
+                                width,
+                                show_picker,
+                            ));
+                        }
+                    } else if expandable && is_expanded && low {
                         if entry.kind == ToolTranscriptKind::Command {
                             lines.extend(indent_tool_result_body(
                                 entry.body.clone(),
@@ -1365,32 +1452,103 @@ fn render_tool_result_group_snapshot(
             }
         }
 
-        index = entries.len();
+        index = group_end;
     }
     lines
 }
 
 /// Message indices the expand key can act on, oldest first.
 ///
-/// Derived from the same rules the renderer applies — a Command or generic
-/// Tool entry with a non-empty body, at low verbosity — so the hint and the
-/// key can never disagree about what is expandable (#1541). Already expanded
-/// entries stay in the list: they are what the next press collapses, so
-/// dropping them would make a second press skip past the entry it expanded.
+/// Derived from the same rules the renderer applies, so the hint and the key
+/// can never disagree about what is expandable (#1541, #1563):
+/// - low verbosity only (high verbosity renders bodies inline, never collapsed);
+/// - generic Tool entries with a non-empty body;
+/// - Command entries only when they share their provider batch with a
+///   non-Command entry (a homogeneous command-only batch renders its
+///   summary+bodies inline with no collapse affordance, so a newer
+///   command-only group must not absorb Ctrl+O meant for an older collapsed
+///   group);
+/// - Edit entries with an expandable diff body (successful changes with
+///   changed lines; no-op/failed keep truthful status, #1567).
+/// Already expanded entries stay in the list: they are what the next press
+/// collapses, so dropping them would make a second press skip past the entry
+/// it expanded.
 pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Vec<usize> {
     if !matches!(state.verbosity(), rustcode::controller::Verbosity::Low) {
         return Vec::new();
     }
-    (0..state.active_history().len())
-        .filter(|&index| {
-            tool_transcript_entry(state, index, width, false).is_some_and(|entry| {
-                matches!(
-                    entry.kind,
-                    ToolTranscriptKind::Tool | ToolTranscriptKind::Command
-                ) && !entry.body.is_empty()
-            })
-        })
-        .collect()
+    let history = state.active_history();
+    // Group consecutive tool messages the way the transcript does, joining
+    // across tool-only assistant turns (one-tool-per-round orchestration).
+    // A batch's homogeneity decides whether its Command members render with
+    // a collapse affordance (mixed) or inline (homogeneous command-only).
+    let mut batches: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut idx = 0;
+    while idx < history.len() {
+        let Some(msg) = history.get(idx) else {
+            break;
+        };
+        if msg.role == "tool" {
+            current.push(idx);
+            idx += 1;
+            continue;
+        }
+        if msg.role == "assistant" && !current.is_empty() {
+            let has_calls = !msg.tool_calls.is_empty()
+                || !rustcode_tool_protocol::resolve_tool_calls(msg, state.active_tool_protocol())
+                    .is_empty();
+            let content_empty = msg.content.trim().is_empty();
+            let next_is_tool = history.get(idx + 1).is_some_and(|next| next.role == "tool");
+            if has_calls && content_empty && next_is_tool {
+                idx += 1;
+                continue;
+            }
+        }
+        if !current.is_empty() {
+            batches.push(std::mem::take(&mut current));
+        }
+        idx += 1;
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+
+    let mut out = Vec::new();
+    for batch in batches {
+        let kinds = batch
+            .iter()
+            .filter_map(|&i| tool_transcript_entry(state, i, width, false).map(|e| e.kind))
+            .collect::<Vec<_>>();
+        if kinds.is_empty() {
+            continue;
+        }
+        let homogeneous_command = kinds.iter().all(|k| *k == ToolTranscriptKind::Command);
+        for &i in &batch {
+            let Some(entry) = tool_transcript_entry(state, i, width, false) else {
+                continue;
+            };
+            match entry.kind {
+                ToolTranscriptKind::Tool => {
+                    if !entry.body.is_empty() {
+                        out.push(i);
+                    }
+                }
+                ToolTranscriptKind::Command => {
+                    if !homogeneous_command && !entry.body.is_empty() {
+                        out.push(i);
+                    }
+                }
+                ToolTranscriptKind::Edit => {
+                    if edit_entry_is_expandable(&entry) {
+                        out.push(i);
+                    }
+                }
+                ToolTranscriptKind::Explored => {}
+            }
+        }
+    }
+    out
 }
 
 pub(super) fn render_committed_tool_result(
