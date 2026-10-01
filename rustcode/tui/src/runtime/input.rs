@@ -40,6 +40,16 @@ fn is_keyboard_range_key(key: crossterm::event::KeyEvent) -> bool {
         .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::ALT)
 }
 
+/// Whether the transcript selection claims `key` before any other handler.
+///
+/// The advertised copy binding is `ctrl+c` on every platform including macOS
+/// (`controller::copy_selection_binding`, see #1566): raw mode delivers it as
+/// a key event, while Apple Terminal reserves `cmd+c` for its native
+/// selection, which never reaches the app. `SUPER` (Cmd) is still accepted
+/// here for terminals that do deliver it, but the footer only promises the
+/// chord that always arrives. Esc always belongs to the selection while it is
+/// live. When no selection exists this returns false, so `ctrl+c` falls
+/// through to the interrupt/exit path.
 fn selection_owns_key(transcript: &TranscriptState, key: crossterm::event::KeyEvent) -> bool {
     let has_range_or_mode =
         transcript.selection.has_selection() || transcript.selection.is_keyboard_mode();
@@ -230,7 +240,8 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
-                // Composer selection owns Ctrl/Cmd+C and Esc (#1493).
+                // Composer selection owns Ctrl+C (and Cmd+C where the terminal
+                // delivers it) and Esc (#1493, #1566).
                 // Copy keeps the highlight; Esc dismisses it.
                 if app_state.lock().await.has_composer_selection() {
                     if key.code == KeyCode::Esc {
@@ -1913,7 +1924,7 @@ pub(super) async fn handle_app_event(
                         };
                         // `mouse()` returns `Some` only for the explicit
                         // right-click copy action; left-button release keeps
-                        // the highlight and copies via Ctrl/Cmd+C (#1492).
+                        // the highlight and copies via Ctrl+C (#1492, #1566).
                         if let Some(text) = selected {
                             report_selection_copy(
                                 app_state,
@@ -2103,6 +2114,68 @@ mod tests {
         );
         assert!(!transcript.selection.is_keyboard_mode());
         assert!(!transcript.selection.is_active());
+    }
+
+    /// The advertised copy binding reaches the selection handler for both
+    /// mouse and keyboard selections, and `ctrl+c` without a selection falls
+    /// through to interrupt/exit (#1566).
+    #[test]
+    fn ctrl_c_copies_mouse_and_keyboard_selections_but_interrupts_without_one() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        // The hint and the handler share this definition: the footer promises
+        // exactly the chord the handler owns.
+        assert_eq!(rustcode::controller::copy_selection_binding(), "ctrl+c");
+        let copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        // Mouse selection owns the advertised binding.
+        let mut mouse = TranscriptState::default();
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello", ratatui::style::Style::default());
+        mouse.selection.refresh(area, &buffer, &[false]);
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse.selection.mouse(down);
+        mouse.selection.mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 3,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        mouse.selection.mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 3,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(mouse.selection.has_selection());
+        assert!(!mouse.selection.is_keyboard_mode());
+        assert_eq!(mouse.selection.selected_text().as_deref(), Some("hell"));
+        assert!(selection_owns_key(&mouse, copy));
+
+        // Keyboard selection owns the same binding.
+        let mut keyboard = TranscriptState::default();
+        keyboard.selection.refresh(area, &buffer, &[false]);
+        keyboard.selection.begin_keyboard_with_snapshot(
+            crate::ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(
+                &AppState::new(),
+            )),
+            0,
+        );
+        keyboard.selection.move_keyboard(KeyCode::Right);
+        assert!(keyboard.selection.has_selection());
+        assert!(selection_owns_key(&keyboard, copy));
+
+        // No selection: the key is not owned, so the caller falls through to
+        // the existing interruption/exit behavior.
+        let idle = TranscriptState::default();
+        assert!(!idle.selection.has_selection());
+        assert!(!selection_owns_key(&idle, copy));
     }
 
     #[test]

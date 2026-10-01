@@ -55,22 +55,20 @@ pub fn build_help_text() -> String {
 /// The key that copies a transcript selection on the platform this session is
 /// running on.
 ///
-/// macOS is the exception. `cmd+c` is the copy chord the Mac terminal reserves
-/// for whatever is in the foreground, while `ctrl+c` there can be claimed by the
-/// line discipline and raise SIGINT instead of arriving as a key event, so
-/// naming `ctrl+c` in a Mac footer would be a promise the terminal may not keep.
-/// Every other platform delivers `ctrl+c` to the app, which is where the copy
-/// binding has to be advertised.
+/// This is always `ctrl+c`. RustCode enables raw mode, which disables the
+/// line discipline's ISIG handling, so `ctrl+c` arrives as a key event the
+/// selection handler owns (`selection_owns_key` in the TUI runtime) instead
+/// of raising SIGINT. Apple Terminal reserves `cmd+c` for its own native
+/// selection, which knows nothing about RustCode's semantic or keyboard
+/// selection range, so advertising `cmd+c` would promise a copy the app never
+/// receives. `ctrl+c` is the chord delivered to the handler on macOS and
+/// everywhere else.
 ///
 /// This is the one piece of selection policy the engine owns: the chord is the
 /// same in every frontend, and a hint that hardcodes it would be wrong on one
 /// platform or the other.
 pub fn copy_selection_binding() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd+c"
-    } else {
-        "ctrl+c"
-    }
+    "ctrl+c"
 }
 
 #[cfg(test)]
@@ -116,16 +114,11 @@ mod tests {
     }
 
     /// The advertised copy chord must name the key the platform actually
-    /// delivers, so the footer is not a promise the terminal breaks (#1542).
-    #[cfg(target_os = "macos")]
+    /// delivers, so the footer is not a promise the terminal breaks (#1566).
+    /// Raw mode delivers `ctrl+c` on every platform including macOS; `cmd+c`
+    /// is the terminal's native selection and never reaches the handler.
     #[test]
-    fn macos_copy_binding_is_cmd_c() {
-        assert_eq!(copy_selection_binding(), "cmd+c");
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn non_macos_copy_binding_is_ctrl_c() {
+    fn copy_binding_is_ctrl_c_on_every_platform() {
         assert_eq!(copy_selection_binding(), "ctrl+c");
     }
 }
