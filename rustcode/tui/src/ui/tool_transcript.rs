@@ -892,6 +892,8 @@ pub(super) fn tool_group_header(title: &str, success: bool, show_picker: bool) -
 /// Expand affordance appended to a collapsed body row. Reserved out of the
 /// wrap width so it always lands on the entry's own first row (#1541).
 pub(super) const EXPAND_HINT: &str = " (ctrl+o to expand)";
+const COMPACT_EXPAND_HINT: &str = " (ctrl+o)";
+const SHORT_EXPAND_HINT: &str = " (o)";
 
 /// Maximum terminal rows in a collapsed tool-result preview, including the
 /// omission marker (#1602).
@@ -933,9 +935,16 @@ fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> 
 /// Display width the expand hint occupies once appended to a row.
 pub(super) const EXPAND_HINT_WIDTH: u16 = EXPAND_HINT.len() as u16;
 
-fn expand_hint_span(show_picker: bool) -> Span<'static> {
+fn expand_hint_span(width: u16, show_picker: bool) -> Span<'static> {
+    let hint = if width >= 29 {
+        EXPAND_HINT
+    } else if width >= 19 {
+        COMPACT_EXPAND_HINT
+    } else {
+        SHORT_EXPAND_HINT
+    };
     Span::styled(
-        EXPAND_HINT,
+        hint,
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
     )
 }
@@ -945,9 +954,9 @@ fn expand_hint_span(show_picker: bool) -> Span<'static> {
 /// The hint must never be appended to the last wrapped line: that line is
 /// followed by the next tool row, so the hint reads as annotating *that* row
 /// and splits the `Ran` group (#1541).
-fn append_expand_hint(lines: &mut [Line<'static>], show_picker: bool) {
+fn append_expand_hint(lines: &mut [Line<'static>], width: u16, show_picker: bool) {
     if let Some(first) = lines.first_mut() {
-        first.spans.push(expand_hint_span(show_picker));
+        first.spans.push(expand_hint_span(width, show_picker));
     }
 }
 
@@ -999,7 +1008,7 @@ pub(super) fn tool_child_line(
         Some(continuation),
     );
     if show_hint {
-        append_expand_hint(&mut lines, show_picker);
+        append_expand_hint(&mut lines, width, show_picker);
     }
     lines
 }
@@ -1007,7 +1016,14 @@ pub(super) fn tool_child_line(
 /// Wrap width for a row that carries the expand hint, leaving room for the
 /// hint so the row it annotates is the row the hint lands on.
 fn wrap_width(width: u16, show_hint: bool) -> usize {
-    let reserved = if show_hint { EXPAND_HINT_WIDTH } else { 0 };
+    let hint_width = if width >= 29 {
+        EXPAND_HINT_WIDTH
+    } else if width >= 19 {
+        COMPACT_EXPAND_HINT.width() as u16
+    } else {
+        SHORT_EXPAND_HINT.width() as u16
+    };
+    let reserved = if show_hint { hint_width } else { 0 };
     (width.saturating_sub(reserved) as usize).max(10)
 }
 
@@ -1125,7 +1141,7 @@ pub(super) fn command_child_lines(
     }
     let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
     if show_hint {
-        append_expand_hint(&mut lines, show_picker);
+        append_expand_hint(&mut lines, width, show_picker);
     }
     if let Some(status_suffix) = status_suffix {
         if let Some(line) = lines.last_mut() {
@@ -1206,7 +1222,7 @@ pub(super) fn command_summary_lines(
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
     if show_hint {
-        append_expand_hint(&mut lines, show_picker);
+        append_expand_hint(&mut lines, width, show_picker);
     }
     truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES)
 }
@@ -1942,5 +1958,41 @@ mod tests {
         let capped = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
         assert_eq!(capped.len(), COMMAND_DISPLAY_MAX_LINES);
         assert!(capped.last().unwrap().to_string().contains('…'));
+    }
+
+    #[test]
+    fn narrow_command_preview_keeps_compact_expand_hint_inside_its_row() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{Paragraph, Widget},
+        };
+
+        let entry = super::ToolTranscriptEntry {
+            message_index: 0,
+            tool_name: "run_command".to_owned(),
+            action: "Run".to_owned(),
+            target: "echo this command has a longer target".to_owned(),
+            success: true,
+            status: "exit 0".to_owned(),
+            body: Vec::new(),
+            kind: super::ToolTranscriptKind::Command,
+        };
+        let width = 24;
+        let lines = super::command_child_lines(&entry, true, true, width, false);
+        assert!(
+            lines.iter().all(|line| line.width() <= usize::from(width)),
+            "wrapped command rows plus expand hint must stay within the terminal width: {lines:?}"
+        );
+        assert!(lines[0].to_string().contains("(ctrl+o)"), "{lines:?}");
+        assert!(!lines[0].to_string().contains("to expand"), "{lines:?}");
+
+        let area = Rect::new(0, 0, width, lines.len() as u16);
+        let mut buffer = Buffer::empty(area);
+        Paragraph::new(lines).render(area, &mut buffer);
+        let first_row = (0..width)
+            .map(|column| buffer[(column, 0)].symbol())
+            .collect::<String>();
+        assert!(first_row.contains("(ctrl+o)"), "{first_row:?}");
     }
 }
