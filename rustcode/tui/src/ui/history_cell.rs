@@ -61,6 +61,14 @@ pub(crate) struct TranscriptState {
     pub(super) follow_control: super::follow_control::FollowControl,
     pub(super) reading_anchor: Option<ReadingAnchor>,
     pub(crate) selection: super::selection::TranscriptSelection,
+    /// Independent selection for the currently visible informational panel.
+    /// Panel rows use a different painted surface from the conversation, so
+    /// sharing the transcript selection would pin and copy the wrong content.
+    pub(crate) panel_selection: super::selection::TranscriptSelection,
+    /// Content rectangle from the last painted informational panel frame.
+    pub(crate) panel_selection_area: Option<ratatui::layout::Rect>,
+    /// Whether the visible panel body responds to vertical scrolling.
+    pub(crate) panel_selection_scrollable: bool,
     committed_cache:
         Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Arc<Vec<Line<'static>>>>>,
 }
@@ -84,6 +92,9 @@ impl Default for TranscriptState {
             follow_control: super::follow_control::FollowControl::default(),
             reading_anchor: None,
             selection: super::selection::TranscriptSelection::default(),
+            panel_selection: super::selection::TranscriptSelection::default(),
+            panel_selection_area: None,
+            panel_selection_scrollable: false,
             committed_cache: None,
         }
     }
