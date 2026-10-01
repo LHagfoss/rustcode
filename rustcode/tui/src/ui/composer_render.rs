@@ -1157,9 +1157,6 @@ pub(super) fn render_composer_footer(
             metadata.push(agent.name().to_string());
         }
         metadata.push(state.model_name().to_string());
-        if let Some(speed) = decode_speed_label(state) {
-            metadata.push(speed);
-        }
         metadata.push(location);
         (
             format!("  {}", metadata.join(" · ")),
@@ -1168,7 +1165,16 @@ pub(super) fn render_composer_footer(
         )
     };
     let row_width = area.width as usize;
-    let right = format!("{remaining}% context left  ");
+    let speed = decode_speed_label(state)
+        .map(|speed| format!("{speed}  "))
+        .unwrap_or_default();
+    let context_right = format!("{remaining}% context left  ");
+    let speed_and_context = format!("{speed}{context_right}");
+    let right = if speed_and_context.width() <= row_width {
+        speed_and_context
+    } else {
+        context_right
+    };
     let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let right_width = right.width();
     // The hint is the actionable content on this row, so it claims the width
