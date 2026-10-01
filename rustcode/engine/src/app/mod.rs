@@ -3,6 +3,7 @@ pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision
 pub mod actions;
 pub mod activity;
 pub mod composer;
+pub mod fuzzy;
 pub mod geometry;
 pub mod overlays;
 pub mod session_controller;

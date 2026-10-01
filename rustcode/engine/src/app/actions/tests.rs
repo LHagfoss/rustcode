@@ -1349,7 +1349,7 @@ async fn sandbox_command_without_an_argument_lists_every_mode_including_trusted(
         );
     }
     assert!(
-        content.contains("* /sandbox trusted"),
+        content.contains("• /sandbox trusted"),
         "the current mode must be marked: {content}"
     );
     assert!(

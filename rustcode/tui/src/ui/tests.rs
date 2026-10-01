@@ -1548,6 +1548,71 @@ fn inline_command_popup_marks_selection_and_clips_descriptions_to_width() {
     );
 }
 
+/// The popup finds a command the user mistyped and marks the characters that
+/// matched, so a fuzzy hit is not a mystery (#1588).
+#[test]
+fn inline_command_popup_matches_fuzzily_and_marks_the_match() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::{backend::TestBackend, layout::Rect};
+
+    // A transposed command name: neither an exact nor a prefix match, so it
+    // matched nothing before.
+    let mut state = RenderState::new();
+    state.input_buffer = "/modle".to_owned();
+    state.cursor_position = state.input_buffer.len();
+    state.active_suggestion_index = Some(0);
+    let commands = rustcode::controller::filtered_commands(&state.input_buffer);
+    assert_eq!(
+        commands.first().map(|command| command.name),
+        Some("/model"),
+        "the typo must still find the command"
+    );
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(60, 2)).unwrap();
+    terminal
+        .draw(|frame| {
+            super::modals::render_popup_menu(frame, &snapshot, &commands, Rect::new(0, 0, 60, 2));
+        })
+        .unwrap();
+
+    let row = (0..60)
+        .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+        .collect::<String>();
+    assert!(row.contains("/model"), "rendered: {row:?}");
+
+    // A longer prefix keeps several rows, so the unselected ones carry the
+    // match marking.
+    let mut state = RenderState::new();
+    state.input_buffer = "/mo".to_owned();
+    state.cursor_position = state.input_buffer.len();
+    state.active_suggestion_index = Some(0);
+    let commands = rustcode::controller::filtered_commands(&state.input_buffer);
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(60, 3)).unwrap();
+    terminal
+        .draw(|frame| {
+            super::modals::render_popup_menu(frame, &snapshot, &commands, Rect::new(0, 0, 60, 3));
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut marked = String::new();
+    for row in 0..3 {
+        if buffer[(0, row)].symbol() == "›" {
+            continue;
+        }
+        marked.extend(
+            (0..60)
+                .filter(|column| buffer[(*column, row)].fg == COLOR_PRIMARY())
+                .map(|column| buffer[(column, row)].symbol().to_owned()),
+        );
+    }
+    assert!(
+        marked.contains("mo"),
+        "the matched characters must be marked on unselected rows: {marked:?}"
+    );
+}
+
 #[test]
 fn welcome_banner_renders_without_a_conversation() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");

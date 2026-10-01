@@ -1,7 +1,8 @@
 //! Composer assistance and activity display for frontends (issue #1442).
 //!
-//! Completion, file-mention, help-text, and activity-classification helpers
-//! the composer and status render paths call per frame. Thin contract over
+//! Completion, file-mention, help-text, panel search and
+//! activity-classification helpers the composer, panel and status render
+//! paths call per frame. Thin contract over
 //! the engine implementations: identical output by construction. The input
 //! *driving* itself (key handling mutating `AppState`) lives in the
 //! frontend event loop by design — see the composer move in this epic.
@@ -9,6 +10,7 @@
 use crate::app::{AppStatus, LiveToolCall};
 
 pub use crate::app::activity::{ActivityKind, ActivitySnapshot};
+pub use crate::app::fuzzy::{fuzzy_match_positions, fuzzy_matches};
 pub use crate::app::suggestion::CommandInfo;
 
 /// Classify session activity for the status line from the turn status and
