@@ -282,11 +282,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // the composer does not jump when the popup opens or closes.
     let footer_height = 1;
     let (top_padding, _) = live_surface_padding(state);
-    let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools().is_empty()
-        || !state.background_tasks().is_empty();
     let mut activity_lines = background_command_lines(state);
-    let activity_status_height = u16::from(activity_visible);
     // Reserve a stable row above the composer for return-to-latest. Panels,
     // confirmations, questions, and completions suppress the control there.
     let control_row_suppressed =
@@ -306,7 +302,6 @@ pub(crate) fn render_with_transcript_snapshot(
         .saturating_add(queue_block_height)
         .saturating_add(provisional_input_height)
         .saturating_add(control_row_height)
-        .saturating_add(activity_status_height)
         .saturating_add(footer_height)
         .saturating_add(activity_lines.len() as u16)
         .saturating_add(popup_rows);
@@ -324,7 +319,6 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(queue_block_height)
             .saturating_sub(provisional_input_height)
             .saturating_sub(control_row_height)
-            .saturating_sub(activity_status_height)
             .saturating_sub(footer_height)
             .saturating_sub(activity_gaps),
     );
@@ -339,7 +333,6 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(queue_block_height)
             .saturating_sub(provisional_input_height)
             .saturating_sub(control_row_height)
-            .saturating_sub(activity_status_height)
             .saturating_sub(activity_height)
             .saturating_sub(activity_gaps)
             .saturating_sub(footer_height),
@@ -354,7 +347,6 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
             .saturating_sub(control_row_height)
-            .saturating_sub(activity_status_height)
             .saturating_sub(activity_height)
             .saturating_sub(activity_gaps)
             .saturating_sub(footer_height)
@@ -370,7 +362,6 @@ pub(crate) fn render_with_transcript_snapshot(
         .saturating_sub(vertical_padding)
         .saturating_sub(queue_block_height)
         .saturating_sub(control_row_height)
-        .saturating_sub(activity_status_height)
         .saturating_sub(input_height)
         .saturating_sub(activity_height)
         .saturating_sub(activity_gaps)
@@ -418,7 +409,6 @@ pub(crate) fn render_with_transcript_snapshot(
             Constraint::Length(popup_height),
             Constraint::Length(control_row_height),
             Constraint::Length(input_height),
-            Constraint::Length(activity_status_height),
             Constraint::Length(footer_height),
         ])
         .split(layout_area);
@@ -428,7 +418,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // The composer indexes these as [chat, queue, popup, input, footer]; the
     // activity stays above the queue, panels and completions. Panels claim
     // the rows directly above input, exactly where their anchor paints.
-    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[8], chunks[10]];
+    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[8], chunks[9]];
     render_queue_line(f, &composer_chunks, state);
     // Optional breathing room around live activity (#1494). Gaps are empty
     // background rows; they are omitted when activity is absent or the
@@ -495,7 +485,7 @@ pub(crate) fn render_with_transcript_snapshot(
         // selection is live: reading the range here is already its answer.
         render_composer_footer(
             f,
-            chunks[10],
+            chunks[9],
             state,
             popup_hint,
             transcript.selection.has_selection(),
@@ -599,13 +589,6 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript,
         (!control_row_suppressed).then_some(chunks[7]),
     );
-    if activity_status_height > 0 {
-        f.render_widget(
-            Paragraph::new(activity_status_line(state, false, f.area().width as usize))
-                .style(Style::default().bg(COLOR_BG())),
-            chunks[9],
-        );
-    }
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(
