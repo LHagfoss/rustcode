@@ -1,3 +1,13 @@
+## [v0.56.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.1) - 2026-10-01
+
+### Features
+- Remote MCP OAuth now re-plans from the registered grant, falls back from rejected device flow to a loopback browser callback, and preserves resource scopes (#1569, #1553).
+- Untrusted-by-default sandbox flips to trusted default with YOLO override honored everywhere including headless and ACP; denial messages name the effective permission (#1574, #1546).
+- Command overlays and panels stay stable while a turn runs; informational commands render through panels (#1575).
+- Tool groups collapse precisely (Ctrl+O targets visible candidates) and low-verbosity mode shows compact edit diffs (#1576).
+- Scrolled selections keep their copy text when extended; copy binding advertised as ctrl+c on every platform (#1577).
+- Panic cleanup is scoped to the terminal owner, so a recovered background panic restores normal exit erasing (#1578).
+- Engine policy paths hardened (no unchecked unwraps on sandbox classification) and runtime contracts documented (#1573).
 ## [v0.55.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.55.11) - 2026-09-24
 
 ### Improvements
