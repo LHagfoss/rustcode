@@ -659,7 +659,7 @@ pub(crate) fn render_committed_history_block_snapshot(
             if is_hidden_system_notice(&message.content) {
                 return Vec::new();
             }
-            return history_cell::AssistantMarkdownCell::committed(
+            let mut response = history_cell::AssistantMarkdownCell::committed(
                 &message.content,
                 message.token_usage.clone(),
                 message.response_time_ms,
@@ -667,6 +667,8 @@ pub(crate) fn render_committed_history_block_snapshot(
                 message.thought_tokens,
             )
             .display_lines(width);
+            response.extend(render_turn_completion(message, width));
+            return response;
         }
         "tool" => {
             let tool_name = resolve_tool_result_name(
@@ -712,6 +714,78 @@ pub(crate) fn render_committed_history_block_snapshot(
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+fn render_turn_completion(
+    message: &rustcode::controller::ChatMessage,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let Some(completed_at) = message
+        .completed_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return Vec::new();
+    };
+    if width == 0 {
+        return Vec::new();
+    }
+    use chrono::Datelike;
+    let completed_at = completed_at.with_timezone(&chrono::Local);
+    let today = chrono::Local::now().date_naive();
+    let date_format = if completed_at.date_naive() == today {
+        ""
+    } else if completed_at.year() == today.year() {
+        "%b %-d at "
+    } else {
+        "%b %-d, %Y at "
+    };
+    let mut labels = Vec::new();
+    if let Some(duration) = message.response_time_ms {
+        let seconds = duration / 1_000;
+        let elapsed = if seconds >= 3600 {
+            format!(
+                "{}h {}m {}s",
+                seconds / 3600,
+                seconds / 60 % 60,
+                seconds % 60
+            )
+        } else if seconds >= 60 {
+            format!("{}m {}s", seconds / 60, seconds % 60)
+        } else if seconds == 0 {
+            "<1s".to_string()
+        } else {
+            format!("{seconds}s")
+        };
+        labels.push(format!("Worked for {elapsed}"));
+    }
+    labels.push(format!(
+        "{}{}",
+        completed_at.format(date_format),
+        completed_at.format("%H:%M")
+    ));
+    let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, false);
+    let indent = if width > 2 { "  " } else { "" };
+    if width < 10 {
+        let label = labels.join(" • ");
+        return label
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(width as usize)
+            .map(|chunk| Line::from(Span::styled(chunk.iter().collect::<String>(), style)))
+            .collect();
+    }
+    let mut lines = Vec::new();
+    push_wrapped_with_continuation(
+        &mut lines,
+        vec![Span::styled(
+            format!("{indent}{}", labels.join(" • ")),
+            style,
+        )],
+        width as usize,
+        Some(Span::styled(indent, style)),
+    );
+    lines
 }
 
 fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
@@ -1005,6 +1079,77 @@ mod projection_tests {
             let expected = full[start..end].to_vec();
 
             assert_eq!(actual, expected, "scroll={requested_scroll}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    #[test]
+    fn completion_metadata_is_persisted_and_renders_after_prose() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut state = RenderState::new();
+        let mut message = rustcode::controller::ChatMessage::new("assistant", "Task finished.");
+        message.completed_at = Some("2000-09-06T14:32:00+02:00".to_string());
+        message.response_time_ms = Some(125_999);
+        let json = serde_json::to_string(&message).unwrap();
+        let restored = serde_json::from_str(&json).unwrap();
+        state.history.push(restored);
+        let lines = render_committed_history_block_snapshot(&render_snapshot(&state), 0, 100);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.find("Task finished.").unwrap() < text.find("Worked for 2m 5s").unwrap(),
+            "{text}"
+        );
+        assert!(text.contains("Sep 6, 2000 at"), "{text}");
+        assert_eq!(text.matches("Worked for").count(), 1);
+        let timing = lines
+            .iter()
+            .find(|line| line.to_string().contains("Worked for"))
+            .unwrap();
+        assert!(timing.to_string().starts_with("  Worked for"));
+        assert!(
+            timing
+                .spans
+                .iter()
+                .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+        );
+    }
+
+    #[test]
+    fn completion_omits_unknown_times_and_wraps_short_durations() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut message = rustcode::controller::ChatMessage::new("assistant", "Done");
+        message.response_time_ms = Some(250);
+        assert!(render_turn_completion(&message, 100).is_empty());
+        message.completed_at = Some("invalid".to_string());
+        assert!(render_turn_completion(&message, 100).is_empty());
+        message.completed_at = Some(chrono::Local::now().to_rfc3339());
+        for (milliseconds, expected) in [(250, "<1s"), (12_000, "12s"), (3_605_000, "1h 0m 5s")] {
+            message.response_time_ms = Some(milliseconds);
+            let text = render_turn_completion(&message, 100)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(&format!("Worked for {expected}")), "{text}");
+        }
+        let narrow = render_turn_completion(&message, 15);
+        assert!(narrow.len() > 1);
+        assert!(narrow.iter().all(|line| line.width() <= 15));
+        assert!(render_turn_completion(&message, 0).is_empty());
+        for width in 1..10 {
+            assert!(
+                render_turn_completion(&message, width)
+                    .iter()
+                    .all(|line| line.width() <= width as usize)
+            );
         }
     }
 }

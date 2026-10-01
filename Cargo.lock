@@ -7223,6 +7223,7 @@ dependencies = [
 name = "rustcode-tui"
 version = "0.56.3"
 dependencies = [
+ "chrono",
  "clap",
  "crossterm",
  "ctor",
