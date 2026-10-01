@@ -3834,6 +3834,7 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     ctx.metrics.tool_calls = 9;
     ctx.metrics.malformed_calls = 2;
     ctx.metrics.no_progress_results = 3;
+    ctx.metrics.cancelled_tool_calls = 2;
     ctx.metrics.grounded_recoveries = 1;
     ctx.metrics.provider_errors = 1;
     ctx.metrics.provider_429s = 1;
@@ -3850,6 +3851,8 @@ fn benchmark_summary_contains_metrics_and_stop_reason() {
     assert_eq!(summary["tool_calls"], 9);
     assert_eq!(summary["provider_429s"], 1);
     assert_eq!(summary["grounded_recoveries"], 1);
+    // Cancelled results are reported apart from judged no-progress results.
+    assert_eq!(summary["cancelled_tool_calls"], 2);
     assert_eq!(summary["changed_paths"][0], "src/GameScene.ts");
     assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
     assert_eq!(summary["last_stream_termination"], "client_budget");
@@ -4357,10 +4360,22 @@ fn cancellation_persists_completed_results_and_typed_missing_results() {
         Some(crate::tools::ToolErrorKind::Cancelled)
     );
 
+    // #1592: history keeps the cancellation verbatim — it is the record of
+    // what the user stopped — but the provider request answers the call with
+    // the neutral stub instead of the cancellation record, and the pairing
+    // stays valid.
+    let before = serde_json::to_string(&history).expect("serialize history");
     let messages = history::to_messages(&history, "system");
     assert_eq!(messages[1]["tool_calls"][0]["id"], "call_done");
     assert_eq!(messages[2]["tool_call_id"], "call_done");
     assert_eq!(messages[3]["tool_call_id"], "call_cancelled");
+    let rendered = serde_json::to_string(&messages).expect("render request");
+    assert!(!rendered.contains("interrupted by the user"));
+    assert!(!rendered.contains("Cancelled"));
+    assert!(rendered.contains("this call did not run"));
+    assert_eq!(serde_json::to_string(&history).unwrap(), before);
+    history::validate_native_tool_messages(&messages)
+        .expect("a cancelled batch still pairs every announced call");
 }
 
 #[tokio::test]
