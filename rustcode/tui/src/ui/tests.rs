@@ -1155,7 +1155,7 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 }
 
 #[test]
-fn busy_command_surfaces_stay_above_input_and_activity_below_it() {
+fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     for (width, height) in [(80, 24), (60, 18), (100, 30)] {
         for panel in [false, true] {
@@ -1204,23 +1204,10 @@ fn busy_command_surfaces_stay_above_input_and_activity_below_it() {
                 row(surface) < composer,
                 "surface must remain above composer: {rendered}"
             );
-            assert!(
-                composer < row(activity.trim()),
-                "live activity belongs below the composer: {rendered}"
-            );
+            assert!(!rendered.contains(activity.trim()), "{rendered}");
             if !panel {
-                assert!(
-                    row(activity.trim()) < row("context left"),
-                    "live activity remains above footer metadata: {rendered}"
-                );
+                assert!(composer < row("context left"), "{rendered}");
             }
-            assert_eq!(
-                rendered
-                    .lines()
-                    .filter(|line| line.contains(activity.trim()))
-                    .count(),
-                1
-            );
         }
     }
 }
@@ -2216,8 +2203,9 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     assert!(rendered.contains("queued follow-ups (2) · ↑ edit last"));
     assert!(rendered.contains("follow-up one"));
     assert!(rendered.contains("follow-up two"));
-    assert!(rendered.contains("esc interrupt and apply now"));
-    assert!(rendered.contains("Steer · Tab switches to Queue"));
+    assert!(!rendered.contains("esc interrupt and apply now"));
+    assert!(rendered.contains("Working · "));
+    assert!(!rendered.contains("Steer · Tab switches to Queue"));
 }
 
 #[test]
@@ -7579,7 +7567,8 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
     let mut streaming = RenderState::new();
     streaming.status = AppStatus::Streaming;
     let streaming_text = render_state_to_text(&mut streaming, 80, 20);
-    assert!(streaming_text.contains("esc interrupt"));
+    assert!(streaming_text.contains("Working · "));
+    assert!(!streaming_text.contains("esc interrupt"));
     assert!(streaming_text.contains("context left"));
 
     // Constrained height must not clip composer/footer for spacing.
@@ -8968,4 +8957,44 @@ fn a_live_selection_also_releases_follow() {
     select_transcript_text(&mut state, &mut transcript, (2, 2), (20, 4));
     assert!(transcript.selection.is_active());
     assert!(!transcript.is_following());
+}
+
+#[test]
+fn footer_shows_only_plain_activity_immediately_before_model() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for (status, label) in [
+        (AppStatus::Idle, None),
+        (AppStatus::Streaming, Some("Working")),
+        (AppStatus::Queued, Some("Queued")),
+        (AppStatus::AwaitingQuestion, Some("Waiting")),
+        (AppStatus::AwaitingToolConfirmation, Some("Waiting")),
+    ] {
+        let mut state = RenderState::new();
+        state.status = status;
+        let snapshot = render_snapshot(&state);
+        let model = snapshot.model_name().to_string();
+        let mut terminal =
+            crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(160, 1))
+                .unwrap();
+        terminal
+            .draw(|frame| {
+                super::render_composer_footer(frame, frame.area(), &snapshot, None, false);
+            })
+            .unwrap();
+        let row = (0..160)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        if let Some(label) = label {
+            assert!(row.contains(&format!("{label} · {model}")), "{row}");
+        } else {
+            assert!(
+                !row.contains("Working") && !row.contains("Waiting") && !row.contains("Queued"),
+                "{row}"
+            );
+        }
+        assert!(
+            !row.contains("esc interrupt") && !row.contains("Thinking"),
+            "{row}"
+        );
+    }
 }
