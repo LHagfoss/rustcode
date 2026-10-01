@@ -582,6 +582,7 @@ pub(super) fn indent_tool_result_body(
     tool_name: &str,
     verbosity: &rustcode::controller::Verbosity,
     width: u16,
+    expanded: bool,
 ) -> Vec<Line<'static>> {
     if matches!(verbosity, rustcode::controller::Verbosity::High) {
         return Vec::new();
@@ -597,18 +598,27 @@ pub(super) fn indent_tool_result_body(
                     .any(|span| span.content.trim_start().starts_with('✗'))
         })
         .collect::<Vec<_>>();
-    let max_visible = 6;
-    let omitted = filtered.len().saturating_sub(max_visible);
-    let head_count = max_visible / 2;
-    let tail_count = max_visible - head_count;
-    let visible = if omitted == 0 {
-        filtered
+    // Expanded bodies render in full; collapsed ones keep the head/tail
+    // window. Homogeneous command batches render expanded (full) so a
+    // truncation marker never appears without an expand affordance (#1580).
+    let max_visible = COLLAPSED_TOOL_BODY_MAX_LINES;
+    let total = filtered.len();
+    let (visible, omitted, head_count) = if expanded {
+        (filtered, 0, 0)
     } else {
-        filtered[..head_count]
-            .iter()
-            .chain(&filtered[filtered.len() - tail_count..])
-            .cloned()
-            .collect()
+        let omitted = total.saturating_sub(max_visible);
+        if omitted == 0 {
+            (filtered, 0, 0)
+        } else {
+            let head_count = max_visible / 2;
+            let tail_count = max_visible - head_count;
+            let windowed = filtered[..head_count]
+                .iter()
+                .chain(&filtered[filtered.len() - tail_count..])
+                .cloned()
+                .collect();
+            (windowed, omitted, head_count)
+        }
     };
     let max_w = (width as usize).max(10);
     let mut indented = Vec::new();
@@ -912,6 +922,11 @@ pub(super) fn tool_group_header(title: &str, success: bool, show_picker: bool) -
 /// wrap width so it always lands on the entry's own first row (#1541).
 pub(super) const EXPAND_HINT: &str = " (ctrl+o to expand)";
 
+/// Collapsed tool-body window: head/tail lines kept around the omission
+/// marker. Single constant so Command and generic Tool bodies share the same
+/// threshold (#1580).
+pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 6;
+
 /// Display width the expand hint occupies once appended to a row.
 pub(super) const EXPAND_HINT_WIDTH: u16 = EXPAND_HINT.len() as u16;
 
@@ -1177,12 +1192,18 @@ pub(super) fn indent_generic_tool_body(
     verbosity: &rustcode::controller::Verbosity,
     width: u16,
     show_picker: bool,
+    expanded: bool,
 ) -> Vec<Line<'static>> {
     if matches!(verbosity, rustcode::controller::Verbosity::High) {
         return Vec::new();
     }
+    // Expanded Tool bodies render in full; collapsed ones keep the shared
+    // head/tail window so ctrl+o visibly changes the body (#1580).
+    if expanded {
+        return indent_full_tool_body(lines, width, show_picker);
+    }
 
-    let max_visible = 6;
+    let max_visible = COLLAPSED_TOOL_BODY_MAX_LINES;
     let omitted = lines.len().saturating_sub(max_visible);
     let head_count = max_visible / 2;
     let tail_count = max_visible - head_count;
@@ -1231,11 +1252,12 @@ pub(super) fn indent_generic_tool_body(
     indented
 }
 
-/// Indent a body without truncating it: the expanded form of an edit preview.
+/// Indent a body without truncating it: the expanded form of a tool preview.
 ///
-/// The collapsed edit preview reuses [`indent_generic_tool_body`] (6-line
-/// head/tail window with an omitted count). Once expanded, the full changed
-/// lines render inline so Ctrl+O visibly changes the chosen body (#1567).
+/// The collapsed preview reuses [`indent_generic_tool_body`] (shared
+/// [`COLLAPSED_TOOL_BODY_MAX_LINES`] head/tail window with an omitted count).
+/// Once expanded, the full body renders inline so Ctrl+O visibly changes the
+/// chosen body (#1567, #1580).
 pub(super) fn indent_full_tool_body(
     lines: Vec<Line<'static>>,
     width: u16,
@@ -1348,11 +1370,15 @@ fn render_tool_result_group_snapshot(
             } else {
                 let entry = &group[0];
                 lines.extend(command_summary_lines(entry, width, show_picker));
+                // Homogeneous command batches are not collapsible, so they
+                // render the full body: a truncation marker without an expand
+                // affordance leaves no way to act on it (#1580).
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
                     &state.verbosity(),
                     width,
+                    true,
                 ));
             }
         } else {
@@ -1429,6 +1455,7 @@ fn render_tool_result_group_snapshot(
                                 &state.verbosity(),
                                 width,
                                 show_picker,
+                                false,
                             ));
                         }
                     } else if expandable && is_expanded && low {
@@ -1438,6 +1465,7 @@ fn render_tool_result_group_snapshot(
                                 &entry.tool_name,
                                 &state.verbosity(),
                                 width,
+                                true,
                             ));
                         } else {
                             lines.extend(indent_generic_tool_body(
@@ -1445,6 +1473,7 @@ fn render_tool_result_group_snapshot(
                                 &state.verbosity(),
                                 width,
                                 show_picker,
+                                true,
                             ));
                         }
                     }

@@ -3095,7 +3095,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
 }
 
 #[test]
-fn low_verbosity_long_generic_body_uses_head_tail_window_when_expanded() {
+fn low_verbosity_long_generic_body_renders_full_when_expanded() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3126,19 +3126,155 @@ fn low_verbosity_long_generic_body_uses_head_tail_window_when_expanded() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
+    // Expanded bodies render in full (#1580): every line present, no
+    // omission marker.
+    for i in 0..50 {
+        assert!(
+            rendered.iter().any(|line| line.contains(&format!("line {i}"))),
+            "line {i} present when expanded: {rendered:?}"
+        );
+    }
     assert!(
-        rendered.iter().any(|line| line.contains("line 0")),
-        "head stays: {rendered:?}"
-    );
-    assert!(
-        rendered.iter().any(|line| line.contains("line 49")),
-        "tail stays: {rendered:?}"
-    );
-    assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("+") && line.contains("lines")),
-        "omitted count stays discoverable: {rendered:?}"
+        "no omission marker when expanded: {rendered:?}"
+    );
+}
+
+#[test]
+fn expanded_command_body_renders_full_not_window() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"make test"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "get_time".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+        ]),
+    );
+    let body = (0..30)
+        .map(|i| format!("output line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new("tool", format!("run_command: exit code: 0\nstdout:\n{body}"))
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "get_time: Thursday, 08:30")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "get_time".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+
+    // Collapsed: command body hidden, hint present on the child row.
+    let collapsed = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        collapsed
+            .iter()
+            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+        "collapsed command carries hint: {collapsed:?}"
+    );
+    assert!(
+        !collapsed.iter().any(|line| line.contains("output line 15")),
+        "collapsed command hides body: {collapsed:?}"
+    );
+
+    // Expanded: full body, no omission marker.
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for i in 0..30 {
+        assert!(
+            expanded
+                .iter()
+                .any(|line| line.contains(&format!("output line {i}"))),
+            "line {i} present when expanded: {expanded:?}"
+        );
+    }
+    assert!(
+        !expanded
+            .iter()
+            .any(|line| line.contains("+") && line.contains("lines")),
+        "no omission marker when expanded: {expanded:?}"
+    );
+}
+
+#[test]
+fn homogeneous_command_batch_renders_full_with_no_hint() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"make test"}"#.to_owned(),
+        }]),
+    );
+    let body = (0..20)
+        .map(|i| format!("homo line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new("tool", format!("run_command: exit code: 0\nstdout:\n{body}"))
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+    );
+
+    // Homogeneous batches are not collapsible, so they must not truncate
+    // without an affordance: full body, no hint, no omission marker (#1580).
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for i in 0..20 {
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains(&format!("homo line {i}"))),
+            "line {i} present: {rendered:?}"
+        );
+    }
+    assert!(
+        !rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("lines")),
+        "no omission marker without affordance: {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("ctrl+o")),
+        "no hint when nothing is collapsed: {rendered:?}"
     );
 }
 
