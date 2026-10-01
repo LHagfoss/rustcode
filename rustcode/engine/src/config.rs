@@ -1157,6 +1157,18 @@ pub struct AppConfig {
     /// Opt in to the interactive TUI's full-terminal mode.
     #[serde(default)]
     pub fullscreen: bool,
+    /// Keep every committed transcript row in the terminal's own scrollback
+    /// while the session runs.
+    ///
+    /// Off by default (#1587): native scrollback is write-only, so a session
+    /// that commits more than one screen leaves the whole conversation above
+    /// the exit handoff where no erase can reach it, and an expanded tool body
+    /// can be appended but never taken back (#1593). The TUI already
+    /// re-projects the readable tail on screen, so the scrollback copy is a
+    /// convenience for copy/paste and shell piping — opt back in when that is
+    /// what you want, and accept the rows left behind.
+    #[serde(default)]
+    pub preserve_transcript_scrollback: bool,
     /// Render the activity line without the animated shimmer sweep, for
     /// users who find continuous motion distracting. Purely presentational,
     /// so project config may set it like `theme` and `fullscreen`.
@@ -1228,6 +1240,8 @@ struct RuntimeConfig {
     #[serde(default)]
     fullscreen: bool,
     #[serde(default)]
+    preserve_transcript_scrollback: bool,
+    #[serde(default)]
     reduced_motion: bool,
     #[serde(default)]
     agent_mode: AgentMode,
@@ -1283,6 +1297,8 @@ struct TomlConfig {
     discord_rpc_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fullscreen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserve_transcript_scrollback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reduced_motion: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
@@ -1439,6 +1455,7 @@ impl Default for AppConfig {
             audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             fullscreen: false,
+            preserve_transcript_scrollback: false,
             reduced_motion: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
@@ -1681,6 +1698,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.audio = runtime.audio;
                     config.discord_rpc_enabled = runtime.discord_rpc_enabled;
                     config.fullscreen = runtime.fullscreen;
+                    config.preserve_transcript_scrollback = runtime.preserve_transcript_scrollback;
                     config.reduced_motion = runtime.reduced_motion;
                 }
                 None => {
@@ -1767,6 +1785,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         fullscreen: Some(config.fullscreen),
+        preserve_transcript_scrollback: Some(config.preserve_transcript_scrollback),
         reduced_motion: Some(config.reduced_motion),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
@@ -1855,6 +1874,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(fullscreen) = file.fullscreen {
         config.fullscreen = fullscreen;
+    }
+    if let Some(preserve_transcript_scrollback) = file.preserve_transcript_scrollback {
+        config.preserve_transcript_scrollback = preserve_transcript_scrollback;
     }
     if let Some(reduced_motion) = file.reduced_motion {
         config.reduced_motion = reduced_motion;
@@ -2005,6 +2027,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         audio: None,
         discord_rpc_enabled: None,
         fullscreen: None,
+        preserve_transcript_scrollback: None,
         reduced_motion: None,
         legacy_laya: None,
         agent_mode: None,

@@ -764,6 +764,79 @@ fn toggle_expanded_thought_second_press_collapses_focused_after_newer_arrived() 
     assert_eq!(state.expanded_thought_focus, None);
 }
 
+/// #1594: one press moves the whole transcript, and the direction follows the
+/// visible set rather than invisible focus state, so it is idempotent.
+#[test]
+fn toggle_all_expanded_thoughts_expands_then_collapses_every_candidate() {
+    let mut state = crate::app::AppState::new();
+
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[]),
+        super::ExpandOutcome::NothingToExpand
+    );
+    assert!(state.expanded_thoughts.is_empty());
+
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::ExpandedAll { count: 3 }
+    );
+    assert_eq!(
+        state.expanded_thoughts,
+        std::collections::HashSet::from([1, 2, 3])
+    );
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Expanded all tool output")
+    );
+
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::CollapsedAll { count: 3 }
+    );
+    assert!(state.expanded_thoughts.is_empty());
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Collapsed all tool output")
+    );
+}
+
+/// #1594: one open entry is enough for the press to be an expand, so a
+/// partially expanded transcript converges on "all" rather than collapsing
+/// the entries the user had already opened.
+#[test]
+fn toggle_all_expands_while_any_candidate_is_still_collapsed() {
+    let mut state = crate::app::AppState::new();
+    state.expanded_thoughts = std::collections::HashSet::from([2]);
+
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::ExpandedAll { count: 3 }
+    );
+    assert_eq!(
+        state.expanded_thoughts,
+        std::collections::HashSet::from([1, 2, 3])
+    );
+
+    // A newer candidate arriving does not reopen anything on its own.
+    state.expanded_thoughts = std::collections::HashSet::from([1, 2]);
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[1, 2, 3]),
+        super::ExpandOutcome::ExpandedAll { count: 3 }
+    );
+
+    // Only a fully expanded set collapses, and it leaves the newcomer's own
+    // state alone because that entry was never in the set.
+    state.expanded_thoughts = std::collections::HashSet::from([1, 2, 3]);
+    assert_eq!(
+        super::toggle_all_expanded_thoughts(&mut state, &[1, 2]),
+        super::ExpandOutcome::CollapsedAll { count: 2 }
+    );
+    assert_eq!(
+        state.expanded_thoughts,
+        std::collections::HashSet::from([3])
+    );
+}
+
 #[test]
 fn start_new_session_drops_expanded_tool_bodies() {
     let mut state = crate::app::AppState::new();

@@ -1414,7 +1414,9 @@ fn render_tool_result_group_snapshot(
                     // expanded.
                     let expandable = matches!(
                         entry.kind,
-                        ToolTranscriptKind::Tool | ToolTranscriptKind::Command
+                        ToolTranscriptKind::Tool
+                            | ToolTranscriptKind::Command
+                            | ToolTranscriptKind::Explored
                     ) || edit_entry_is_expandable(entry);
                     let show_hint = expandable
                         && !entry.body.is_empty()
@@ -1553,10 +1555,21 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
             continue;
         }
         let homogeneous_command = kinds.iter().all(|k| *k == ToolTranscriptKind::Command);
+        let mut seen_explorations: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for &i in &batch {
             let Some(entry) = tool_transcript_entry(state, i, width, false) else {
                 continue;
             };
+            // The renderer folds repeated identical `Explored` rows into a
+            // single child, so the walk must not offer a candidate for a row
+            // the transcript does not draw: a press would report expanding
+            // something that stayed collapsed (#1594).
+            if entry.kind == ToolTranscriptKind::Explored
+                && !seen_explorations.insert(format!("{}\0{}", entry.action, entry.target))
+            {
+                continue;
+            }
             match entry.kind {
                 ToolTranscriptKind::Tool => {
                     if !entry.body.is_empty() {
@@ -1573,11 +1586,28 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
                         out.push(i);
                     }
                 }
-                ToolTranscriptKind::Explored => {}
+                ToolTranscriptKind::Explored => {
+                    if !entry.body.is_empty() {
+                        out.push(i);
+                    }
+                }
             }
         }
     }
     out
+}
+
+/// How much of the transcript is expanded, as `(expanded, collapsible)`.
+///
+/// The transcript-level readout, so the whole-session state is visible while
+/// scrolling instead of only inferable from per-row hints (#1594).
+pub(crate) fn expand_progress(state: &RenderSnapshot, width: u16) -> (usize, usize) {
+    let candidates = collapsible_tool_indices(state, width);
+    let expanded = candidates
+        .iter()
+        .filter(|index| state.expanded_thoughts().contains(index))
+        .count();
+    (expanded, candidates.len())
 }
 
 pub(super) fn render_committed_tool_result(

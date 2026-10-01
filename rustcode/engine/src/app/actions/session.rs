@@ -126,8 +126,69 @@ pub enum ExpandOutcome {
     Expanded(usize),
     /// The focused entry is collapsed again.
     Collapsed(usize),
+    /// Every collapsible entry now renders its body inline.
+    ExpandedAll {
+        /// How many entries the press expanded.
+        count: usize,
+    },
+    /// Every collapsible entry is collapsed again.
+    CollapsedAll {
+        /// How many entries the press collapsed.
+        count: usize,
+    },
     /// Nothing in the transcript is collapsible, so the press was a no-op.
     NothingToExpand,
+}
+
+/// Expand every collapsible body, or collapse them all when all are already
+/// expanded.
+///
+/// The whole-transcript toggle `ctrl+o` drives. Which direction a press goes
+/// is a property of the visible set, not of invisible focus state, so the key
+/// is idempotent and predictable (#1594).
+pub fn toggle_all_expanded_thoughts(s: &mut AppState, candidates: &[usize]) -> ExpandOutcome {
+    let (outcome, notice) = toggle_all_expanded_bodies(&mut s.expanded_thoughts, candidates);
+    s.expanded_thought_focus = None;
+    s.set_transient_notice(notice);
+    outcome
+}
+
+/// The whole-transcript transition, over just the state the bodies live in.
+///
+/// Expand when *any* candidate is still collapsed, collapse only once none
+/// are. Split out for the same reason as [`toggle_expanded_bodies`]: a
+/// frontend that owns only the render-visible expand state can drive the same
+/// press without an `AppState` (#1594).
+pub(crate) fn toggle_all_expanded_bodies(
+    expanded: &mut std::collections::HashSet<usize>,
+    candidates: &[usize],
+) -> (ExpandOutcome, &'static str) {
+    if candidates.is_empty() {
+        return (ExpandOutcome::NothingToExpand, "Nothing to expand");
+    }
+    // Entries that already sit expanded are exactly the ones a collapse pass
+    // would remove, so the count is the visible state, not a recount.
+    let already = candidates
+        .iter()
+        .filter(|index| expanded.contains(index))
+        .count();
+    if already < candidates.len() {
+        expanded.extend(candidates.iter().copied());
+        (
+            ExpandOutcome::ExpandedAll {
+                count: candidates.len(),
+            },
+            "Expanded all tool output",
+        )
+    } else {
+        for index in candidates {
+            expanded.remove(index);
+        }
+        (
+            ExpandOutcome::CollapsedAll { count: already },
+            "Collapsed all tool output",
+        )
+    }
 }
 
 /// Toggle the collapsed tool body `candidates` points at.

@@ -332,11 +332,14 @@ pub struct AppState {
     pub prompt_cache: PromptCache,
     pub verbosity: Verbosity,
     pub expanded_thoughts: std::collections::HashSet<usize>,
-    /// Message index the expand affordance is currently pointed at.
+    /// Message index the single-entry expand step is currently pointed at.
     ///
-    /// `ctrl+o` toggles the focused entry. Keeping the focus next to
-    /// `expanded_thoughts` means a press always collapses what the previous
-    /// press expanded, even when new tool output has arrived in between.
+    /// `ctrl+shift+o` toggles the focused entry. `ctrl+o` is the
+    /// whole-transcript toggle and does not use this, so a press there is
+    /// decided by the visible set rather than by invisible focus (#1594).
+    /// Keeping the focus next to `expanded_thoughts` means a step always
+    /// collapses what the previous step expanded, even when new tool output
+    /// has arrived in between.
     pub expanded_thought_focus: Option<usize>,
     /// Warning or informational notices collected from background operations (e.g. MCP startup timeouts)
     /// to be displayed cleanly upon application exit instead of interrupting active terminal rendering.

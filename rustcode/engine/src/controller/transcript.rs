@@ -45,6 +45,26 @@ pub fn sanitize_recap_content(content: &str) -> String {
 /// What one expand/collapse request did to the collapsed tool bodies.
 pub use crate::app::ExpandOutcome;
 
+/// Expand every collapsible body, or collapse them all when all are expanded.
+///
+/// This is what `ctrl+o` does; [`toggle_expanded_thought`] is the single-entry
+/// step behind `ctrl+shift+o`. The direction is decided by the visible set, so
+/// the press is idempotent instead of depending on invisible focus (#1594).
+pub fn toggle_all_expanded_thoughts(
+    state: &mut crate::app::AppState,
+    candidates: &[usize],
+) -> ExpandOutcome {
+    crate::app::toggle_all_expanded_thoughts(state, candidates)
+}
+
+/// Apply one whole-transcript expand/collapse press to bodies a frontend owns.
+pub fn toggle_all_expanded_bodies(
+    expanded: &mut std::collections::HashSet<usize>,
+    candidates: &[usize],
+) -> (ExpandOutcome, &'static str) {
+    crate::app::toggle_all_expanded_bodies(expanded, candidates)
+}
+
 /// Toggle the collapsed tool body the expand key points at.
 ///
 /// `candidates` are the message indices the frontend rendered with a collapsed

@@ -1,10 +1,16 @@
 //! A dynamically-sized inline terminal.
 //!
 //! Ratatui's stock inline viewport has an immutable height.  Chat UIs need the
-//! opposite: finalized rows belong to terminal scrollback while the mutable
-//! composer/streaming tail grows and shrinks each frame.  This small wrapper is
-//! derived from Ratatui's terminal implementation and follows Codex's viewport
-//! model.
+//! opposite: the composer and streaming tail grow and shrink each frame while
+//! the session keeps a fixed anchor on the row it started at.  This small
+//! wrapper is derived from Ratatui's terminal implementation and follows
+//! Codex's viewport model.
+//!
+//! `insert_before` copies finalized rows into the terminal's own scrollback.
+//! That path is opt-in (`preserve_transcript_scrollback`): scrollback is
+//! write-only, so rows copied there can never be revised or taken back, which
+//! is what left the whole conversation above the exit handoff (#1587) and what
+//! made an expanded tool body append without bound (#1593).
 
 use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::{Buffer, Cell};
@@ -174,7 +180,7 @@ where
     }
 
     /// Erase everything this session painted, from its first row to the bottom
-    /// of the screen, keeping native scrollback.
+    /// of the screen.
     ///
     /// Decision (#1544, revising #1520): an inline exit leaves only the exit
     /// handoff and the shell prompt on screen. #1520 anchored the erase at the
@@ -188,10 +194,12 @@ where
     /// and exactly the rows the session wrote when it has not, so a short
     /// session still leaves the user's earlier terminal output alone.
     ///
-    /// Scrollback above the visible screen is never touched: the erase is
-    /// `ClearType::AfterCursor` from the anchor, with no `ESC[3J`. The
-    /// conversation stays scrollable, output from before the session survives,
-    /// and nothing depends on scrollback-purge support that varies by terminal.
+    /// Native scrollback is never purged: the erase is `ClearType::AfterCursor`
+    /// from the anchor, with no `ESC[3J`. Output from before the session
+    /// survives and nothing depends on scrollback-purge support that varies by
+    /// terminal. By default the session put no transcript rows there to begin
+    /// with (#1587); with `preserve_transcript_scrollback` the opted-in copy
+    /// stays scrollable, which is the trade that setting exists to offer.
     ///
     /// The erase is exact and idempotent: it collapses the viewport and clears
     /// all tracking, so repeats (second restore, `Drop`, editor handoff) clear
@@ -441,8 +449,7 @@ where
         // Committed lines now own every row above the viewport, but they are
         // still this session's output and still on screen, so the session
         // anchor and its scroll distance stay: the exit erase covers them
-        // (that is the #1544 decision) instead of stopping at the live
-        // viewport. A resize pending-clear is clamped below the committed rows
+        // instead of stopping at the live viewport. A resize pending-clear is clamped below the committed rows
         // because the next draw repaints from there.
         self.clear_from_y = self.clear_from_y.map(|y| y.max(self.viewport_area.y));
 
@@ -809,14 +816,13 @@ mod tests {
         );
     }
 
-    /// #1544 decision, regression: a long session commits nearly its whole
+    /// #1544 decision, regression: a long session paints nearly its whole
     /// conversation while it runs, so the exit erase must cover every row the
-    /// session painted, not just the live mutable viewport. The rows the
-    /// session already pushed into scrollback stay there — the erase must not
-    /// purge scrollback, which would destroy output from before the session
-    /// too and would depend on terminal-specific `ESC[3J` support.
+    /// session wrote, not just the live mutable viewport. Scrollback is not
+    /// purged, which would destroy output from before the session too and
+    /// would depend on terminal-specific `ESC[3J` support.
     #[test]
-    fn erase_clears_the_whole_session_projection_and_keeps_scrollback() {
+    fn erase_clears_the_whole_session_projection_without_purging_scrollback() {
         let mut terminal = inline_session(20, 8, 7, 7);
         composer(&mut terminal, 6, "composer");
         // A long session: far more committed rows than the screen can hold.
@@ -847,6 +853,43 @@ mod tests {
             scrollback.iter().any(|row| row.contains("chat")),
             "committed conversation is no longer scrollable: {scrollback:?}"
         );
+    }
+
+    /// #1587: the transcript lives in the mutable viewport, so a long session
+    /// leaves no transcript rows in the terminal's own scrollback for the exit
+    /// erase to fail to reach. The scrollback an inline session does touch is
+    /// the shell output it started on top of, which is pre-session content the
+    /// user still wants.
+    #[test]
+    fn a_session_that_never_commits_to_scrollback_leaves_no_transcript_on_exit() {
+        let mut terminal = inline_session(20, 8, 7, 7);
+        // A long session: the frame grows and repaints exactly as a real one
+        // does, without ever calling `insert_before` for transcript content.
+        for round in 0..6 {
+            composer(&mut terminal, 5, &format!("frame {round}"));
+        }
+        let scrollback = rows_of(terminal.backend().scrollback(), 20);
+        assert!(
+            scrollback.iter().all(|row| !row.contains("frame")),
+            "transcript rows reached native scrollback: {scrollback:?}"
+        );
+
+        terminal.erase_session_projection(None).unwrap();
+
+        let rows = rows_of(terminal.backend().buffer(), 20);
+        assert!(
+            rows.iter().all(|row| !row.contains("frame")),
+            "the projection survived the exit erase: {rows:?}"
+        );
+        assert!(
+            rows[3..].iter().all(|row| row.is_empty()),
+            "session rows survived: {rows:?}"
+        );
+        assert!(
+            rows[..3].iter().all(|row| row.starts_with("shell")),
+            "pre-session output was erased: {rows:?}"
+        );
+        assert_eq!(terminal.area(), Rect::new(0, 3, 20, 0));
     }
 
     /// A session that never scrolls the screen owns only the rows it wrote, so
