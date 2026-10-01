@@ -13,16 +13,22 @@ use ratatui::backend::CrosstermBackend;
 use std::future::Future;
 use std::io::{self, Write};
 use std::sync::{
-    Once,
+    Once, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
+use std::thread::{self, ThreadId};
 
 static FULLSCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// Set while a panic unwinds, so the restore that runs on `Drop` leaves the
-/// inline projection alone. A panic is an emergency, not an exit: the
-/// conversation and the panic message are the only context the user has, and
-/// the clean exit of #1544 must not delete them on the way out.
+/// Latched when the terminal-owner thread panics. This alone never suppresses
+/// cleanup: a recovered panic (background tool/turn/child, or even a caught
+/// owner panic) must not disable later `/exit`, Ctrl-C/Ctrl-D, suspend or
+/// editor cleanup. Only the conjunction with a live unwind on the restoring
+/// thread — see `panic_suppresses_erase` — keeps the projection. (#1564)
 static PANIC_UNWINDING: AtomicBool = AtomicBool::new(false);
+/// Thread that owns the terminal. The panic hook records every thread panic,
+/// but only the owner's panic arms `PANIC_UNWINDING`; a recovered background
+/// panic returns the app to idle and must leave later cleanup intact.
+static PANIC_OWNER: OnceLock<ThreadId> = OnceLock::new();
 static PANIC_HOOK: Once = Once::new();
 
 #[derive(Debug, Default)]
@@ -57,12 +63,36 @@ impl AlternateScreen {
     }
 }
 
+/// Whether a panic on `panicking_thread` should arm the owner-scoped panic
+/// latch. Panics on any other thread are background panics: the controller
+/// recovers and returns the app to idle, so they must not affect later
+/// cleanup. When no owner is recorded yet (panic before startup), arm the
+/// latch to preserve the previous emergency behavior.
+fn panic_from_owner(owner: Option<ThreadId>, panicking_thread: ThreadId) -> bool {
+    owner.map(|id| id == panicking_thread).unwrap_or(true)
+}
+
+/// Whether the panic latch suppresses the exit erase right now. The latch
+/// records that the owner panicked; `thread_unwinding` reports whether the
+/// restoring thread is actively unwinding. A recovered panic — background or
+/// caught owner — has `thread_unwinding == false`, so normal cleanup resumes.
+/// An actual terminal-owner unwind keeps the projection and the panic message.
+fn panic_suppresses_erase(owner_latched: bool, thread_unwinding: bool) -> bool {
+    owner_latched && thread_unwinding
+}
+
 fn install_panic_restore() {
     PANIC_HOOK.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            PANIC_UNWINDING.store(true, Ordering::SeqCst);
-            if FULLSCREEN_ACTIVE.load(Ordering::SeqCst) {
+            let from_owner = panic_from_owner(PANIC_OWNER.get().copied(), thread::current().id());
+            if from_owner {
+                PANIC_UNWINDING.store(true, Ordering::SeqCst);
+            }
+            // Only the owner tears down the screen: a recovered background
+            // panic must leave raw mode and the alternate screen alone, or
+            // the still-running session loses its terminal mid-turn. (#1564)
+            if from_owner && FULLSCREEN_ACTIVE.load(Ordering::SeqCst) {
                 let mut out = io::stdout();
                 let _ = execute!(out, PopKeyboardEnhancementFlags);
                 let _ = execute!(
@@ -178,7 +208,12 @@ impl TerminalRuntime {
 
         // Both modes need the hook: fullscreen to release the alternate screen
         // before the message prints, inline to arm `PANIC_UNWINDING` so the
-        // restore on `Drop` keeps the projection and the panic message.
+        // restore on `Drop` keeps the projection and the panic message during
+        // an actual owner unwind. The latch is owner-scoped (a recovered
+        // background panic never arms it) and only suppresses the erase while
+        // the restoring thread is actively unwinding, so later normal exits,
+        // suspend/resume and editor handoffs clean up as usual. (#1564)
+        let _ = PANIC_OWNER.get_or_init(|| thread::current().id());
         install_panic_restore();
         if fullscreen_requested {
             FULLSCREEN_ACTIVE.store(true, Ordering::SeqCst);
@@ -241,11 +276,15 @@ impl TerminalRuntime {
         // correct by scroll distance, so growth, `scroll_screen_up` and a
         // mid-session resize cannot strand it) down to the bottom of the
         // screen, while native scrollback is preserved. It is exact and
-        // idempotent, so repeats are safe.
+        // idempotent, so repeats are safe. A panic suppresses the erase only
+        // while the restoring thread is actively unwinding from an owner
+        // panic; a recovered background panic (or a caught owner panic) has
+        // already returned the app to idle, so later restores erase normally.
+        // (#1564; #1545 deliberately keeps the projection on a live unwind.)
         let erase_result = if should_erase_session_projection(
             self.alternate_screen.is_active(),
             self.fullscreen,
-            PANIC_UNWINDING.load(Ordering::SeqCst),
+            panic_suppresses_erase(PANIC_UNWINDING.load(Ordering::SeqCst), thread::panicking()),
         ) {
             self.terminal.erase_session_projection(cursor_y)
         } else {
@@ -382,7 +421,10 @@ impl Drop for TerminalRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlternateScreen, Lifecycle, should_erase_session_projection};
+    use super::{
+        AlternateScreen, Lifecycle, panic_from_owner, panic_suppresses_erase,
+        should_erase_session_projection,
+    };
 
     #[test]
     fn inline_restore_erases_the_projection_but_fullscreen_and_panics_do_not() {
@@ -438,5 +480,61 @@ mod tests {
         lifecycle.mark_restored();
 
         assert!(lifecycle.is_restored());
+    }
+
+    #[test]
+    fn only_the_owner_thread_arms_the_panic_latch() {
+        let owner = std::thread::current().id();
+        assert!(panic_from_owner(Some(owner), owner));
+        let background = std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .unwrap();
+        assert_ne!(owner, background);
+        // A recovered background tool/turn/child panic must not arm the latch,
+        // or every later /exit, Ctrl-C/Ctrl-D, suspend and editor cleanup
+        // would skip the erase even though the app is back at idle. (#1564)
+        assert!(!panic_from_owner(Some(owner), background));
+        // Before startup no owner is recorded; keep the emergency behavior.
+        assert!(panic_from_owner(None, background));
+    }
+
+    #[test]
+    fn only_an_active_owner_unwind_suppresses_the_erase() {
+        // No panic at all: normal exits erase.
+        assert!(!panic_suppresses_erase(false, false));
+        // Recovered background panic never arms the latch, so even while some
+        // other thread unwinds the owner's restore still erases. This is the
+        // #1564 regression: the old code latched globally forever, so any
+        // thread panic suppressed every later restore.
+        // Owner panicked and the restoring thread is unwinding: keep the
+        // projection and the panic message. (#1545 behavior, retained.)
+        assert!(panic_suppresses_erase(true, true));
+        // Owner panic recovered (caught) and the app is back at idle: later
+        // restores erase normally again.
+        assert!(!panic_suppresses_erase(true, false));
+    }
+
+    #[test]
+    fn recovered_background_panic_leaves_later_restores_erasing() {
+        // End-to-end through the decision function: simulate a background
+        // panic that never arms the latch, followed by a normal restore on
+        // the idle owner thread. The erase must still happen.
+        let owner = std::thread::current().id();
+        let background = std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .unwrap();
+        let latched = panic_from_owner(Some(owner), background);
+        assert!(!latched);
+        assert!(should_erase_session_projection(
+            false,
+            false,
+            panic_suppresses_erase(latched, false),
+        ));
+        // And while the owner itself unwinds, the erase stays suppressed.
+        assert!(!should_erase_session_projection(
+            false,
+            false,
+            panic_suppresses_erase(true, true),
+        ));
     }
 }
