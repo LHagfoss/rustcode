@@ -179,7 +179,10 @@ impl TranscriptState {
         );
         let cache = self
             .committed_cache
-            .get_or_insert_with(|| super::lru::LruCache::new(4));
+            // Viewports showing more than ~4 messages thrashed a cap-4 cache:
+            // the suffix walk and the viewport loop read the same blocks, so
+            // keep enough entries for a tall viewport plus its suffix (#1582).
+            .get_or_insert_with(|| super::lru::LruCache::new(32));
         if let Some(lines) = cache.get(&key) {
             return Arc::clone(lines);
         }

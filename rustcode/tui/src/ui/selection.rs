@@ -67,6 +67,26 @@ fn buffer_row_cells(area: Rect, buffer: &Buffer, y: u16) -> Vec<String> {
         .collect()
 }
 
+/// Hashes the visible buffer without allocating per-cell Strings.
+///
+/// `buffer_row_cells` allocates one String per cell; hashing borrows each
+/// symbol so an unchanged frame can skip the scan entirely (#1582).
+fn buffer_content_hash(area: Rect, buffer: &Buffer) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    area.hash(&mut hasher);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            buffer
+                .cell((x, y))
+                .map(|cell| cell.symbol())
+                .unwrap_or_default()
+                .hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 enum SelectionUnit {
     #[default]
@@ -104,6 +124,7 @@ pub(crate) struct TranscriptSelection {
     origin_row: u16,
     moved_vertically: bool,
     last_edge_attempt: Option<(isize, usize)>,
+    unpinned_hash: Option<(Rect, Vec<bool>, usize, u64)>,
 }
 
 impl TranscriptSelection {
@@ -175,6 +196,68 @@ impl TranscriptSelection {
             self.viewport_scroll = scroll_rows;
             self.capture_missing_rows(area, buffer);
         } else {
+            // No active selection: reuse the last scan when the frame is
+            // unchanged instead of rebuilding a Vec<PaintedRow> with one
+            // String per cell plus a deep equality compare every frame.
+            // The buffer hash walks cells without allocating Strings, so an
+            // unchanged frame does no per-cell allocation and never reaches
+            // `buffer_row_cells` (#1582).
+            let keyboard_selected =
+                self.keyboard_mode && self.keyboard_anchor != self.keyboard_focus;
+            if self.anchor.is_none() && self.focus.is_none() && !keyboard_selected && !self.dragging
+            {
+                // Fast path: geometry/scroll/wrap changed => content definitely
+                // changed, rescan without paying for a hash first. Only hash
+                // when a static frame is possible.
+                let geometry_same = self.rows_scanned
+                    && self.area == area
+                    && self.soft_wrap_before == soft_wrap_before
+                    && self.viewport_scroll == scroll_rows;
+                if geometry_same {
+                    let hash = buffer_content_hash(area, buffer);
+                    if let Some((_, _, _, prev_hash)) = &self.unpinned_hash
+                        && *prev_hash == hash
+                    {
+                        return;
+                    }
+                    let rows = (area.y..area.bottom())
+                        .map(|y| {
+                            PaintedRow::new(
+                                buffer_row_cells(area, buffer, y),
+                                soft_wrap_before
+                                    .get(usize::from(y - area.y))
+                                    .copied()
+                                    .unwrap_or(false),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    self.rows = rows;
+                    self.rows_scanned = true;
+                    self.unpinned_hash = Some((area, soft_wrap_before.to_vec(), scroll_rows, hash));
+                    return;
+                }
+                let rows = (area.y..area.bottom())
+                    .map(|y| {
+                        PaintedRow::new(
+                            buffer_row_cells(area, buffer, y),
+                            soft_wrap_before
+                                .get(usize::from(y - area.y))
+                                .copied()
+                                .unwrap_or(false),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                // No selection to clear on drift; just refresh the cache.
+                // Geometry changed, so skip hashing this frame; the next
+                // static frame will hash and populate the cache.
+                self.area = area;
+                self.rows = rows;
+                self.rows_scanned = true;
+                self.set_soft_wrap_before(soft_wrap_before);
+                self.viewport_scroll = scroll_rows;
+                self.unpinned_hash = None;
+                return;
+            }
             let rows = (area.y..area.bottom())
                 .map(|y| {
                     PaintedRow::new(
@@ -1069,6 +1152,32 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn refresh_view_without_selection_reuses_unchanged_frame() {
+        // No anchor, no focus, no keyboard range: the first frame scans once
+        // so a later pin has fresh rows, and an identical second frame reuses
+        // the scan without reaching `buffer_row_cells` again (#1582).
+        let area = Rect::new(0, 0, 32, 10);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello world", Style::default());
+        let mut selection = TranscriptSelection::default();
+        let soft_wrap_before = vec![false; 10];
+        selection.refresh_view(area, &buffer, &soft_wrap_before, 0);
+        assert!(!selection.rows.is_empty());
+        assert!(selection.rows_scanned);
+        assert!(!selection.has_selection());
+        let rows_len = selection.rows.len();
+        // Identical frame: reuse, no rescan.
+        selection.refresh_view(area, &buffer, &soft_wrap_before, 0);
+        assert_eq!(selection.rows.len(), rows_len);
+        assert!(selection.rows_scanned);
+        // Changed content: rescan.
+        buffer.set_string(0, 1, "second row", Style::default());
+        selection.refresh_view(area, &buffer, &soft_wrap_before, 0);
+        assert_eq!(selection.rows.len(), rows_len);
+        assert!(selection.rows_scanned);
     }
 
     #[test]
