@@ -228,6 +228,20 @@ pub(crate) fn render_visible_conversation_with_transcript(
         return live;
     }
 
+    if transcript.selection.is_active() {
+        return render_selected_history_projection(
+            state,
+            width,
+            height,
+            transcript,
+            live,
+            display_start,
+            measured_tail,
+            content_changed,
+            content_mark,
+        );
+    }
+
     let capacity = height as usize;
     let target_rows = capacity
         .saturating_add(transcript.scroll_rows())
@@ -308,6 +322,153 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let through = end.saturating_sub(offset).min(live.len());
     if from < through {
         lines.extend_from_slice(&live[from..through]);
+    }
+    lines
+}
+
+/// Reuse the immutable history projection pinned at selection start. As an
+/// edge drag or wheel gesture moves into older content, render only the newly
+/// exposed blocks; prefix row counts locate the viewport without rescanning or
+/// rebuilding the already selected history span on each frame.
+fn render_selected_history_projection(
+    state: &RenderSnapshot,
+    width: u16,
+    height: u16,
+    transcript: &mut TranscriptState,
+    live: Vec<Line<'static>>,
+    display_start: usize,
+    measured_tail: Option<(usize, usize)>,
+    content_changed: bool,
+    content_mark: (u64, usize),
+) -> Vec<Line<'static>> {
+    let history = state.history();
+    let capacity = height as usize;
+    let target_rows = capacity
+        .saturating_add(transcript.scroll_rows())
+        .saturating_add(1);
+    transcript
+        .selection
+        .ensure_selected_projection(history.len(), display_start, width, height);
+
+    loop {
+        let Some((cached_rows, next_index, projection_start, finished)) = transcript
+            .selection
+            .selected_projection()
+            .map(|projection| {
+                (
+                    projection.total_rows(),
+                    projection.next_index(),
+                    projection.display_start(),
+                    projection.finished(),
+                )
+            })
+        else {
+            return Vec::new();
+        };
+        let reached_oldest_history = next_index <= projection_start;
+        let needs_welcome = reached_oldest_history && !welcome_is_live(state);
+        if (live.len().saturating_add(cached_rows) >= target_rows && !needs_welcome) || finished {
+            break;
+        }
+
+        let next = if next_index > projection_start {
+            let last = next_index - 1;
+            if history[last].role == "tool" {
+                let mut first = last;
+                while first > projection_start && history[first - 1].role == "tool" {
+                    first -= 1;
+                }
+                let indices = (first..next_index).collect::<Vec<_>>();
+                let mut block =
+                    render_committed_tool_result_group_snapshot(state, &indices, width, false);
+                if !block.is_empty() {
+                    block.push(Line::from(""));
+                }
+                Some((Arc::new(block), first, false))
+            } else {
+                Some((
+                    Arc::clone(&transcript.committed_block(state, last, width)),
+                    last,
+                    false,
+                ))
+            }
+        } else if !welcome_is_live(state) {
+            let banner =
+                build_claude_startup_banner_snapshot(state, width as usize, height as usize);
+            Some((Arc::new(banner), projection_start, true))
+        } else {
+            None
+        };
+
+        if let Some((block, next_index, finish_projection)) = next {
+            transcript
+                .selection
+                .selected_projection_mut()
+                .expect("selection projection initialized")
+                .append(block, next_index);
+            if finish_projection {
+                transcript
+                    .selection
+                    .selected_projection_mut()
+                    .expect("selection projection initialized")
+                    .finish();
+            }
+        } else {
+            transcript
+                .selection
+                .selected_projection_mut()
+                .expect("selection projection initialized")
+                .finish();
+        }
+    }
+
+    let history_rows = transcript
+        .selection
+        .selected_projection()
+        .map_or(0, |projection| projection.total_rows());
+    let total_rows = history_rows.saturating_add(live.len());
+    let max_scroll = total_rows.saturating_sub(capacity);
+    let scroll = transcript.clamp_scroll_rows(max_scroll);
+    if scroll > 0 {
+        let tail_start = committed_tail_start(state, display_start);
+        let tail_rows = measured_tail
+            .filter(|(start, _)| *start == tail_start)
+            .map(|(_, rows)| rows)
+            .unwrap_or_else(|| committed_suffix_rows(state, width, transcript, tail_start));
+        transcript.reading_anchor = Some(super::history_cell::ReadingAnchor {
+            width,
+            height,
+            display_start,
+            history_revision: state.history().revision(),
+            history_len: history.len(),
+            tail_start,
+            tail_rows,
+        });
+    }
+
+    // Keep the "new activity" affordance tied to the offset this frame
+    // clamped to, exactly as the uncached projection path does.
+    transcript.note_projection(scroll == 0, content_changed, content_mark);
+    let end = total_rows.saturating_sub(scroll);
+    let start = end.saturating_sub(capacity);
+    let history_end = end.min(history_rows);
+    let history_start = start.min(history_end);
+    let mut lines = if history_start < history_end {
+        let from_tail = history_rows - history_end;
+        let through_tail = history_rows - history_start;
+        transcript
+            .selection
+            .selected_projection()
+            .map_or_else(Vec::new, |projection| {
+                projection.rows_from_tail_range(from_tail, through_tail)
+            })
+    } else {
+        Vec::new()
+    };
+    let live_start = start.saturating_sub(history_rows);
+    let live_end = end.saturating_sub(history_rows).min(live.len());
+    if live_start < live_end {
+        lines.extend_from_slice(&live[live_start..live_end]);
     }
     lines
 }
