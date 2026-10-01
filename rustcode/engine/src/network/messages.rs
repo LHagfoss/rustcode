@@ -135,6 +135,31 @@ pub(crate) fn attach_request_context_tail(msgs: &mut Vec<serde_json::Value>, tex
     }));
 }
 
+/// Add a request-local notice to the runtime context tail.
+///
+/// The tail is excluded from the recorded stable prefix, so a notice added here
+/// never invalidates the provider's cached prefix. (#1589)
+pub(crate) fn append_to_context_tail(msgs: &mut [serde_json::Value], text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(content) = msgs
+        .iter_mut()
+        .rev()
+        .find(|message| {
+            message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        })
+        .and_then(|message| message.get_mut("content"))
+        && let serde_json::Value::String(content) = content
+    {
+        content.push_str("\n\n");
+        content.push_str(text);
+    }
+}
+
 /// In-memory checkpoint for preserving the stable provider-request prefix
 /// while a single user turn grows through assistant/tool rounds. The volatile
 /// runtime-context message is deliberately excluded from the checkpoint.
