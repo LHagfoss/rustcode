@@ -538,24 +538,76 @@ impl TranscriptSelection {
             return;
         };
         let (start, end) = (range.0.row.min(range.1.row), range.0.row.max(range.1.row));
-        if (start..=end).all(|row| self.captured.contains_key(&row)) {
-            return;
+        let mut gaps = Vec::new();
+        let mut gap_start = None;
+        for row in start..=end {
+            if self.captured.contains_key(&row) {
+                if let Some(first) = gap_start.take() {
+                    gaps.push((first, row - 1));
+                }
+            } else {
+                gap_start.get_or_insert(row);
+            }
         }
+        if let Some(first) = gap_start {
+            gaps.push((first, end));
+        }
+        for (mut first, last) in gaps {
+            while first <= last {
+                let through = last.min(first.saturating_add(60_000));
+                self.regenerate_snapshot_rows(first, through);
+                first = through.saturating_add(1);
+            }
+        }
+    }
+
+    fn regenerate_snapshot_rows(&mut self, start: i64, end: i64) {
         let Some(snapshot) = self.snapshot.as_ref().map(Arc::clone) else {
             return;
         };
         if self.pinned_width == 0 || self.pinned_height == 0 {
             return;
         }
-        // The full transcript at the pinned width; the temp transcript only
-        // supplies the committed-block cache, never the live selection.
+        // Render only the requested span, measured from the pinned tail.
+        // A deep transcript must not be rendered in full after a wheel burst.
+        let requested_start = start.saturating_sub(1);
+        let requested_end = end.saturating_add(1);
+        let pinned_tail = self.pinned_height as i64 + self.pinned_scroll as i64;
+        let scroll = pinned_tail.saturating_sub(requested_end + 1).max(0) as usize;
+        let height = requested_end
+            .saturating_sub(requested_start)
+            .saturating_add(1);
+        let Ok(height) = u16::try_from(height) else {
+            return;
+        };
         let mut temp = super::TranscriptState::default();
+        temp.scroll_up(scroll);
+        // Reuse the immutable selected-history projection that already covers
+        // the scrolled viewport, instead of revisiting all newer blocks.
+        let projection_height = self
+            .selected_projection
+            .as_ref()
+            .filter(|projection| projection.width == self.pinned_width)
+            .map(|projection| projection.height);
+        if projection_height.is_some() {
+            temp.selection.snapshot = Some(Arc::clone(&snapshot));
+            temp.selection.selected_projection = self.selected_projection.take();
+            if let Some(projection) = temp.selection.selected_projection.as_mut() {
+                projection.height = height;
+            }
+        }
         let lines = super::render_visible_conversation_with_transcript(
             &snapshot,
             self.pinned_width,
-            u16::MAX,
+            height,
             &mut temp,
         );
+        if let Some(original_height) = projection_height {
+            self.selected_projection = temp.selection.selected_projection.take();
+            if let Some(projection) = self.selected_projection.as_mut() {
+                projection.height = original_height;
+            }
+        }
         if lines.is_empty() {
             return;
         }
@@ -583,10 +635,8 @@ impl TranscriptSelection {
             let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
             paragraph.render(source_area, &mut source);
         }
-        // Absolute key -> visual index: key 0 is the top of the viewport as
-        // pinned, which showed `pinned_height` visual rows ending
-        // `pinned_scroll` rows above the bottom.
-        let base = total_visual as i64 - self.pinned_height as i64 - self.pinned_scroll as i64;
+        // Map the returned tail window back to the original pinned keys.
+        let base = total_visual as i64 + temp.scroll_rows() as i64 - pinned_tail;
         // One neighbour each side keeps `copied_range`'s trailing-space
         // decision exact when the extended edge ends mid-logical-line.
         for row in start.saturating_sub(1)..=end.saturating_add(1) {
@@ -1063,9 +1113,10 @@ impl TranscriptSelection {
 
     pub(crate) fn take_scroll_step(&mut self, scroll_rows: usize) -> Option<isize> {
         if self.pending_scroll != 0 {
-            let direction = self.pending_scroll.signum();
-            self.pending_scroll -= direction;
-            return Some(direction);
+            // Wheel events already carry the same row delta as unselected
+            // scrolling. Consume their coalesced delta in the next frame;
+            // throttling it to one row makes a flick take dozens of frames.
+            return Some(std::mem::take(&mut self.pending_scroll));
         }
         let direction = self.edge_scroll_direction(scroll_rows)?;
         self.mark_edge_attempt(direction, scroll_rows);
@@ -1160,6 +1211,10 @@ impl TranscriptSelection {
                 self.moved_vertically |= event.row != self.origin_row;
                 self.last_edge_attempt = None;
                 self.extend_from_pointer();
+                // A coalesced wheel burst can skip entire viewports. Recover
+                // missing rows only when the gesture extends across that gap,
+                // so scrolling itself stays as cheap as unselected scrolling.
+                self.regenerate_gap_from_snapshot();
             }
             MouseEventKind::Up(MouseButton::Left) if self.dragging => {
                 if self.snapshot.is_some() {
@@ -2445,11 +2500,9 @@ mod tests {
             transcript.scroll_rows(),
         );
         transcript.selection.queue_scroll(-1, 3);
-        for step in 1..=3 {
-            assert!(transcript.step_selection_scroll());
-            let _ = rendered_transcript(&state, &mut transcript);
-            assert_eq!(transcript.scroll_rows(), step);
-        }
+        assert!(transcript.step_selection_scroll());
+        let _ = rendered_transcript(&state, &mut transcript);
+        assert_eq!(transcript.scroll_rows(), 3);
         assert!(!transcript.step_selection_scroll());
         assert!(transcript.selection.captured.len() >= area.height as usize + 3);
 
@@ -2504,9 +2557,8 @@ mod tests {
             assert!(frames <= 8 * WHEEL_SCROLL_LINES, "the queue must drain");
         }
         assert_eq!(
-            frames,
-            8 * WHEEL_SCROLL_LINES,
-            "the run drains one row per frame, so every crossed row is captured"
+            frames, 1,
+            "a coalesced wheel flick moves its entire delta in the next frame"
         );
         assert_eq!(transcript.scroll_rows(), start + 8 * WHEEL_SCROLL_LINES);
 
@@ -2524,12 +2576,64 @@ mod tests {
             let _ = rendered_transcript(&state, &mut transcript);
             frames += 1;
         }
-        assert_eq!(frames, 6);
+        assert_eq!(frames, 1);
         assert_eq!(
             transcript.scroll_rows(),
             start + 8 * WHEEL_SCROLL_LINES - 6,
             "the reversed run should scroll back 6 rows, not run away"
         );
+    }
+
+    #[test]
+    fn selected_and_plain_wheel_movement_match_at_each_frame() {
+        let state = long_conversation();
+        for released in [false, true] {
+            let mut selected = super::super::history_cell::TranscriptState::default();
+            let mut plain = super::super::history_cell::TranscriptState::default();
+            selected.scroll_up(60);
+            plain.scroll_up(60);
+            let _ = rendered_transcript(&state, &mut selected);
+            let area = selected.selection.area;
+            selected.selection.begin_with_snapshot(
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    area.x + 2,
+                    area.y + 2,
+                ),
+                super::super::render_snapshot::render_snapshot(&state),
+                selected.scroll_rows(),
+            );
+            selected.selection.mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x + 2,
+                area.y + 1,
+            ));
+            if released {
+                selected.selection.mouse(mouse(
+                    MouseEventKind::Up(MouseButton::Left),
+                    area.x + 2,
+                    area.y + 1,
+                ));
+            }
+            // Identical event cadence: single ticks and bursts coalesced before a
+            // frame, including reversal. Compare movement after each frame.
+            for directions in [&[-1][..], &[-1, -1, -1, -1], &[1], &[1, 1, -1]] {
+                for &direction in directions {
+                    selected
+                        .selection
+                        .queue_scroll(direction, WHEEL_SCROLL_LINES);
+                    if direction < 0 {
+                        plain.scroll_up(WHEEL_SCROLL_LINES);
+                    } else {
+                        plain.scroll_down(WHEEL_SCROLL_LINES);
+                    }
+                }
+                assert!(selected.step_selection_scroll());
+                assert_eq!(selected.scroll_rows(), plain.scroll_rows());
+                let _ = rendered_transcript(&state, &mut selected);
+                assert!(!selected.step_selection_scroll(), "no slow frame backlog");
+            }
+        }
     }
 
     #[test]
@@ -2568,21 +2672,24 @@ mod tests {
             let _ = rendered_transcript(&state, &mut transcript);
             frames += 1;
         }
-        assert_eq!(frames, 10 * WHEEL_SCROLL_LINES);
+        assert_eq!(frames, 1);
         assert!(
             transcript.scroll_rows() > 3 * usize::from(area.height),
             "the flick should carry the viewport well past where it started"
         );
 
-        // Every row that was on screen before the flick is now off screen, so
-        // the copy can only be complete if each one was captured on the frame
-        // it was painted in.
+        // Extend across skipped viewports while still dragging: copying must
+        // recover the gap before release, including the original viewport.
         transcript.selection.mouse(mouse(
             MouseEventKind::Drag(MouseButton::Left),
             area.x + 2,
             area.y,
         ));
         let selected = transcript.selection.selected_text().unwrap();
+        assert!(
+            selected.contains("history row 30"),
+            "the skipped interior row must be recovered: {selected:?}"
+        );
         for row in &before {
             assert!(
                 selected.contains(row.as_str()),
@@ -2677,7 +2784,7 @@ mod tests {
             .lock()
             .expect("theme test lock");
         let mut state = RenderState::new();
-        for index in 0..10_000 {
+        for index in 0..50_000 {
             state.history.push(ChatMessage::new(
                 if index % 2 == 0 { "user" } else { "assistant" },
                 format!("history entry {index:04}: read this line and keep scrolling"),
@@ -2706,8 +2813,8 @@ mod tests {
             area.y,
         ));
 
-        // Measure one cold projection frame separately, then 100 incremental
-        // scroll frames so p95 describes the repeated interaction.
+        // Include actual wheel deltas and pointer extension in every sample,
+        // so gap recovery cost is represented in the interaction benchmark.
         let mut frames = Vec::with_capacity(101);
         let mut allocation_counts = Vec::with_capacity(101);
         let mut allocated_bytes = Vec::with_capacity(101);
@@ -2715,8 +2822,14 @@ mod tests {
             let before_allocations = ALLOCATIONS.load(Ordering::Relaxed);
             let before_bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
             let started = Instant::now();
+            transcript.selection.queue_scroll(-1, 30);
             assert!(transcript.step_selection_scroll());
             let _ = rendered_transcript_size(&state, &mut transcript, 132, 48);
+            transcript.selection.mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x + 2,
+                area.y,
+            ));
             frames.push(started.elapsed());
             allocation_counts.push(ALLOCATIONS.load(Ordering::Relaxed) - before_allocations);
             allocated_bytes.push(ALLOCATED_BYTES.load(Ordering::Relaxed) - before_bytes);
@@ -2732,7 +2845,7 @@ mod tests {
         let percentile_index = |len: usize, p: usize| len.saturating_mul(p).div_ceil(100) - 1;
         let percentile = |sorted: &[Duration], p: usize| sorted[percentile_index(sorted.len(), p)];
         eprintln!(
-            "deep many-entry selection frames (10,000 history entries, 5,000-row initial offset, 132x48, TestBackend + buffer clone): cold={first_frame:?}; 100 warm frames p50/p95/p99={:?}/{:?}/{:?}; warm allocations/frame p50/p95/p99={}/{}/{}, requested bytes/frame p50/p95/p99={}/{}/{}",
+            "deep many-entry selection wheel+drag frames (50,000 history entries, 5,000-row initial offset, 132x48, TestBackend + buffer clone): cold={first_frame:?}; 100 warm frames p50/p95/p99={:?}/{:?}/{:?}; warm allocations/frame p50/p95/p99={}/{}/{}, requested bytes/frame p50/p95/p99={}/{}/{}",
             percentile(&warm_frames, 50),
             percentile(&warm_frames, 95),
             percentile(&warm_frames, 99),
@@ -2750,9 +2863,7 @@ mod tests {
     /// A bigger step is only cheaper per line if the frame cost is flat in the row
     /// count, so this walks a fixed line budget at 1, 3 and 6 rows per tick and
     /// prints the per-frame and per-line cost of each. With a selection pinned the
-    /// cost per line deliberately does not move: `step_selection_scroll` advances
-    /// one row per frame so every crossed row is captured, so an N-row tick costs
-    /// N frames exactly as it did when N was 1.
+    /// selected scrolling now applies the complete wheel delta per frame too.
     fn bench_wheel_step_cost(state: &RenderState) {
         const LINES: usize = 60;
         for step in [1usize, 3, 6] {
