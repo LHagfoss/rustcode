@@ -275,12 +275,19 @@ impl TerminalRuntime {
         // every row this session painted, from the row it started at (kept
         // correct by scroll distance, so growth, `scroll_screen_up` and a
         // mid-session resize cannot strand it) down to the bottom of the
-        // screen, while native scrollback is preserved. It is exact and
-        // idempotent, so repeats are safe. A panic suppresses the erase only
-        // while the restoring thread is actively unwinding from an owner
-        // panic; a recovered background panic (or a caught owner panic) has
-        // already returned the app to idle, so later restores erase normally.
+        // screen. It is exact and idempotent, so repeats are safe. A panic
+        // suppresses the erase only while the restoring thread is actively
+        // unwinding from an owner panic; a recovered background panic (or a
+        // caught owner panic) has already returned the app to idle, so later
+        // restores erase normally.
         // (#1564; #1545 deliberately keeps the projection on a live unwind.)
+        //
+        // The erase is enough now, because the transcript is not in native
+        // scrollback: the readable conversation lives in this mutable viewport,
+        // which is re-projected from the render snapshot every frame, and
+        // `preserve_transcript_scrollback` is the opt-in that would put rows
+        // where no erase can reach them. #1587 is the report that they used to
+        // be there; with the opt-in, that trade is the user's to make.
         let erase_result = if should_erase_session_projection(
             self.alternate_screen.is_active(),
             self.fullscreen,

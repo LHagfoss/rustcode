@@ -122,6 +122,55 @@ pub(super) fn activity_spacing(
     }
 }
 
+/// Paint the transcript status row into the composer's own top padding row.
+///
+/// The composer's blank panel row above the input is the one place that is
+/// neither transcript content nor composer content, so the affordance never
+/// overwrites a row the reader is on and never changes the layout: the wheel
+/// and page-step math above it is untouched. Following is the default, so an
+/// ordinary frame paints nothing, and a hidden control owns no rectangle, so
+/// it cannot intercept a click either (#1595, #1594).
+fn render_transcript_status_row(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    transcript: &mut TranscriptState,
+    input: ratatui::layout::Rect,
+) {
+    let gap = ratatui::layout::Rect {
+        y: input.y,
+        height: 1,
+        ..input
+    };
+    if !transcript.tail_visible() {
+        transcript.follow_control.render(
+            Some(gap),
+            f.area().width,
+            transcript.unseen_activity(),
+            f.buffer_mut(),
+            false,
+        );
+        return;
+    }
+    transcript.follow_control.clear();
+    // The candidate walk is proportional to the tool history, and the collapsed
+    // default is the common case: an empty set is answered without walking, so
+    // an ordinary frame never pays for the readout.
+    if state.expanded_thoughts().is_empty() {
+        return;
+    }
+    let (expanded, collapsible) = super::tool_transcript::expand_progress(state, f.area().width);
+    if collapsible == 0 {
+        return;
+    }
+    f.render_widget(
+        Paragraph::new(format!(
+            "{expanded}/{collapsible} expanded · ctrl+o all · ctrl+shift+o step"
+        ))
+        .style(Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL())),
+        gap,
+    );
+}
+
 pub(super) fn inset_vertical(
     area: ratatui::layout::Rect,
     top: u16,
@@ -135,8 +184,10 @@ pub(super) fn inset_vertical(
     )
 }
 
-/// Height of the mutable inline surface for the next frame. Finalized history
-/// is rendered above this area into terminal scrollback.
+/// Height of the mutable inline surface for the next frame.
+///
+/// Full height, so the readable transcript is the projection this surface
+/// paints rather than rows the terminal has already scrolled away (#1587).
 pub(crate) fn desired_height_snapshot(
     _state: &RenderSnapshot,
     _transcript: &mut TranscriptState,
@@ -520,6 +571,8 @@ pub(crate) fn render_with_transcript_snapshot(
             render_yolo_picker_modal(f, state, input_box_area);
         }
     });
+
+    render_transcript_status_row(f, state, transcript, chunks[7]);
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(

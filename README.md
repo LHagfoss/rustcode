@@ -397,6 +397,26 @@ reduced_motion = true
 The default is off, so the sweep is unchanged unless you opt in. This is purely
 presentational, so a project `.rustcode/config.toml` may set it.
 
+### Keeping the transcript in terminal scrollback
+
+The readable transcript lives in the terminal surface RustCode paints, and on
+exit that surface is erased, so the conversation does not stay in the
+terminal's own scrollback. Set `preserve_transcript_scrollback = true` in
+`config.toml` to also copy every committed transcript row into native
+scrollback as the session runs:
+
+```toml
+preserve_transcript_scrollback = true
+```
+
+The default is off. Native scrollback is write-only: rows copied there cannot
+be revised, so an expanded tool body stays expanded after you collapse it, and
+the rows sit above the exit handoff where no erase can reach them (#1587,
+#1593). Turn it on if you rely on the scrollback copy for terminal copy/paste
+or shell piping, and accept that it is a copy rather than the live transcript.
+Use the mouse wheel, `PageUp`/`PageDown`, or `Esc` to read the transcript while
+a response streams; the transcript never leaves the view (#1595).
+
 ### Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a

@@ -22,7 +22,8 @@ pub(crate) enum KeyAction {
     InsertNewline,
     ClearScreen,
     Paste,
-    ToggleExpand,
+    ToggleExpandAll,
+    ToggleExpandStep,
     MoveLeft,
     MoveRight,
     MoveWordLeft,
@@ -117,8 +118,15 @@ impl KeyMap {
             }
             KeyCode::Char('n') | KeyCode::Char('N') if ctrl => KeyAction::NextSuggestion,
             // Ctrl+O is the expand/collapse affordance the transcript hint
-            // advertises (#1541). Ctrl+J is the ASCII newline it replaces.
-            KeyCode::Char('o') | KeyCode::Char('O') if ctrl => KeyAction::ToggleExpand,
+            // advertises (#1541) and toggles the *whole* transcript, so the
+            // direction follows the visible set instead of invisible focus
+            // state. Ctrl+J is the ASCII newline it replaces. (#1594)
+            KeyCode::Char('o') | KeyCode::Char('O')
+                if ctrl && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                KeyAction::ToggleExpandStep
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') if ctrl => KeyAction::ToggleExpandAll,
             KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::InsertNewline,
             KeyCode::Char('a') | KeyCode::Char('A') if ctrl => KeyAction::MoveStart,
             KeyCode::Char('e') | KeyCode::Char('E') if ctrl => KeyAction::MoveEnd,
@@ -185,18 +193,28 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_expands_and_ctrl_j_inserts_the_newline_it_replaced() {
+    fn ctrl_o_expands_all_and_ctrl_j_inserts_the_newline_it_replaced() {
         let map = KeyMap::default();
 
         // Ctrl+O is the affordance the transcript hint advertises, so it must
         // resolve to the expand action and never to a newline insert (#1541).
+        // It toggles every collapsible body (#1594).
         assert_eq!(
             map.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
-            KeyAction::ToggleExpand
+            KeyAction::ToggleExpandAll
         );
         assert_eq!(
             map.resolve(key(KeyCode::Char('O'), KeyModifiers::CONTROL)),
-            KeyAction::ToggleExpand
+            KeyAction::ToggleExpandAll
+        );
+        // The single-entry step moves to ctrl+shift+o so the old behaviour is
+        // still reachable instead of being lost.
+        assert_eq!(
+            map.resolve(key(
+                KeyCode::Char('O'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            KeyAction::ToggleExpandStep
         );
         assert_eq!(
             map.resolve(key(KeyCode::Char('j'), KeyModifiers::CONTROL)),

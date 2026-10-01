@@ -11,7 +11,8 @@ pub(crate) enum ComposerAction {
     Submit,
     Paste,
     ClearScreen,
-    ToggleExpand,
+    ToggleExpandAll,
+    ToggleExpandStep,
     Unhandled,
 }
 
@@ -73,8 +74,10 @@ impl Composer {
             KeyAction::ClearScreen => ComposerAction::ClearScreen,
             KeyAction::Paste => ComposerAction::Paste,
             // The transcript owns the expand state, so the composer only
-            // reports the intent; the runtime applies it (#1541).
-            KeyAction::ToggleExpand => ComposerAction::ToggleExpand,
+            // reports the intent; the runtime applies it (#1541). Ctrl+O is the
+            // whole-transcript toggle, ctrl+shift+O the single-entry step.
+            KeyAction::ToggleExpandAll => ComposerAction::ToggleExpandAll,
+            KeyAction::ToggleExpandStep => ComposerAction::ToggleExpandStep,
             KeyAction::MoveLeft => {
                 state.move_cursor_left();
                 ComposerAction::Handled
@@ -340,7 +343,7 @@ mod tests {
                     &mut state,
                     KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)
                 ),
-                ComposerAction::ToggleExpand
+                ComposerAction::ToggleExpandAll
             );
             assert_eq!(state.input_buffer, before, "draft survives ctrl+o");
         }

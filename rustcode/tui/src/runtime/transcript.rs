@@ -77,6 +77,22 @@ pub(super) fn tool_result_group(
     (indices, index)
 }
 
+/// Whether committed transcript rows may be copied into the terminal's own
+/// scrollback.
+///
+/// Off by default (#1587). Native scrollback is write-only, so rows copied
+/// there survive an expanded body being collapsed, survive the exit erase, and
+/// make every new commit push the reader's scrollback position further away
+/// (#1593, #1595). The readable transcript does not need them: the full-height
+/// mutable viewport re-projects it from the render snapshot every frame. The
+/// opt-in exists for users who rely on the copy for terminal copy/paste and
+/// shell piping.
+pub(super) fn transcript_scrollback_enabled(
+    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
+) -> bool {
+    snapshot.config().preserve_transcript_scrollback
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn commit_transcript(
     terminal_runtime: &mut crate::ui::TerminalRuntime,
@@ -88,6 +104,13 @@ pub(super) fn commit_transcript(
     response_active: bool,
     response_just_finished: bool,
 ) -> std::io::Result<()> {
+    // Native scrollback is opt-in (#1587). By default the readable transcript
+    // lives in the mutable viewport, which the full-height frame re-projects
+    // from the render snapshot every frame: collapsing an expanded body or
+    // scrolling back cannot leave orphaned rows, and an exit has nothing in
+    // scrollback it cannot erase. `preserve_transcript_scrollback` opts back
+    // into the write-only copy for copy/paste and shell piping (#1593).
+    let keep_scrollback = transcript_scrollback_enabled(snapshot);
     let live_response = snapshot.current_response();
     transcript_cursor.begin_stream(&live_response);
     let stable_source = if *replaying_transcript {
@@ -111,7 +134,7 @@ pub(super) fn commit_transcript(
 
     let history_range = transcript_cursor.pending_history_range(snapshot.history().len());
     let stable_lines = stream_commits.take_ready(!history_range.is_empty() || !response_active);
-    if !stable_lines.is_empty() {
+    if !stable_lines.is_empty() && keep_scrollback {
         crate::run::insert_scrollback_lines(
             terminal_runtime.terminal(),
             stable_lines,
@@ -209,8 +232,14 @@ pub(super) fn commit_transcript(
         }
         index += 1;
     }
-    for lines in blocks {
-        crate::run::insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
+    if keep_scrollback {
+        for lines in blocks {
+            crate::run::insert_scrollback_lines(
+                terminal_runtime.terminal(),
+                lines,
+                terminal_width,
+            )?;
+        }
     }
 
     transcript_cursor.commit_history_through(history_range.end);
@@ -230,7 +259,7 @@ pub(super) fn commit_transcript(
             transcript_cursor.commit_stable_stream(&stable_source);
         }
         let stable_lines = stream_commits.take_ready(true);
-        if !stable_lines.is_empty() {
+        if !stable_lines.is_empty() && keep_scrollback {
             crate::run::insert_scrollback_lines(
                 terminal_runtime.terminal(),
                 stable_lines,
@@ -244,9 +273,39 @@ pub(super) fn commit_transcript(
 
 #[cfg(test)]
 mod tests {
-    use super::tool_result_group;
+    use super::{tool_result_group, transcript_scrollback_enabled};
     use crate::ui::render_snapshot::render_snapshot;
     use rustcode::app::{AppState, ChatMessage, ToolCallRef};
+
+    /// #1587: the transcript reaches the terminal's own scrollback only when
+    /// the user opts back in, and the opt-in is what the copy/paste path costs.
+    #[test]
+    fn native_scrollback_is_opt_in_and_the_transcript_is_still_rendered() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(ChatMessage::new("assistant", "a committed answer"));
+        state
+            .history
+            .push(ChatMessage::new("tool", "get_time: noon").answering(Some("call-1".to_owned())));
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
+
+        assert!(
+            !transcript_scrollback_enabled(&snapshot),
+            "the default must not write transcript rows into native scrollback"
+        );
+        let block = crate::ui::render_committed_history_block_snapshot(&snapshot, 0, 80);
+        assert!(
+            block
+                .iter()
+                .any(|line| line.to_string().contains("a committed answer")),
+            "the transcript is still available to the viewport: {block:?}"
+        );
+
+        state.config.preserve_transcript_scrollback = true;
+        let opted_in = render_snapshot(&rustcode::controller::render_state(&state));
+        assert!(transcript_scrollback_enabled(&opted_in));
+    }
 
     fn tool_turn(id: &str) -> ChatMessage {
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {

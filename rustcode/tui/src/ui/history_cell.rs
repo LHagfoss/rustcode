@@ -36,7 +36,6 @@ pub(super) trait HistoryCell {
 /// its contents on deltas instead of appending duplicate terminal rows. The
 /// source and tool summaries here are intentionally not serialized or passed
 /// to providers; [`AppState`] remains the canonical conversation boundary.
-#[derive(Default)]
 pub(crate) struct TranscriptState {
     assistant: Option<AssistantMarkdownCell>,
     tools: Option<LiveToolCell>,
@@ -44,10 +43,50 @@ pub(crate) struct TranscriptState {
     history_revision: Option<u64>,
     model: super::TranscriptModel,
     scroll_rows: usize,
+    /// Whether the last painted frame showed the newest transcript row.
+    ///
+    /// Recomputed from the clamped offset on every projection rather than
+    /// tracked incrementally, following Codex's `tail_visible` (#1595): a
+    /// derived fact about the current offset cannot drift out of sync with it.
+    tail_visible: bool,
+    /// Content arrived below the reading position while the user was away.
+    ///
+    /// Cleared as soon as the tail is visible again, so the affordance cannot
+    /// claim unseen activity the user has already seen.
+    unseen_activity: bool,
+    /// `(history revision, live stream length)` the last projection consumed,
+    /// so the next one can tell that new output arrived below the reader.
+    last_content: Option<(u64, usize)>,
+    /// The row the affordance is painted into, owned by the render layer.
+    pub(super) follow_control: super::follow_control::FollowControl,
     pub(super) reading_anchor: Option<ReadingAnchor>,
     pub(crate) selection: super::selection::TranscriptSelection,
     committed_cache:
         Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Arc<Vec<Line<'static>>>>>,
+}
+
+impl Default for TranscriptState {
+    /// A transcript that has painted nothing yet is following: the newest row
+    /// is by definition the one on screen, and the first projection confirms
+    /// it either way. Deriving `Default` would start it *not* following and
+    /// paint a "return to bottom" affordance over the welcome banner.
+    fn default() -> Self {
+        Self {
+            assistant: None,
+            tools: None,
+            revision: 0,
+            history_revision: None,
+            model: super::TranscriptModel::default(),
+            scroll_rows: 0,
+            tail_visible: true,
+            unseen_activity: false,
+            last_content: None,
+            follow_control: super::follow_control::FollowControl::default(),
+            reading_anchor: None,
+            selection: super::selection::TranscriptSelection::default(),
+            committed_cache: None,
+        }
+    }
 }
 
 /// The committed tail at the last painted reading viewport. A fixed offset
@@ -112,6 +151,72 @@ impl TranscriptState {
 
     pub(crate) fn scroll_rows(&self) -> usize {
         self.scroll_rows
+    }
+
+    /// Whether the transcript is showing the newest row and nothing is being
+    /// selected, following Codex's `is_following`.
+    ///
+    /// Two explicit inputs, not one flag: a reading offset *or* a live text
+    /// selection releases follow, so pointing at a row is enough to keep the
+    /// viewport still while the model streams (#1595).
+    pub(crate) fn is_following(&self) -> bool {
+        self.tail_visible && !self.selection.is_active()
+    }
+
+    /// Whether the last painted frame showed the final transcript row.
+    pub(crate) fn tail_visible(&self) -> bool {
+        self.tail_visible
+    }
+
+    /// Whether content arrived below the reading position since it was last
+    /// visible.
+    pub(crate) fn unseen_activity(&self) -> bool {
+        self.unseen_activity
+    }
+
+    pub(crate) fn follow_control(&self) -> &super::follow_control::FollowControl {
+        &self.follow_control
+    }
+
+    /// Re-enter follow: the newest row is on screen and the "new activity"
+    /// affordance has nothing left to announce.
+    ///
+    /// Optimistic, like Codex's `jump_to_latest`: the position is `Latest`
+    /// before the next projection confirms it, so the control disappears on the
+    /// same press that asked for it.
+    pub(crate) fn jump_to_latest(&mut self) {
+        self.scroll_down(usize::MAX);
+        self.tail_visible = true;
+        self.unseen_activity = false;
+        self.follow_control.clear();
+    }
+
+    /// Record what the projection actually showed this frame.
+    ///
+    /// `content_changed` is the signal that something below the reading
+    /// position moved since the last projection. The follow test uses the
+    /// *previous* frame's tail visibility, exactly like Codex, so a stream
+    /// that started while the user was reading raises the flag before the
+    /// next frame's recomputation can clear it (#1595).
+    pub(super) fn note_projection(
+        &mut self,
+        tail_visible: bool,
+        content_changed: bool,
+        content_mark: (u64, usize),
+    ) {
+        let following = self.is_following();
+        self.tail_visible = tail_visible;
+        self.last_content = Some(content_mark);
+        if tail_visible {
+            self.unseen_activity = false;
+        } else if content_changed && !following {
+            self.unseen_activity = true;
+        }
+    }
+
+    /// `(history revision, live stream length)` the last projection consumed.
+    pub(super) fn last_content(&self) -> Option<(u64, usize)> {
+        self.last_content
     }
 
     pub(crate) fn clamp_scroll_rows(&mut self, maximum: usize) -> usize {
@@ -778,6 +883,56 @@ mod tests {
         );
         assert_eq!(visible.len(), 30);
         assert!(visible.iter().any(|line| line.to_string().contains("0999")));
+    }
+
+    /// #1595: follow is a two-input state, not one flag. A reading offset or a
+    /// live selection releases it, output arriving while the user is away only
+    /// raises a flag, and re-entering follow clears it.
+    #[test]
+    fn follow_state_releases_on_scroll_and_re_enters_on_jump_to_latest() {
+        let mut transcript = TranscriptState::default();
+        assert!(
+            transcript.is_following(),
+            "a transcript that has painted nothing yet is following"
+        );
+
+        transcript.note_projection(/* tail_visible */ true, false, (1, 0));
+        assert!(transcript.is_following());
+        assert!(transcript.tail_visible());
+        assert!(!transcript.unseen_activity());
+
+        // The user scrolls up: follow is released, and the affordance appears.
+        transcript.scroll_up(3);
+        transcript.note_projection(/* tail_visible */ false, false, (1, 0));
+        assert!(!transcript.is_following());
+        assert!(!transcript.tail_visible());
+        assert!(!transcript.unseen_activity());
+
+        // Output arrives below the reader. The flag is raised; the offset is
+        // untouched, because the projection never moves a reading position.
+        let offset = transcript.scroll_rows();
+        transcript.note_projection(/* tail_visible */ false, true, (2, 40));
+        assert!(transcript.unseen_activity());
+        assert_eq!(transcript.scroll_rows(), offset);
+
+        // Showing the tail again clears it, so the control cannot claim
+        // activity the user has already seen.
+        transcript.note_projection(/* tail_visible */ true, true, (2, 40));
+        assert!(!transcript.unseen_activity());
+        assert!(transcript.is_following());
+
+        // And returning to the newest row re-follows and clears the flag.
+        // The first frame after the user's own scroll carries no new content,
+        // so it must not be reported back to them as unseen activity.
+        transcript.scroll_up(3);
+        transcript.note_projection(/* tail_visible */ false, false, (2, 40));
+        assert!(!transcript.unseen_activity());
+        transcript.note_projection(/* tail_visible */ false, true, (3, 90));
+        assert!(transcript.unseen_activity());
+        transcript.jump_to_latest();
+        assert_eq!(transcript.scroll_rows(), 0);
+        assert!(!transcript.unseen_activity());
+        assert!(transcript.is_following());
     }
 
     #[test]
