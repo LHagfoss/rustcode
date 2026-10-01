@@ -1155,7 +1155,7 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 }
 
 #[test]
-fn busy_command_surfaces_stay_above_input_and_activity_below_it() {
+fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     for (width, height) in [(80, 24), (60, 18), (100, 30)] {
         for panel in [false, true] {
@@ -1204,23 +1204,10 @@ fn busy_command_surfaces_stay_above_input_and_activity_below_it() {
                 row(surface) < composer,
                 "surface must remain above composer: {rendered}"
             );
-            assert!(
-                composer < row(activity.trim()),
-                "live activity belongs below the composer: {rendered}"
-            );
+            assert!(!rendered.contains(activity.trim()), "{rendered}");
             if !panel {
-                assert!(
-                    row(activity.trim()) < row("context left"),
-                    "live activity remains above footer metadata: {rendered}"
-                );
+                assert!(composer < row("context left"), "{rendered}");
             }
-            assert_eq!(
-                rendered
-                    .lines()
-                    .filter(|line| line.contains(activity.trim()))
-                    .count(),
-                1
-            );
         }
     }
 }
@@ -1410,6 +1397,154 @@ fn stats_and_session_panels_render_their_details_without_touching_the_transcript
         rendered.matches("one user turn").count(),
         1,
         "the panel summarises the turn instead of repeating it: {rendered:?}"
+    );
+}
+
+#[test]
+fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{backend::TestBackend, style::Modifier};
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.show_session_modal = true;
+    state.active_session_id = "session-test".to_owned();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    let area = transcript
+        .panel_selection_area
+        .expect("session panel exposes its body to selection");
+    let buffer = terminal.backend().buffer();
+    let (column, row) = (area.y..area.bottom())
+        .find_map(|row| {
+            let line = (area.x..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>();
+            line.find("session-test")
+                .map(|offset| (area.x + offset as u16, row))
+        })
+        .expect("the selected body contains the session id");
+    let end_column = column + "session-test".len() as u16 - 1;
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: end_column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: end_column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(
+        transcript.panel_selection.selected_text().as_deref(),
+        Some("session-test")
+    );
+    assert!(
+        !transcript.selection.has_selection(),
+        "panel selection must remain independent from transcript selection"
+    );
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert!(
+        terminal.backend().buffer()[(column, row)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "the selected panel text is visibly highlighted"
+    );
+    state.show_session_modal = false;
+    state.show_status_modal = true;
+    let previous_area = area;
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert_eq!(transcript.panel_selection_area, Some(previous_area));
+    assert!(
+        !transcript.panel_selection.has_selection(),
+        "a same-sized status panel must not inherit the session panel range"
+    );
+
+    state.show_status_modal = false;
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert!(transcript.panel_selection_area.is_none());
+    assert!(!transcript.panel_selection.has_selection());
+}
+
+#[test]
+fn info_command_panel_text_can_be_selected_and_copied() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    use unicode_width::UnicodeWidthStr;
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "About RustCode",
+        content: "Session: session-test\nModel: café 🙂\nTurn: inactive\nQueue: 0".into(),
+    });
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    let area = transcript
+        .panel_selection_area
+        .expect("generic info panel exposes its body to selection");
+    let buffer = terminal.backend().buffer();
+    let (column, row) = (area.y..area.bottom())
+        .find_map(|row| {
+            let line = (area.x..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>();
+            line.find("café 🙂")
+                .map(|offset| (area.x + offset as u16, row))
+        })
+        .expect("the info body contains accented and wide text");
+    let selected = "café 🙂";
+    let end_column = column + selected.width() as u16 - 1;
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), column),
+        (MouseEventKind::Drag(MouseButton::Left), end_column),
+        (MouseEventKind::Up(MouseButton::Left), end_column),
+    ] {
+        transcript.panel_selection.mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(
+        transcript.panel_selection.selected_text().as_deref(),
+        Some(selected)
     );
 }
 
@@ -2068,8 +2203,9 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     assert!(rendered.contains("queued follow-ups (2) · ↑ edit last"));
     assert!(rendered.contains("follow-up one"));
     assert!(rendered.contains("follow-up two"));
-    assert!(rendered.contains("esc interrupt and apply now"));
-    assert!(rendered.contains("Steer · Tab switches to Queue"));
+    assert!(!rendered.contains("esc interrupt and apply now"));
+    assert!(rendered.contains("Working · "));
+    assert!(!rendered.contains("Steer · Tab switches to Queue"));
 }
 
 #[test]
@@ -7422,7 +7558,8 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
     let mut streaming = RenderState::new();
     streaming.status = AppStatus::Streaming;
     let streaming_text = render_state_to_text(&mut streaming, 80, 20);
-    assert!(streaming_text.contains("esc interrupt"));
+    assert!(streaming_text.contains("Working · "));
+    assert!(!streaming_text.contains("esc interrupt"));
     assert!(streaming_text.contains("context left"));
 
     // Constrained height must not clip composer/footer for spacing.
@@ -8836,6 +8973,46 @@ fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
                 .any(|span| span.content.contains("N")
                     && span.style.add_modifier.contains(Modifier::BOLD))
                 || width < 10
+        );
+    }
+}
+
+#[test]
+fn footer_shows_only_plain_activity_immediately_before_model() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for (status, label) in [
+        (AppStatus::Idle, None),
+        (AppStatus::Streaming, Some("Working")),
+        (AppStatus::Queued, Some("Queued")),
+        (AppStatus::AwaitingQuestion, Some("Waiting")),
+        (AppStatus::AwaitingToolConfirmation, Some("Waiting")),
+    ] {
+        let mut state = RenderState::new();
+        state.status = status;
+        let snapshot = render_snapshot(&state);
+        let model = snapshot.model_name().to_string();
+        let mut terminal =
+            crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(160, 1))
+                .unwrap();
+        terminal
+            .draw(|frame| {
+                super::render_composer_footer(frame, frame.area(), &snapshot, None, false);
+            })
+            .unwrap();
+        let row = (0..160)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        if let Some(label) = label {
+            assert!(row.contains(&format!("{label} · {model}")), "{row}");
+        } else {
+            assert!(
+                !row.contains("Working") && !row.contains("Waiting") && !row.contains("Queued"),
+                "{row}"
+            );
+        }
+        assert!(
+            !row.contains("esc interrupt") && !row.contains("Thinking"),
+            "{row}"
         );
     }
 }
