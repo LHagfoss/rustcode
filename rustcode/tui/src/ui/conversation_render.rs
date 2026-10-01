@@ -162,6 +162,13 @@ fn render_live_tail_mode(
         lines.push(Line::from(""));
     }
 
+    if state.recap_loading() {
+        lines.extend(render_conversation_recap(
+            "Generating conversation recap…",
+            width,
+        ));
+    }
+
     if height == 0 && full_viewport {
         return Vec::new();
     }
@@ -196,7 +203,14 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let history_revision = state.history().revision();
     // Anything that can add rows below the reader: committed history and the
     // live stream both land at the tail of the same projection.
-    let content_mark = (history_revision, state.current_response().len());
+    let content_mark = (
+        history_revision,
+        state
+            .current_response()
+            .len()
+            .saturating_mul(2)
+            .saturating_add(usize::from(state.recap_loading())),
+    );
     let content_changed = transcript.last_content() != Some(content_mark);
     let display_start = state.history_display_start().min(history_len);
     let mut measured_tail = None;
@@ -778,41 +792,108 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
-    let message_padding = 2;
-    let content_width = (width as usize).saturating_sub(message_padding).max(10);
-    let label = "─ Conversation recap ─";
-    let line_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false);
-    let label_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::BOLD, false);
-    let label_width = label.width();
-    let mut lines = vec![Line::from("")];
-    lines.push(Line::from(vec![
-        Span::styled(label, label_style),
-        Span::styled(
-            "─".repeat((width as usize).saturating_sub(label_width)),
-            line_style,
-        ),
-    ]));
-    lines.push(Line::from(""));
-    let message_padding = Span::styled("  ", line_style);
-    let recap = rustcode::controller::sanitize_recap_content(content);
-    if !recap.is_empty() {
-        let mut recap_lines = Vec::new();
-        push_wrapped_with_continuation(
-            &mut recap_lines,
-            vec![Span::styled(
-                recap,
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), false),
-            )],
-            content_width,
-            Some(message_padding.clone()),
+    let style = get_themed_style(
+        COLOR_MUTED(),
+        COLOR_BG(),
+        Modifier::ITALIC | Modifier::DIM,
+        false,
+    );
+    if content == "Generating conversation recap…" {
+        return wrap_recap_spans(
+            vec![Span::styled(content.to_owned(), style)],
+            width as usize,
+            None,
         );
-        if let Some(first) = recap_lines.first_mut() {
-            first.spans.insert(0, message_padding);
-        }
-        lines.extend(recap_lines);
     }
-    lines.push(Line::from(""));
-    lines.into_iter().map(|line| own_line(&line)).collect()
+    let generated = serde_json::from_str::<serde_json::Value>(content).ok();
+    let summary = generated
+        .as_ref()
+        .and_then(|value| value["summary"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| rustcode::controller::sanitize_recap_content(content));
+    let next = generated
+        .as_ref()
+        .and_then(|value| value["next_action"].as_str());
+    let wrap_width = width.saturating_sub(2).max(1) as usize;
+    let prefix = "  ↳ Recap: ";
+    let indent = if wrap_width > prefix.width() {
+        prefix.width()
+    } else {
+        0
+    };
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    if indent == 0 {
+        lines.extend(wrap_recap_spans(
+            vec![Span::styled("↳ Recap:", style.add_modifier(Modifier::BOLD))],
+            wrap_width,
+            None,
+        ));
+    } else {
+        spans.push(Span::styled("  ↳ ", style));
+        spans.push(Span::styled("Recap: ", style.add_modifier(Modifier::BOLD)));
+    }
+    spans.push(Span::styled(summary, style));
+    let continuation = (indent > 0).then(|| Span::styled(" ".repeat(indent), style));
+    lines.extend(wrap_recap_spans(spans, wrap_width, continuation.clone()));
+    if let Some(next) = next {
+        lines.extend(wrap_recap_spans(
+            vec![
+                Span::styled(" ".repeat(indent), style),
+                Span::styled("Next: ", style.add_modifier(Modifier::BOLD)),
+                Span::styled(next.to_owned(), style),
+            ],
+            wrap_width,
+            continuation,
+        ));
+    }
+    lines
+}
+
+fn wrap_recap_spans(
+    spans: Vec<Span<'static>>,
+    width: usize,
+    continuation: Option<Span<'static>>,
+) -> Vec<Line<'static>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let indent_width = continuation
+        .as_ref()
+        .map_or(0, Span::width)
+        .min(width.saturating_sub(1));
+    let mut lines = Vec::new();
+    let mut row = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        for word in span.content.split_inclusive(char::is_whitespace) {
+            let word_width = word.width();
+            if used > indent_width
+                && used + word_width > width
+                && word_width <= width - indent_width
+            {
+                lines.push(Line::from(std::mem::take(&mut row)));
+                if let Some(indent) = &continuation {
+                    row.push(indent.clone());
+                }
+                used = indent_width;
+            }
+            for grapheme in word.graphemes(true) {
+                let columns = grapheme.width();
+                if used > indent_width && used + columns > width {
+                    lines.push(Line::from(std::mem::take(&mut row)));
+                    if let Some(indent) = &continuation {
+                        row.push(indent.clone());
+                    }
+                    used = indent_width;
+                }
+                row.push(Span::styled(grapheme.to_owned(), span.style));
+                used += columns;
+            }
+        }
+    }
+    if !row.is_empty() {
+        lines.push(Line::from(row));
+    }
+    lines
 }
 
 #[cfg(test)]

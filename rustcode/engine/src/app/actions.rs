@@ -119,3 +119,6 @@ pub(crate) use submit::{SubmitOutcome, submit_plain_prompt, submit_plain_prompt_
 use commands::append_codex_rate_limits;
 use commands::{background_terminal_list, stop_background_terminals};
 use session::{history_matches_snapshot, report_stale_compaction, try_merge_compacted_history};
+
+mod recap;
+pub use recap::{RECAP_IDLE_DELAY, generate_conversation_recap};

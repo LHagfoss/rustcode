@@ -1,8 +1,6 @@
 use super::*;
 use std::sync::mpsc::TryRecvError;
 
-const IDLE_SUMMARY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
 impl AppRuntime {
     pub(crate) async fn run(self) -> Result<crate::run::ExitSummary, Box<dyn Error>> {
         let AppRuntime {
@@ -105,10 +103,9 @@ impl AppRuntime {
                 let mut state = app_state.lock().await;
                 let background_tasks_active =
                     rustcode::tools::has_background_tasks(&state.active_session_id);
-                let due = state.should_start_idle_summary(
+                let due = state.should_start_conversation_recap(
                     std::time::Instant::now(),
                     background_tasks_active,
-                    IDLE_SUMMARY_AFTER,
                 );
                 if due { state.claim_summary() } else { false }
             };
@@ -116,7 +113,8 @@ impl AppRuntime {
                 let state_clone = std::sync::Arc::clone(&app_state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    rustcode::app::summarize_session_after_idle(&state_clone, &client_clone).await;
+                    rustcode::app::generate_conversation_recap(&state_clone, &client_clone, false)
+                        .await;
                 });
             }
 
