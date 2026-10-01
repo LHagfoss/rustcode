@@ -326,8 +326,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // with the same viewport reuse counts without cloning Lines per line.
     // The content height is the sum of the same counts (no second full
     // `lines.clone()`) (#1582).
-    let (wrapped_counts, conversation_content_height) =
-        cached_wrap_counts(&lines, layout_width);
+    let (wrapped_counts, conversation_content_height) = cached_wrap_counts(&lines, layout_width);
     let soft_wrap_before: Vec<bool> = wrapped_counts
         .iter()
         .flat_map(|&count| {
