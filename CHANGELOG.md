@@ -1,3 +1,15 @@
+## [v0.56.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.3) - 2026-10-01
+
+### Fixes
+- Hold the transcript scroll position while the model streams instead of yanking the view to the bottom, with a `↓ Back to bottom` affordance that reports unseen activity (#1595)
+- Stop leaving the whole session transcript in terminal scrollback on exit; `preserve_transcript_scrollback` opts back in (#1587)
+- Bound expanded tool bodies and stop appending ~100 un-truncated lines per tool call; expansion is now render state, so collapsing is its exact inverse (#1593)
+- Ctrl+O now toggles every truncated tool call at once, with Ctrl+Shift+O stepping one entry and an `N/M expanded` readout (#1594)
+- Route slash-command panels through the panel label/value helpers so label columns align and over-threshold values are marked, and add fuzzy subsequence matching with highlighted matches to slash-command and palette search (#1588)
+- Stop silently dropping 16 of 37 built-in tools, tell the model which tools were withheld and how to reach them, stop the built-in menu drifting mid-session, and only emit the Delegation Policy when delegation tools exist (#1589)
+- Pin the native MCP tool selection for the turn so the selected set, and the prompt prefix cache, survive lazily-started MCP servers (#1591)
+- Hold over-budget tool calls and execute them automatically in a later round instead of telling the model to reissue them (#1590)
+- Stop re-sending cancelled-turn records to the provider on every later turn, and stop reporting stale progress metrics on a cancelled turn (#1592)
 ## [v0.56.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.2) - 2026-10-01
 
 ### Fixes
