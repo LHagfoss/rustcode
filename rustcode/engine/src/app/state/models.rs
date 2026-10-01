@@ -679,16 +679,33 @@ struct PromptCacheKey {
 /// changes when the protocol, agent mode, or MCP tool set changes. This caches
 /// it and rebuilds lazily only when [`PromptCacheKey`] moves. Native schemas are
 /// selected per request from the current conversation and explicit schema policy.
-/// MCP names selected during a request remain sticky so explicitly requested
-/// schemas survive later tool rounds of the same session.
+/// MCP names selected during a request are pinned for the rest of the turn so
+/// the `tools` block — and therefore the cached prompt prefix — stays
+/// byte-identical across rounds. (#1591)
 #[derive(Clone, Debug)]
 pub(crate) struct NativeToolSchemaSnapshot {
     pub(crate) generation: u64,
     pub(crate) policy: crate::tools::ToolSchemaPolicy,
     pub(crate) session_id: String,
-    pub(crate) user_message_count: usize,
+    pub(crate) turn_user_message_count: usize,
     pub(crate) selection_revision: u64,
     pub(crate) sticky_names: Vec<String>,
+}
+
+/// Number of real user turns in the projected request. The runtime context tail
+/// is projected as a `user` message and appears or disappears between rounds of
+/// the same turn, so it must not be mistaken for a new turn. (#1591)
+fn turn_user_message_count(messages: &[serde_json::Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                && !message
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|content| content.starts_with("<rustcode_context>"))
+        })
+        .count()
 }
 
 #[derive(Default)]
@@ -700,9 +717,11 @@ pub struct PromptCache {
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
     mcp_selection_user_count: Option<usize>,
-    /// The last request's MCP menu. The schema selector prioritizes this list,
-    /// which keeps explicit user-requested MCP tools available across rounds
-    /// even when a later round has a full relevance-ranked menu.
+    /// The pinned MCP menu for the current turn. The schema selector gives this
+    /// absolute priority over its scoring buckets, so a growing transcript or a
+    /// server registering mid-turn cannot reshuffle a full budget. Cleared only
+    /// when the turn, session, or policy changes — never on `bump_mcp_generation`,
+    /// which fires for every lazily started server. (#1591)
     mcp_selected_names: Vec<String>,
     /// Invalidates schema computations that started from an older cache
     /// snapshot, including concurrent requests with the same session inputs.
@@ -754,32 +773,29 @@ impl PromptCache {
         session_id: &str,
     ) -> NativeToolSchemaSnapshot {
         let generation = crate::mcp::mcp_generation();
-        let user_message_count = messages
-            .iter()
-            .filter(|message| {
-                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
-            })
-            .count();
-        if self.mcp_selection_generation != generation
-            || self.mcp_selection_policy != Some(policy)
+        let turn_user_message_count = turn_user_message_count(messages);
+        // `mcp_generation` is deliberately absent: a lazily started server bumps
+        // it, and dropping the pin there is what made `selected_names` disjoint
+        // between consecutive rounds of one turn. (#1591)
+        if self.mcp_selection_policy != Some(policy)
             || self.mcp_selection_session_id.as_deref() != Some(session_id)
             || self
                 .mcp_selection_user_count
-                .is_some_and(|previous| user_message_count > previous)
+                .is_some_and(|previous| turn_user_message_count > previous)
         {
             self.mcp_selected_names.clear();
             self.mcp_selection_generation = generation;
             self.mcp_selection_policy = Some(policy);
             self.mcp_selection_session_id = Some(session_id.to_string());
         }
-        self.mcp_selection_user_count = Some(user_message_count);
+        self.mcp_selection_user_count = Some(turn_user_message_count);
         self.mcp_selection_revision = self.mcp_selection_revision.wrapping_add(1);
 
         NativeToolSchemaSnapshot {
             generation,
             policy,
             session_id: session_id.to_string(),
-            user_message_count,
+            turn_user_message_count,
             selection_revision: self.mcp_selection_revision,
             sticky_names: self.mcp_selected_names.clone(),
         }
@@ -794,7 +810,7 @@ impl PromptCache {
             || self.mcp_selection_generation != snapshot.generation
             || self.mcp_selection_policy != Some(snapshot.policy)
             || self.mcp_selection_session_id.as_deref() != Some(snapshot.session_id.as_str())
-            || self.mcp_selection_user_count != Some(snapshot.user_message_count)
+            || self.mcp_selection_user_count != Some(snapshot.turn_user_message_count)
             || self.mcp_selection_revision != snapshot.selection_revision
         {
             return false;
@@ -849,6 +865,10 @@ mod prompt_cache_snapshot_tests {
     use crate::tools::ToolSchemaPolicy;
     use serde_json::json;
 
+    /// `mcp_generation` is process-global, so these tests must not run
+    /// concurrently: a bump from one would make another's commit look stale.
+    static GENERATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn messages(user_count: usize) -> Vec<serde_json::Value> {
         (0..user_count)
             .map(|index| json!({"role": "user", "content": format!("prompt {index}")}))
@@ -857,6 +877,9 @@ mod prompt_cache_snapshot_tests {
 
     #[test]
     fn stale_session_snapshot_cannot_overwrite_newer_selection() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut cache = PromptCache::default();
         let policy = ToolSchemaPolicy::root(false);
         let old = cache.native_tool_schema_snapshot(policy, &messages(1), "old-session");
@@ -869,6 +892,9 @@ mod prompt_cache_snapshot_tests {
 
     #[test]
     fn stale_generation_snapshot_cannot_overwrite_selection() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut cache = PromptCache::default();
         let policy = ToolSchemaPolicy::root(false);
         let snapshot = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
@@ -876,6 +902,52 @@ mod prompt_cache_snapshot_tests {
 
         assert!(!cache.commit_native_tool_schema_selection(&snapshot, &["stale-tool".to_string()]));
         assert!(cache.mcp_selected_names.is_empty());
+    }
+
+    #[test]
+    fn a_lazily_started_server_keeps_the_pinned_menu() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = PromptCache::default();
+        let policy = ToolSchemaPolicy::root(false);
+        let pinned = ["alpha_read", "alpha_write", "alpha_list", "alpha_search"]
+            .map(str::to_string)
+            .to_vec();
+        let first = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
+        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+
+        // Servers keep finishing their lazy startup mid-turn, and each one bumps
+        // the generation. `available` grew 118 → 268 → 337 → 485 that way.
+        crate::mcp::bump_mcp_generation();
+        let mut transcript = messages(1);
+        transcript.push(json!({"role": "assistant", "content": "still working"}));
+        let after = cache.native_tool_schema_snapshot(policy, &transcript, "session");
+
+        // Dropping the pin here is what made consecutive rounds of one turn
+        // select disjoint name sets and invalidated the cached prefix. (#1591)
+        assert_eq!(after.sticky_names, pinned);
+    }
+
+    #[test]
+    fn a_new_user_turn_releases_the_pin() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = PromptCache::default();
+        let policy = ToolSchemaPolicy::root(false);
+        let first = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
+        assert!(cache.commit_native_tool_schema_selection(&first, &["alpha_read".to_string()]));
+
+        // The runtime context tail is projected as a `user` message and appears or
+        // disappears between rounds, so it must not look like a new turn. (#1591)
+        let mut with_tail = messages(1);
+        with_tail.push(json!({"role": "user", "content": "<rustcode_context>\n# Runtime"}));
+        let round = cache.native_tool_schema_snapshot(policy, &with_tail, "session");
+        assert_eq!(round.sticky_names, ["alpha_read"]);
+
+        let next = cache.native_tool_schema_snapshot(policy, &messages(2), "session");
+        assert!(next.sticky_names.is_empty());
     }
 }
 

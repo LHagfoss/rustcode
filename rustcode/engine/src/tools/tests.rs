@@ -419,6 +419,198 @@ fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
 }
 
 #[test]
+fn a_pinned_menu_survives_a_transcript_that_rescores_every_tool() {
+    let schema = serde_json::json!({"type":"object","properties":{}});
+    // One more name-matching tool than the budget allows, so any change in the
+    // score ordering evicts a member and rewrites the whole `tools` block.
+    let mut mcp = (0..(MAX_MCP_NATIVE_SCHEMAS + 1))
+        .map(|index| {
+            (
+                format!("mcp__pool__alpha_{index:02}"),
+                "Alpha".to_string(),
+                schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    // Relevant only once the assistant mentions "bravo". It sorts ahead of every
+    // alpha tool, so an unpinned round hands it a slot the pinned menu keeps shut.
+    mcp.push((
+        "mcp__pool__aaa_bravo".to_string(),
+        "Bravo".to_string(),
+        schema,
+    ));
+    let mut messages = vec![serde_json::json!({"role":"user","content":"alpha"})];
+
+    let (round0, stats0) = select_mcp_tools_for_context(&mcp, &messages);
+    assert_eq!(stats0.selected, MAX_MCP_NATIVE_SCHEMAS);
+    assert!(
+        !stats0
+            .selected_names
+            .contains(&"mcp__pool__aaa_bravo".to_string())
+    );
+
+    let used = stats0.selected_names[0].clone();
+    messages.push(serde_json::json!({
+        "role":"assistant",
+        "content":"Retrying down the bravo route.",
+        "tool_calls":[{"function":{"name": used}}]
+    }));
+    messages.push(serde_json::json!({"role":"tool","content":"done"}));
+
+    // Without the pin, the new "bravo" term re-scores the whole pool and two
+    // previously selected tools drop out.
+    let (_, unpinned) = select_mcp_tools_for_context(&mcp, &messages);
+    assert!(
+        unpinned
+            .selected_names
+            .contains(&"mcp__pool__aaa_bravo".to_string())
+    );
+    assert_ne!(unpinned.selected_names, stats0.selected_names);
+
+    let (round1, stats1) =
+        select_mcp_tools_for_context_with_sticky(&mcp, &messages, &stats0.selected_names);
+    assert_eq!(stats1.selected_names, stats0.selected_names);
+    assert_eq!(round1, round0);
+    // A tool the model used in round N is still offered in round N+1.
+    assert!(stats1.selected_names.contains(&used));
+    // The model called one of the retained tools: the counter must report it.
+    assert_eq!(stats1.previously_used, 1);
+    // Nothing was admitted by relevance scoring, so it must not claim credit.
+    assert_eq!(stats1.relevant, 0);
+}
+
+#[test]
+fn a_pinned_menu_holds_when_the_schema_budget_is_exhausted() {
+    // Real sessions select 13-16 of 485 tools and report
+    // `schema_budget_exhausted: true` from round 3 onward, so the pin has to
+    // survive a genuinely full budget, not merely a tight one. (#1591)
+    let padded = |topic: &str| {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": format!("{topic} {}", "detail ".repeat(300))}
+            }
+        })
+    };
+    let mut mcp = (0..40)
+        .map(|index| {
+            (
+                format!("mcp__alpha__review_{index:03}"),
+                format!("Review helper {index}"),
+                padded("review"),
+            )
+        })
+        .collect::<Vec<_>>();
+    // Scores 3 in round 0 (a description-only "review" match) and 11 once the
+    // assistant names it, which outranks every review tool on the next round.
+    mcp.push((
+        "mcp__alpha__widget_000".to_string(),
+        "Widget review helper".to_string(),
+        padded("widget"),
+    ));
+    let mut messages = vec![serde_json::json!({"role":"user","content":"review"})];
+
+    let (round0, stats0) = select_mcp_tools_for_context(&mcp, &messages);
+    assert!(stats0.schema_budget_exhausted);
+    assert!(stats0.selected < MAX_MCP_NATIVE_SCHEMAS);
+    let widget = "mcp__alpha__widget_000".to_string();
+    assert!(!stats0.selected_names.contains(&widget));
+
+    let used = stats0.selected_names[0].clone();
+    messages.push(serde_json::json!({
+        "role":"assistant",
+        "content":"The widget path looks better.",
+        "tool_calls":[{"function":{"name": used}}]
+    }));
+    messages.push(serde_json::json!({"role":"tool","content":"done"}));
+
+    // Unpinned, the new term wins a slot the pin is holding and the byte budget
+    // then decides a different eviction, so the whole `tools` block changes.
+    let (_, unpinned) = select_mcp_tools_for_context(&mcp, &messages);
+    assert!(unpinned.selected_names.contains(&widget));
+    assert_ne!(unpinned.selected_names, stats0.selected_names);
+
+    // Pinned, the menu is identical even though the budget is still exhausted:
+    // retention is a retention guarantee, not a preference competing for slots.
+    let (round1, stats1) =
+        select_mcp_tools_for_context_with_sticky(&mcp, &messages, &stats0.selected_names);
+    assert_eq!(round1, round0);
+    assert_eq!(stats1.selected_names, stats0.selected_names);
+    assert_eq!(stats1.mcp_schema_bytes, stats0.mcp_schema_bytes);
+    assert_eq!(stats1.previously_used, 1);
+    assert_eq!(stats1.relevant, 0);
+}
+
+#[test]
+fn previously_used_counts_a_tool_admitted_by_a_server_reservation() {
+    let tools = vec![
+        (
+            "mail_send_email".to_string(),
+            "Send an email by UID".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "mail_list_emails".to_string(),
+            "List recent emails".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+    ];
+    let owners = vec!["mail".to_string(), "mail".to_string()];
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Send an email"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{"function":{"name":"mail_send_email"}}]
+        }),
+        serde_json::json!({"role":"tool","content":"sent"}),
+    ];
+
+    let (selected, stats) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &["mail".to_string()],
+            &messages,
+            &[],
+            ToolSchemaPhase::Established,
+        );
+    let names = selected
+        .iter()
+        .map(|index| tools[*index].0.as_str())
+        .collect::<Vec<_>>();
+    // The reservation bound the whole mail toolset before the candidate loop ran,
+    // so the used tool was already selected and the old increment sat behind the
+    // dedup `continue` — it reported 0 on every request. (#1591)
+    assert_eq!(names, ["mail_send_email", "mail_list_emails"]);
+    assert_eq!(stats.reserved_servers, ["mail"]);
+    assert_eq!(stats.previously_used, 1);
+}
+
+#[test]
+fn withheld_tools_are_named_in_the_round_notice() {
+    let notice = super::withheld_tools_notice(&super::McpSchemaSelectionStats {
+        withheld_builtin_names: vec!["render_video".to_string(), "remember".to_string()],
+        available: 485,
+        selected: 13,
+        ..Default::default()
+    })
+    .expect("withheld tools must produce a notice");
+    assert!(notice.contains("render_video, remember"));
+    assert!(notice.contains("472 registered MCP tools"));
+    assert!(notice.contains("list_mcp_tools"));
+
+    assert!(
+        super::withheld_tools_notice(&super::McpSchemaSelectionStats {
+            available: 13,
+            selected: 13,
+            ..Default::default()
+        })
+        .is_none(),
+        "an unfiltered request must not spend tokens on the notice"
+    );
+}
+
+#[test]
 fn mcp_schema_selection_avoids_arbitrary_zero_relevance_fallback() {
     let mcp: Vec<_> = (0..(MAX_MCP_NATIVE_SCHEMAS + 4))
         .map(|index| {
@@ -1117,44 +1309,96 @@ fn inspection_schemas_use_strict_typed_arguments() {
     );
 }
 
+fn native_names(schemas: &[serde_json::Value]) -> Vec<String> {
+    schemas
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
 #[test]
-fn api_native_builtin_selection_keeps_coding_core_and_routes_specialized_tools() {
+fn api_native_builtin_selection_is_policy_only_and_protocol_agnostic() {
     let coding_messages = vec![serde_json::json!({
         "role": "user",
         "content": "Implement the parser fix, edit the Rust files, and run tests"
     })];
-    let coding = native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages).0;
-    let coding_names = coding
-        .iter()
-        .filter_map(|tool| tool["function"]["name"].as_str())
-        .collect::<Vec<_>>();
+    let media_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Render a video and generate music for it"
+    })];
+    let coding = native_names(
+        &native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages).0,
+    );
+    let media = native_names(
+        &native_tools_schema_for_context(ToolSchemaPolicy::root(false), &media_messages).0,
+    );
+
     for required in [
         "grep",
         "view_file",
         "replace_file_content",
         "run_command",
         "complete_task",
+        "render_video",
+        "generate_music",
+        "get_time",
+        "remember",
     ] {
-        assert!(coding_names.contains(&required), "missing {required}");
+        assert!(coding.contains(&required.to_string()), "missing {required}");
     }
-    for irrelevant in ["render_video", "generate_music", "get_time", "remember"] {
-        assert!(
-            !coding_names.contains(&irrelevant),
-            "unrelated schema leaked into coding request: {irrelevant}"
-        );
-    }
+    // Keyword filtering silently hid 16 of 37 built-ins from every request and
+    // let one assistant word flip five of them on for the rest of the session.
+    // Membership is now a pure function of the policy. (#1589)
+    assert_eq!(coding, media);
 
-    let media_messages = vec![serde_json::json!({
-        "role": "user",
-        "content": "Render a video and generate music for it"
-    })];
-    let media = native_tools_schema_for_context(ToolSchemaPolicy::root(false), &media_messages).0;
-    let media_names = media
+    let (_, stats) =
+        native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages);
+    assert_eq!(stats.builtin_selected, stats.builtin_available);
+    assert!(stats.withheld_builtin_names.is_empty());
+}
+
+#[test]
+fn textual_and_native_protocols_advertise_the_same_builtin_tools() {
+    let policy = ToolSchemaPolicy::root(false);
+    let native = native_names(&native_tools_schema_for_context(policy, &[]).0);
+    let textual = tool_system_prompt(
+        false,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+    let advertised = super::TOOLS
         .iter()
-        .filter_map(|tool| tool["function"]["name"].as_str())
+        .map(|tool| tool.name)
+        .filter(|name| textual.contains(&format!("- {name} | Args:")))
         .collect::<Vec<_>>();
-    assert!(media_names.contains(&"render_video"));
-    assert!(media_names.contains(&"generate_music"));
+    assert_eq!(advertised, native);
+}
+
+#[test]
+fn builtin_tool_selection_is_stable_across_consecutive_turns() {
+    let mut messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Fix the parser and rerun the tests"
+    })];
+    let first =
+        native_names(&native_tools_schema_for_context(ToolSchemaPolicy::root(false), &messages).0);
+    // Assistant prose used to feed `context_terms`, so one incidental "delete"
+    // flipped delete_file/move_file/copy_file on for the rest of the session.
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": "I did not delete or remove anything yet."
+    }));
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": "Now render a video and remember the decision"
+    }));
+    let second =
+        native_names(&native_tools_schema_for_context(ToolSchemaPolicy::root(false), &messages).0);
+
+    assert_eq!(first, second);
+    assert!(first.contains(&"delete_file".to_string()));
+    assert!(first.contains(&"render_video".to_string()));
+    assert!(first.contains(&"list_mcp_tools".to_string()));
 }
 
 #[test]
@@ -1188,7 +1432,7 @@ fn compact_text_prompt_explains_how_to_create_a_file() {
 }
 
 #[test]
-fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
+fn bootstrap_schema_phase_does_not_move_the_builtin_tool_block() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
     let messages = vec![serde_json::json!({
@@ -1199,30 +1443,20 @@ fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
         tool_schema_phase(&messages, Some(dir.path())),
         ToolSchemaPhase::Bootstrap
     );
-    let (schemas, stats) = native_tools_schema_for_context_with_sticky_at(
+    let (bootstrap_schemas, stats) = native_tools_schema_for_context_with_sticky_at(
         ToolSchemaPolicy::root(false),
         &messages,
         &[],
         Some(dir.path()),
     );
-    let names = schemas
-        .iter()
-        .filter_map(|tool| tool["function"]["name"].as_str())
-        .collect::<Vec<_>>();
-    assert!(names.contains(&"run_command"));
-    assert!(names.contains(&"write_to_file"));
-    assert!(names.contains(&"write_file_chunk"));
-    assert!(!names.contains(&"find_symbol"));
-    assert!(!names.contains(&"get_project_map"));
+    let bootstrap = native_names(&bootstrap_schemas);
+    for required in ["run_command", "write_to_file", "write_file_chunk"] {
+        assert!(
+            bootstrap.contains(&required.to_string()),
+            "missing {required}"
+        );
+    }
     assert_eq!(stats.phase, ToolSchemaPhase::Bootstrap);
-    assert!(stats.builtin_selected < stats.builtin_available);
-    let bootstrap_schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(&schemas);
-    let baseline_schema_tokens =
-        crate::network::compaction::estimate_tool_schema_tokens(&native_tools_schema(false));
-    assert!(
-        bootstrap_schema_tokens < baseline_schema_tokens * 80 / 100,
-        "bootstrap schema should materially reduce the baseline: {bootstrap_schema_tokens} vs {baseline_schema_tokens}"
-    );
 
     for index in 0..4 {
         std::fs::write(dir.path().join(format!("src{index}.ts")), "export {};\n").unwrap();
@@ -1231,19 +1465,19 @@ fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
         tool_schema_phase(&messages, Some(dir.path())),
         ToolSchemaPhase::Established
     );
-    let (schemas, stats) = native_tools_schema_for_context_with_sticky_at(
+    let (established_schemas, stats) = native_tools_schema_for_context_with_sticky_at(
         ToolSchemaPolicy::root(false),
         &messages,
         &[],
         Some(dir.path()),
     );
-    let names = schemas
-        .iter()
-        .filter_map(|tool| tool["function"]["name"].as_str())
-        .collect::<Vec<_>>();
-    assert!(names.contains(&"find_symbol"));
-    assert!(names.contains(&"get_project_map"));
     assert_eq!(stats.phase, ToolSchemaPhase::Established);
+    // The phase still gates the MCP discovery fallback, but it must not move the
+    // built-in half: a mid-session flip used to swap the whole `tools` block and
+    // invalidate the provider's cached prefix. (#1589)
+    assert_eq!(bootstrap, native_names(&established_schemas));
+    assert_eq!(stats.builtin_selected, stats.builtin_available);
+    assert!(stats.withheld_builtin_names.is_empty());
 }
 
 #[test]
@@ -2745,14 +2979,40 @@ fn prompt_makes_delegation_explicitly_opt_in() {
         crate::config::ToolProtocol::Json,
         crate::config::AgentMode::Build,
     );
-    assert!(prompt.contains("Do not spawn subagents unless the user explicitly requests"));
-    assert!(prompt.contains("Review every subagent result"));
+    // Without delegation armed there is no callable subagent tool, so promising
+    // a delegation workflow only invited probing for one that was never
+    // offered. (#1589)
+    assert!(!prompt.contains("Do not spawn subagents unless the user explicitly requests"));
+    assert!(!prompt.contains("Review every subagent result"));
+    assert!(!prompt.contains("- spawn_agent | Args:"));
+
+    let delegated = tool_system_prompt(
+        true,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+    assert!(delegated.contains("Do not spawn subagents unless the user explicitly requests"));
+    assert!(delegated.contains("Review every subagent result"));
+    assert!(delegated.contains("- spawn_agent | Args:"));
+
     assert!(prompt.contains("Never run `cargo check` on a standalone `.rs` file"));
     assert!(prompt.contains("Prefer the smallest focused sequence"));
     assert!(prompt.contains("git-feature-workflow"));
     assert!(prompt.contains("Chained shell commands are fine"));
     assert!(prompt.contains("Tool results are authoritative: claim checks only"));
     assert!(prompt.contains("never use `git add .`"));
+}
+
+#[test]
+fn api_native_prompt_states_that_the_tool_list_is_filtered() {
+    let prompt = tool_system_prompt(
+        false,
+        crate::config::ToolProtocol::ApiNative,
+        crate::config::AgentMode::Build,
+    );
+    assert!(prompt.contains("# Tool Surface"));
+    assert!(prompt.contains("filtered, not exhaustive"));
+    assert!(prompt.contains("list_mcp_tools"));
 }
 
 #[test]
