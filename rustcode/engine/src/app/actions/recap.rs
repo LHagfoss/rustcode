@@ -65,6 +65,7 @@ impl AppState {
                 }
                 user = true;
             } else if user
+                && message.completed_at.is_some()
                 && !rustcode_tool_protocol::text::strip_think_blocks(&message.content).is_empty()
             {
                 answered = true;
@@ -74,13 +75,19 @@ impl AppState {
     }
 
     pub fn should_start_conversation_recap(&self, now: Instant, background_active: bool) -> bool {
-        let count = self.completed_recap_turns();
-        self.config.auto_recap
-            && self.recap_unfocused_since.is_some_and(|since| {
+        // This runs on every input-loop iteration. Check focus and time before
+        // walking history, so ordinary selection/scrolling stays independent
+        // of the size of the conversation.
+        if !self.config.auto_recap
+            || !self.recap_unfocused_since.is_some_and(|since| {
                 now.saturating_duration_since(since.max(self.idle_since)) >= RECAP_IDLE_DELAY
             })
-            && self.should_start_idle_summary(now, background_active, RECAP_IDLE_DELAY)
-            && count >= 3
+            || !self.should_start_idle_summary(now, background_active, RECAP_IDLE_DELAY)
+        {
+            return false;
+        }
+        let count = self.completed_recap_turns();
+        count >= 3
             && self
                 .last_recapped_turn_count
                 .is_none_or(|last| count.saturating_sub(last) >= 2)
@@ -339,9 +346,9 @@ mod tests {
             state
                 .history
                 .push(ChatMessage::new("user", "implement this"));
-            state
-                .history
-                .push(ChatMessage::new("assistant", "Implemented and tested."));
+            let mut answer = ChatMessage::new("assistant", "Implemented and tested.");
+            answer.completed_at = Some("2026-10-01T18:00:00Z".into());
+            state.history.push(answer);
         }
         state.last_turn_had_model_final_response = true;
     }
@@ -376,6 +383,31 @@ mod tests {
         assert!(!state.should_start_conversation_recap(now + RECAP_IDLE_DELAY, true));
         state.status = AppStatus::Streaming;
         assert!(!state.should_start_conversation_recap(now + RECAP_IDLE_DELAY, false));
+    }
+
+    #[test]
+    fn automatic_minimum_counts_only_known_successful_completed_turns() {
+        let mut state = AppState::new();
+        let now = Instant::now();
+        state.idle_since = now - RECAP_IDLE_DELAY;
+        state.note_recap_focus_lost(now - RECAP_IDLE_DELAY);
+        for _ in 0..3 {
+            state
+                .history
+                .push(ChatMessage::new("user", "interrupted or legacy task"));
+            let mut answer = ChatMessage::new("assistant", "Some partial prose");
+            answer.response_time_ms = Some(500);
+            state.history.push(answer);
+        }
+        state.last_turn_had_model_final_response = true;
+        assert_eq!(state.completed_recap_turns(), 0);
+        assert!(!state.should_start_conversation_recap(now, false));
+        completed(&mut state, 2);
+        assert_eq!(state.completed_recap_turns(), 2);
+        assert!(!state.should_start_conversation_recap(now, false));
+        completed(&mut state, 1);
+        assert_eq!(state.completed_recap_turns(), 3);
+        assert!(state.should_start_conversation_recap(now, false));
     }
 
     #[test]
