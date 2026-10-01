@@ -904,20 +904,52 @@ const SHORT_EXPAND_HINT: &str = " (o)";
 /// omission marker (#1602).
 pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 5;
 
+/// Row window shared by committed and live tool previews. Callers supply their
+/// own marker text so live output can retain its omitted-byte note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ToolPreviewWindow {
+    pub(super) head_rows: usize,
+    pub(super) tail_rows: usize,
+    pub(super) omitted_rows: usize,
+}
+
+pub(super) fn tool_preview_window(
+    row_count: usize,
+    force_marker: bool,
+) -> Option<ToolPreviewWindow> {
+    if row_count <= COLLAPSED_TOOL_BODY_MAX_LINES && !force_marker {
+        return None;
+    }
+    if row_count.saturating_add(1) <= COLLAPSED_TOOL_BODY_MAX_LINES {
+        return Some(ToolPreviewWindow {
+            head_rows: row_count,
+            tail_rows: 0,
+            omitted_rows: 0,
+        });
+    }
+
+    let head_rows = (COLLAPSED_TOOL_BODY_MAX_LINES - 1) / 2;
+    let tail_rows = COLLAPSED_TOOL_BODY_MAX_LINES - head_rows - 1;
+    Some(ToolPreviewWindow {
+        head_rows,
+        tail_rows,
+        omitted_rows: row_count.saturating_sub(head_rows + tail_rows),
+    })
+}
+
 /// Keep the beginning and end of an already wrapped tool body within the
 /// collapsed visual-row budget. The marker occupies one of the five rows.
 fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> Vec<Line<'static>> {
-    if lines.len() <= COLLAPSED_TOOL_BODY_MAX_LINES {
+    let Some(window) = tool_preview_window(lines.len(), false) else {
         return lines;
-    }
-
-    let head_count = (COLLAPSED_TOOL_BODY_MAX_LINES - 1) / 2;
-    let tail_count = COLLAPSED_TOOL_BODY_MAX_LINES - head_count - 1;
-    let omitted = lines.len() - head_count - tail_count;
+    };
     let mut preview = Vec::with_capacity(COLLAPSED_TOOL_BODY_MAX_LINES);
-    preview.extend(lines.drain(..head_count));
+    let tail_start = lines.len().saturating_sub(window.tail_rows);
+    let tail = lines.split_off(tail_start);
+    lines.truncate(window.head_rows);
+    preview.extend(lines);
     preview.push(Line::from(Span::styled(
-        format!("    … +{omitted} lines"),
+        format!("    … +{} lines", window.omitted_rows),
         get_themed_style(
             COLOR_MUTED(),
             COLOR_BG(),
@@ -925,15 +957,7 @@ fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> 
             show_picker,
         ),
     )));
-    preview.extend(
-        lines
-            .into_iter()
-            .rev()
-            .take(tail_count)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev(),
-    );
+    preview.extend(tail);
     preview
 }
 
@@ -1999,5 +2023,53 @@ mod tests {
             .map(|column| buffer[(column, 0)].symbol())
             .collect::<String>();
         assert!(first_row.contains("(ctrl+o)"), "{first_row:?}");
+    }
+
+    #[test]
+    fn tool_preview_window_preserves_head_tail_and_forced_markers() {
+        use ratatui::text::Line;
+
+        let overflow = super::tool_preview_window(9, false).expect("overflow marker");
+        assert_eq!(
+            (
+                overflow.head_rows,
+                overflow.tail_rows,
+                overflow.omitted_rows
+            ),
+            (2, 2, 5)
+        );
+        let rows = (0..9)
+            .map(|row| Line::from(format!("row {row}")))
+            .collect::<Vec<_>>();
+        let capped = super::cap_collapsed_tool_body(rows, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            capped,
+            ["row 0", "row 1", "    … +5 lines", "row 7", "row 8"]
+        );
+
+        let forced_marker = super::tool_preview_window(4, true).expect("byte marker");
+        assert_eq!(
+            (
+                forced_marker.head_rows,
+                forced_marker.tail_rows,
+                forced_marker.omitted_rows
+            ),
+            (4, 0, 0)
+        );
+
+        assert!(super::tool_preview_window(5, false).is_none());
+        let full_with_forced_marker =
+            super::tool_preview_window(5, true).expect("marker occupies one preview row");
+        assert_eq!(
+            (
+                full_with_forced_marker.head_rows,
+                full_with_forced_marker.tail_rows,
+                full_with_forced_marker.omitted_rows
+            ),
+            (2, 2, 1)
+        );
     }
 }
