@@ -88,10 +88,9 @@ fn render_state_to_text_with_transcript_and_composer_area(
     (text, input_area)
 }
 
-/// Row the composer footer is laid out on: the last row of the layout area,
-/// which sits one row above the bottom padding.
+/// Row the composer footer is laid out on: the final terminal row.
 fn footer_row(height: u16) -> u16 {
-    height - 2
+    height - 1
 }
 
 /// Drag a transcript selection the way the runtime does on a mouse gesture:
@@ -568,7 +567,7 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
 }
 
 #[test]
-fn working_status_is_fixed_immediately_above_the_composer() {
+fn working_status_is_fixed_below_the_composer() {
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.history.push(ChatMessage::new("user", "hello"));
@@ -582,18 +581,15 @@ fn working_status_is_fixed_immediately_above_the_composer() {
     let mut transcript = TranscriptState::default();
     let (rendered, input_area) =
         render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 50, 12);
-    let composer_y = input_area.y as usize;
+    let status_y = input_area.bottom() as usize;
     let rows = rendered.lines().collect::<Vec<_>>();
-    // #1494: live activity keeps one row of breathing room above the composer.
-    assert!(rows[composer_y - 2].contains("Working"));
-    assert!(rows[composer_y - 1].trim().is_empty());
+    assert!(rows[status_y].contains("Working"));
     assert_eq!(rendered.matches("Working").count(), 1);
 
     transcript.scroll_up(4);
     let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
     let rows = scrolled.lines().collect::<Vec<_>>();
-    assert!(rows[composer_y - 2].contains("Working"));
-    assert!(rows[composer_y - 1].trim().is_empty());
+    assert!(rows[status_y].contains("Working"));
     assert_eq!(scrolled.matches("Working").count(), 1);
 }
 
@@ -1159,7 +1155,7 @@ fn command_popup_keeps_composer_on_the_same_bottom_row() {
 }
 
 #[test]
-fn busy_command_surfaces_stay_between_activity_and_composer() {
+fn busy_command_surfaces_stay_above_input_and_activity_below_it() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     for (width, height) in [(80, 24), (60, 18), (100, 30)] {
         for panel in [false, true] {
@@ -1191,10 +1187,6 @@ fn busy_command_surfaces_stay_between_activity_and_composer() {
             } else {
                 "Show or set verbosity"
             };
-            assert!(
-                row(activity.trim()) < row(surface),
-                "activity must remain above command surface: {rendered}"
-            );
             let composer = rendered
                 .lines()
                 .enumerate()
@@ -1212,6 +1204,16 @@ fn busy_command_surfaces_stay_between_activity_and_composer() {
                 row(surface) < composer,
                 "surface must remain above composer: {rendered}"
             );
+            assert!(
+                composer < row(activity.trim()),
+                "live activity belongs below the composer: {rendered}"
+            );
+            if !panel {
+                assert!(
+                    row(activity.trim()) < row("context left"),
+                    "live activity remains above footer metadata: {rendered}"
+                );
+            }
             assert_eq!(
                 rendered
                     .lines()
@@ -5421,7 +5423,18 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
 
     assert!(!status.contains("Tokens/s"), "{status}");
     assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
+    assert!(
+        footer.find("Tokens/s: 80.0") < footer.find("context left"),
+        "Tokens/s should appear immediately before context usage: {footer}"
+    );
     assert!(status.contains("esc interrupt"), "{status}");
+
+    let narrow = render_state_to_text(&mut state, 20, 12);
+    let narrow_footer = narrow
+        .lines()
+        .find(|line| line.contains("context left"))
+        .expect("context remains visible at narrow widths");
+    assert!(!narrow_footer.contains("Tokens/s"), "{narrow_footer}");
 }
 
 /// The esc and steer-mode hints follow the same drop-don't-clip rule as the
@@ -6494,8 +6507,8 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
             input_area = render_with_transcript(frame, &mut state, &mut transcript).1;
         })
         .unwrap();
-    let input_top = input_area.y;
-    let before = (0..input_top)
+    let transcript_bottom = input_area.y.saturating_sub(1);
+    let before = (0..transcript_bottom)
         .map(|row| {
             (0..36)
                 .map(|column| terminal.backend().buffer()[(column, row)].symbol())
@@ -6509,7 +6522,7 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
             render_with_transcript(frame, &mut state, &mut transcript);
         })
         .unwrap();
-    let after = (0..input_top)
+    let after = (0..transcript_bottom)
         .map(|row| {
             (0..36)
                 .map(|column| terminal.backend().buffer()[(column, row)].symbol())
@@ -6550,9 +6563,11 @@ fn a_wheel_tick_moves_three_painted_rows() {
             input_area = render_with_transcript(frame, &mut state, &mut transcript).1;
         })
         .unwrap();
-    let input_top = input_area.y;
+    // The row immediately above input is reserved for the return-to-latest
+    // control; compare transcript rows independently of that composer slot.
+    let transcript_bottom = input_area.y.saturating_sub(1);
     let painted = |terminal: &Terminal<TestBackend>| {
-        (0..input_top)
+        (0..transcript_bottom)
             .map(|row| {
                 (0..36)
                     .map(|column| terminal.backend().buffer()[(column, row)].symbol())
@@ -8582,9 +8597,13 @@ fn streaming_while_scrolled_up_holds_the_rows_and_offers_a_return_to_latest() {
         "output that arrived out of view is announced"
     );
 
-    // The affordance survives, sits on the composer's own padding row, and
-    // says so in the "new activity" wording.
-    assert_eq!(control.y, input_area.y, "the control owns one composer row");
+    // The affordance stays in the dedicated row above the composer and says
+    // so in the "new activity" wording.
+    assert_eq!(
+        control.bottom(),
+        input_area.y,
+        "the control sits directly above the composer"
+    );
     let announced = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
     assert!(
         announced.contains("New activity"),
@@ -8641,6 +8660,32 @@ fn the_return_to_latest_control_is_hidden_at_the_tail_and_degrades_when_narrow()
         .area()
         .expect("the narrow label still paints");
     assert!(control.width <= 20, "{control:?}");
+}
+
+#[test]
+fn the_return_to_latest_control_stays_above_the_input_and_hides_for_panels() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = state_with_a_scrollable_transcript();
+    let mut transcript = TranscriptState::default();
+    let _ = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    transcript.scroll_up(4);
+
+    let (_, input_area) =
+        render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 80, 20);
+    let control = transcript
+        .follow_control()
+        .area()
+        .expect("the scrolled transcript shows a return control");
+    assert_eq!(control.bottom(), input_area.y);
+
+    state.show_session_modal = true;
+    let panel = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
+    assert!(panel.contains("Session"), "{panel}");
+    assert_eq!(
+        transcript.follow_control().area(),
+        None,
+        "the panel owns the area and the hidden control owns no pointer target"
+    );
 }
 
 /// #1593: an expanded body is bounded, and collapsing it restores exactly the

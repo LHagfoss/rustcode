@@ -134,12 +134,11 @@ fn render_transcript_status_row(
     f: &mut Frame,
     state: &RenderSnapshot,
     transcript: &mut TranscriptState,
-    input: ratatui::layout::Rect,
+    control_area: Option<ratatui::layout::Rect>,
 ) {
-    let gap = ratatui::layout::Rect {
-        y: input.y,
-        height: 1,
-        ..input
+    let Some(gap) = control_area else {
+        transcript.follow_control.clear();
+        return;
     };
     if !transcript.tail_visible() {
         transcript.follow_control.render(
@@ -282,29 +281,41 @@ pub(crate) fn render_with_transcript_snapshot(
     // Reserve the footer row even while a completion popup replaces its text so
     // the composer does not jump when the popup opens or closes.
     let footer_height = 1;
-    let (top_padding, bottom_padding) = live_surface_padding(state);
-    let vertical_padding = top_padding.saturating_add(bottom_padding);
+    let (top_padding, _) = live_surface_padding(state);
     let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
         || !state.running_tools().is_empty()
         || !state.background_tasks().is_empty();
-    let mut activity_lines = if activity_visible {
-        let mut lines = background_command_lines(state);
-        lines.push(activity_status_line(state, false, f.area().width as usize));
-        lines
-    } else {
-        Vec::new()
-    };
+    let mut activity_lines = background_command_lines(state);
+    let activity_status_height = u16::from(activity_visible);
+    // Reserve a stable row above the composer for return-to-latest. Panels,
+    // confirmations, questions, and completions suppress the control there.
+    let control_row_suppressed =
+        state.modal_open() || approval_active || question_active || popup_rows > 0;
+    // Keep viewport geometry stable as the reader scrolls; conditionally
+    // adding this row after a wheel/drag event would shift selection anchors.
+    let control_row_height = 1;
+    // The stable control slot takes over the old one-row bottom pad. Keeping
+    // its height fixed, even when a panel hides the control, preserves both
+    // the transcript viewport and the composer's bottom anchor.
+    let bottom_padding = 0;
+    let vertical_padding = top_padding.saturating_add(bottom_padding);
     // Decide on optional breathing room around live activity (#1494). Gaps are
     // dropped first on short terminals so chat/input are never clipped for
     // spacing, and never added when activity is absent.
     let reserved_without_gaps = vertical_padding
         .saturating_add(queue_block_height)
         .saturating_add(provisional_input_height)
+        .saturating_add(control_row_height)
+        .saturating_add(activity_status_height)
         .saturating_add(footer_height)
         .saturating_add(activity_lines.len() as u16)
         .saturating_add(popup_rows);
-    let (activity_gap_top, activity_gap_bottom) =
-        activity_spacing(activity_visible, f.area().height, reserved_without_gaps, 3);
+    let (activity_gap_top, activity_gap_bottom) = activity_spacing(
+        !activity_lines.is_empty(),
+        f.area().height,
+        reserved_without_gaps,
+        3,
+    );
     let activity_gaps = activity_gap_top.saturating_add(activity_gap_bottom);
     let activity_height = (activity_lines.len() as u16).min(
         f.area()
@@ -312,6 +323,8 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
             .saturating_sub(provisional_input_height)
+            .saturating_sub(control_row_height)
+            .saturating_sub(activity_status_height)
             .saturating_sub(footer_height)
             .saturating_sub(activity_gaps),
     );
@@ -325,6 +338,8 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
             .saturating_sub(provisional_input_height)
+            .saturating_sub(control_row_height)
+            .saturating_sub(activity_status_height)
             .saturating_sub(activity_height)
             .saturating_sub(activity_gaps)
             .saturating_sub(footer_height),
@@ -338,6 +353,8 @@ pub(crate) fn render_with_transcript_snapshot(
             .height
             .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
+            .saturating_sub(control_row_height)
+            .saturating_sub(activity_status_height)
             .saturating_sub(activity_height)
             .saturating_sub(activity_gaps)
             .saturating_sub(footer_height)
@@ -352,6 +369,8 @@ pub(crate) fn render_with_transcript_snapshot(
         .height
         .saturating_sub(vertical_padding)
         .saturating_sub(queue_block_height)
+        .saturating_sub(control_row_height)
+        .saturating_sub(activity_status_height)
         .saturating_sub(input_height)
         .saturating_sub(activity_height)
         .saturating_sub(activity_gaps)
@@ -397,7 +416,9 @@ pub(crate) fn render_with_transcript_snapshot(
             Constraint::Length(queue_block_height),
             Constraint::Length(modal_height),
             Constraint::Length(popup_height),
+            Constraint::Length(control_row_height),
             Constraint::Length(input_height),
+            Constraint::Length(activity_status_height),
             Constraint::Length(footer_height),
         ])
         .split(layout_area);
@@ -407,7 +428,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // The composer indexes these as [chat, queue, popup, input, footer]; the
     // activity stays above the queue, panels and completions. Panels claim
     // the rows directly above input, exactly where their anchor paints.
-    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[7], chunks[8]];
+    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[8], chunks[10]];
     render_queue_line(f, &composer_chunks, state);
     // Optional breathing room around live activity (#1494). Gaps are empty
     // background rows; they are omitted when activity is absent or the
@@ -437,22 +458,22 @@ pub(crate) fn render_with_transcript_snapshot(
             layout_area.height.saturating_sub(footer_height),
         );
         Some(ratatui::layout::Rect::new(
-            chunks[7].x,
-            chunks[7].bottom().saturating_sub(height),
-            chunks[7].width,
+            chunks[8].x,
+            chunks[8].bottom().saturating_sub(height),
+            chunks[8].width,
             height,
         ))
     } else {
         None
     };
     let input_margin = if approval_active {
-        render_tool_confirmation_modal(f, state, chunks[7]);
+        render_tool_confirmation_modal(f, state, chunks[8]);
         Margin {
             vertical: 0,
             horizontal: 0,
         }
     } else if question_in_bottom_pane {
-        render_question_modal(f, state, chunks[7]);
+        render_question_modal(f, state, chunks[8]);
         Margin {
             vertical: 0,
             horizontal: 0,
@@ -474,7 +495,7 @@ pub(crate) fn render_with_transcript_snapshot(
         // selection is live: reading the range here is already its answer.
         render_composer_footer(
             f,
-            chunks[8],
+            chunks[10],
             state,
             popup_hint,
             transcript.selection.has_selection(),
@@ -482,7 +503,7 @@ pub(crate) fn render_with_transcript_snapshot(
     }
 
     if !filtered_cmds.is_empty() {
-        let input_inner = chunks[7].inner(input_margin);
+        let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
             chunks[6].y,
@@ -491,7 +512,7 @@ pub(crate) fn render_with_transcript_snapshot(
         );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
-        let input_inner = chunks[7].inner(input_margin);
+        let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
             chunks[6].y,
@@ -501,7 +522,7 @@ pub(crate) fn render_with_transcript_snapshot(
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 
-    let input_box_area = question_area.unwrap_or(chunks[7]);
+    let input_box_area = question_area.unwrap_or(chunks[8]);
 
     f.render_in_area(chunks[5], |f| {
         if state.show_model_picker() {
@@ -572,7 +593,19 @@ pub(crate) fn render_with_transcript_snapshot(
         }
     });
 
-    render_transcript_status_row(f, state, transcript, chunks[7]);
+    render_transcript_status_row(
+        f,
+        state,
+        transcript,
+        (!control_row_suppressed).then_some(chunks[7]),
+    );
+    if activity_status_height > 0 {
+        f.render_widget(
+            Paragraph::new(activity_status_line(state, false, f.area().width as usize))
+                .style(Style::default().bg(COLOR_BG())),
+            chunks[9],
+        );
+    }
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(
