@@ -1568,11 +1568,16 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // Rebuild once after the first trim so the schema cost and selected set
     // describe the same request that will be sent, rather than the raw
     // pre-trim projection.
+    let mut tools_notice = None;
     if let Some(policy) = native_schema_policy {
-        native_tool_schemas =
+        let (schemas, selection) =
             prepare_native_tool_schemas(state, policy, &msgs, task_working_directory.as_deref())
-                .await
-                .0;
+                .await;
+        native_tool_schemas = schemas;
+        tools_notice = crate::tools::withheld_tools_notice(&selection);
+        if let Some(notice) = tools_notice.as_deref() {
+            messages::append_to_context_tail(&mut msgs, notice);
+        }
         let schema_preflight = compaction::calculate_preflight_budget_for_projection(
             &msgs,
             &native_tool_schemas,
@@ -1602,6 +1607,11 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         if omitted {
             dynamic_context = reduced_context;
             dynamic_context_omitted = replace_request_context_tail(&mut msgs, &dynamic_context);
+            // Replacing the tail also discards anything appended to it after the
+            // context was built, so re-state which tools this request withheld. (#1589)
+            if let Some(notice) = tools_notice.as_deref() {
+                messages::append_to_context_tail(&mut msgs, notice);
+            }
             preflight = compaction::calculate_preflight_budget_for_projection(
                 &msgs,
                 &native_tool_schemas,
