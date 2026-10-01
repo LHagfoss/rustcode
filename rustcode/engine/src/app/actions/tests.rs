@@ -740,10 +740,7 @@ fn toggle_expanded_thought_expands_then_collapses_the_last_candidate() {
         super::toggle_expanded_thought(&mut state, &[1, 2, 3]),
         super::ExpandOutcome::Collapsed(2)
     );
-    assert_eq!(
-        state.expanded_thoughts,
-        std::collections::HashSet::new()
-    );
+    assert_eq!(state.expanded_thoughts, std::collections::HashSet::new());
 }
 
 #[test]
