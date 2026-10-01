@@ -285,6 +285,12 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.clear_deferred_tool_calls();
     s.last_turn_had_model_final_response = false;
     s.last_summary_history_len = None;
+    s.summary_in_flight = false;
+    s.recap_request_id = None;
+    s.last_recapped_turn_count = None;
+    s.recap_retry_after = None;
+    s.recap_failed_turn_count = None;
+    s.recap_unfocused_since = s.recap_unfocused_since.map(|_| Instant::now());
     s.image_analysis_cache.clear();
     s.clear_current_response();
     s.current_thought_time_ms = 0;

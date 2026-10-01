@@ -2051,10 +2051,15 @@ pub(super) async fn handle_app_event(
                 return Ok(InputFlow::ContinueIteration);
             }
             TuiEvent::FocusGained => {
+                app_state.lock().await.note_recap_focus_gained();
                 *terminal_focused = true;
                 *needs_redraw = true;
             }
             TuiEvent::FocusLost => {
+                app_state
+                    .lock()
+                    .await
+                    .note_recap_focus_lost(std::time::Instant::now());
                 *terminal_focused = false;
                 *needs_redraw = true;
             }

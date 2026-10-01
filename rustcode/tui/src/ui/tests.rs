@@ -7312,22 +7312,15 @@ fn conversation_recap_renders_as_compact_labeled_block() {
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
-    assert_eq!(text[0], "");
-    assert!(text[1].starts_with("─ Conversation recap ─"));
-    assert_eq!(text[1].chars().count(), 80);
+    assert!(text[0].starts_with("  ↳ Recap: "), "{text:?}");
+    assert!(!text.iter().any(|line| line.contains("─")));
     assert!(
-        rendered[1]
-            .spans
+        rendered
             .iter()
-            .all(|span| span.style.fg == Some(COLOR_TURN_SEPARATOR()))
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style.add_modifier.contains(Modifier::ITALIC))
     );
-    assert_eq!(text[2], "");
-    assert_eq!(
-        text[3],
-        "  The implementation is complete; cargo test passes and the next step is review."
-    );
-    assert_eq!(text[4], "");
-    assert!(!text.iter().any(|line| line.contains("• ")));
+    assert!(text.concat().contains("implementation is complete"));
 }
 
 #[test]
@@ -7371,16 +7364,14 @@ fn conversation_recap_wraps_inside_its_message_gutter() {
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
-    assert!(text.len() > 5, "recap fixture must wrap: {text:?}");
-    assert_eq!(text[0], "");
-    assert!(text[1].starts_with("─ Conversation recap ─"));
-    assert_eq!(text[1].chars().count(), 32);
+    assert!(text.len() > 2, "recap fixture must wrap: {text:?}");
+    assert!(text[0].starts_with("  ↳ Recap: "));
     assert!(
-        text[3..]
-            .iter()
-            .filter(|line| !line.is_empty())
-            .all(|line| line.starts_with("  ") && line.chars().count() <= 32)
+        text.iter()
+            .skip(1)
+            .all(|line| line.starts_with("           "))
     );
+    assert!(rendered.iter().all(|line| line.width() <= 30));
 }
 
 #[test]
@@ -8957,6 +8948,33 @@ fn a_live_selection_also_releases_follow() {
     select_transcript_text(&mut state, &mut transcript, (2, 2), (20, 4));
     assert!(transcript.selection.is_active());
     assert!(!transcript.is_following());
+}
+
+#[test]
+fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("assistant", r#"{"summary":"The fix is implemented and tested.","next_action":"Install it locally."}"#).as_conversation_recap());
+    for width in [8, 16, 32, 80] {
+        let rendered = super::render_committed_history_block(&state, 0, width);
+        assert!(
+            rendered.iter().all(|line| line.width() <= width as usize),
+            "{rendered:?}"
+        );
+        let text = rendered.iter().map(Line::to_string).collect::<String>();
+        if width >= 32 {
+            assert!(text.contains("Next:"), "{text}");
+        }
+        assert!(!text.contains("summary"));
+        assert!(
+            rendered
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content.contains("N")
+                    && span.style.add_modifier.contains(Modifier::BOLD))
+                || width < 10
+        );
+    }
 }
 
 #[test]
