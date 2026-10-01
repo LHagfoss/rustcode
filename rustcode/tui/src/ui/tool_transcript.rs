@@ -598,28 +598,9 @@ pub(super) fn indent_tool_result_body(
                     .any(|span| span.content.trim_start().starts_with('✗'))
         })
         .collect::<Vec<_>>();
-    // Expanded bodies render in full; collapsed ones keep the head/tail
-    // window. Homogeneous command batches render expanded (full) so a
-    // truncation marker never appears without an expand affordance (#1580).
-    let max_visible = COLLAPSED_TOOL_BODY_MAX_LINES;
-    let total = filtered.len();
-    let (visible, omitted, head_count) = if expanded {
-        (filtered, 0, 0)
-    } else {
-        let omitted = total.saturating_sub(max_visible);
-        if omitted == 0 {
-            (filtered, 0, 0)
-        } else {
-            let head_count = max_visible / 2;
-            let tail_count = max_visible - head_count;
-            let windowed = filtered[..head_count]
-                .iter()
-                .chain(&filtered[filtered.len() - tail_count..])
-                .cloned()
-                .collect();
-            (windowed, omitted, head_count)
-        }
-    };
+    // Expanded bodies render in full; collapsed ones are capped after width-
+    // aware wrapping so the limit counts terminal rows (#1602).
+    let visible = filtered;
     let max_w = (width as usize).max(10);
     let mut indented = Vec::new();
     for (index, line) in visible.into_iter().enumerate() {
@@ -639,21 +620,11 @@ pub(super) fn indent_tool_result_body(
         );
         push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
     }
-    if omitted > 0 {
-        indented.insert(
-            head_count,
-            Line::from(Span::styled(
-                format!("    … +{omitted} lines"),
-                get_themed_style(
-                    COLOR_MUTED(),
-                    COLOR_BG(),
-                    Modifier::ITALIC | Modifier::DIM,
-                    false,
-                ),
-            )),
-        );
+    if expanded {
+        indented
+    } else {
+        cap_collapsed_tool_body(indented, false)
     }
-    indented
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -922,10 +893,42 @@ pub(super) fn tool_group_header(title: &str, success: bool, show_picker: bool) -
 /// wrap width so it always lands on the entry's own first row (#1541).
 pub(super) const EXPAND_HINT: &str = " (ctrl+o to expand)";
 
-/// Collapsed tool-body window: head/tail lines kept around the omission
-/// marker. Single constant so Command and generic Tool bodies share the same
-/// threshold (#1580).
-pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 6;
+/// Maximum terminal rows in a collapsed tool-result preview, including the
+/// omission marker (#1602).
+pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 5;
+
+/// Keep the beginning and end of an already wrapped tool body within the
+/// collapsed visual-row budget. The marker occupies one of the five rows.
+fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> Vec<Line<'static>> {
+    if lines.len() <= COLLAPSED_TOOL_BODY_MAX_LINES {
+        return lines;
+    }
+
+    let head_count = (COLLAPSED_TOOL_BODY_MAX_LINES - 1) / 2;
+    let tail_count = COLLAPSED_TOOL_BODY_MAX_LINES - head_count - 1;
+    let omitted = lines.len() - head_count - tail_count;
+    let mut preview = Vec::with_capacity(COLLAPSED_TOOL_BODY_MAX_LINES);
+    preview.extend(lines.drain(..head_count));
+    preview.push(Line::from(Span::styled(
+        format!("    … +{omitted} lines"),
+        get_themed_style(
+            COLOR_MUTED(),
+            COLOR_BG(),
+            Modifier::ITALIC | Modifier::DIM,
+            show_picker,
+        ),
+    )));
+    preview.extend(
+        lines
+            .into_iter()
+            .rev()
+            .take(tail_count)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev(),
+    );
+    preview
+}
 
 /// Display width the expand hint occupies once appended to a row.
 pub(super) const EXPAND_HINT_WIDTH: u16 = EXPAND_HINT.len() as u16;
@@ -1085,7 +1088,11 @@ pub(super) fn command_child_lines(
         commands.push(Line::default());
     }
     let mut lines = Vec::with_capacity(commands.len());
-    let max_w = wrap_width(width, show_hint);
+    let status_suffix =
+        (!entry.success || entry.status == "running").then(|| format!(" · {}", entry.status));
+    let max_w = wrap_width(width, show_hint)
+        .saturating_sub(status_suffix.as_ref().map_or(0, |status| status.width()))
+        .max(10);
     for (command_index, command) in commands.into_iter().enumerate() {
         let mut spans = vec![Span::styled(
             if first && command_index == 0 {
@@ -1120,10 +1127,10 @@ pub(super) fn command_child_lines(
     if show_hint {
         append_expand_hint(&mut lines, show_picker);
     }
-    if !entry.success || entry.status == "running" {
+    if let Some(status_suffix) = status_suffix {
         if let Some(line) = lines.last_mut() {
             line.spans.push(Span::styled(
-                format!(" · {}", entry.status),
+                status_suffix,
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
@@ -1134,6 +1141,7 @@ pub(super) fn command_child_lines(
 pub(super) fn command_summary_lines(
     entry: &ToolTranscriptEntry,
     width: u16,
+    show_hint: bool,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let bullet_color = if entry.success {
@@ -1142,14 +1150,27 @@ pub(super) fn command_summary_lines(
         Color::Rgb(229, 123, 123)
     };
     let has_command = !entry.target.is_empty() && entry.target != "?";
-    let preview =
-        collapse_command_preview(&entry.target, (width as usize).saturating_sub(14).max(20));
+    let preview = collapse_command_preview(
+        &entry.target,
+        (width as usize)
+            .saturating_sub(
+                14 + if show_hint {
+                    EXPAND_HINT_WIDTH as usize
+                } else {
+                    0
+                },
+            )
+            .max(10),
+    );
     let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
     if commands.is_empty() {
         commands.push(Line::default());
     }
     let last = commands.len().saturating_sub(1);
-    let max_w = (width as usize).max(10);
+    let status_suffix = format!(" · {}", entry.status);
+    let max_w = wrap_width(width, show_hint)
+        .saturating_sub(status_suffix.width())
+        .max(10);
     let mut lines = Vec::new();
     for (index, command) in commands.into_iter().enumerate() {
         let mut spans = if index == 0 {
@@ -1174,7 +1195,7 @@ pub(super) fn command_summary_lines(
         }
         if index == last {
             spans.push(Span::styled(
-                format!(" · {}", entry.status),
+                status_suffix.clone(),
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
@@ -1183,6 +1204,9 @@ pub(super) fn command_summary_lines(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         );
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
+    }
+    if show_hint {
+        append_expand_hint(&mut lines, show_picker);
     }
     truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES)
 }
@@ -1197,28 +1221,15 @@ pub(super) fn indent_generic_tool_body(
     if matches!(verbosity, rustcode::controller::Verbosity::High) {
         return Vec::new();
     }
-    // Expanded Tool bodies render in full; collapsed ones keep the shared
-    // head/tail window so ctrl+o visibly changes the body (#1580).
+    // Expanded Tool bodies render in full; collapsed ones are capped after
+    // width-aware wrapping so they stay within five terminal rows (#1602).
     if expanded {
         return indent_full_tool_body(lines, width, show_picker);
     }
 
-    let max_visible = COLLAPSED_TOOL_BODY_MAX_LINES;
-    let omitted = lines.len().saturating_sub(max_visible);
-    let head_count = max_visible / 2;
-    let tail_count = max_visible - head_count;
-    let visible = if omitted == 0 {
-        lines
-    } else {
-        lines[..head_count]
-            .iter()
-            .chain(&lines[lines.len() - tail_count..])
-            .cloned()
-            .collect()
-    };
     let max_w = (width as usize).max(10);
     let mut indented = Vec::new();
-    for line in visible {
+    for line in lines {
         if line.spans.is_empty() {
             indented.push(line);
             continue;
@@ -1235,21 +1246,7 @@ pub(super) fn indent_generic_tool_body(
         );
         push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
     }
-    if omitted > 0 {
-        indented.insert(
-            head_count,
-            Line::from(Span::styled(
-                format!("    … +{omitted} lines"),
-                get_themed_style(
-                    COLOR_MUTED(),
-                    COLOR_BG(),
-                    Modifier::ITALIC | Modifier::DIM,
-                    show_picker,
-                ),
-            )),
-        );
-    }
-    indented
+    cap_collapsed_tool_body(indented, show_picker)
 }
 
 /// Indent a body without truncating it: the expanded form of a tool preview.
@@ -1369,16 +1366,15 @@ fn render_tool_result_group_snapshot(
                 }
             } else {
                 let entry = &group[0];
-                lines.extend(command_summary_lines(entry, width, show_picker));
-                // Homogeneous command batches are not collapsible, so they
-                // render the full body: a truncation marker without an expand
-                // affordance leaves no way to act on it (#1580).
+                let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
+                let show_hint = !entry.body.is_empty() && !is_expanded;
+                lines.extend(command_summary_lines(entry, width, show_hint, show_picker));
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
                     &state.verbosity(),
                     width,
-                    true,
+                    is_expanded,
                 ));
             }
         } else {
@@ -1494,11 +1490,8 @@ fn render_tool_result_group_snapshot(
 /// can never disagree about what is expandable (#1541, #1563):
 /// - low verbosity only (high verbosity renders bodies inline, never collapsed);
 /// - generic Tool entries with a non-empty body;
-/// - Command entries only when they share their provider batch with a
-///   non-Command entry (a homogeneous command-only batch renders its
-///   summary+bodies inline with no collapse affordance, so a newer
-///   command-only group must not absorb Ctrl+O meant for an older collapsed
-///   group);
+/// - Command entries with a non-empty body, whether their provider batch is
+///   homogeneous or mixed;
 /// - Edit entries with an expandable diff body (successful changes with
 ///   changed lines; no-op/failed keep truthful status, #1567).
 /// Already expanded entries stay in the list: they are what the next press
@@ -1511,8 +1504,8 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
     let history = state.active_history();
     // Group consecutive tool messages the way the transcript does, joining
     // across tool-only assistant turns (one-tool-per-round orchestration).
-    // A batch's homogeneity decides whether its Command members render with
-    // a collapse affordance (mixed) or inline (homogeneous command-only).
+    // A batch's homogeneity decides its grouping, while each command result
+    // keeps an independent expansion target.
     let mut batches: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     let mut idx = 0;
@@ -1547,14 +1540,6 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
 
     let mut out = Vec::new();
     for batch in batches {
-        let kinds = batch
-            .iter()
-            .filter_map(|&i| tool_transcript_entry(state, i, width, false).map(|e| e.kind))
-            .collect::<Vec<_>>();
-        if kinds.is_empty() {
-            continue;
-        }
-        let homogeneous_command = kinds.iter().all(|k| *k == ToolTranscriptKind::Command);
         let mut seen_explorations: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         for &i in &batch {
@@ -1577,7 +1562,7 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
                     }
                 }
                 ToolTranscriptKind::Command => {
-                    if !homogeneous_command && !entry.body.is_empty() {
+                    if !entry.body.is_empty() {
                         out.push(i);
                     }
                 }
