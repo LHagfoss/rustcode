@@ -1414,6 +1414,154 @@ fn stats_and_session_panels_render_their_details_without_touching_the_transcript
 }
 
 #[test]
+fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{backend::TestBackend, style::Modifier};
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.show_session_modal = true;
+    state.active_session_id = "session-test".to_owned();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    let area = transcript
+        .panel_selection_area
+        .expect("session panel exposes its body to selection");
+    let buffer = terminal.backend().buffer();
+    let (column, row) = (area.y..area.bottom())
+        .find_map(|row| {
+            let line = (area.x..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>();
+            line.find("session-test")
+                .map(|offset| (area.x + offset as u16, row))
+        })
+        .expect("the selected body contains the session id");
+    let end_column = column + "session-test".len() as u16 - 1;
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: end_column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    transcript.panel_selection.mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: end_column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(
+        transcript.panel_selection.selected_text().as_deref(),
+        Some("session-test")
+    );
+    assert!(
+        !transcript.selection.has_selection(),
+        "panel selection must remain independent from transcript selection"
+    );
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert!(
+        terminal.backend().buffer()[(column, row)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "the selected panel text is visibly highlighted"
+    );
+    state.show_session_modal = false;
+    state.show_status_modal = true;
+    let previous_area = area;
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert_eq!(transcript.panel_selection_area, Some(previous_area));
+    assert!(
+        !transcript.panel_selection.has_selection(),
+        "a same-sized status panel must not inherit the session panel range"
+    );
+
+    state.show_status_modal = false;
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert!(transcript.panel_selection_area.is_none());
+    assert!(!transcript.panel_selection.has_selection());
+}
+
+#[test]
+fn info_command_panel_text_can_be_selected_and_copied() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    use unicode_width::UnicodeWidthStr;
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "About RustCode",
+        content: "Session: session-test\nModel: café 🙂\nTurn: inactive\nQueue: 0".into(),
+    });
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    let area = transcript
+        .panel_selection_area
+        .expect("generic info panel exposes its body to selection");
+    let buffer = terminal.backend().buffer();
+    let (column, row) = (area.y..area.bottom())
+        .find_map(|row| {
+            let line = (area.x..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>();
+            line.find("café 🙂")
+                .map(|offset| (area.x + offset as u16, row))
+        })
+        .expect("the info body contains accented and wide text");
+    let selected = "café 🙂";
+    let end_column = column + selected.width() as u16 - 1;
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), column),
+        (MouseEventKind::Drag(MouseButton::Left), end_column),
+        (MouseEventKind::Up(MouseButton::Left), end_column),
+    ] {
+        transcript.panel_selection.mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(
+        transcript.panel_selection.selected_text().as_deref(),
+        Some(selected)
+    );
+}
+
+#[test]
 fn inline_command_selection_is_distinct_from_typed_input() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
