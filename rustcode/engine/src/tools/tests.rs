@@ -3027,6 +3027,7 @@ fn skills_are_discovered_and_loaded_in_two_on_demand_steps() {
     assert!(list < use_skill, "discover before loading: {prompt}");
     assert!(prompt.contains("metadata only"));
     assert!(prompt.contains("selected SKILL.md"));
+    assert!(prompt.contains("live local app/device state without a matching tool or route hint"));
     assert!(TOOLS.iter().any(|tool| tool.name == "list_skills"));
     assert!(TOOLS.iter().any(|tool| tool.name == "use_skill"));
 }
