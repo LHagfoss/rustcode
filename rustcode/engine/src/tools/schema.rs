@@ -1607,12 +1607,6 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
 /// rejection as the only feedback. (#1589)
 pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<String> {
     let mut lines = Vec::new();
-    // Failed servers are surfaced up front so the model does not burn rounds
-    // retrying tools that can never load (#1633). Recorded at startup in
-    // addition to the exit-summary/stderr paths.
-    for warning in crate::mcp::mcp_startup_warnings() {
-        lines.push(warning);
-    }
     if !stats.withheld_builtin_names.is_empty() {
         lines.push(format!(
             "Withheld built-ins, callable by exact name: {}.",
@@ -1633,6 +1627,14 @@ pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<S
         ));
     }
     (!lines.is_empty()).then(|| format!("# Tools Not Listed\n{}\n", lines.join("\n")))
+}
+
+/// Failed-server startup warnings surfaced up front so the model does not burn
+/// rounds retrying tools that can never load (#1633). Kept separate from
+/// `withheld_tools_notice` so schema-selection tests stay deterministic.
+pub(crate) fn mcp_startup_notice() -> Option<String> {
+    let warnings = crate::mcp::mcp_startup_warnings();
+    (!warnings.is_empty()).then(|| format!("# MCP Servers Unavailable\n{}\n", warnings.join("\n")))
 }
 
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
