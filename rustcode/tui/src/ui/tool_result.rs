@@ -1029,4 +1029,23 @@ mod tests {
             .is_empty()
         );
     }
+    #[test]
+    fn command_preview_removes_only_transport_header() {
+        let result = "[command status: completed=true; success=true; exit_code=Some(0)]\nstdout:\n日本語\n[command status: real output]";
+        let text = super::render_command_result(result, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("completed=true"));
+        assert!(text.contains("日本語"));
+        assert!(text.contains("[command status: real output]"));
+        assert!(
+            super::render_command_result(
+                "[Side-effect replay suppressed: use recorded result]",
+                false
+            )
+            .is_empty()
+        );
+    }
 }
