@@ -68,7 +68,9 @@ use modals::{
     render_yolo_picker_modal, tool_confirmation_height,
 };
 use tool_result::{
-    edit_result_is_noop, render_tool_result, result_has_embedded_diff, synthesized_edit_preview,
+    edit_diff_counts, edit_diff_unavailable, edit_result_is_noop, embedded_edit_diff,
+    render_file_edit_diff_for_path, render_tool_result, result_has_embedded_diff,
+    synthesized_edit_preview,
 };
 
 use crate::inline_terminal::Frame;

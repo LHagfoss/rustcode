@@ -1281,10 +1281,24 @@ fn write_to_file_defaults_to_overwrite_true() {
     }))
     .expect("write_to_file without explicit overwrite should succeed");
     assert!(result.contains("wrote"), "got: {result}");
+    let diff = diff_block_of(&result);
+    assert!(diff.contains("-old content"), "got: {diff}");
+    assert!(diff.contains("+new content"), "got: {diff}");
     assert_eq!(
         std::fs::read_to_string(&file).expect("read"),
         "new content\n"
     );
+
+    let repeated = write_to_file_tool(&serde_json::json!({
+        "path": path,
+        "content": "new content\n",
+    }))
+    .expect("writing identical content should succeed");
+    assert!(
+        repeated.contains("already applied; no changes made"),
+        "got: {repeated}"
+    );
+    assert!(!repeated.contains("```diff"), "got: {repeated}");
 
     // overwrite explicitly false -> should return error
     let err = write_to_file_tool(&serde_json::json!({
@@ -1294,6 +1308,76 @@ fn write_to_file_defaults_to_overwrite_true() {
     }))
     .expect_err("write_to_file with overwrite: false on existing file must error");
     assert!(err.contains("already exists"), "got: {err}");
+}
+
+#[test]
+fn write_to_file_new_file_emits_added_lines_diff() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("new.rs");
+    let result = write_to_file_tool(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "content": "fn main() {}\n",
+    }))
+    .expect("new file should be written");
+
+    let diff = diff_block_of(&result);
+    assert!(diff.contains("@@ -0,0 +1"), "got: {diff}");
+    assert!(diff.contains("+fn main() {}"), "got: {diff}");
+}
+
+#[test]
+fn write_to_file_creates_an_empty_file_instead_of_treating_it_as_a_noop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("empty.txt");
+    let result = write_to_file_tool(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "content": "",
+    }))
+    .expect("empty file should be created");
+
+    assert!(result.contains("wrote"), "got: {result}");
+    assert!(file.is_file());
+}
+
+#[test]
+fn write_to_file_overwrite_diff_uses_actual_source_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    let before = (1..=50)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&file, before).expect("write original");
+    let after = (1..=50)
+        .map(|line| {
+            if line == 25 {
+                "LINE TWENTY FIVE".to_owned()
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+
+    let result = write_to_file_tool(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "content": after,
+    }))
+    .expect("overwrite should succeed");
+    let diff = diff_block_of(&result);
+
+    assert!(
+        diff.contains("@@ -22,"),
+        "hunk should retain source position: {diff}"
+    );
+    assert!(diff.contains("-line 25"), "got: {diff}");
+    assert!(diff.contains("+LINE TWENTY FIVE"), "got: {diff}");
+    assert!(
+        diff.contains(" line 26"),
+        "unchanged context should remain: {diff}"
+    );
 }
 
 #[test]

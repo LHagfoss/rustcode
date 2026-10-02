@@ -404,6 +404,30 @@ pub(super) fn cached_tool_result(
     })
 }
 
+fn cached_file_edit_diff(
+    diff: &str,
+    path: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (
+        "inline-file-diff",
+        diff,
+        path,
+        width,
+        show_picker,
+        theme::active_palette().name,
+    )
+        .hash(&mut hasher);
+    let key = hasher.finish();
+    TOOL_RESULT_CACHE.with(|cache| {
+        cached_tool_result_in(cache, key, || {
+            render_file_edit_diff_for_path(diff, path, width, show_picker)
+        })
+    })
+}
+
 pub(super) fn cached_tool_result_in(
     cache: &RefCell<lru::LruCache<u64, Vec<Line<'static>>>>,
     key: u64,
@@ -748,6 +772,7 @@ pub(super) struct ToolTranscriptEntry {
     pub(super) status: String,
     pub(super) body: Vec<Line<'static>>,
     pub(super) kind: ToolTranscriptKind,
+    pub(super) diff_counts: Option<(usize, usize)>,
 }
 
 pub(super) fn tool_call_arguments(
@@ -847,36 +872,35 @@ pub(super) fn tool_transcript_entry(
         tool_result_action(state, message_index, &tool_name)
     };
     let (success, mut status) = tool_result_status(message, &tool_name, result);
-    // Raw result bodies are useful for shell commands. Other tools stay
-    // compact; successful edits are the exception because their diff is the
-    // durable, reviewable record of what changed.
-    let mut body = match kind {
-        ToolTranscriptKind::Command => cached_tool_result(
+    let edit_diff = if kind == ToolTranscriptKind::Edit && success && !edit_result_is_noop(result) {
+        message
+            .diff
+            .as_deref()
+            .filter(|diff| !diff.is_empty() && !diff.contains('\0'))
+            .or_else(|| embedded_edit_diff(result))
+    } else {
+        None
+    };
+    let diff_counts = edit_diff.and_then(edit_diff_counts);
+    // Only command output and file diffs expose tool payloads. Human answers
+    // remain available because they belong to the conversation.
+    let mut body = if let Some(diff) = edit_diff {
+        cached_file_edit_diff(
+            diff,
+            &target,
+            usize::from(width).saturating_sub(4),
+            show_picker,
+        )
+    } else if kind == ToolTranscriptKind::Command || tool_name == "ask_question" {
+        cached_tool_result(
             &tool_name,
             result,
             width as usize,
             &state.verbosity(),
             show_picker,
-        ),
-        ToolTranscriptKind::Edit if success && result_has_embedded_diff(result) => {
-            cached_tool_result(
-                &tool_name,
-                result,
-                width as usize,
-                &state.verbosity(),
-                show_picker,
-            )
-        }
-        // The payload is the user's answer, not tool diagnostics. Keep it
-        // available when a long answer is expanded past the headline summary.
-        ToolTranscriptKind::Tool if tool_name == "ask_question" => cached_tool_result(
-            &tool_name,
-            result,
-            width as usize,
-            &state.verbosity(),
-            show_picker,
-        ),
-        _ => Vec::new(),
+        )
+    } else {
+        Vec::new()
     };
     if kind == ToolTranscriptKind::Edit && success && edit_result_is_noop(result) {
         status = "no changes".to_owned();
@@ -888,7 +912,10 @@ pub(super) fn tool_transcript_entry(
     // keep their truthful single-line status.
     if kind == ToolTranscriptKind::Edit
         && success
+        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
         && !edit_result_is_noop(result)
+        && !edit_diff_unavailable(result)
+        && edit_diff.is_none()
         && !result_has_embedded_diff(result)
     {
         let args = tool_call_arguments(state, message_index, &tool_name);
@@ -919,6 +946,7 @@ pub(super) fn tool_transcript_entry(
         status,
         body,
         kind,
+        diff_counts,
     })
 }
 
@@ -1072,6 +1100,12 @@ pub(super) fn tool_child_line(
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
+    }
+    if let Some((added, removed)) = entry.diff_counts {
+        spans.push(Span::styled(
+            format!(" (+{added} -{removed})"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
     }
     if !entry.success || entry.status == "running" || entry.status == "no changes" {
         spans.push(Span::styled(
@@ -1560,11 +1594,8 @@ fn render_tool_result_group_snapshot(
                     let mut body = Vec::new();
                     first_child = false;
                     let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
-                    if entry.kind == ToolTranscriptKind::Edit
-                        && edit_entry_is_expandable(entry)
-                        && low
-                    {
-                        if is_expanded {
+                    if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
+                        if is_expanded || !low {
                             body.extend(indent_full_tool_body(
                                 entry.body.clone(),
                                 width,
@@ -1956,6 +1987,24 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inline_diff_reuses_cached_rows_and_keys_file_language_and_width() {
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        super::TOOL_RESULT_CACHE.with(|cache| cache.borrow_mut().entries.clear());
+        let diff = "@@ -1 +1 @@\n+fn main() { let answer = 42; }\n";
+        let first = super::cached_file_edit_diff(diff, "main.rs", 40, false);
+        let second = super::cached_file_edit_diff(diff, "main.rs", 40, false);
+        assert_eq!(first, second);
+        super::TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 1));
+        super::cached_file_edit_diff(diff, "main.py", 40, false);
+        super::cached_file_edit_diff(diff, "main.rs", 20, false);
+        super::cached_file_edit_diff(diff, "main.rs", 40, true);
+        super::cached_file_edit_diff("@@ -1 +1 @@\n+changed\n", "main.rs", 40, false);
+        super::TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 5));
+    }
+
     use super::{
         COMMAND_DISPLAY_MAX_LINES, collapse_command_preview, is_hidden_system_notice,
         tool_result_status, truncate_wrapped_lines,
@@ -2079,6 +2128,7 @@ mod tests {
             status: "exit 0".to_owned(),
             body: vec![],
             kind: super::ToolTranscriptKind::Command,
+            diff_counts: None,
         };
         for width in [18, 24, 48, 80, 180] {
             let lines = super::command_summary_lines(&entry, width, false, false);
@@ -2103,6 +2153,7 @@ mod tests {
                     .map(|i| ratatui::text::Line::from(format!("output {i}")))
                     .collect(),
                 kind: super::ToolTranscriptKind::Command,
+                diff_counts: None,
             };
             let title = super::command_summary_lines(&entry, width, false, false);
             let body = super::indent_tool_result_body(
@@ -2144,6 +2195,7 @@ mod tests {
                 .map(|i| ratatui::text::Line::from(format!("output {i}")))
                 .collect(),
             kind: super::ToolTranscriptKind::Tool,
+            diff_counts: None,
         };
         let title = super::tool_child_line(&entry, true, false, 80, false);
         let body = super::indent_generic_tool_body(
@@ -2188,6 +2240,7 @@ mod tests {
             status: "exit 0".to_owned(),
             body: Vec::new(),
             kind: super::ToolTranscriptKind::Command,
+            diff_counts: None,
         };
         let width = 24;
         let lines = super::command_child_lines(&entry, true, true, width, false);

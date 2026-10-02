@@ -4002,6 +4002,63 @@ fn low_verbosity_write_shows_added_lines_preview() {
 }
 
 #[test]
+fn high_verbosity_keeps_actual_file_diff_visible() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "write_to_file".to_owned(),
+            arguments: r#"{"path":"src/main.rs","content":"let value = 2;"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "write_to_file: wrote 'src/main.rs'")
+            .answering(Some("call-1".to_owned()))
+            .with_diff(Some(
+                "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -20 +20 @@\n-let value = 1;\n+let value = 2;\n".to_owned(),
+            ))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "write_to_file".to_owned(),
+                success: true,
+                changed_paths: vec!["src/main.rs".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs (+1 -1)")),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("20 -let value = 1;")),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("20 +let value = 2;")),
+        "{rendered:?}"
+    );
+    assert!(
+        !rendered
+            .iter()
+            .any(|line| line.contains("@@") || line.contains("wrote")),
+        "{rendered:?}"
+    );
+}
+
+#[test]
 fn low_verbosity_write_expand_round_trip_changes_body_and_hint() {
     use rustcode::controller::{
         ChatMessage, ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity,

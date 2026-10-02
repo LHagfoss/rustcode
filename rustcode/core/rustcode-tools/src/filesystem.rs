@@ -1423,6 +1423,14 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
         ));
     }
 
+    let previous_content = if resolved_path.exists() {
+        std::fs::read_to_string(&resolved_path).ok()
+    } else {
+        Some(String::new())
+    };
+
+    let content_unchanged = resolved_path.exists() && previous_content.as_deref() == Some(content);
+
     if let Some(parent) = resolved_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
@@ -1430,12 +1438,28 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
 
     std::fs::write(&resolved_path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
 
+    if content_unchanged {
+        return Ok(format!(
+            "already applied; no changes made to '{path}' (resolved path: '{}')",
+            resolved_path.display()
+        ));
+    }
+
     let lines = content.lines().count();
-    Ok(format!(
+    let mut result = format!(
         "wrote '{path}' (resolved path: '{}'; {lines} lines, {} bytes)",
         resolved_path.display(),
         content.len()
-    ))
+    );
+    if let Some(previous_content) = previous_content {
+        let diff = generate_unified_diff(&previous_content, content);
+        if !diff.is_empty() {
+            result.push_str(&format!("\n\n```diff\n{diff}\n```"));
+        }
+    } else {
+        result.push_str(" (diff unavailable: existing content could not be read as text)");
+    }
+    Ok(result)
 }
 
 pub fn write_to_file_with_context(
