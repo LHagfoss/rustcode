@@ -147,7 +147,10 @@ pub(super) fn commit_transcript(
         transcript_cursor.is_at_start(),
         !history_range.is_empty(),
     ) {
-        terminal_runtime.terminal().draw_height(0, |_| {})?;
+        // Flag the repaint without presenting an intermediate blank frame:
+        // the old `draw_height(0)` reset left a blank viewport behind when
+        // the repaint that followed it panicked.
+        terminal_runtime.terminal().mark_viewport_dirty();
     }
     if transcript_cursor.is_at_start() && !history_range.is_empty() {
         let banner =
