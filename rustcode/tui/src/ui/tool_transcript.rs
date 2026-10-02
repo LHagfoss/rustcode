@@ -1066,12 +1066,15 @@ pub(super) const COMMAND_DISPLAY_MAX_LINES: usize = 2;
 /// and the result is width-truncated with an ellipsis. Width is display
 /// columns, not bytes, so CJK/wide glyphs don't overflow the transcript.
 pub(super) fn collapse_command_preview(target: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
     let single = target.split_whitespace().collect::<Vec<_>>().join(" ");
     if single.width() <= max_width {
         return single;
     }
     let suffix = '…';
-    let budget = max_width.saturating_sub(1).max(1);
+    let budget = max_width.saturating_sub(1);
     let mut output = String::new();
     let mut used = 0;
     for grapheme in single.split("").filter(|s| !s.is_empty()) {
@@ -1197,65 +1200,44 @@ pub(super) fn command_summary_lines(
         Color::Rgb(229, 123, 123)
     };
     let has_command = !entry.target.is_empty() && entry.target != "?";
-    let preview = collapse_command_preview(
-        &entry.target,
-        (width as usize)
-            .saturating_sub(
-                14 + if show_hint {
-                    EXPAND_HINT_WIDTH as usize
-                } else {
-                    0
-                },
-            )
-            .max(10),
-    );
-    let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
-    if commands.is_empty() {
-        commands.push(Line::default());
-    }
-    let last = commands.len().saturating_sub(1);
+    let prefix = if has_command { "Ran $ " } else { "Ran Bash" };
     let status_suffix = format!(" · {}", entry.status);
-    let max_w = wrap_width(width, show_hint)
-        .saturating_sub(status_suffix.width())
-        .max(10);
-    let mut lines = Vec::new();
-    for (index, command) in commands.into_iter().enumerate() {
-        let mut spans = if index == 0 {
-            vec![
-                Span::styled(
-                    "• ",
-                    get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    if has_command { "Ran $ " } else { "Ran Bash" },
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-            ]
-        } else {
-            vec![Span::styled(
-                "    ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            )]
-        };
-        if has_command {
+    let available = wrap_width(width, show_hint).min(width as usize);
+    let preview_width = available.saturating_sub(2 + prefix.width() + status_suffix.width());
+    let preview = collapse_command_preview(&entry.target, preview_width);
+    let mut spans = vec![
+        Span::styled(
+            "• ",
+            get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+        Span::styled(
+            prefix,
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+    ];
+    if has_command && preview_width > 0 {
+        for command in highlight_shell_command(&preview, COLOR_BG(), show_picker) {
             spans.extend(command.spans);
         }
-        if index == last {
-            spans.push(Span::styled(
-                status_suffix.clone(),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        let continuation = Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        );
-        push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
+    spans.push(Span::styled(
+        status_suffix,
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
+    let line = Line::from(spans);
+    let line = if line.width() > available {
+        Line::from(Span::styled(
+            collapse_command_preview(&line.to_string(), available),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ))
+    } else {
+        line
+    };
+    let mut lines = vec![line];
     if show_hint {
         append_expand_hint(&mut lines, width, show_picker);
     }
-    truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES)
+    lines
 }
 
 pub(super) fn indent_generic_tool_body(
@@ -2042,6 +2024,30 @@ mod tests {
         let long = collapse_command_preview("curl -sS https://example.com/very/long/path", 20);
         assert!(long.ends_with('…'), "{long:?}");
         assert!(long.width() <= 20, "{long:?}");
+    }
+
+    #[test]
+    fn completed_command_header_stays_on_one_line() {
+        let entry = super::ToolTranscriptEntry {
+            message_index: 0,
+            tool_name: "run_command".to_owned(),
+            action: "Bash".to_owned(),
+            target: format!(
+                "python3 - <<'PY'\n{}\nPY",
+                "日本語 long command ".repeat(30)
+            ),
+            success: true,
+            status: "exit 0".to_owned(),
+            body: vec![],
+            kind: super::ToolTranscriptKind::Command,
+        };
+        for width in [18, 24, 48, 80, 180] {
+            let lines = super::command_summary_lines(&entry, width, false, false);
+            assert_eq!(lines.len(), 1, "width {width}: {lines:?}");
+            assert!(lines[0].width() <= width as usize);
+            assert!(lines[0].to_string().starts_with("• Ran $ "));
+            assert!(lines[0].to_string().ends_with("… · exit 0"));
+        }
     }
 
     #[test]

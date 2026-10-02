@@ -643,7 +643,38 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             return;
         }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
-        let grid_is_cramped = cols > 1 && width < cols.saturating_mul(14).saturating_add(4);
+        // Content drives width. Keep compact tables compact instead of expanding them to
+        // the viewport; when a table is wider than the viewport, shrink its columns and
+        // wrap the cells below without dropping their inline styles.
+        let mut col_widths = vec![3usize; cols];
+        for (cells, _) in rows {
+            for (i, c) in cells.iter().enumerate() {
+                col_widths[i] = col_widths[i].max(c.width());
+            }
+        }
+        // Two spaces between columns match Codex's readable table rhythm without
+        // adding a box around every cell.
+        const TABLE_COLUMN_GAP: usize = 2;
+        const TABLE_CELL_PADDING: usize = 1;
+        let minima = (0..cols)
+            .map(|i| {
+                let header_width = rows
+                    .iter()
+                    .filter(|(_, header)| *header)
+                    .filter_map(|(cells, _)| cells.get(i))
+                    .map(MarkdownTableCell::width)
+                    .max()
+                    .unwrap_or(3);
+                col_widths[i].min(header_width.clamp(12, 24))
+            })
+            .collect::<Vec<_>>();
+        let minimum_grid_width = minima
+            .iter()
+            .map(|width| width + TABLE_CELL_PADDING * 2)
+            .sum::<usize>()
+            + cols.saturating_sub(1) * TABLE_COLUMN_GAP;
+        let grid_is_cramped = cols > 1
+            && (width < cols.saturating_mul(14).saturating_add(4) || width < minimum_grid_width);
         if grid_is_cramped {
             if let Some(header) = rows
                 .iter()
@@ -679,19 +710,6 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 return;
             }
         }
-        // Content drives width. Keep compact tables compact instead of expanding them to
-        // the viewport; when a table is wider than the viewport, shrink its columns and
-        // wrap the cells below without dropping their inline styles.
-        let mut col_widths = vec![3usize; cols];
-        for (cells, _) in rows {
-            for (i, c) in cells.iter().enumerate() {
-                col_widths[i] = col_widths[i].max(c.width());
-            }
-        }
-        // Two spaces between columns match Codex's readable table rhythm without
-        // adding a box around every cell.
-        const TABLE_COLUMN_GAP: usize = 2;
-        const TABLE_CELL_PADDING: usize = 1;
         let mut total: usize = col_widths
             .iter()
             .map(|width| width + TABLE_CELL_PADDING * 2)
@@ -699,28 +717,17 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             + cols.saturating_sub(1) * TABLE_COLUMN_GAP;
         if total > width && cols > 0 {
             let mut excess = total.saturating_sub(width);
-            let order: Vec<usize> = {
-                let mut idxs: Vec<usize> = (0..cols).collect();
-                idxs.sort_by_key(|&i| {
-                    if i == 0 {
-                        100
-                    } else if i == 2 {
-                        0
-                    } else {
-                        1
-                    }
-                }); // shrink Total first
-                idxs
-            };
-            for &i in &order {
-                if excess == 0 {
+            // Reduce the widest column first, rather than starving an arbitrary
+            // column. Preserve short values and enough room for header labels.
+            while excess > 0 {
+                let Some(i) = (0..cols)
+                    .filter(|&i| col_widths[i] > minima[i])
+                    .max_by_key(|&i| col_widths[i])
+                else {
                     break;
-                }
-                let min_w = 3;
-                let can_shrink = col_widths[i].saturating_sub(min_w);
-                let take = can_shrink.min(excess);
-                col_widths[i] -= take;
-                excess -= take;
+                };
+                col_widths[i] -= 1;
+                excess -= 1;
             }
             total = col_widths
                 .iter()
@@ -1431,6 +1438,28 @@ mod tests {
         assert!(all.contains("Header 2"));
         assert!(all.contains('━'));
         assert!(!all.contains('┌') && !all.contains('│'));
+    }
+
+    #[test]
+    fn activity_table_keeps_all_headers_readable() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let md = "| Day | GitLab project | Activity window | What happened |\n|---|---|---|---|\n| Fri 2/10 (today) | 94 paral-x-webpage (09:40–11:29) + 91 paral-x (13:27–14:18) | 09:40–11:29, 13:27–14:18 | Bilingual Paral X website + release workflow, brand/agents; company-agent + global prompts (D21–D24), agent tools redesign |";
+        for width in [80, 120, 180] {
+            let lines = render_markdown(md, width, false, false);
+            assert!(
+                lines[0].to_string().contains("Activity window"),
+                "width {width}: {lines:?}"
+            );
+            assert!(lines.iter().all(|line| line.width() <= width as usize));
+            assert!(lines.len() < 12, "width {width}: {lines:?}");
+        }
+        let narrow = render_markdown(md, 64, false, false);
+        assert!(
+            narrow
+                .iter()
+                .any(|line| line.to_string().contains("Activity window:"))
+        );
+        assert!(narrow.iter().all(|line| line.width() <= 64));
     }
 
     #[test]

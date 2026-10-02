@@ -219,7 +219,10 @@ fn row_is_blank(buffer: &ratatui::buffer::Buffer, area: ratatui::layout::Rect, r
     if area.width == 0 || row < area.y || row >= area.bottom() {
         return false;
     }
-    (area.x..area.right()).all(|x| buffer[(x, row)].symbol() == " ")
+    (area.x..area.right()).all(|x| {
+        let cell = &buffer[(x, row)];
+        cell.symbol() == " " && cell.bg == COLOR_BG()
+    })
 }
 
 /// The first row after the last row that carries content in `area`.
@@ -400,7 +403,16 @@ pub(crate) fn render_with_transcript_snapshot(
     // Reserve their rows so the transcript keeps the space above the panel
     // instead of being painted over.
     let modal_height = open_modal_max_height(state).min(max_chat_height);
-    let chat_height = max_chat_height.saturating_sub(modal_height);
+    let chat_surface_height = max_chat_height.saturating_sub(modal_height);
+    let indicator = live_running_indicator(state);
+    // Own the gap and indicator rows so even a full transcript keeps activity
+    // visible. Leave at least one transcript row on short terminals.
+    let indicator_height = if indicator.is_some() {
+        2.min(chat_surface_height.saturating_sub(1))
+    } else {
+        0
+    };
+    let chat_height = chat_surface_height.saturating_sub(indicator_height);
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
 
     let pinned = transcript.selection.pinned_snapshot();
@@ -425,11 +437,11 @@ pub(crate) fn render_with_transcript_snapshot(
         .take(chat_height as usize)
         .collect();
 
-    let chunks = Layout::default()
+    let mut chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(0)
         .constraints([
-            Constraint::Length(chat_height),
+            Constraint::Length(chat_surface_height),
             Constraint::Length(activity_gap_top),
             Constraint::Length(activity_height),
             Constraint::Length(activity_gap_bottom),
@@ -440,31 +452,30 @@ pub(crate) fn render_with_transcript_snapshot(
             Constraint::Length(input_height),
             Constraint::Length(footer_height),
         ])
-        .split(layout_area);
+        .split(layout_area)
+        .to_vec();
+    let chat_surface = chunks[0];
+    chunks[0].height = chat_height;
 
+    f.render_widget(
+        Paragraph::new("").style(Style::default().bg(COLOR_BG())),
+        chat_surface,
+    );
     render_live_conversation(f, chunks[0], lines, layout_width);
 
-    // Anchor the running indicator directly under whatever is currently on
-    // screen, not at the bottom of the viewport. Pinned to the last row it sat
-    // far below a short transcript and read as unrelated to the work in
-    // progress; under the last non-blank row it continues the same column of
-    // activity.
-    //
-    // Overlaying a spare row instead of reserving one keeps the transcript
-    // geometry identical whether or not a turn is running, so nothing reflows
-    // and selection anchors stay valid when a turn starts.
-    if let Some(indicator) = live_running_indicator(state)
-        && chunks[0].height > 0
+    // Scan backgrounds as well as text: the user's shaded bottom padding
+    // belongs to the message. Keep a blank row between it and the indicator.
+    if let Some(indicator) = indicator
+        && indicator_height > 0
     {
-        // Prefer the row under the content; fall back to the bottom row when
-        // the chat is entirely blank so a running turn is never invisible.
-        let target = row_after_last_content(f.buffer(), chunks[0])
-            .unwrap_or_else(|| chunks[0].bottom().saturating_sub(1));
-        // Never paint over transcript text, whatever the scan concluded.
-        if target < chunks[0].bottom() && row_is_blank(f.buffer(), chunks[0], target) {
+        let target = row_after_last_content(f.buffer(), chat_surface)
+            .map(|row| row.saturating_add(1))
+            .unwrap_or(chat_surface.y)
+            .min(chat_surface.bottom().saturating_sub(1));
+        if row_is_blank(f.buffer(), chat_surface, target) {
             f.render_widget(
                 Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
-                ratatui::layout::Rect::new(chunks[0].x, target, chunks[0].width, 1),
+                ratatui::layout::Rect::new(chat_surface.x, target, chat_surface.width, 1),
             );
         }
     }
