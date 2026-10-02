@@ -98,12 +98,7 @@ fn render_live_tail_mode(
         model_live_text = "";
     }
 
-    if visible_live_tool_calls.is_empty() {
-        transcript.clear_tools();
-    } else {
-        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity());
-        has_visible_active_cell = true;
-    }
+    transcript.clear_tools();
     if model_live_text.is_empty() {
         transcript.clear_assistant();
     } else {
@@ -150,15 +145,12 @@ fn render_live_tail_mode(
         lines.extend(transcript.display_lines(width));
     }
 
-    let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools().is_empty()
-        || !state.background_tasks().is_empty();
-    if activity_visible && !full_viewport {
+    let background_lines = background_command_lines(state);
+    if !background_lines.is_empty() && !full_viewport {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
-        lines.push(activity_status_line(state, false, width as usize));
-        lines.extend(background_command_lines(state));
+        lines.extend(background_lines);
         lines.push(Line::from(""));
     }
 
