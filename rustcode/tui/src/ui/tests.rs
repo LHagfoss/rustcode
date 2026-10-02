@@ -602,9 +602,8 @@ fn working_indicator_lives_in_the_chat_not_below_the_composer() {
 }
 
 #[test]
-fn a_full_chat_needs_no_running_indicator() {
-    // Streaming text that fills the viewport is its own signal; the indicator
-    // only claims a spare row so nothing reflows.
+fn a_full_chat_keeps_the_running_indicator() {
+    // Reserve activity rows even when streaming text fills the viewport.
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.history.push(ChatMessage::new("user", "hello"));
@@ -623,8 +622,8 @@ fn a_full_chat_needs_no_running_indicator() {
         .take(input_area.y as usize)
         .collect::<Vec<_>>();
     assert!(
-        !chat_rows.iter().any(|row| row.contains(&state.model_name)),
-        "a full chat must not gain a duplicate model row: {rendered:?}"
+        chat_rows.iter().any(|row| row.contains(&state.model_name)),
+        "a full chat must keep its running indicator: {rendered:?}"
     );
 }
 
@@ -9213,11 +9212,18 @@ fn the_running_indicator_sits_directly_under_the_transcript() {
         .position(|row| row.trim_start().starts_with('•') && row.contains(&model))
         .unwrap_or_else(|| panic!("the indicator must be on screen: {rows:?}"));
 
-    // Immediately below the last message, so it reads as a continuation of the
-    // transcript rather than floating at the bottom of the viewport.
+    // Preserve the user panel bottom padding and leave a blank row above the indicator.
+    assert_eq!(
+        terminal.backend().buffer()[(0, (prompt + 1) as u16)].bg,
+        COLOR_PANEL()
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(0, (prompt + 2) as u16)].bg,
+        COLOR_BG()
+    );
     assert_eq!(
         indicator,
-        prompt + 1,
+        prompt + 3,
         "the indicator must sit under the transcript, not at the viewport bottom: {rows:?}"
     );
     assert!(
