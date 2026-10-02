@@ -404,6 +404,30 @@ pub(super) fn cached_tool_result(
     })
 }
 
+fn cached_file_edit_diff(
+    diff: &str,
+    path: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (
+        "inline-file-diff",
+        diff,
+        path,
+        width,
+        show_picker,
+        theme::active_palette().name,
+    )
+        .hash(&mut hasher);
+    let key = hasher.finish();
+    TOOL_RESULT_CACHE.with(|cache| {
+        cached_tool_result_in(cache, key, || {
+            render_file_edit_diff_for_path(diff, path, width, show_picker)
+        })
+    })
+}
+
 pub(super) fn cached_tool_result_in(
     cache: &RefCell<lru::LruCache<u64, Vec<Line<'static>>>>,
     key: u64,
@@ -861,7 +885,7 @@ pub(super) fn tool_transcript_entry(
     // Only command output and file diffs expose tool payloads. Human answers
     // remain available because they belong to the conversation.
     let mut body = if let Some(diff) = edit_diff {
-        render_file_edit_diff_for_path(
+        cached_file_edit_diff(
             diff,
             &target,
             usize::from(width).saturating_sub(4),
@@ -1963,6 +1987,24 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inline_diff_reuses_cached_rows_and_keys_file_language_and_width() {
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        super::TOOL_RESULT_CACHE.with(|cache| cache.borrow_mut().entries.clear());
+        let diff = "@@ -1 +1 @@\n+fn main() { let answer = 42; }\n";
+        let first = super::cached_file_edit_diff(diff, "main.rs", 40, false);
+        let second = super::cached_file_edit_diff(diff, "main.rs", 40, false);
+        assert_eq!(first, second);
+        super::TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 1));
+        super::cached_file_edit_diff(diff, "main.py", 40, false);
+        super::cached_file_edit_diff(diff, "main.rs", 20, false);
+        super::cached_file_edit_diff(diff, "main.rs", 40, true);
+        super::cached_file_edit_diff("@@ -1 +1 @@\n+changed\n", "main.rs", 40, false);
+        super::TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 5));
+    }
+
     use super::{
         COMMAND_DISPLAY_MAX_LINES, collapse_command_preview, is_hidden_system_notice,
         tool_result_status, truncate_wrapped_lines,
