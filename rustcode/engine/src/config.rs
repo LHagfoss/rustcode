@@ -237,6 +237,12 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
+    /// Send the resolved API key as an `X-Api-Key` header in addition to
+    /// `Authorization: Bearer`. Defaults to off: OpenAI-compatible gateways
+    /// (e.g. Splash/MLX) reject requests carrying both headers even when the
+    /// key is valid. Opt in only for providers that genuinely require it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_x_api_key: Option<bool>,
     /// Request API dialect used by the endpoint. Omitted profiles retain the
     /// OpenAI-compatible chat-completions behavior; a `/responses` URL also
     /// selects the Responses dialect for convenient hand-written configs.
@@ -285,7 +291,7 @@ pub struct ModelProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f64>,
     /// Frequency penalty sent to OpenAI-compatible endpoints. When absent,
-    /// RustCode preserves its historical default of 0.3.
+    /// nothing is sent and the provider default applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frequency_penalty: Option<f64>,
     /// Force stochastic sampling on servers such as oMLX that otherwise keep
@@ -766,6 +772,10 @@ impl ModelProfile {
         // Existing profiles with reasoning_effort must continue sending it.
         self.supports_reasoning_effort
             .unwrap_or(self.reasoning_effort.is_some())
+    }
+
+    pub fn send_x_api_key_header(&self) -> bool {
+        self.send_x_api_key == Some(true)
     }
 }
 

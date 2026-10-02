@@ -929,7 +929,7 @@ pub async fn probe_function_calling(
             format!("{trimmed}/chat/completions")
         }
     };
-    let (api_key, responses_api) = {
+    let (api_key, responses_api, send_x_api_key) = {
         let s = state.lock().await;
         let profile = s
             .config
@@ -941,6 +941,7 @@ pub async fn probe_function_calling(
             profile.is_some_and(|m| {
                 m.resolved_api_protocol() == crate::config::ApiProtocol::Responses
             }),
+            profile.is_some_and(|m| m.send_x_api_key_header()),
         )
     };
     if responses_api {
@@ -972,9 +973,8 @@ pub async fn probe_function_calling(
         .json(&payload)
         .timeout(std::time::Duration::from_secs(20));
     if let Some(ref key) = api_key {
-        req = req
-            .header("Authorization", format!("Bearer {key}"))
-            .header("X-Api-Key", key);
+        // Same opt-in rule as the streaming path (`send_x_api_key = true`).
+        req = crate::network::stream_request::apply_api_key_headers(req, key, send_x_api_key);
     }
 
     match req.send().await {
