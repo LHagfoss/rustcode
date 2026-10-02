@@ -131,7 +131,7 @@ pub(super) async fn render_frame(
             // backgrounded terminal still shows the session is working.
             activity.kind,
             session_name,
-            rustcode::app::activity::spinner_frame_index(std::time::Instant::now().elapsed()),
+            rustcode::controller::spinner_frame_index(std::time::Instant::now().elapsed()),
         );
         let old_title = guard.current_terminal_title.clone();
         if old_title.as_deref() != Some(title_display.as_str()) {
