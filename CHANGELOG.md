@@ -1,3 +1,8 @@
+## [v0.56.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.7) - 2026-10-02
+
+### Fixes
+- Hide raw Read, MCP and Skills results while retaining command output, compact status rows and human answers. ([#1664](https://github.com/LHagfoss/rustcode/pull/1664))
+- Show Codex-style inline file diffs with correct source line numbers, change counts, syntax highlighting, wrapping and hunk separators; capture real before/after diffs for file writes and keep recorded edits visible at High verbosity. ([#1665](https://github.com/LHagfoss/rustcode/pull/1665))
 ## [v0.56.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.6) - 2026-10-02
 
 ### Features
