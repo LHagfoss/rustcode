@@ -32,6 +32,7 @@ Now supports ollama or openai compatible APIs.
 - [Background tasks and cancellation](docs/background-tasks.md)
 - [ACP server integration](docs/acp.md)
 - [Provider stream traces](docs/provider-stream-traces.md)
+- [Per-request thinking routing](docs/thinking-router.md)
 - [Runtime and workspace architecture](docs/architecture.md)
 - [Discord Rich Presence](docs/discord-rich-presence.md)
 - [Build-boundary benchmark](scripts/bench-build-boundaries.md)

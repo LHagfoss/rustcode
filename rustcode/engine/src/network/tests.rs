@@ -7850,3 +7850,84 @@ fn vision_profile_error_names_bad_value_and_options() {
     let empty = super::vision_profile_missing_error(Some(""), &available);
     assert!(empty.contains("no vision_model is configured"), "{empty}");
 }
+
+#[tokio::test]
+async fn thinking_router_decision_reaches_main_request_and_failure_keeps_defaults() {
+    use crate::config::{ModelProfile, ThinkingRouterConfig};
+    use crate::network::stream::StreamBuffer;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    for (decision, expected_thinking) in [
+        (
+            serde_json::json!({"model":"decider-4b","choices":[{"text":"B"}]}),
+            false,
+        ),
+        (serde_json::json!({"error":"inference unavailable"}), true),
+    ] {
+        let (router_url, router_request, router_release) = gated_json_server(decision).await;
+        let release = tokio::spawn(async move {
+            router_request
+                .await
+                .expect("router request reached endpoint");
+            router_release.send(()).unwrap();
+        });
+        let (provider_url, provider_request) = streaming_provider_server().await;
+        let endpoint = format!("{provider_url}/v1/chat/completions");
+        let mut app = crate::app::AppState::new();
+        app.api_base_url = endpoint.clone();
+        app.model_name = "router-main-test".into();
+        app.config.models = vec![ModelProfile {
+            name: app.model_name.clone(),
+            url: endpoint.clone(),
+            model: app.model_name.clone(),
+            context_window: Some(8192),
+            enable_thinking: Some(true),
+            reasoning_effort: Some("high".into()),
+            supports_reasoning_effort: Some(true),
+            thinking_budget: Some(1024),
+            supports_thinking_budget: Some(true),
+            thinking_router: Some(ThinkingRouterConfig {
+                url: format!("{router_url}/v1/completions"),
+                model: "decider-4b".into(),
+                env_key: "PATH".into(),
+                timeout_ms: 1000,
+            }),
+            ..Default::default()
+        }];
+        app.record_function_calling_support(&endpoint, false);
+        app.history.push(ChatMessage::new("user", "What is 2 + 2?"));
+        let state = Arc::new(tokio::sync::Mutex::new(app));
+        let (sender, _receiver) = ui_adapter::AgentUiEventSender::channel();
+        let buffer = Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let context = tokio::time::timeout(
+            Duration::from_secs(5),
+            ui_adapter::run_agent_turn_with_events_for_acp(
+                &reqwest::Client::new(),
+                &state,
+                &CancellationToken::new(),
+                &Arc::new(AcpPromptTestPolicy),
+                &buffer,
+                "What is 2 + 2?".into(),
+                sender,
+            ),
+        )
+        .await
+        .expect("routed turn must finish");
+        assert_eq!(
+            context.response.final_content,
+            "wakeup request reached provider"
+        );
+        release.await.unwrap();
+        let request = provider_request.await.unwrap();
+        let offset = request.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
+        let payload: serde_json::Value = serde_json::from_slice(&request[offset..]).unwrap();
+        assert_eq!(payload["enable_thinking"], expected_thinking);
+        assert_eq!(
+            payload["chat_template_kwargs"]["enable_thinking"],
+            expected_thinking
+        );
+        assert_eq!(payload.get("reasoning_effort").is_some(), expected_thinking);
+        assert_eq!(payload.get("thinking_budget").is_some(), expected_thinking);
+    }
+}
