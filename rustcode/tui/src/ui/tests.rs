@@ -559,7 +559,7 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
 
     let rendered = render_state_to_text(&mut state, 100, 20);
 
-    assert!(rendered.contains("Working"), "rendered: {rendered:?}");
+    assert!(!rendered.contains("Working"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("streamed output"),
         "rendered: {rendered:?}"
@@ -583,14 +583,14 @@ fn working_status_is_fixed_below_the_composer() {
         render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 50, 12);
     let status_y = input_area.bottom() as usize;
     let rows = rendered.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].contains("Working"));
-    assert_eq!(rendered.matches("Working").count(), 1);
+    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
+    assert_eq!(rendered.matches("Working").count(), 0);
 
     transcript.scroll_up(4);
     let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
     let rows = scrolled.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].contains("Working"));
-    assert_eq!(scrolled.matches("Working").count(), 1);
+    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
+    assert_eq!(scrolled.matches("Working").count(), 0);
 }
 
 #[test]
@@ -2204,7 +2204,7 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     assert!(rendered.contains("follow-up one"));
     assert!(rendered.contains("follow-up two"));
     assert!(!rendered.contains("esc interrupt and apply now"));
-    assert!(rendered.contains("Working · "));
+    assert!(!rendered.contains("Working · "));
     assert!(!rendered.contains("Steer · Tab switches to Queue"));
 }
 
@@ -5939,7 +5939,7 @@ fn live_tool_cell_is_a_projection_not_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Exploring"));
+    assert!(!text.contains("Exploring"));
     assert!(state.history.is_empty());
 }
 
@@ -5964,7 +5964,7 @@ fn live_tool_projection_does_not_hide_partial_assistant_stream() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(!text.contains("src/main.rs"), "rendered: {text:?}");
     assert!(
         text.contains("partial assistant response"),
         "rendered: {text:?}"
@@ -6008,7 +6008,7 @@ fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(!text.contains("src/main.rs"), "rendered: {text:?}");
     assert!(!text.contains("target_content"), "rendered: {text:?}");
     assert!(!text.contains("replacement"), "rendered: {text:?}");
 }
