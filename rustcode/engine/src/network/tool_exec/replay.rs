@@ -13,15 +13,18 @@ pub(crate) enum ToolReplayPolicy {
     OncePerUserTurn,
 }
 
-pub(crate) fn tool_replay_policy(name: &str) -> ToolReplayPolicy {
-    match crate::tools::tool_safety(name) {
+pub(crate) fn tool_replay_policy(call: &ToolCall) -> ToolReplayPolicy {
+    if crate::tools::is_read_only_call(call) {
+        return ToolReplayPolicy::Repeatable;
+    }
+    match crate::tools::tool_safety(&call.name) {
         ToolSafety::ReadOnly | ToolSafety::ControlPlane | ToolSafety::Interactive => {
             ToolReplayPolicy::Repeatable
         }
         ToolSafety::WorkspaceMutation | ToolSafety::ProcessControl | ToolSafety::Delegation => {
             ToolReplayPolicy::OncePerUserTurn
         }
-        ToolSafety::Unknown => crate::tools::mcp_tool_read_only_hint(name)
+        ToolSafety::Unknown => crate::tools::mcp_tool_read_only_hint(&call.name)
             .then_some(ToolReplayPolicy::Repeatable)
             .unwrap_or(ToolReplayPolicy::OncePerUserTurn),
     }
@@ -33,7 +36,7 @@ pub(crate) fn successful_side_effect_replay(
     history: &[ChatMessage],
     call: &ToolCall,
 ) -> Option<ToolResult> {
-    if tool_replay_policy(&call.name) == ToolReplayPolicy::Repeatable {
+    if tool_replay_policy(call) == ToolReplayPolicy::Repeatable {
         return None;
     }
     let turn_start = history
@@ -131,8 +134,57 @@ mod tests {
         });
         let history = vec![ChatMessage::new("user", "Try it"), failed];
 
-        assert_eq!(tool_replay_policy(&read.name), ToolReplayPolicy::Repeatable);
+        assert_eq!(tool_replay_policy(&read), ToolReplayPolicy::Repeatable);
         assert!(successful_side_effect_replay(&history, &read).is_none());
         assert!(successful_side_effect_replay(&history, &send).is_none());
+    }
+
+    fn assert_shell_replay(command: Option<&str>, repeatable: bool) {
+        let arguments = command
+            .map(|command| serde_json::json!({"command": command}))
+            .unwrap_or_else(|| serde_json::json!({}));
+        let shell = call("run_command", arguments);
+        let history = vec![
+            ChatMessage::new("user", "Inspect the current state"),
+            successful_result(&shell),
+        ];
+        assert_eq!(
+            successful_side_effect_replay(&history, &shell).is_none(),
+            repeatable
+        );
+    }
+
+    #[test]
+    fn safe_shell_reads_repeat_after_successful_durable_history() {
+        for command in ["git status", "ls", "cat Cargo.toml", "rg replay src | head"] {
+            assert_shell_replay(Some(command), true);
+        }
+    }
+
+    #[test]
+    fn native_mail_list_remains_guarded_as_a_potential_send() {
+        assert_shell_replay(Some("mail list"), false);
+    }
+
+    #[test]
+    fn native_mail_recipient_remains_guarded() {
+        assert_shell_replay(Some("mail person@example.test"), false);
+    }
+
+    #[test]
+    fn mixed_shell_reads_and_writes_remain_guarded() {
+        for command in [
+            "git status && touch marker",
+            "cat Cargo.toml > copy",
+            "ls; rm marker",
+        ] {
+            assert_shell_replay(Some(command), false);
+        }
+    }
+
+    #[test]
+    fn unknown_or_missing_shell_commands_remain_guarded() {
+        assert_shell_replay(Some("unknown_service list"), false);
+        assert_shell_replay(None, false);
     }
 }
