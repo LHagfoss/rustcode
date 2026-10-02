@@ -1,3 +1,9 @@
+## [v0.56.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.6) - 2026-10-02
+
+### Features
+- Add reusable Markdown prompt templates with `/prompts` and `/prompt <name> [arguments]`, editable composer staging, workspace overrides, and user-template config sync ([#1659](https://github.com/LHagfoss/rustcode/pull/1659)).
+- Add `/pwd` and `/diff` panels for local workspace inspection without a model request, including bounded asynchronous Git output and stale-result protection ([#1660](https://github.com/LHagfoss/rustcode/pull/1660)).
+- Reuse wrapped command output for collapsed previews and expand hints; a local release benchmark measured 49% lower rendering time for long command previews ([#1658](https://github.com/LHagfoss/rustcode/pull/1658)).
 ## [v0.56.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.5) - 2026-10-02
 
 ### Fixes
