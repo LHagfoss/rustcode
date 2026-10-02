@@ -50,6 +50,55 @@ struct RemoteSnapshot {
     http: reqwest::Client,
 }
 
+/// Startup warnings surfaced to the model up front so a failed server does not
+/// burn agent rounds silently (#1633). Populated by
+/// `start_enabled_servers_with_timeout`, read by tool-notice composition.
+static MCP_STARTUP_WARNINGS: OnceLock<StdMutex<Vec<String>>> = OnceLock::new();
+/// Count of filtered non-JSON stdout lines per server (noisy servers pollute
+/// stdout without losing the diagnostic via dbg_log).
+static MCP_NON_JSON_COUNTS: OnceLock<StdMutex<HashMap<String, u64>>> = OnceLock::new();
+
+/// Record startup warnings for in-turn surfacing (in addition to the exit
+/// summary / stderr paths).
+pub fn record_mcp_startup_warnings(warnings: &[String]) {
+    if warnings.is_empty() {
+        return;
+    }
+    let slot = MCP_STARTUP_WARNINGS.get_or_init(|| StdMutex::new(Vec::new()));
+    if let Ok(mut guard) = slot.lock() {
+        for w in warnings {
+            if !guard.contains(w) {
+                guard.push(w.clone());
+            }
+        }
+    }
+}
+
+/// Failed-server notices for prompt composition. Deduplicated, bounded.
+pub fn mcp_startup_warnings() -> Vec<String> {
+    MCP_STARTUP_WARNINGS
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .map(|guard| guard.iter().take(8).cloned().collect())
+        .unwrap_or_default()
+}
+
+fn note_mcp_non_json_line(server: &str) {
+    let slot = MCP_NON_JSON_COUNTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    if let Ok(mut guard) = slot.lock() {
+        *guard.entry(server.to_owned()).or_insert(0) += 1;
+    }
+}
+
+/// Per-server filtered stdout noise, for diagnostics.
+pub fn mcp_non_json_counts() -> HashMap<String, u64> {
+    MCP_NON_JSON_COUNTS
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
 /// OAuth tokens for one remote MCP server. Persisted under
 /// `~/.config/rustcode/mcp-oauth/<server>.json` — never in `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -160,6 +209,7 @@ where
             }
         }
     }
+    record_mcp_startup_warnings(&warnings);
     warnings
 }
 
@@ -777,6 +827,7 @@ impl McpClient {
         });
 
         // Stdout reader task
+        let stdout_server_name = name.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -788,8 +839,12 @@ impl McpClient {
                         }
                     }
                 } else {
+                    // Filter noisy stdout without losing the diagnostic:
+                    // count per server and keep the truncated line in debug.log
+                    // with the server name attached.
+                    note_mcp_non_json_line(&stdout_server_name);
                     crate::dbg_log!(
-                        "[mcp] ignoring non-JSON line from server: {}",
+                        "[mcp:{stdout_server_name}] ignoring non-JSON stdout line: {}",
                         if line.len() > 100 {
                             &line[..100]
                         } else {
