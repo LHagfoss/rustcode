@@ -559,7 +559,7 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
 
     let rendered = render_state_to_text(&mut state, 100, 20);
 
-    assert!(rendered.contains("Working"), "rendered: {rendered:?}");
+    assert!(!rendered.contains("Working"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("streamed output"),
         "rendered: {rendered:?}"
@@ -583,14 +583,14 @@ fn working_status_is_fixed_below_the_composer() {
         render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 50, 12);
     let status_y = input_area.bottom() as usize;
     let rows = rendered.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].contains("Working"));
-    assert_eq!(rendered.matches("Working").count(), 1);
+    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
+    assert_eq!(rendered.matches("Working").count(), 0);
 
     transcript.scroll_up(4);
     let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
     let rows = scrolled.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].contains("Working"));
-    assert_eq!(scrolled.matches("Working").count(), 1);
+    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
+    assert_eq!(scrolled.matches("Working").count(), 0);
 }
 
 #[test]
@@ -2204,7 +2204,7 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     assert!(rendered.contains("follow-up one"));
     assert!(rendered.contains("follow-up two"));
     assert!(!rendered.contains("esc interrupt and apply now"));
-    assert!(rendered.contains("Working · "));
+    assert!(!rendered.contains("Working · "));
     assert!(!rendered.contains("Steer · Tab switches to Queue"));
 }
 
@@ -3186,7 +3186,7 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
         .collect::<Vec<_>>();
 
     assert!(!low.iter().any(|line| line.contains("line 25")));
-    assert!(!low.iter().any(|line| line.contains("line 49")));
+    assert!(low.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("… +31 lines")));
     assert!(!high.iter().any(|line| line.contains("line 25")));
@@ -3219,17 +3219,17 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
             }),
     );
 
-    // Collapsed generic bodies hide behind the hint; expanding reveals a
+    // Short collapsed generic bodies render without a hint; expanding preserves a
     // wrapped, guttered block that fits narrow widths (#1568).
     let collapsed = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(collapsed.len(), 2);
+    assert_eq!(collapsed.len(), 3);
     assert_eq!(collapsed[0], "• Ran");
     assert!(
-        collapsed[1].contains("McpCustomTool") && collapsed[1].contains("ctrl+o to expand"),
-        "collapsed generic hides behind hint: {collapsed:?}"
+        collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("ctrl+o to expand"),
+        "short generic output needs no expansion hint: {collapsed:?}"
     );
 
     state.expanded_thoughts.insert(1);
@@ -3388,10 +3388,10 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         "exit status stays: {rendered:?}"
     );
     assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("ctrl+o to expand")),
-        "collapsed shell result has an expand hint: {rendered:?}"
+        "fully visible shell output needs no expansion hint: {rendered:?}"
     );
     assert!(
         rendered.iter().any(|line| line.contains("build failed")),
@@ -3510,7 +3510,7 @@ fn expanded_command_body_renders_full_not_window() {
             }),
     );
 
-    // Collapsed: command body hidden, hint present on the child row.
+    // Collapsed: the five-row preview keeps the output head and tail.
     let collapsed = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -3770,8 +3770,8 @@ fn low_verbosity_write_shows_added_lines_preview() {
         "added content renders inline: {rendered:?}"
     );
     assert!(
-        rendered.iter().any(|line| line.contains("ctrl+o")),
-        "larger bodies stay expandable: {rendered:?}"
+        !rendered.iter().any(|line| line.contains("ctrl+o")),
+        "fully visible edit preview needs no expansion hint: {rendered:?}"
     );
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1]);
@@ -4265,10 +4265,10 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
-        "command child should carry the expand hint: {rendered:?}"
+        "fully visible command needs no expansion hint: {rendered:?}"
     );
 
     // The hint belongs to the row it describes. Appending it to the last
@@ -4279,8 +4279,10 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         rendered,
         [
             "• Ran",
-            "  └ Bash git status --short (ctrl+o to expand)",
-            "    GetTime (ctrl+o to expand)",
+            "  └ Bash git status --short",
+            "  └   │ M src/main.rs",
+            "    GetTime",
+            "      │ Thursday, 08:30",
         ],
         "each hint stays on the row of the entry it expands: {rendered:?}"
     );
@@ -4359,7 +4361,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1, 2], "both tool rows are collapsible");
     assert!(
-        !render(&state)
+        render(&state)
             .iter()
             .any(|line| line.contains("M src/main.rs")),
         "the command body starts collapsed"
@@ -4416,10 +4418,10 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     assert!(state.expanded_thoughts.is_empty());
     assert_eq!(focus, None);
     assert!(
-        !render(&state)
+        render(&state)
             .iter()
             .any(|line| line.contains("Thursday, 08:30")),
-        "collapsing hides the body again: {:?}",
+        "collapsing retains the bounded visible preview: {:?}",
         render(&state)
     );
 }
@@ -4485,10 +4487,10 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
         "each homogeneous command keeps its own summary: {rendered:?}"
     );
     assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("ctrl+o to expand")),
-        "command-only batch carries expand hints: {rendered:?}"
+        "fully visible commands need no expansion hints: {rendered:?}"
     );
 }
 
@@ -4608,16 +4610,16 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("Bash") && line.contains("ctrl+o")),
-        "mixed-batch command keeps its hint: {rendered:?}"
+        "fully visible mixed command needs no hint: {rendered:?}"
     );
     assert!(
-        rendered
+        !rendered
             .iter()
             .any(|line| line.contains("GetTime") && line.contains("ctrl+o")),
-        "mixed-batch generic keeps its hint: {rendered:?}"
+        "fully visible mixed generic output needs no hint: {rendered:?}"
     );
 }
 
@@ -5795,8 +5797,8 @@ fn background_terminal_activity_shows_management_hints_and_command() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(live_tail.contains("Idle"));
-    assert!(live_tail.contains("⠋ 1 running ("));
+    assert!(!live_tail.contains("Idle"));
+    assert!(!live_tail.contains("1 running ("));
     assert!(live_tail.contains(&format!("  └ {long_command}")));
     assert_eq!(
         rustcode::controller::background_command_label("cargo\n test\t--locked", 80),
@@ -5939,7 +5941,7 @@ fn live_tool_cell_is_a_projection_not_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Exploring"));
+    assert!(!text.contains("Exploring"));
     assert!(state.history.is_empty());
 }
 
@@ -5964,7 +5966,7 @@ fn live_tool_projection_does_not_hide_partial_assistant_stream() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(!text.contains("src/main.rs"), "rendered: {text:?}");
     assert!(
         text.contains("partial assistant response"),
         "rendered: {text:?}"
@@ -6008,7 +6010,7 @@ fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
+    assert!(!text.contains("src/main.rs"), "rendered: {text:?}");
     assert!(!text.contains("target_content"), "rendered: {text:?}");
     assert!(!text.contains("replacement"), "rendered: {text:?}");
 }
@@ -6240,8 +6242,8 @@ fn native_speculative_exploration_without_target_uses_preparing_heading() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("• Queued"), "rendered: {text:?}");
-    assert!(text.contains("Calling grep"), "rendered: {text:?}");
+    assert!(!text.contains("• Queued"), "rendered: {text:?}");
+    assert!(!text.contains("Calling grep"), "rendered: {text:?}");
     assert!(!text.contains("[TOOL_CALLS]"), "rendered: {text:?}");
 }
 
@@ -7090,7 +7092,7 @@ fn live_tail_excludes_committed_history() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(text.contains("Working"));
+    assert!(!text.contains("Working"));
     assert!(text.contains("unclosed tail"));
     assert!(!text.contains("old completed answer"));
 }
@@ -7424,8 +7426,8 @@ fn live_tail_uses_formatted_working_status() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(text.contains("• Working"));
-    assert!(text.contains("esc interrupt"));
+    assert!(!text.contains("• Working"));
+    assert!(!text.contains("esc interrupt"));
     assert!(!text.contains("Working..."));
 }
 
@@ -7436,14 +7438,7 @@ fn live_tail_includes_working_status_with_trailing_gap() {
 
     let lines = super::render_live_tail(&state, 80, 24);
 
-    assert!(lines.len() >= 2);
-    assert!(lines.last().unwrap().spans.is_empty());
-    let status_text = lines[lines.len() - 2]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
-    assert!(status_text.contains("Working"));
+    assert!(lines.is_empty());
 }
 
 #[test]
@@ -7468,8 +7463,8 @@ fn visible_streaming_text_keeps_working_status_until_completion() {
     );
     assert!(text.contains("line 10"), "streaming lines: {rendered:?}");
     assert!(rendered.len() > 5, "streaming lines: {rendered:?}");
-    assert!(rendered.iter().any(|line| line.contains("Working")));
-    assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
+    assert!(!rendered.iter().any(|line| line.contains("Working")));
+    assert!(lines.last().is_some_and(|line| !line.spans.is_empty()));
 }
 
 #[test]
@@ -7558,7 +7553,7 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
     let mut streaming = RenderState::new();
     streaming.status = AppStatus::Streaming;
     let streaming_text = render_state_to_text(&mut streaming, 80, 20);
-    assert!(streaming_text.contains("Working · "));
+    assert!(!streaming_text.contains("Working · "));
     assert!(!streaming_text.contains("esc interrupt"));
     assert!(streaming_text.contains("context left"));
 
@@ -8932,7 +8927,7 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     assert!(state.expanded_thoughts.is_empty());
     let recollapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
     assert!(!recollapsed.contains("expanded ·"), "{recollapsed}");
-    assert!(recollapsed.contains("ctrl+o to expand"), "{recollapsed}");
+    assert!(!recollapsed.contains("ctrl+o to expand"), "{recollapsed}");
 }
 
 /// #1594: a selection releases follow, so pointing at a row is enough to keep
@@ -8978,17 +8973,18 @@ fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
 }
 
 #[test]
-fn footer_shows_only_plain_activity_immediately_before_model() {
+fn footer_shows_only_spinner_immediately_before_model() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     for (status, label) in [
         (AppStatus::Idle, None),
-        (AppStatus::Streaming, Some("Working")),
-        (AppStatus::Queued, Some("Queued")),
-        (AppStatus::AwaitingQuestion, Some("Waiting")),
-        (AppStatus::AwaitingToolConfirmation, Some("Waiting")),
+        (AppStatus::Streaming, Some("•")),
+        (AppStatus::Queued, Some("•")),
+        (AppStatus::AwaitingQuestion, None),
+        (AppStatus::AwaitingToolConfirmation, None),
     ] {
         let mut state = RenderState::new();
         state.status = status;
+        state.config.reduced_motion = true;
         let snapshot = render_snapshot(&state);
         let model = snapshot.model_name().to_string();
         let mut terminal =
@@ -9015,4 +9011,29 @@ fn footer_shows_only_plain_activity_immediately_before_model() {
             "{row}"
         );
     }
+}
+
+#[test]
+fn reduced_motion_footer_spinner_is_static_and_live_tools_are_hidden() {
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.history.push(ChatMessage::new("user", "hello"));
+    set_current_response(&mut state, "visible assistant text");
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
+        rustcode::controller::LiveToolCall::new(
+            "call-1",
+            None,
+            "run_command",
+            "Bash",
+            "secret command",
+        ),
+    );
+    let text = render_state_to_text(&mut state, 100, 20);
+    assert!(text.contains("visible assistant text"));
+    assert!(text.contains("• ·"));
+    assert!(!text.contains("Working"));
+    assert!(!text.contains("secret command"));
+    assert!(!text.contains("Running"));
+    assert!(!text.contains("Queued"));
 }
