@@ -748,6 +748,7 @@ pub(super) struct ToolTranscriptEntry {
     pub(super) status: String,
     pub(super) body: Vec<Line<'static>>,
     pub(super) kind: ToolTranscriptKind,
+    pub(super) diff_counts: Option<(usize, usize)>,
 }
 
 pub(super) fn tool_call_arguments(
@@ -847,13 +848,34 @@ pub(super) fn tool_transcript_entry(
         tool_result_action(state, message_index, &tool_name)
     };
     let (success, status) = tool_result_status(message, &tool_name, result);
-    let mut body = cached_tool_result(
-        &tool_name,
-        result,
-        width as usize,
-        &state.verbosity(),
-        show_picker,
-    );
+    let edit_diff = if kind == ToolTranscriptKind::Edit && success {
+        message
+            .diff
+            .as_deref()
+            .filter(|diff| !diff.is_empty() && !diff.contains('\0'))
+            .or_else(|| embedded_edit_diff(result))
+    } else {
+        None
+    };
+    let diff_counts = edit_diff.and_then(edit_diff_counts);
+    let mut body = if let Some(diff) = edit_diff {
+        render_file_edit_diff_for_path(
+            diff,
+            &target,
+            usize::from(width).saturating_sub(4),
+            show_picker,
+        )
+    } else if kind == ToolTranscriptKind::Edit {
+        Vec::new()
+    } else {
+        cached_tool_result(
+            &tool_name,
+            result,
+            width as usize,
+            &state.verbosity(),
+            show_picker,
+        )
+    };
     // Write/edit calls whose result carries no embedded diff (e.g.
     // `write_to_file` reports only `wrote 'path' (N lines, M bytes)`) still
     // need their changed lines at low verbosity (#1567). Synthesize an
@@ -861,7 +883,10 @@ pub(super) fn tool_transcript_entry(
     // keep their truthful single-line status.
     if kind == ToolTranscriptKind::Edit
         && success
+        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
         && !edit_result_is_noop(result)
+        && !edit_diff_unavailable(result)
+        && edit_diff.is_none()
         && !result_has_embedded_diff(result)
         && body.len() <= 1
     {
@@ -893,6 +918,7 @@ pub(super) fn tool_transcript_entry(
         status,
         body,
         kind,
+        diff_counts,
     })
 }
 
@@ -1046,6 +1072,12 @@ pub(super) fn tool_child_line(
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
+    }
+    if let Some((added, removed)) = entry.diff_counts {
+        spans.push(Span::styled(
+            format!(" (+{added} -{removed})"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
     }
     let mut lines = Vec::new();
     let continuation = Span::styled(
@@ -1337,10 +1369,7 @@ pub(super) fn indent_full_tool_body(
 /// expand; no-op (`already applied`) and failed changes keep their truthful
 /// single-line status with no hint.
 pub(super) fn edit_entry_is_expandable(entry: &ToolTranscriptEntry) -> bool {
-    entry.kind == ToolTranscriptKind::Edit
-        && entry.success
-        && !entry.body.is_empty()
-        && entry.body.len() > 1
+    entry.kind == ToolTranscriptKind::Edit && entry.success && !entry.body.is_empty()
 }
 
 /// Keep a fitting title's hint inline; otherwise put it after the visible
@@ -1531,11 +1560,8 @@ fn render_tool_result_group_snapshot(
                     let mut body = Vec::new();
                     first_child = false;
                     let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
-                    if entry.kind == ToolTranscriptKind::Edit
-                        && edit_entry_is_expandable(entry)
-                        && low
-                    {
-                        if is_expanded {
+                    if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
+                        if is_expanded || !low {
                             body.extend(indent_full_tool_body(
                                 entry.body.clone(),
                                 width,
@@ -2050,6 +2076,7 @@ mod tests {
             status: "exit 0".to_owned(),
             body: vec![],
             kind: super::ToolTranscriptKind::Command,
+            diff_counts: None,
         };
         for width in [18, 24, 48, 80, 180] {
             let lines = super::command_summary_lines(&entry, width, false, false);
@@ -2074,6 +2101,7 @@ mod tests {
                     .map(|i| ratatui::text::Line::from(format!("output {i}")))
                     .collect(),
                 kind: super::ToolTranscriptKind::Command,
+                diff_counts: None,
             };
             let title = super::command_summary_lines(&entry, width, false, false);
             let body = super::indent_tool_result_body(
@@ -2115,6 +2143,7 @@ mod tests {
                 .map(|i| ratatui::text::Line::from(format!("output {i}")))
                 .collect(),
             kind: super::ToolTranscriptKind::Tool,
+            diff_counts: None,
         };
         let title = super::tool_child_line(&entry, true, false, 80, false);
         let body = super::indent_generic_tool_body(
@@ -2159,6 +2188,7 @@ mod tests {
             status: "exit 0".to_owned(),
             body: Vec::new(),
             kind: super::ToolTranscriptKind::Command,
+            diff_counts: None,
         };
         let width = 24;
         let lines = super::command_child_lines(&entry, true, true, width, false);

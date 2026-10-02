@@ -170,12 +170,7 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
         for diff in diffs {
             // The Edit heading already identifies this as a patch. Hunk metadata
             // is useful to a patch parser but adds visual noise in the transcript.
-            let diff_body = diff
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("@@"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            lines.extend(render_unified_diff(&diff_body, width, show_picker));
+            lines.extend(render_file_edit_diff(diff, width, show_picker));
         }
     } else {
         lines.push(Line::from(Span::styled(
@@ -184,6 +179,208 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
         )));
     }
     lines
+}
+
+/// Render a real file edit without exposing patch metadata. Hunk offsets still
+/// drive the aligned source-line gutter, including context rows and later hunks.
+pub(super) fn render_file_edit_diff<'a>(
+    diff: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    render_file_edit_diff_with_language(diff, "text", width, show_picker)
+}
+
+pub(super) fn render_file_edit_diff_for_path<'a>(
+    diff: &str,
+    path: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    render_file_edit_diff_with_language(diff, language_for_path(path), width, show_picker)
+}
+
+fn render_file_edit_diff_with_language<'a>(
+    diff: &str,
+    language: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    let line_number_width = diff_max_line_number(diff).to_string().len();
+    let mut old_line = 1usize;
+    let mut new_line = 1usize;
+    let mut inside_hunk = false;
+    let mut rendered = Vec::new();
+
+    for raw in diff.lines() {
+        if let Some((old, new)) = parse_edit_hunk_header(raw) {
+            old_line = old;
+            new_line = new;
+            inside_hunk = true;
+            continue;
+        }
+        if (!inside_hunk && (raw.starts_with("--- ") || raw.starts_with("+++ ")))
+            || raw.starts_with("\\ No newline at end of file")
+        {
+            continue;
+        }
+
+        let line_number = match raw.chars().next() {
+            Some('+') => {
+                let number = new_line;
+                new_line += 1;
+                number
+            }
+            Some('-') => {
+                let number = old_line;
+                old_line += 1;
+                number
+            }
+            Some(' ') => {
+                let number = new_line;
+                old_line += 1;
+                new_line += 1;
+                number
+            }
+            _ => continue,
+        };
+
+        let (sign, code, color) = match raw.chars().next() {
+            Some('+') => ('+', &raw[1..], super::COLOR_DIFF_ADD_FG()),
+            Some('-') => ('-', &raw[1..], super::COLOR_DIFF_REMOVE_FG()),
+            Some(' ') => (' ', &raw[1..], super::COLOR_TEXT()),
+            _ => continue,
+        };
+        let mut spans = vec![Span::styled(
+            format!("{line_number:>line_number_width$} "),
+            get_themed_style(COLOR_MUTED(), diff_bg(sign), Modifier::empty(), show_picker),
+        )];
+        spans.push(Span::styled(
+            sign.to_string(),
+            get_themed_style(color, diff_bg(sign), Modifier::BOLD, show_picker),
+        ));
+        let code_spans: Vec<_> = highlight_code_line(code, language, show_picker)
+            .into_iter()
+            .map(|mut span| {
+                let foreground = span.style.fg.unwrap_or(color);
+                span.style = span.style.fg(foreground).bg(diff_bg(sign));
+                span
+            })
+            .collect();
+        spans.extend(code_spans);
+        let continuation = Span::styled(
+            format!("{:line_number_width$}  ", ""),
+            get_themed_style(COLOR_MUTED(), diff_bg(sign), Modifier::empty(), show_picker),
+        );
+        super::push_wrapped_with_continuation(
+            &mut rendered,
+            spans,
+            width.max(1),
+            Some(continuation),
+        );
+    }
+    cap_transcript_lines(rendered, show_picker)
+}
+
+fn diff_bg(sign: char) -> Color {
+    match sign {
+        '+' => super::COLOR_DIFF_ADD_BG(),
+        '-' => super::COLOR_DIFF_REMOVE_BG(),
+        _ => COLOR_BG(),
+    }
+}
+
+fn diff_max_line_number(diff: &str) -> usize {
+    let (mut old_line, mut new_line, mut maximum) = (1, 1, 1);
+    let mut inside_hunk = false;
+    for raw in diff.lines() {
+        if let Some((old, new)) = parse_edit_hunk_header(raw) {
+            old_line = old;
+            new_line = new;
+            maximum = maximum.max(old).max(new);
+            inside_hunk = true;
+            continue;
+        }
+        if !inside_hunk && (raw.starts_with("--- ") || raw.starts_with("+++ ")) {
+            continue;
+        }
+        match raw.chars().next() {
+            Some('+') => {
+                maximum = maximum.max(new_line);
+                new_line += 1;
+            }
+            Some('-') => {
+                maximum = maximum.max(old_line);
+                old_line += 1;
+            }
+            Some(' ') => {
+                maximum = maximum.max(new_line);
+                old_line += 1;
+                new_line += 1;
+            }
+            _ => {}
+        }
+    }
+    maximum
+}
+
+fn parse_edit_hunk_header(line: &str) -> Option<(usize, usize)> {
+    let mut parts = line.split_whitespace();
+    if parts.next()? != "@@" {
+        return None;
+    }
+    let old = parts
+        .next()?
+        .trim_start_matches('-')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    let new = parts
+        .next()?
+        .trim_start_matches('+')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    Some((old, new))
+}
+
+pub(super) fn edit_diff_counts(result: &str) -> Option<(usize, usize)> {
+    let diff = result
+        .split_once("```diff")
+        .and_then(|(_, block)| block.split_once("```").map(|(diff, _)| diff))
+        .unwrap_or(result);
+    let (mut added, mut removed) = (0, 0);
+    let mut inside_hunk = false;
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            inside_hunk = true;
+            continue;
+        }
+        if !inside_hunk && (line.starts_with("+++") || line.starts_with("---")) {
+            continue;
+        }
+        if line.starts_with('+') {
+            added += 1;
+        } else if line.starts_with('-') {
+            removed += 1;
+        }
+    }
+    Some((added, removed))
+}
+
+pub(super) fn embedded_edit_diff(result: &str) -> Option<&str> {
+    result
+        .split_once("```diff")?
+        .1
+        .split_once("```")
+        .map(|(diff, _)| diff.trim())
+        .filter(|diff| !diff.is_empty())
+}
+
+pub(super) fn edit_diff_unavailable(result: &str) -> bool {
+    result.contains("diff unavailable")
 }
 
 /// True when an edit result reports a no-op rather than a change.
@@ -252,7 +449,11 @@ pub(super) fn synthesized_edit_preview<'a>(
     width: usize,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    if !success || edit_result_is_noop(result) || result_has_embedded_diff(result) {
+    if !success
+        || edit_result_is_noop(result)
+        || edit_diff_unavailable(result)
+        || result_has_embedded_diff(result)
+    {
         return Vec::new();
     }
     let Some(content) = edit_args_content(tool_name, args) else {
@@ -486,7 +687,8 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 #[cfg(test)]
 mod tests {
     use super::{
-        COLOR_MUTED, TOOL_RESULT_TRANSCRIPT_MAX_LINES, render_file_preview, render_tool_result,
+        COLOR_MUTED, TOOL_RESULT_TRANSCRIPT_MAX_LINES, edit_diff_counts, render_file_edit_diff,
+        render_file_preview, render_tool_result, synthesized_edit_preview,
     };
     use crate::ui::tests::THEME_TEST_LOCK;
     use ratatui::style::Color;
@@ -496,6 +698,87 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    #[test]
+    fn file_edit_diff_keeps_hunk_line_numbers_and_hides_metadata() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -30,3 +30,3 @@\n before\n-old\n+new\n@@ -90 +90 @@\n--- old-code\n+++ new-code\n";
+        let lines = render_file_edit_diff(diff, 80, false);
+        let text = lines.iter().map(text_of).collect::<Vec<_>>();
+
+        assert!(
+            text.iter().any(|line| line.starts_with("30  before")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.starts_with("31 -old")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.starts_with("31 +new")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.starts_with("90 --- old-code")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.starts_with("90 +++ new-code")),
+            "{text:?}"
+        );
+        assert!(
+            !text
+                .iter()
+                .any(|line| line.contains("@@") || line.contains("a/src/")),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn file_edit_diff_wraps_long_code_without_repeating_line_numbers() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let content = "pub fn long_name() { let value = \"012345678901234567890123456789\"; }";
+        let diff = format!("@@ -1 +1 @@\n+{content}\n");
+        let lines = render_file_edit_diff(&diff, 24, false);
+        let text = lines.iter().map(text_of).collect::<Vec<_>>();
+        let joined = text.join("");
+
+        assert!(lines.len() > 1, "long edit line should wrap: {text:?}");
+        assert!(lines.iter().all(|line| line.width() <= 24), "{text:?}");
+        assert!(text[0].starts_with("1 +"), "{text:?}");
+        assert!(
+            text[1].starts_with("  "),
+            "continuation aligns after the gutter: {text:?}"
+        );
+        assert_eq!(joined.matches("pub fn").count(), 1, "{text:?}");
+        assert!(
+            !text.iter().skip(1).any(|line| line.contains("1 +")),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn edit_diff_counts_ignore_file_headers_but_keep_plus_prefixed_code() {
+        let diff = "--- a/file.rs\n+++ b/file.rs\n@@ -1 +1 @@\n--- old\n+++ new\n";
+        assert_eq!(edit_diff_counts(diff), Some((1, 1)));
+    }
+
+    #[test]
+    fn unreadable_overwrite_does_not_synthesize_added_content() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let args = serde_json::json!({"path": "src/data.bin", "content": "replacement"});
+        assert!(
+            synthesized_edit_preview(
+                "write_to_file",
+                &args,
+                "wrote 'src/data.bin' (diff unavailable: existing file is not UTF-8)",
+                true,
+                80,
+                false,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
