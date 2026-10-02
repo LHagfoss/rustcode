@@ -1,3 +1,17 @@
+## [v0.56.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.4) - 2026-10-02
+
+### Features
+- Add per-request thinking decisions through an opt-in oMLX decider endpoint, with immediate application and fallback to normal behavior ([#1647](https://github.com/LHagfoss/rustcode/pull/1647)).
+- Resolve local JSON Schema references and validate enum arguments for MCP tools ([#1648](https://github.com/LHagfoss/rustcode/pull/1648)).
+- Let Ctrl+C copy a selection and still arm the second press to exit ([#1649](https://github.com/LHagfoss/rustcode/pull/1649)).
+- Advance the terminal tab spinner using a shared animation clock ([#1650](https://github.com/LHagfoss/rustcode/pull/1650)).
+- Anchor the running indicator directly below transcript activity ([#1651](https://github.com/LHagfoss/rustcode/pull/1651)).
+- Add idle catch-up recaps and completion timing below finished turns ([#1623](https://github.com/LHagfoss/rustcode/pull/1623), [#1622](https://github.com/LHagfoss/rustcode/pull/1622)).
+- Improve tool previews, expansion hints, model-match highlighting, and feedback placement ([#1611](https://github.com/LHagfoss/rustcode/pull/1611), [#1628](https://github.com/LHagfoss/rustcode/pull/1628), [#1630](https://github.com/LHagfoss/rustcode/pull/1630), [#1638](https://github.com/LHagfoss/rustcode/pull/1638), [#1645](https://github.com/LHagfoss/rustcode/pull/1645)).
+- Support copying in informational panels, improve selected-text scrolling, and cache pinned selection projections ([#1614](https://github.com/LHagfoss/rustcode/pull/1614), [#1619](https://github.com/LHagfoss/rustcode/pull/1619), [#1613](https://github.com/LHagfoss/rustcode/pull/1613)).
+- Stabilize streaming frames and isolate render panics ([#1636](https://github.com/LHagfoss/rustcode/pull/1636), [#1635](https://github.com/LHagfoss/rustcode/pull/1635)).
+- Bound per-server MCP schemas and surface server startup failures ([#1637](https://github.com/LHagfoss/rustcode/pull/1637)).
+- Preserve cancelled-stream progress and safe shell reads in durable replay, check skills before live app probes, clear idle watchdog clocks, and make the additional API-key header opt-in ([#1634](https://github.com/LHagfoss/rustcode/pull/1634), [#1629](https://github.com/LHagfoss/rustcode/pull/1629), [#1610](https://github.com/LHagfoss/rustcode/pull/1610), [#1642](https://github.com/LHagfoss/rustcode/pull/1642), [#1640](https://github.com/LHagfoss/rustcode/pull/1640)).
 ## [v0.56.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.3) - 2026-10-01
 
 ### Fixes
