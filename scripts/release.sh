@@ -760,6 +760,24 @@ wait_for_required_pr_checks() {
             return 1
         fi
 
+        # Some repositories configure no required checks at all. Require the
+        # workflow's blocking test/lint contexts explicitly in that case; an
+        # empty or partially registered list must never authorize a release.
+        if jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<<"$output"; then
+            if output="$(gh pr checks "$branch" --json name,state,bucket,link 2>&1)"; then
+                :
+            elif [[ "$output" == *"no checks reported"* ]]; then
+                output='[]'
+            elif ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$output"; then
+                error "Could not query CI checks for $branch: $output"
+                return 1
+            fi
+            output="$(jq '[.[] | select(.name == "test" or .name == "lint")]' <<<"$output")" || return 1
+            if ! jq -e 'any(.[]; .name == "test") and any(.[]; .name == "lint")' >/dev/null <<<"$output"; then
+                output='[]'
+            fi
+        fi
+
         if [[ -n "$output" ]] && jq -e \
             'length > 0 and any(.[]; .bucket == "fail" or .bucket == "cancel")' \
             >/dev/null 2>&1 <<<"$output"; then
@@ -1174,6 +1192,10 @@ run_tests() {
         mock_tick=0 mock_mode=delayed
         sleep() { mock_tick=$((mock_tick + 1)); }
         gh() {
+            if [[ "$*" == "pr checks test-branch --json name,state,bucket,link" ]]; then
+                printf '%s' '[]'
+                return 0
+            fi
             [[ "$*" == *"pr checks test-branch --required --json name,state,bucket,link"* ]] || return 1
             case "$mock_mode" in
                 delayed)
@@ -1207,6 +1229,47 @@ run_tests() {
         info "  ✓ required checks wait for registration and success, reject failures and time out"
     else
         error "  ✗ required check gate regression"
+        failed=$((failed + 1))
+    fi
+
+    # Repositories without required-check settings still need real CI results.
+    info "Test 7b: Unprotected repository check gate"
+    if (
+        mock_mode=pass mock_tick=0
+        sleep() { mock_tick=$((mock_tick + 1)); }
+        gh() {
+            if [[ "$*" == *"--required"* ]]; then
+                printf '%s' "no required checks reported on the 'test-branch' branch"
+                return 1
+            fi
+            case "$mock_mode" in
+                pass) printf '%s' '[{"name":"test","bucket":"pass"},{"name":"lint","bucket":"pass"}]' ;;
+                pending)
+                    if [[ "$mock_tick" -eq 0 ]]; then
+                        printf '%s' '[{"name":"test","bucket":"pending"},{"name":"lint","bucket":"pass"}]'
+                    else
+                        printf '%s' '[{"name":"test","bucket":"pass"},{"name":"lint","bucket":"pass"}]'
+                    fi ;;
+                failed) printf '%s' '[{"name":"test","bucket":"fail"},{"name":"lint","bucket":"pass"}]'; return 1 ;;
+                missing) printf '%s' '[{"name":"test","bucket":"pass"}]' ;;
+                api_error) printf '%s' 'API unavailable'; return 1 ;;
+            esac
+        }
+        wait_for_required_pr_checks test-branch 1 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 0 ]] || exit 1
+        mock_mode=pending
+        wait_for_required_pr_checks test-branch 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 1 ]] || exit 1
+        mock_mode=failed
+        if wait_for_required_pr_checks test-branch 1 0 >/dev/null 2>&1; then exit 1; fi
+        mock_mode=missing
+        if wait_for_required_pr_checks test-branch 1 0 >/dev/null 2>&1; then exit 1; fi
+        mock_mode=api_error
+        if wait_for_required_pr_checks test-branch 1 0 >/dev/null 2>&1; then exit 1; fi
+    ); then
+        info "  ✓ unprotected repositories require successful test and lint checks"
+    else
+        error "  ✗ unprotected repository check gate regression"
         failed=$((failed + 1))
     fi
 
