@@ -2,7 +2,8 @@ use super::{AppStatus, LiveToolCall};
 use rustcode_core::activity::{
     exploration_tool_parameters, is_exploration_tool, safe_parameter, sanitize_tool_parameter,
 };
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
@@ -420,11 +421,34 @@ pub fn spinner_frame_index(elapsed: Duration) -> u64 {
     (millis / SPINNER_FRAME_MS) as u64
 }
 
+/// Baseline for the shared spinner timeline.
+///
+/// The tab title and the chat's running row are written by different callers on
+/// different frames, so the timeline needs one process-wide origin for the two
+/// to advance in step.
+static SPINNER_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+/// Elapsed time on the shared spinner timeline.
+///
+/// Callers must use this instead of measuring from `Instant::now()`:
+/// `Instant::now().elapsed()` is the gap between two adjacent clock reads,
+/// which is always ~0 and therefore pins the animation to frame zero.
+pub fn spinner_elapsed() -> Duration {
+    SPINNER_EPOCH.get_or_init(Instant::now).elapsed()
+}
+
+/// Spinner frame index for the current point on the shared timeline.
+pub fn current_spinner_frame_index() -> u64 {
+    spinner_frame_index(spinner_elapsed())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityKind, AnimationCell, LiveToolCall, animation_trail, classify_activity,
-        classify_live_tools, format_terminal_title, sanitize_session_name, summarize_tool_call,
+        ActivityKind, AnimationCell, LiveToolCall, TERMINAL_SPINNER, animation_trail,
+        classify_activity, classify_live_tools, current_spinner_frame_index, format_terminal_title,
+        sanitize_session_name, spinner_elapsed, spinner_frame, spinner_frame_index,
+        summarize_tool_call,
     };
     use crate::app::AppStatus;
 
@@ -511,6 +535,48 @@ mod tests {
         assert_eq!(
             format_terminal_title(ActivityKind::Working, "bench", 10),
             format_terminal_title(ActivityKind::Working, "bench", 0)
+        );
+    }
+
+    /// The title must actually animate. The previous caller measured with
+    /// `Instant::now().elapsed()` — the gap between two adjacent clock reads,
+    /// always ~0 — so the frame index was permanently 0 and the tab title
+    /// stayed pinned on `⠋` for the whole turn.
+    #[test]
+    fn the_shared_timeline_advances_so_the_title_is_not_pinned() {
+        let first = current_spinner_frame_index();
+        // Elapsed time is monotonic, so two reads can never go backwards.
+        let second = current_spinner_frame_index();
+        assert!(second >= first);
+
+        // Cross a frame boundary on the real clock and the title must change.
+        let start = current_spinner_frame_index();
+        let mut changed = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if current_spinner_frame_index() != start {
+                changed = true;
+                break;
+            }
+        }
+        assert!(
+            changed,
+            "the shared timeline never advanced past frame {start}"
+        );
+    }
+
+    #[test]
+    fn the_shared_timeline_keeps_the_title_and_chat_in_step() {
+        // Both surfaces read the same epoch, so one instant yields one frame.
+        let elapsed = spinner_elapsed();
+        assert_eq!(spinner_frame_index(elapsed), current_spinner_frame_index());
+        assert_eq!(
+            spinner_frame(elapsed),
+            TERMINAL_SPINNER[current_spinner_frame_index() as usize % TERMINAL_SPINNER.len()]
+        );
+        assert!(
+            spinner_elapsed() >= elapsed,
+            "the shared timeline must be monotonic"
         );
     }
 

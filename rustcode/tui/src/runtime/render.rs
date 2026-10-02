@@ -38,6 +38,23 @@ pub(super) async fn session_title_for_render(
     (current_session_id, current_title)
 }
 
+/// Build the OSC title for the terminal tab.
+///
+/// The tab title carries the live spinner while a turn runs, so a backgrounded
+/// terminal still shows the session is working.
+///
+/// The frame must come from the shared timeline
+/// (`controller::current_spinner_frame_index`). Measuring from
+/// `Instant::now()` instead yields the gap between two adjacent clock reads —
+/// always ~0 — which pinned the title on its first frame for the whole turn.
+fn terminal_title_display(kind: rustcode::controller::ActivityKind, session_name: &str) -> String {
+    rustcode::app::activity::format_terminal_title(
+        kind,
+        session_name,
+        rustcode::controller::current_spinner_frame_index(),
+    )
+}
+
 pub(super) struct RenderFrameContext<'a> {
     pub terminal_runtime: &'a mut TerminalRuntime,
     pub frame_requester: &'a FrameRequester,
@@ -126,13 +143,7 @@ pub(super) async fn render_frame(
                     .or_else(|| std::env::current_dir().ok());
                 rustcode::discord_rpc::workspace_basename(workspace.as_deref())
             });
-        let title_display = rustcode::app::activity::format_terminal_title(
-            // The tab title carries the live spinner while a turn runs, so a
-            // backgrounded terminal still shows the session is working.
-            activity.kind,
-            session_name,
-            rustcode::controller::spinner_frame_index(std::time::Instant::now().elapsed()),
-        );
+        let title_display = terminal_title_display(activity.kind, session_name);
         let old_title = guard.current_terminal_title.clone();
         if old_title.as_deref() != Some(title_display.as_str()) {
             guard.current_terminal_title = Some(title_display.clone());
@@ -250,7 +261,38 @@ mod tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use rustcode::app::ChatMessage;
+    use rustcode::controller::ActivityKind;
     use std::time::Duration;
+
+    /// The tab title must animate while a turn runs.
+    ///
+    /// This regressed when the frame was derived from `Instant::now().elapsed()`
+    /// — the gap between two adjacent clock reads, always ~0 — which held the
+    /// title on frame 0 for the whole turn and read as a frozen spinner.
+    #[test]
+    fn the_terminal_title_spinner_advances_while_working() {
+        let first = terminal_title_display(ActivityKind::Working, "bench");
+        assert!(
+            first.ends_with(" · bench"),
+            "an active title carries the session name: {first:?}"
+        );
+
+        let mut frames = vec![first];
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames.push(terminal_title_display(ActivityKind::Working, "bench"));
+        }
+        assert!(
+            frames.windows(2).any(|pair| pair[0] != pair[1]),
+            "the title never changed across 600ms, so the spinner is pinned"
+        );
+
+        // Idle hides the spinner entirely, so the animation is tied to activity.
+        assert_eq!(
+            terminal_title_display(ActivityKind::Ready, "bench"),
+            "bench"
+        );
+    }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
         MouseEvent {
