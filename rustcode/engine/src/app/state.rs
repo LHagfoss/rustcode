@@ -456,6 +456,12 @@ impl AppState {
     pub fn enter_idle(&mut self) {
         self.status = AppStatus::Idle;
         self.idle_since = std::time::Instant::now();
+        // Per-turn progress clocks describe the current turn only. Leaving
+        // the previous turn's timestamps behind made a freshly queued prompt
+        // look 5-minutes-stalled to the watchdog after any idle stretch, so
+        // it injected a bogus recovery notice on the next submit.
+        self.generation_start_time = None;
+        self.stream_tracker = None;
     }
 
     /// Start a chained question flow: the first question becomes active, the
