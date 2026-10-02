@@ -44,6 +44,7 @@ impl AppRuntime {
         let mut task_subscriptions = task_subscriptions;
         let update_exit;
         let mut last_progress_sent = std::time::Instant::now();
+        let mut consecutive_skipped_frames = 0u32;
         let composer = ui::Composer::new();
         loop {
             let active_session_id = app_state.lock().await.active_session_id.clone();
@@ -306,6 +307,7 @@ impl AppRuntime {
                 // modes; here we catch the unwind, keep the turn alive, and
                 // surface a transient notice instead of dying mid-turn.
                 use futures_util::FutureExt as _;
+                let mut frame_presented = true;
                 let frame = std::panic::AssertUnwindSafe(render_frame(RenderFrameContext {
                     terminal_runtime: &mut terminal_runtime,
                     frame_requester: &frame_requester,
@@ -318,13 +320,37 @@ impl AppRuntime {
                     response_active,
                     response_just_finished,
                     last_progress_sent: &mut last_progress_sent,
+                    frame_presented: &mut frame_presented,
                 }))
                 .catch_unwind()
                 .await;
                 match frame {
-                    Ok(Ok(())) => {}
+                    Ok(Ok(())) if frame_presented => {
+                        consecutive_skipped_frames = 0;
+                    }
+                    Ok(Ok(())) => {
+                        // The terminal kept the last good frame instead of
+                        // presenting a torn one. Keep the turn alive and retry
+                        // cleanly; the panic hook already logged the backtrace.
+                        consecutive_skipped_frames = consecutive_skipped_frames.saturating_add(1);
+                        {
+                            let mut s = app_state.lock().await;
+                            s.set_transient_notice(
+                                "Display recovered from a bad frame; turn continues.",
+                            );
+                        }
+                        rustcode::logger::operational_event(
+                            "tui.frame_skipped",
+                            serde_json::json!({
+                                "consecutive_skipped_frames": consecutive_skipped_frames,
+                            }),
+                        );
+                        // Skip this frame; request a clean redraw next tick.
+                        frame_requester.schedule_frame();
+                    }
                     Ok(Err(e)) => return Err(e),
                     Err(_) => {
+                        consecutive_skipped_frames = 0;
                         {
                             let mut s = app_state.lock().await;
                             s.set_transient_notice(

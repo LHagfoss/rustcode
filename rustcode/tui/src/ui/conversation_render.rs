@@ -172,6 +172,34 @@ fn render_live_tail_mode(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+/// Plain running indicator (spinner + model) painted in the reserved row at
+/// the bottom of the chat, or `None` when there is nothing to report.
+///
+/// Deliberately plain — status words, elapsed clocks and token rates belong in
+/// the transcript. A turn waiting on the provider or a tool still shows that
+/// work is happening instead of an empty chat.
+pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'static>> {
+    let activity = rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(
+        rustcode::controller::classify_activity(&state.status(), &state.running_tools()),
+    );
+    match activity.kind {
+        // Nothing is running, and waiting on the user is not "running": the
+        // approval/question panel is its own signal, so no indicator is added.
+        rustcode::controller::ActivityKind::Ready
+        | rustcode::controller::ActivityKind::ActionRequired => None,
+        _ => Some(Line::from(vec![
+            Span::styled(
+                format!("{} ", super::composer_render::running_spinner_char(state)),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+            ),
+            Span::styled(
+                state.model_name().to_string(),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            ),
+        ])),
+    }
+}
+
 fn welcome_is_live(state: &RenderSnapshot) -> bool {
     (state.history().is_empty() || state.history_display_start() >= state.history().len())
         && state.current_response().is_empty()

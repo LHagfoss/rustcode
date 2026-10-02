@@ -213,6 +213,15 @@ pub(crate) fn desired_height(
 /// Interactive TUI entry point. `transcript` is terminal-only mutable state;
 /// it must never be persisted with `ChatMessage` history or included in a
 /// provider request.
+/// True when every cell of `row` inside `area` is still blank, so an overlay
+/// can claim it without hiding anything the transcript painted.
+fn row_is_blank(buffer: &ratatui::buffer::Buffer, area: ratatui::layout::Rect, row: u16) -> bool {
+    if area.width == 0 || row < area.y || row >= area.bottom() {
+        return false;
+    }
+    (area.x..area.right()).all(|x| buffer[(x, row)].symbol() == " ")
+}
+
 pub(crate) fn render_with_transcript_snapshot(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -414,6 +423,22 @@ pub(crate) fn render_with_transcript_snapshot(
         .split(layout_area);
 
     render_live_conversation(f, chunks[0], lines, layout_width);
+
+    // Running indicator sits at the bottom of the chat, in the trailing blank
+    // row. Overlaying the spare row instead of reserving one keeps the
+    // transcript geometry identical whether or not a turn is running, so
+    // nothing reflows and selection anchors stay valid when a turn starts.
+    if let Some(indicator) = live_running_indicator(state)
+        && chunks[0].height > 0
+    {
+        let row = chunks[0].bottom().saturating_sub(1);
+        if row_is_blank(f.buffer(), chunks[0], row) {
+            f.render_widget(
+                Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
+                ratatui::layout::Rect::new(chunks[0].x, row, chunks[0].width, 1),
+            );
+        }
+    }
 
     // The composer indexes these as [chat, queue, popup, input, footer]; the
     // activity stays above the queue, panels and completions. Panels claim
