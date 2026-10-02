@@ -3220,7 +3220,7 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
             }),
     );
 
-    // Collapsed generic bodies hide behind the hint; expanding reveals a
+    // Short collapsed generic bodies render without a hint; expanding preserves a
     // wrapped, guttered block that fits narrow widths (#1568).
     let collapsed = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
@@ -3230,7 +3230,7 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
     assert_eq!(collapsed[0], "• Ran");
     assert!(
         collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("ctrl+o to expand"),
-        "collapsed generic hides behind hint: {collapsed:?}"
+        "short generic output needs no expansion hint: {collapsed:?}"
     );
 
     state.expanded_thoughts.insert(1);
@@ -3396,7 +3396,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         !rendered
             .iter()
             .any(|line| line.contains("ctrl+o to expand")),
-        "collapsed shell result has an expand hint: {rendered:?}"
+        "fully visible shell output needs no expansion hint: {rendered:?}"
     );
     assert!(
         rendered.iter().any(|line| line.contains("build failed")),
@@ -3515,7 +3515,7 @@ fn expanded_command_body_renders_full_not_window() {
             }),
     );
 
-    // Collapsed: command body hidden, hint present on the child row.
+    // Collapsed: the five-row preview keeps the output head and tail.
     let collapsed = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -3776,7 +3776,7 @@ fn low_verbosity_write_shows_added_lines_preview() {
     );
     assert!(
         !rendered.iter().any(|line| line.contains("ctrl+o")),
-        "larger bodies stay expandable: {rendered:?}"
+        "fully visible edit preview needs no expansion hint: {rendered:?}"
     );
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1]);
@@ -4273,7 +4273,7 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         !rendered
             .iter()
             .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
-        "command child should carry the expand hint: {rendered:?}"
+        "fully visible command needs no expansion hint: {rendered:?}"
     );
 
     // The hint belongs to the row it describes. Appending it to the last
@@ -4426,7 +4426,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         render(&state)
             .iter()
             .any(|line| line.contains("Thursday, 08:30")),
-        "collapsing hides the body again: {:?}",
+        "collapsing retains the bounded visible preview: {:?}",
         render(&state)
     );
 }
@@ -4495,7 +4495,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
         !rendered
             .iter()
             .any(|line| line.contains("ctrl+o to expand")),
-        "command-only batch carries expand hints: {rendered:?}"
+        "fully visible commands need no expansion hints: {rendered:?}"
     );
 }
 
@@ -4618,13 +4618,13 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
         !rendered
             .iter()
             .any(|line| line.contains("Bash") && line.contains("ctrl+o")),
-        "mixed-batch command keeps its hint: {rendered:?}"
+        "fully visible mixed command needs no hint: {rendered:?}"
     );
     assert!(
         !rendered
             .iter()
             .any(|line| line.contains("GetTime") && line.contains("ctrl+o")),
-        "mixed-batch generic keeps its hint: {rendered:?}"
+        "fully visible mixed generic output needs no hint: {rendered:?}"
     );
 }
 
