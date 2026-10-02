@@ -1579,6 +1579,75 @@ async fn status_command_opens_screen_without_adding_chat_history() {
 }
 
 #[tokio::test]
+async fn prompt_command_stages_expanded_template_without_submitting_it() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let command_dir = workspace.path().join(".rustcode/commands");
+    std::fs::create_dir_all(&command_dir).unwrap();
+    let name = format!("review-{}", std::process::id());
+    std::fs::write(
+        command_dir.join(format!("{name}.md")),
+        "Inspect the changes:\n$ARGUMENTS",
+    )
+    .unwrap();
+    let mut app = AppState::new();
+    app.workspace_root = Some(workspace.path().to_path_buf());
+    app.input_buffer = format!("/prompt {name}  diff --stat\nnext  ");
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+
+    let state = state.lock().await;
+    assert_eq!(
+        state.input_buffer,
+        "Inspect the changes:\n diff --stat\nnext  "
+    );
+    assert_eq!(state.cursor_position, state.input_buffer.chars().count());
+    assert!(state.history.is_empty());
+    assert!(state.pending_queue.is_empty());
+    assert!(state.pending_steers.is_empty());
+}
+
+#[tokio::test]
+async fn prompts_command_lists_user_templates_without_creating_workspace_directories() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let config_dir = crate::config::get_config_dir().expect("isolated test config directory");
+    let command_dir = config_dir.join("commands");
+    std::fs::create_dir_all(&command_dir).unwrap();
+    let name = format!("catalog-{}", std::process::id());
+    let command_path = command_dir.join(format!("{name}.md"));
+    std::fs::write(&command_path, "Inspect the repository.").unwrap();
+    let mut app = AppState::new();
+    app.workspace_root = Some(workspace.path().to_path_buf());
+    app.input_buffer = "/prompts".to_owned();
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+
+    let state = state.lock().await;
+    let panel = state
+        .command_panel
+        .as_ref()
+        .expect("prompt command catalog");
+    assert!(panel.content.contains(&format!("`/prompt {name}`")));
+    assert!(panel.content.contains(&command_path.display().to_string()));
+    assert!(state.history.is_empty());
+    assert!(!workspace.path().join(".rustcode/commands").exists());
+    std::fs::remove_file(command_path).unwrap();
+}
+
+#[tokio::test]
 async fn stats_and_session_commands_open_panels_without_adding_chat_history() {
     use crate::app::state::AppState;
     use std::sync::Arc;

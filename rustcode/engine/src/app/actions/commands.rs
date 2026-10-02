@@ -560,9 +560,17 @@ pub fn build_help_text() -> String {
                 ("/yolo", "Show or set tool confirmation mode"),
                 ("/sandbox", "Show or set OS-enforced shell permissions"),
                 ("/skills", "Discover and list custom skills"),
-                ("/sync", "Sync config, skills, and themes with Git"),
+                (
+                    "/sync",
+                    "Sync config, skills, themes, and prompt commands with Git",
+                ),
                 ("/copy", "Copy last assistant reply to clipboard"),
                 ("/memory", "Inspect or update bounded project memory"),
+                ("/prompts", "List reusable prompt templates"),
+                (
+                    "/prompt",
+                    "Load a prompt template into the composer for review",
+                ),
                 ("/ps", "Show running background terminals"),
                 ("/stop", "Stop all running background terminals"),
                 ("/changelog", "Show recent changelog updates"),

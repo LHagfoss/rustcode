@@ -434,12 +434,38 @@ rustcode sync              # pull, then push
 `--pull` and `--push` cannot be used together.
 
 `rustcode sync` stages only files inside the RustCode config directory:
-`.gitignore`, `config.toml`, `skills/`, and `themes/`. Skills in
+`.gitignore`, `config.toml`, `skills/`, `themes/`, and `commands/`. Skills in
 `~/.agents/skills`, a workspace `.rustcode/skills`, or any
 `extra_skill_dirs` entry are **not** synced — the universal root is shared
 with other agents, and pushing one agent's skills into it would conflict with
 them. Version those skills separately, or point `extra_skill_dirs` at a
 directory you sync yourself.
+
+### Prompt commands
+
+In the terminal frontend, reusable Markdown templates are loaded with
+`/prompt <name> [arguments]`; `/prompts` lists their names and source paths. A
+loaded template is placed in the composer for editing and review, and is sent
+only after you press Enter again. Put user templates in
+`<config dir>/commands/<name>.md` and workspace templates in
+`<workspace>/.rustcode/commands/<name>.md`. Workspace templates override user
+templates with the same name. Names use lowercase ASCII letters, numbers,
+hyphens, or underscores. Templates can use the literal `$ARGUMENTS`
+placeholder; supplied arguments replace every occurrence, or are appended after
+a blank line if there is no placeholder. With no arguments, placeholders are
+removed.
+
+For example, create `<workspace>/.rustcode/commands/review.md`:
+
+```markdown
+Review $ARGUMENTS for correctness and missing tests.
+```
+
+Then run `/prompt review the current diff`, review or edit the staged text, and
+press Enter to submit it. Templates are limited to 64 KiB and expanded prompts
+to 256 KiB; empty, invalid UTF-8, symlink, and slash-command expansions are
+rejected. Listing does not create command directories. User templates are
+included in `rustcode sync`; workspace templates remain with the project.
 
 ### Optional local audio generation (Apple Silicon)
 

@@ -71,6 +71,16 @@ async fn handle_enter_inner(
         let mut should_exit = false;
 
         match cmd {
+            "/prompts" => {
+                let roots = prompt_command_roots(&s);
+                let content = prompt_command_catalog(&roots);
+                s.show_command_panel("Prompt commands", content);
+            }
+            "/prompt" => {
+                let roots = prompt_command_roots(&s);
+                let input = s.input_buffer.clone();
+                stage_prompt_command(&mut s, &input, &roots);
+            }
             "/memory" => {
                 let root = s.effective_workspace_root();
                 match tokens.get(1).copied() {
@@ -1020,6 +1030,12 @@ async fn handle_enter_inner(
             spawn_context_window_detection(Arc::clone(state), client.clone());
         }
 
+        // /prompt replaces the draft with editable template text. Preserve it
+        // instead of applying the normal slash-command cleanup below.
+        if cmd == "/prompt" {
+            return false;
+        }
+
         s.input_buffer.clear();
         s.cursor_position = 0;
         return should_exit;
@@ -1093,6 +1109,82 @@ async fn handle_enter_inner(
     )
     .await;
     false
+}
+
+fn prompt_command_roots(state: &AppState) -> crate::prompt_commands::Roots {
+    crate::prompt_commands::Roots {
+        workspace: state.effective_workspace_root(),
+        config_dir: crate::config::get_config_dir(),
+    }
+}
+
+fn prompt_command_catalog(roots: &crate::prompt_commands::Roots) -> String {
+    match crate::prompt_commands::list(roots) {
+        Ok(commands) if commands.is_empty() => format!(
+            "No prompt templates found. Add direct-child Markdown files to:\n  {}\n  {}",
+            roots
+                .workspace
+                .as_ref()
+                .map(|path| path.join(".rustcode/commands").display().to_string())
+                .unwrap_or_else(|| "<workspace>/.rustcode/commands".to_owned()),
+            roots
+                .config_dir
+                .as_ref()
+                .map(|path| path.join("commands").display().to_string())
+                .unwrap_or_else(|| "<config dir>/commands".to_owned())
+        ),
+        Ok(commands) => {
+            let entries = commands
+                .into_iter()
+                .map(|command| {
+                    let source = if roots.workspace.as_ref().is_some_and(|workspace| {
+                        command
+                            .path
+                            .starts_with(workspace.join(".rustcode/commands"))
+                    }) {
+                        "workspace"
+                    } else {
+                        "user"
+                    };
+                    format!(
+                        "- `/prompt {}` — {source}: `{}`",
+                        command.name,
+                        command.path.display()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "Prompt templates (workspace files override user files with the same name):\n\n{entries}\n\nUse `/prompt <name> [arguments]` to load a template into the composer for review. `$ARGUMENTS` is replaced literally; without a placeholder, arguments are appended."
+            )
+        }
+        Err(error) => error,
+    }
+}
+
+fn stage_prompt_command(state: &mut AppState, input: &str, roots: &crate::prompt_commands::Roots) {
+    let Some((name, arguments)) = crate::prompt_commands::parse_request(input) else {
+        state.show_command_panel(
+            "Prompt commands",
+            "Usage: `/prompt <name> [arguments]`. Use `/prompts` to list templates.",
+        );
+        return;
+    };
+    if name.is_empty() {
+        state.show_command_panel(
+            "Prompt commands",
+            "Usage: `/prompt <name> [arguments]`. Use `/prompts` to list templates.",
+        );
+        return;
+    }
+    match crate::prompt_commands::load(roots, name, arguments) {
+        Ok(prompt) => {
+            state.input_buffer = prompt;
+            state.cursor_position = state.input_buffer.chars().count();
+            state.request_redraw();
+        }
+        Err(error) => state.show_command_panel("Prompt commands", error),
+    }
 }
 
 /// Point the session at an isolated task worktree.

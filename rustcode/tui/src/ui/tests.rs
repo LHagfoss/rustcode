@@ -3412,6 +3412,78 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
 }
 
 #[test]
+fn command_preview_wrap_reuse_preserves_styled_lines_and_hint_state() {
+    use super::tool_transcript::{
+        COLLAPSED_TOOL_BODY_MAX_LINES, command_preview_body, indent_tool_result_body,
+    };
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use rustcode::controller::Verbosity;
+
+    for width in [18, 24, 80] {
+        for body in [
+            vec![
+                Line::from(vec![
+                    Span::styled("status: ", Style::default().fg(Color::Green)),
+                    Span::styled("✓ готово 日", Style::default().add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(Span::styled(
+                    "short row",
+                    Style::default().fg(Color::Yellow),
+                )),
+            ],
+            (0..12)
+                .map(|index| {
+                    Line::from(vec![
+                        Span::styled(format!("{index}: "), Style::default().fg(Color::Cyan)),
+                        Span::styled(
+                            "日本語の出力 with styled tail",
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ])
+                })
+                .collect(),
+        ] {
+            for expanded in [false, true] {
+                let full = indent_tool_result_body(
+                    body.clone(),
+                    "run_command",
+                    &Verbosity::Low,
+                    width,
+                    true,
+                );
+                let expected_hint = !expanded && full.len() > COLLAPSED_TOOL_BODY_MAX_LINES;
+                let expected_body = indent_tool_result_body(
+                    body.clone(),
+                    "run_command",
+                    &Verbosity::Low,
+                    width,
+                    expanded,
+                );
+                let (actual_body, actual_hint) = command_preview_body(
+                    body.clone(),
+                    "run_command",
+                    &Verbosity::Low,
+                    width,
+                    expanded,
+                );
+
+                assert_eq!(
+                    actual_body, expected_body,
+                    "width={width}, expanded={expanded}"
+                );
+                assert_eq!(
+                    actual_hint, expected_hint,
+                    "width={width}, expanded={expanded}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn low_verbosity_keeps_errors_and_exit_status_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 

@@ -113,6 +113,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show or set current tool protocol (json only)",
     },
     CommandInfo {
+        name: "/prompt",
+        desc: "Load a prompt template into the composer for review",
+    },
+    CommandInfo {
+        name: "/prompts",
+        desc: "List available prompt templates",
+    },
+    CommandInfo {
         name: "/provider",
         desc: "Add/update model provider profile",
     },
@@ -174,7 +182,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/sync",
-        desc: "Sync config, skills, and themes with remote Git repo",
+        desc: "Sync config, skills, themes, and prompt commands with Git",
     },
     CommandInfo {
         name: "/update",
@@ -403,6 +411,20 @@ mod tests {
                 "{expected} should be suggested for {input}"
             );
         }
+    }
+
+    #[test]
+    fn prompt_template_commands_are_discoverable_and_document_argument_entry() {
+        let matches = filtered_commands("/prom");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            ["/prompt", "/prompts"]
+        );
+        assert!(matches[0].desc.contains("composer for review"));
+        assert!(matches[1].desc.contains("List available prompt templates"));
     }
 
     #[test]

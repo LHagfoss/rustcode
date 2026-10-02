@@ -2,7 +2,7 @@
 
 Audited the complete `COMMANDS` registry in
 `rustcode/engine/src/app/suggestion.rs` and its dispatch in
-`rustcode/engine/src/app/actions/enter.rs` (45 registered names).
+`rustcode/engine/src/app/actions/enter.rs`.
 The command palette uses that same dispatch, avoiding a second implementation
 that could publish informational output into history.
 
@@ -46,6 +46,8 @@ an open user panel and resumes its input surface after dismissal.
 | `/ollama` | Scrollable configuration/help and asynchronous model-list panel; arguments still update the profile. |
 | `/parser` | Alias of /protocol. |
 | `/provider` | Immediate profile configuration with arguments; result/help uses a Provider panel. |
+| `/prompt` | Loads a Markdown template into the composer for editing; it is not submitted until the next Enter. |
+| `/prompts` | Scrollable Prompt commands panel listing templates and their source paths. |
 | `/protocol` | Existing protocol chooser; direct arguments apply immediately with panel result/help. |
 | `/ps` | Scrollable Background terminals panel; repeated polls do not enter history. |
 | `/quit` | Alias of /exit; immediate exit. |
@@ -73,6 +75,10 @@ an open user panel and resumes its input surface after dismissal.
 Unknown commands use the Command help/error panel. Session mutations, turn
 cancellation, clipboard actions, compaction, summaries, sync and upgrades are
 immediate actions; opening a result/help panel never delays their execution.
+Prompt templates are read fresh from `<workspace>/.rustcode/commands` and
+`<config dir>/commands`; workspace files override user files with the same
+name. User command files are included in config sync, while workspace files
+stay with the project.
 The desktop controller has its own smaller native command parser; this audit
 covers the terminal frontend registry.
 

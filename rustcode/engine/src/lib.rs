@@ -17,6 +17,7 @@ mod memory;
 pub mod network;
 mod notifications;
 mod platform;
+pub mod prompt_commands;
 pub mod raw_cli;
 pub mod serve;
 pub mod shell_env;
