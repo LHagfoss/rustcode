@@ -1153,9 +1153,21 @@ pub(super) fn render_composer_footer(
     let location = footer_location(state);
     let hint_clauses = footer_hint_clauses(popup_hint, selection_active);
     let (left_content, left_style, hint_clauses) = if state.ctrl_c_exit_armed() {
-        // A second Ctrl+C is a pending exit, which outranks every hint.
+        // A second Ctrl+C is a pending exit, which outranks every hint. The
+        // same press may also have copied a selection, so keep that answer
+        // visible rather than letting the exit hint swallow it.
+        let copied = state
+            .transient_notice()
+            .is_some_and(|notice| notice.starts_with("Copied") || notice.starts_with("Copy "));
         (
-            "  ⚠ Press Ctrl+C again to exit".to_owned(),
+            if copied {
+                format!(
+                    "  {} · ⚠ Press Ctrl+C again to exit",
+                    state.transient_notice().unwrap_or_default()
+                )
+            } else {
+                "  ⚠ Press Ctrl+C again to exit".to_owned()
+            },
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
             None,
         )
