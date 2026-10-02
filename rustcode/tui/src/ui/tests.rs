@@ -9059,3 +9059,38 @@ fn slash_popup_is_flush_with_composer_when_tools_are_expanded() {
         "only composer top padding belongs between picker and input: {rendered}"
     );
 }
+
+#[test]
+fn streaming_timer_only_tick_keeps_frame_stable() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    state.status = AppStatus::Streaming;
+    set_current_response(&mut state, "streamed output");
+    // Reuse one TranscriptState across ticks so committed caches stay warm,
+    // exactly as the runtime does between 16ms frames.
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+    let before = terminal.backend().buffer().clone();
+    let scroll_before = transcript.scroll_rows();
+    // Identical content on the next tick (only wall-clock advanced in prod;
+    // shimmer/spinner are frozen under cfg(test)) must repaint identically
+    // with no scroll jitter.
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+    assert_eq!(before, *terminal.backend().buffer());
+    assert_eq!(scroll_before, transcript.scroll_rows());
+}
