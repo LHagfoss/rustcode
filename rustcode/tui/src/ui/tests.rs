@@ -568,7 +568,43 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
 }
 
 #[test]
-fn working_status_is_fixed_below_the_composer() {
+fn working_indicator_lives_in_the_chat_not_below_the_composer() {
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    // Prior turns keep the welcome banner out of the projection, so the chat
+    // has a genuinely spare trailing row for the indicator.
+    state.history.push(ChatMessage::new("user", "hello"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "earlier answer"));
+    set_current_response(&mut state, "streamed output");
+    let mut transcript = TranscriptState::default();
+    let (rendered, input_area) =
+        render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 60, 30);
+    let rows = rendered.lines().collect::<Vec<_>>();
+
+    // No status row below the composer any more.
+    let below_composer = input_area.bottom() as usize;
+    assert!(
+        !rows[below_composer]
+            .chars()
+            .any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)),
+        "spinner must not render below the composer: {rendered:?}"
+    );
+    assert_eq!(rendered.matches("Working").count(), 0);
+
+    // The chat carries the running indicator instead.
+    let chat_rows = &rows[..input_area.y as usize];
+    assert!(
+        chat_rows.iter().any(|row| row.contains(&state.model_name)),
+        "the chat must carry the running indicator: {rendered:?}"
+    );
+}
+
+#[test]
+fn a_full_chat_needs_no_running_indicator() {
+    // Streaming text that fills the viewport is its own signal; the indicator
+    // only claims a spare row so nothing reflows.
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.history.push(ChatMessage::new("user", "hello"));
@@ -582,16 +618,14 @@ fn working_status_is_fixed_below_the_composer() {
     let mut transcript = TranscriptState::default();
     let (rendered, input_area) =
         render_state_to_text_with_transcript_and_composer_area(&mut state, &mut transcript, 50, 12);
-    let status_y = input_area.bottom() as usize;
-    let rows = rendered.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
-    assert_eq!(rendered.matches("Working").count(), 0);
-
-    transcript.scroll_up(4);
-    let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 50, 12);
-    let rows = scrolled.lines().collect::<Vec<_>>();
-    assert!(rows[status_y].chars().any(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)));
-    assert_eq!(scrolled.matches("Working").count(), 0);
+    let chat_rows = rendered
+        .lines()
+        .take(input_area.y as usize)
+        .collect::<Vec<_>>();
+    assert!(
+        !chat_rows.iter().any(|row| row.contains(&state.model_name)),
+        "a full chat must not gain a duplicate model row: {rendered:?}"
+    );
 }
 
 #[test]
@@ -2333,6 +2367,33 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
 
 /// Copy feedback is the answer to the key that was just pressed, so it holds
 /// the footer while it lasts and the hint returns behind it (#1542).
+#[test]
+#[test]
+fn a_panel_still_shows_the_copy_notice_in_the_footer() {
+    // Marking text inside an open slash-command panel used to hide the footer
+    // entirely, so the copy result was never reported.
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.input_buffer = "/ver".to_owned();
+    state.show_command_picker = true;
+    assert!(
+        !super::composer_footer_visible(&render_snapshot(&state)),
+        "a panel hides the standing metadata by default"
+    );
+
+    state.transient_notice = Some("Copied selection to clipboard".to_owned());
+    assert!(
+        super::composer_footer_visible(&render_snapshot(&state)),
+        "a one-shot notice must survive an open panel"
+    );
+
+    let rendered = render_state_to_text(&mut state, 90, 24);
+    assert!(
+        rendered.contains("Copied selection to clipboard"),
+        "{rendered}"
+    );
+}
+
 #[test]
 fn copy_feedback_notice_holds_the_footer_until_it_expires() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
@@ -7425,13 +7486,40 @@ fn live_tail_uses_formatted_working_status() {
 }
 
 #[test]
-fn live_tail_includes_working_status_with_trailing_gap() {
+fn live_tail_shows_only_the_running_indicator_when_nothing_has_been_produced() {
+    // A running turn with no text, no tools and no history must still show
+    // that work is happening instead of an empty chat (#1626 feedback).
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
 
-    let lines = super::render_live_tail(&state, 80, 24);
+    let mut transcript = TranscriptState::default();
+    let mut terminal =
+        crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, 12))
+            .unwrap();
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
 
-    assert!(lines.is_empty());
+    let rows = (0..12)
+        .map(|y| {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let indicator = rows
+        .iter()
+        .find(|row| row.contains(&state.model_name))
+        .unwrap_or_else(|| panic!("a running turn must show its model: {rows:?}"));
+    assert!(
+        indicator.trim_start().starts_with('•'),
+        "indicator must lead with the spinner: {indicator:?}"
+    );
 }
 
 #[test]
@@ -8966,17 +9054,19 @@ fn generated_recap_shows_next_action_and_stays_bounded_at_narrow_widths() {
 }
 
 #[test]
-fn footer_shows_only_spinner_immediately_before_model() {
+fn footer_shows_the_model_without_a_running_indicator() {
+    // The running indicator moved to the bottom of the chat, so the footer is
+    // model + workspace only — no status words, spinner, or queue markers.
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    for (status, label) in [
-        (AppStatus::Idle, None),
-        (AppStatus::Streaming, Some("•")),
-        (AppStatus::Queued, Some("•")),
-        (AppStatus::AwaitingQuestion, None),
-        (AppStatus::AwaitingToolConfirmation, None),
+    for status in [
+        AppStatus::Idle,
+        AppStatus::Streaming,
+        AppStatus::Queued,
+        AppStatus::AwaitingQuestion,
+        AppStatus::AwaitingToolConfirmation,
     ] {
         let mut state = RenderState::new();
-        state.status = status;
+        state.status = status.clone();
         state.config.reduced_motion = true;
         let snapshot = render_snapshot(&state);
         let model = snapshot.model_name().to_string();
@@ -8991,12 +9081,14 @@ fn footer_shows_only_spinner_immediately_before_model() {
         let row = (0..160)
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect::<String>();
-        if let Some(label) = label {
-            assert!(row.contains(&format!("{label} · {model}")), "{row}");
-        } else {
+        assert!(
+            row.contains(&model),
+            "{status:?} must keep the model: {row}"
+        );
+        for unwanted in ["•", "◦", "⠋", "⠙", "⠹", "Working", "Queued", "Waiting"] {
             assert!(
-                !row.contains("Working") && !row.contains("Waiting") && !row.contains("Queued"),
-                "{row}"
+                !row.contains(unwanted),
+                "{status:?} leaked {unwanted}: {row}"
             );
         }
         assert!(
@@ -9007,7 +9099,86 @@ fn footer_shows_only_spinner_immediately_before_model() {
 }
 
 #[test]
-fn reduced_motion_footer_spinner_is_static_and_live_tools_are_hidden() {
+fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for status in [AppStatus::Streaming, AppStatus::Queued] {
+        let mut state = RenderState::new();
+        state.status = status.clone();
+        state.config.reduced_motion = true;
+        state.history.push(ChatMessage::new("user", "hello"));
+        let snapshot = render_snapshot(&state);
+        let model = snapshot.model_name().to_string();
+        let mut transcript = TranscriptState::default();
+        let mut terminal =
+            crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, 12))
+                .unwrap();
+        terminal
+            .draw(|frame| {
+                let snapshot = render_snapshot(&state);
+                let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+            })
+            .unwrap();
+        let rows = (0..12)
+            .map(|y| {
+                (0..80)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let indicator = rows
+            .iter()
+            .find(|row| row.contains(&model))
+            .unwrap_or_else(|| panic!("{status:?} must show the model in the chat: {rows:?}"));
+        assert!(
+            indicator.trim_start().starts_with('•'),
+            "{status:?} indicator must lead with the spinner: {indicator:?}"
+        );
+        // Deliberately plain: no status words or elapsed clocks.
+        for unwanted in ["Working", "Queued", "Waiting", "Tokens/s"] {
+            assert!(
+                !indicator.contains(unwanted),
+                "{status:?} indicator leaked {unwanted}: {indicator:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn idle_chat_shows_no_running_indicator() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.config.reduced_motion = true;
+    state.history.push(ChatMessage::new("user", "hello"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "done already"));
+    let snapshot = render_snapshot(&state);
+    let model = snapshot.model_name().to_string();
+    let mut transcript = TranscriptState::default();
+    let mut terminal =
+        crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, 12))
+            .unwrap();
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+    let chat_rows = (0..9)
+        .map(|y| {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !chat_rows.iter().any(|row| row.contains(&model)),
+        "idle chat must not show a running indicator: {chat_rows:?}"
+    );
+}
+
+#[test]
+fn reduced_motion_chat_indicator_is_static_and_live_tools_are_hidden() {
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
@@ -9024,11 +9195,33 @@ fn reduced_motion_footer_spinner_is_static_and_live_tools_are_hidden() {
     );
     let text = render_state_to_text(&mut state, 100, 20);
     assert!(text.contains("visible assistant text"));
-    assert!(text.contains("• ·"));
+    // A full chat needs no indicator row: the streaming text is the signal.
+    // (Dedicated tests cover the indicator in a chat with spare room.)
     assert!(!text.contains("Working"));
     assert!(!text.contains("secret command"));
     assert!(!text.contains("Running"));
     assert!(!text.contains("Queued"));
+}
+
+#[test]
+fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    let snapshot = render_snapshot(&state);
+    let indicator =
+        super::live_running_indicator(&snapshot).expect("a running turn has an indicator");
+    let text = indicator
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(text, format!("• {}", snapshot.model_name()), "{text}");
+    assert!(
+        !text.contains('⠋'),
+        "reduced motion must not animate: {text}"
+    );
 }
 
 #[test]
