@@ -831,10 +831,8 @@ fn mcp_per_server_cap_prevents_one_heavy_server_starving_the_rest() {
             &[],
             ToolSchemaPhase::Established,
         );
-    let names: std::collections::HashSet<&str> = selected
-        .iter()
-        .map(|i| tools[*i].0.as_str())
-        .collect();
+    let names: std::collections::HashSet<&str> =
+        selected.iter().map(|i| tools[*i].0.as_str()).collect();
     assert!(
         names.iter().any(|n| n.starts_with("light_tool_")),
         "light server must survive heavy server pressure: {names:?}"
