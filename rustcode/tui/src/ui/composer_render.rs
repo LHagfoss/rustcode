@@ -1156,17 +1156,15 @@ pub(super) fn render_composer_footer(
         if let Some(agent) = state.selected_subagent() {
             metadata.push(agent.name().to_string());
         }
-        let status = match state.status() {
-            AppStatus::AwaitingToolConfirmation | AppStatus::AwaitingQuestion => Some("Waiting"),
-            AppStatus::Queued => Some("Queued"),
-            AppStatus::Streaming => Some("Working"),
-            _ if !state.running_tools().is_empty() || !state.background_tasks().is_empty() => {
-                Some("Working")
-            }
-            _ => None,
-        };
-        if let Some(status) = status {
-            metadata.push(status.to_string());
+        let active = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
+            || !state.running_tools().is_empty()
+            || !state.background_tasks().is_empty();
+        if active {
+            metadata.push(if state.config().reduced_motion {
+                "•".to_string()
+            } else {
+                background_spinner_frame().to_string()
+            });
         }
         metadata.push(state.model_name().to_string());
         metadata.push(location);
