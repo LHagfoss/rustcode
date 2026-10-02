@@ -3348,11 +3348,7 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
             "expanded output preserves status {index}: {expanded:?}"
         );
     }
-    assert!(
-        !expanded
-            .iter()
-            .any(|line| line.contains("(ctrl+o all"))
-    );
+    assert!(!expanded.iter().any(|line| line.contains("(ctrl+o all")));
 }
 
 #[test]
@@ -3393,9 +3389,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         "exit status stays: {rendered:?}"
     );
     assert!(
-        !rendered
-            .iter()
-            .any(|line| line.contains("(ctrl+o all")),
+        !rendered.iter().any(|line| line.contains("(ctrl+o all")),
         "fully visible shell output needs no expansion hint: {rendered:?}"
     );
     assert!(
@@ -3589,11 +3583,7 @@ fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("(ctrl+o all"))
-    );
+    assert!(rendered.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(rendered.iter().any(|line| line.contains("homo line 0")));
     assert!(rendered.iter().any(|line| line.contains("homo line 19")));
     assert!(
@@ -4492,9 +4482,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
         "each homogeneous command keeps its own summary: {rendered:?}"
     );
     assert!(
-        !rendered
-            .iter()
-            .any(|line| line.contains("(ctrl+o all")),
+        !rendered.iter().any(|line| line.contains("(ctrl+o all")),
         "fully visible commands need no expansion hints: {rendered:?}"
     );
 }
