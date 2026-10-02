@@ -794,6 +794,55 @@ fn mcp_schema_selection_enforces_a_measured_schema_byte_budget() {
 }
 
 #[test]
+fn mcp_per_server_cap_prevents_one_heavy_server_starving_the_rest() {
+    use super::schema::MAX_MCP_PER_SERVER_SCHEMA_BYTES;
+    // One heavy server with large descriptions vs one light server; both
+    // relevant. Without per-server fairness the heavy server consumes the
+    // whole budget and the light server is dropped (#1633).
+    let heavy_desc = "x".repeat(MAX_MCP_PER_SERVER_SCHEMA_BYTES);
+    let mut tools = Vec::new();
+    let mut owners = Vec::new();
+    for i in 0..6 {
+        tools.push((
+            format!("heavy_tool_{i}"),
+            format!("heavy relevant {heavy_desc}"),
+            serde_json::json!({"type":"object","properties":{}}),
+        ));
+        owners.push("heavy".to_string());
+    }
+    for i in 0..4 {
+        tools.push((
+            format!("light_tool_{i}"),
+            "light relevant tool".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ));
+        owners.push("light".to_string());
+    }
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "heavy relevant light relevant"
+    })];
+    let (selected, stats) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &[],
+            &messages,
+            &[],
+            ToolSchemaPhase::Established,
+        );
+    let names: std::collections::HashSet<&str> = selected
+        .iter()
+        .map(|i| tools[*i].0.as_str())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("light_tool_")),
+        "light server must survive heavy server pressure: {names:?}"
+    );
+    assert!(stats.mcp_schema_bytes <= stats.mcp_schema_budget_bytes);
+}
+
+#[test]
 fn mcp_always_include_reserves_a_complete_server_toolset_within_the_native_cap() {
     let mut tools = Vec::new();
     let mut owners = Vec::new();
