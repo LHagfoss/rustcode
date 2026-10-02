@@ -1575,6 +1575,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 .await;
         native_tool_schemas = schemas;
         tools_notice = crate::tools::withheld_tools_notice(&selection);
+        // Surface failed MCP servers up front so the agent does not burn
+        // rounds retrying tools that never started (#1633).
+        if let Some(startup) = crate::tools::mcp_startup_notice() {
+            tools_notice = Some(match tools_notice {
+                Some(existing) => format!("{existing}\n{startup}"),
+                None => startup,
+            });
+        }
         if let Some(notice) = tools_notice.as_deref() {
             messages::append_to_context_tail(&mut msgs, notice);
         }
