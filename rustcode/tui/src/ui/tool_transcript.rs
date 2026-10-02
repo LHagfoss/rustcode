@@ -847,8 +847,8 @@ pub(super) fn tool_transcript_entry(
     } else {
         tool_result_action(state, message_index, &tool_name)
     };
-    let (success, status) = tool_result_status(message, &tool_name, result);
-    let edit_diff = if kind == ToolTranscriptKind::Edit && success {
+    let (success, mut status) = tool_result_status(message, &tool_name, result);
+    let edit_diff = if kind == ToolTranscriptKind::Edit && success && !edit_result_is_noop(result) {
         message
             .diff
             .as_deref()
@@ -858,6 +858,8 @@ pub(super) fn tool_transcript_entry(
         None
     };
     let diff_counts = edit_diff.and_then(edit_diff_counts);
+    // Only command output and file diffs expose tool payloads. Human answers
+    // remain available because they belong to the conversation.
     let mut body = if let Some(diff) = edit_diff {
         render_file_edit_diff_for_path(
             diff,
@@ -865,9 +867,7 @@ pub(super) fn tool_transcript_entry(
             usize::from(width).saturating_sub(4),
             show_picker,
         )
-    } else if kind == ToolTranscriptKind::Edit {
-        Vec::new()
-    } else {
+    } else if kind == ToolTranscriptKind::Command || tool_name == "ask_question" {
         cached_tool_result(
             &tool_name,
             result,
@@ -875,7 +875,12 @@ pub(super) fn tool_transcript_entry(
             &state.verbosity(),
             show_picker,
         )
+    } else {
+        Vec::new()
     };
+    if kind == ToolTranscriptKind::Edit && success && edit_result_is_noop(result) {
+        status = "no changes".to_owned();
+    }
     // Write/edit calls whose result carries no embedded diff (e.g.
     // `write_to_file` reports only `wrote 'path' (N lines, M bytes)`) still
     // need their changed lines at low verbosity (#1567). Synthesize an
@@ -888,7 +893,6 @@ pub(super) fn tool_transcript_entry(
         && !edit_diff_unavailable(result)
         && edit_diff.is_none()
         && !result_has_embedded_diff(result)
-        && body.len() <= 1
     {
         let args = tool_call_arguments(state, message_index, &tool_name);
         let preview = synthesized_edit_preview(
@@ -1076,6 +1080,12 @@ pub(super) fn tool_child_line(
     if let Some((added, removed)) = entry.diff_counts {
         spans.push(Span::styled(
             format!(" (+{added} -{removed})"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+    if !entry.success || entry.status == "running" || entry.status == "no changes" {
+        spans.push(Span::styled(
+            format!(" · {}", entry.status),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }

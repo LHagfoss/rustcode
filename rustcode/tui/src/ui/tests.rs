@@ -2704,7 +2704,10 @@ fn ask_question_renders_prompt_and_answer_in_committed_history() {
         }]),
     );
     state.history.push(
-        ChatMessage::new("tool", "ask_question: User selected: Releases API")
+        ChatMessage::new(
+            "tool",
+            "ask_question: User selected: Releases API is the source, and it should include all data from the organization's release record without synthesizing a separate summary; preserve the full response.",
+        )
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
                 tool_name: "ask_question".to_owned(),
@@ -2734,6 +2737,16 @@ fn ask_question_renders_prompt_and_answer_in_committed_history() {
         entry.target.contains("Releases API"),
         "answer missing from headline: {}",
         entry.target
+    );
+    let full_answer = entry
+        .body
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        full_answer.contains("preserve the full response"),
+        "expanded body retains the full human answer: {full_answer:?}"
     );
 
     let rendered = super::render_committed_history_block(&state, 1, 80)
@@ -3208,7 +3221,7 @@ fn high_verbosity_hides_generic_tool_details() {
 }
 
 #[test]
-fn high_verbosity_collapses_tool_output_without_mutating_history() {
+fn generic_tool_output_is_hidden_at_every_verbosity_without_mutating_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3247,17 +3260,17 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
         .collect::<Vec<_>>();
 
     assert!(!low.iter().any(|line| line.contains("line 25")));
-    assert!(low.iter().any(|line| line.contains("line 49")));
+    assert!(!low.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("… +31 lines")));
     assert!(!high.iter().any(|line| line.contains("line 25")));
-    assert!(low.iter().any(|line| line.contains("(ctrl+o all")));
+    assert!(!low.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(!high.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(state.history == history);
 }
 
 #[test]
-fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
+fn low_verbosity_generic_output_stays_hidden_when_expanded() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3280,35 +3293,25 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
             }),
     );
 
-    // Short collapsed generic bodies render without a hint; expanding preserves a
-    // wrapped, guttered block that fits narrow widths (#1568).
+    // Generic result bodies stay hidden even if an old expansion index is
+    // present in the view state.
     let collapsed = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(collapsed.len(), 3);
+    assert_eq!(collapsed.len(), 2);
     assert_eq!(collapsed[0], "• Ran");
     assert!(
         collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("(ctrl+o all"),
-        "short generic output needs no expansion hint: {collapsed:?}"
+        "generic action remains without an expansion hint: {collapsed:?}"
     );
 
     state.expanded_thoughts.insert(1);
-    let width = 30u16;
-    let expanded = super::render_committed_tool_result_group(&state, &[1], width, false);
-    assert!(
-        expanded
-            .iter()
-            .map(|line| line.to_string())
-            .any(|text| text.contains("result line")),
-        "expanded body keeps the output: {expanded:?}"
-    );
-    for line in &expanded {
-        assert!(
-            line.to_string().chars().count() <= width as usize + 8,
-            "narrow generic body wraps: {line:?}"
-        );
-    }
+    let expanded = super::render_committed_tool_result_group(&state, &[1], 30, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(!expanded.iter().any(|line| line.contains("result line")));
 }
 
 #[test]
@@ -3545,7 +3548,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
 }
 
 #[test]
-fn low_verbosity_long_generic_body_renders_full_when_expanded() {
+fn low_verbosity_long_generic_body_stays_hidden_when_expanded() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3576,16 +3579,8 @@ fn low_verbosity_long_generic_body_renders_full_when_expanded() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    // Expanded bodies render in full (#1580): every line present, no
-    // omission marker.
-    for i in 0..50 {
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains(&format!("line {i}"))),
-            "line {i} present when expanded: {rendered:?}"
-        );
-    }
+    assert!(!rendered.iter().any(|line| line.contains("line 0")));
+    assert!(!rendered.iter().any(|line| line.contains("line 49")));
     assert!(
         !rendered
             .iter()
@@ -3779,6 +3774,108 @@ fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
     assert!(rendered.contains("Wrote"), "{rendered}");
     assert!(rendered.contains("src/new.rs"), "{rendered}");
     assert!(rendered.contains("pub fn new"), "{rendered}");
+}
+
+#[test]
+fn low_verbosity_frame_shows_only_bash_output_and_edit_diffs() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    let calls = [
+        (
+            "call-read",
+            "view_file",
+            r#"{"TargetFile":"src/read.rs"}"#,
+            "view_file: read-payload-marker",
+        ),
+        (
+            "call-mcp",
+            "mcp_custom_tool",
+            r#"{"query":"lookup"}"#,
+            "mcp_custom_tool: mcp-payload-marker",
+        ),
+        (
+            "call-skill",
+            "use_skill",
+            r#"{"name":"test-skill"}"#,
+            "use_skill: skill-payload-marker",
+        ),
+        (
+            "call-bash",
+            "run_command",
+            r#"{"command":"printf bash-output-marker"}"#,
+            "run_command: exit code: 0\nbash-output-marker",
+        ),
+        (
+            "call-edit",
+            "write_to_file",
+            r#"{"path":"src/added.rs","content":"edit-diff-marker"}"#,
+            "write_to_file: wrote 'src/added.rs' (1 lines, 15 bytes)",
+        ),
+    ];
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(
+            calls
+                .iter()
+                .map(|(id, name, arguments, _)| ToolCallRef {
+                    id: (*id).to_owned(),
+                    name: (*name).to_owned(),
+                    arguments: (*arguments).to_owned(),
+                })
+                .collect(),
+        ),
+    );
+    for (id, name, _, result) in &calls {
+        let mut record = ToolResultRecord {
+            tool_name: (*name).to_owned(),
+            success: true,
+            ..Default::default()
+        };
+        if *name == "write_to_file" {
+            record.changed_paths = vec!["src/added.rs".to_owned()];
+        }
+        if *name == "mcp_custom_tool" {
+            record.success = false;
+        }
+        state.history.push(
+            ChatMessage::new("tool", *result)
+                .answering(Some((*id).to_owned()))
+                .with_tool_result(record),
+        );
+    }
+
+    let assert_no_hidden_payloads = |rendered: &str| {
+        assert!(!rendered.contains("read-payload-marker"), "{rendered}");
+        assert!(!rendered.contains("mcp-payload-marker"), "{rendered}");
+        assert!(!rendered.contains("skill-payload-marker"), "{rendered}");
+        assert!(!rendered.contains("specific_error_marker"), "{rendered}");
+        assert!(
+            rendered.contains("failed"),
+            "failure status stays visible: {rendered}"
+        );
+    };
+
+    state.verbosity = Verbosity::High;
+    let high = render_state_to_text(&mut state, 100, 40);
+    assert_no_hidden_payloads(&high);
+    // The command invocation remains visible at high verbosity.
+    assert!(!high.contains("edit-diff-marker"), "{high}");
+
+    state.verbosity = Verbosity::Low;
+    let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 100);
+    assert_eq!(candidates, [4, 5], "only Bash and edit bodies expand");
+
+    let collapsed = render_state_to_text(&mut state, 100, 40);
+    assert_no_hidden_payloads(&collapsed);
+    assert!(collapsed.contains("bash-output-marker"), "{collapsed}");
+    assert!(collapsed.contains("edit-diff-marker"), "{collapsed}");
+
+    state.expanded_thoughts.extend(candidates);
+    let expanded = render_state_to_text(&mut state, 100, 40);
+    assert_no_hidden_payloads(&expanded);
+    assert!(expanded.contains("bash-output-marker"), "{expanded}");
+    assert!(expanded.contains("edit-diff-marker"), "{expanded}");
 }
 
 #[test]
@@ -4367,7 +4464,7 @@ fn command_preview_preserves_the_output_tail() {
 }
 
 #[test]
-fn expanded_generic_tool_preserves_its_result_body() {
+fn expanded_generic_tool_preserves_only_its_action_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4400,8 +4497,14 @@ fn expanded_generic_tool_preserves_its_result_body() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("first result")));
-    assert!(rendered.iter().any(|line| line.contains("second result")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("CustomLookup query=\"renderer\"")),
+        "the compact generic action row remains: {rendered:?}"
+    );
+    assert!(!rendered.iter().any(|line| line.contains("first result")));
+    assert!(!rendered.iter().any(|line| line.contains("second result")));
 }
 
 #[test]
@@ -4466,7 +4569,6 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
             "  └ Bash git status --short",
             "  └   │ M src/main.rs",
             "    GetTime",
-            "      │ Thursday, 08:30",
         ],
         "each hint stays on the row of the entry it expands: {rendered:?}"
     );
@@ -4543,7 +4645,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
             .collect::<Vec<_>>()
     };
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1, 2], "both tool rows are collapsible");
+    assert_eq!(candidates, [1], "only the command body is collapsible");
     assert!(
         render(&state)
             .iter()
@@ -4560,18 +4662,18 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         &mut focus,
         &candidates,
     );
-    assert_eq!(outcome, ExpandOutcome::Expanded(2));
+    assert_eq!(outcome, ExpandOutcome::Expanded(1));
     assert_eq!(notice, "Expanded tool output");
-    assert_eq!(focus, Some(2));
+    assert_eq!(focus, Some(1));
     let expanded = render(&state);
     assert!(
-        expanded.iter().any(|line| line.contains("Thursday, 08:30")),
-        "the expanded body renders inline: {expanded:?}"
+        expanded.iter().any(|line| line.contains("M src/main.rs")),
+        "the expanded command body renders inline: {expanded:?}"
     );
     assert!(
         !expanded
             .iter()
-            .any(|line| line.contains("GetTime") && line.contains("(ctrl+o all")),
+            .any(|line| line.contains("Bash") && line.contains("(ctrl+o all")),
         "an expanded row drops the hint it carried while collapsed: {expanded:?}"
     );
 
@@ -4584,7 +4686,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     assert!(
         render(&state)
             .iter()
-            .any(|line| line.contains("Thursday, 08:30")),
+            .any(|line| line.contains("M src/main.rs")),
         "expansion survives new output and scrolling"
     );
 
@@ -4595,7 +4697,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     );
     assert_eq!(
         outcome,
-        ExpandOutcome::Collapsed(2),
+        ExpandOutcome::Collapsed(1),
         "a second press collapses what the first expanded"
     );
     assert_eq!(notice, "Collapsed tool output");
@@ -4604,7 +4706,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     assert!(
         render(&state)
             .iter()
-            .any(|line| line.contains("Thursday, 08:30")),
+            .any(|line| line.contains("M src/main.rs")),
         "collapsing retains the bounded visible preview: {:?}",
         render(&state)
     );
@@ -4677,7 +4779,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
 }
 
 #[test]
-fn later_command_only_group_is_independently_expandable_after_generic() {
+fn later_command_only_group_is_independently_expandable_after_edit() {
     use rustcode::controller::{
         ChatMessage, ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity,
     };
@@ -4687,18 +4789,22 @@ fn later_command_only_group_is_independently_expandable_after_generic() {
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
-            name: "get_time".to_owned(),
-            arguments: "{}".to_owned(),
+            name: "write_to_file".to_owned(),
+            arguments: r#"{"path":"src/earlier.rs","content":"fn earlier() {\n}"}"#.to_owned(),
         }]),
     );
     state.history.push(
-        ChatMessage::new("tool", "get_time: Thursday, 08:30")
-            .answering(Some("call-1".to_owned()))
-            .with_tool_result(ToolResultRecord {
-                tool_name: "get_time".to_owned(),
-                success: true,
-                ..Default::default()
-            }),
+        ChatMessage::new(
+            "tool",
+            "write_to_file: wrote 'src/earlier.rs' (1 lines, 14 bytes)",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "write_to_file".to_owned(),
+            success: true,
+            changed_paths: vec!["src/earlier.rs".to_owned()],
+            ..Default::default()
+        }),
     );
     state.history.push(ChatMessage::new("user", "and then?"));
     state.history.push(
@@ -4719,8 +4825,9 @@ fn later_command_only_group_is_independently_expandable_after_generic() {
             }),
     );
 
-    // Both are candidates, and the existing no-focus rule targets the newest
-    // one. A focused generic entry remains independently addressable.
+    // Both edit and command bodies are candidates, and the existing no-focus
+    // rule targets the newest one. The earlier edit remains independently
+    // addressable.
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1, 4], "candidate ordering is stable");
 
@@ -4783,10 +4890,10 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
             }),
     );
 
-    // In a mixed batch the command shares the collapsed group, so both rows
-    // stay expand candidates and both carry hints (#1563).
+    // The command remains expandable in a mixed batch; hidden generic output
+    // offers no expansion candidate.
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1, 2]);
+    assert_eq!(candidates, [1]);
     let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -6603,6 +6710,80 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
         rendered.len() <= 7,
         "live output must fit a five-row body below its two-row header: {rendered:?}"
     );
+}
+
+#[test]
+fn live_tool_output_shows_bash_only_at_low_verbosity() {
+    use rustcode::controller::{LiveToolCall, LiveToolOutputChunk, Verbosity};
+
+    for (name, action, target, payload, shown_at_low) in [
+        (
+            "run_command",
+            "Bash",
+            "printf output",
+            "live-bash-payload",
+            true,
+        ),
+        (
+            "view_file",
+            "Read",
+            "src/main.rs",
+            "live-read-payload",
+            false,
+        ),
+        (
+            "mcp_custom_tool",
+            "Lookup",
+            "query",
+            "live-mcp-payload",
+            false,
+        ),
+        (
+            "use_skill",
+            "UseSkill",
+            "release-automation",
+            "live-skill-payload",
+            false,
+        ),
+    ] {
+        let mut call = LiveToolCall::new("live:1", None, name, action, target);
+        call.execution_started = true;
+        call.output.push_back(LiveToolOutputChunk {
+            stderr: false,
+            text: payload.to_owned(),
+        });
+
+        let low = super::history_cell::render_live_tool_cell_with_verbosity(
+            &[call.clone()],
+            80,
+            &Verbosity::Low,
+            false,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert_eq!(
+            low.contains(payload),
+            shown_at_low,
+            "low verbosity output for {name}: {low}"
+        );
+
+        let high = super::history_cell::render_live_tool_cell_with_verbosity(
+            &[call],
+            80,
+            &Verbosity::High,
+            false,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            !high.contains(payload),
+            "high verbosity output for {name}: {high}"
+        );
+    }
 }
 
 #[test]
@@ -9055,6 +9236,14 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = state_with_a_scrollable_transcript();
     state.verbosity = Verbosity::Low;
+    // Only commands and edit diffs expose expandable tool bodies.
+    let call = &mut state.history[24].tool_calls[0];
+    call.name = "run_command".to_owned();
+    call.arguments = r#"{"command":"seq 0 399"}"#.to_owned();
+    state.history[25].content = state.history[25]
+        .content
+        .replacen("get_time:", "run_command:", 1);
+    state.history[25].tool_result.as_mut().unwrap().tool_name = "run_command".to_owned();
     let mut transcript = TranscriptState::default();
 
     let collapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
@@ -9065,7 +9254,7 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     );
 
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [25], "the long generic body is the candidate");
+    assert_eq!(candidates, [25], "the long command body is the candidate");
     let mut expanded = std::collections::HashSet::new();
     let (outcome, _) = rustcode::controller::toggle_all_expanded_bodies(&mut expanded, &candidates);
     assert_eq!(outcome, ExpandOutcome::ExpandedAll { count: 1 });
@@ -9119,23 +9308,47 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
     state.verbosity = Verbosity::Low;
-    for (index, name) in ["get_time", "list_files", "get_dir"].iter().enumerate() {
+    let fixtures = [
+        (
+            "run_command",
+            r#"{"command":"printf first"}"#,
+            "run_command: exit code: 0\nstdout:\nfirst detail row",
+            None,
+        ),
+        (
+            "run_command",
+            r#"{"command":"printf second"}"#,
+            "run_command: exit code: 0\nstdout:\nsecond detail row",
+            None,
+        ),
+        (
+            "write_to_file",
+            r#"{"path":"src/added.rs","content":"fn added() {\n}"}"#,
+            "write_to_file: wrote 'src/added.rs' (1 lines, 14 bytes)",
+            Some("src/added.rs"),
+        ),
+    ];
+    for (index, (name, arguments, result, changed_path)) in fixtures.iter().enumerate() {
         let call = format!("call-{index}");
         state.history.push(
             ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
                 id: call.clone(),
                 name: (*name).to_owned(),
-                arguments: "{}".to_owned(),
+                arguments: (*arguments).to_owned(),
             }]),
         );
+        let mut record = ToolResultRecord {
+            tool_name: (*name).to_owned(),
+            success: true,
+            ..Default::default()
+        };
+        if let Some(path) = changed_path {
+            record.changed_paths = vec![(*path).to_owned()];
+        }
         state.history.push(
-            ChatMessage::new("tool", format!("{name}: detail row"))
+            ChatMessage::new("tool", *result)
                 .answering(Some(call))
-                .with_tool_result(ToolResultRecord {
-                    tool_name: (*name).to_owned(),
-                    success: true,
-                    ..Default::default()
-                }),
+                .with_tool_result(record),
         );
     }
     let mut transcript = TranscriptState::default();
@@ -9144,7 +9357,11 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     assert!(!collapsed.contains("expanded ·"), "{collapsed}");
 
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1, 3, 5], "every collapsed body is a candidate");
+    assert_eq!(
+        candidates,
+        [1, 3, 5],
+        "every command/edit body is a candidate"
+    );
     let (outcome, notice) =
         rustcode::controller::toggle_all_expanded_bodies(&mut state.expanded_thoughts, &candidates);
     assert_eq!(outcome, ExpandOutcome::ExpandedAll { count: 3 });

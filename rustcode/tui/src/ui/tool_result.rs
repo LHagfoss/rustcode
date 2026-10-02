@@ -214,6 +214,12 @@ fn render_file_edit_diff_with_language<'a>(
 
     for raw in diff.lines() {
         if let Some((old, new)) = parse_edit_hunk_header(raw) {
+            if inside_hunk {
+                rendered.push(Line::from(Span::styled(
+                    format!("{:>line_number_width$}", "⋮"),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                )));
+            }
             old_line = old;
             new_line = new;
             inside_hunk = true;
@@ -259,7 +265,8 @@ fn render_file_edit_diff_with_language<'a>(
             sign.to_string(),
             get_themed_style(color, diff_bg(sign), Modifier::BOLD, show_picker),
         ));
-        let code_spans: Vec<_> = highlight_code_line(code, language, show_picker)
+        let code = code.replace('\t', "    ");
+        let code_spans: Vec<_> = highlight_code_line(&code, language, show_picker)
             .into_iter()
             .map(|mut span| {
                 let foreground = span.style.fg.unwrap_or(color);
