@@ -143,3 +143,30 @@ fn fresh_submission_with_free_slot_is_not_a_stall() {
     state.generation_start_time = Some(Instant::now());
     assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
 }
+
+#[test]
+fn queued_prompt_after_idle_has_no_stale_clocks_to_trip_on() {
+    // Regression: turn-end left the previous turn's timestamps behind, so a
+    // prompt submitted after >5min idle looked stalled the instant it was
+    // queued (session 01a0fbf3). `enter_idle` must drop per-turn clocks.
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.generation_start_time =
+        Some(Instant::now() - Duration::from_secs(super::STALL_WATCHDOG_TIMEOUT_SECS + 60));
+    let mut tracker = super::super::StreamTracker::new();
+    tracker.last_update =
+        Instant::now() - Duration::from_secs(super::STALL_WATCHDOG_TIMEOUT_SECS + 60);
+    state.stream_tracker = Some(tracker);
+    state.enter_idle();
+    assert!(state.generation_start_time.is_none());
+    assert!(state.stream_tracker.is_none());
+
+    // The resulting shape — queued prompt, free slot, no clocks — is idle
+    // aftermath, not an orphaned queue.
+    state.status = AppStatus::Queued;
+    state
+        .pending_queue
+        .push("after ten idle minutes".to_string());
+    state.orchestrator_running = false;
+    assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
+}
