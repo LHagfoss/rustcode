@@ -54,7 +54,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
         (
             "High",
             rustcode::controller::Verbosity::High,
-            "Pure model text output (hides tool outputs & diffs)",
+            "Model text with file edit diffs",
         ),
     ];
 
