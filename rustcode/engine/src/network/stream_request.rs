@@ -114,6 +114,38 @@ fn apply_profile_generation_options(
     }
 }
 
+/// Attach auth headers to an outgoing provider request. `X-Api-Key` is
+/// strictly opt-in (`send_x_api_key = true` on the profile): gateways such as
+/// Splash reject any request carrying it alongside `Authorization`, even when
+/// the key itself is valid.
+pub(crate) fn apply_api_key_headers(
+    req: reqwest::RequestBuilder,
+    key: &str,
+    send_x_api_key: bool,
+) -> reqwest::RequestBuilder {
+    let req = req.header("Authorization", format!("Bearer {key}"));
+    if send_x_api_key {
+        req.header("X-Api-Key", key)
+    } else {
+        req
+    }
+}
+
+/// Send `frequency_penalty` only when the profile sets it. The historical
+/// injected 0.3 default is rejected by backends such as Splash as an
+/// unsupported output transformation.
+pub(crate) fn apply_frequency_penalty(
+    payload: &mut serde_json::Value,
+    profile: Option<&crate::config::ModelProfile>,
+    url: &str,
+) {
+    if !url.contains("generativelanguage.googleapis.com")
+        && let Some(penalty) = profile.and_then(|p| p.frequency_penalty)
+    {
+        payload["frequency_penalty"] = serde_json::json!(penalty);
+    }
+}
+
 fn apply_profile_sampling_options(
     payload: &mut serde_json::Value,
     profile: Option<&crate::config::ModelProfile>,
@@ -2665,6 +2697,77 @@ mod tests {
     }
 
     #[test]
+    fn api_key_headers_default_to_authorization_only() {
+        let req = apply_api_key_headers(
+            reqwest::Client::new().post("http://localhost/v1/chat/completions"),
+            "secret",
+            false,
+        )
+        .build()
+        .expect("test request builds");
+        assert_eq!(
+            req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer secret")
+        );
+        assert!(req.headers().get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn api_key_headers_include_x_api_key_when_profile_opts_in() {
+        let profile = crate::config::ModelProfile {
+            send_x_api_key: Some(true),
+            ..crate::config::ModelProfile::default()
+        };
+        let req = apply_api_key_headers(
+            reqwest::Client::new().post("http://localhost/v1/chat/completions"),
+            "secret",
+            profile.send_x_api_key_header(),
+        )
+        .build()
+        .expect("test request builds");
+        assert_eq!(
+            req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer secret")
+        );
+        assert_eq!(
+            req.headers().get("x-api-key").and_then(|v| v.to_str().ok()),
+            Some("secret")
+        );
+    }
+
+    #[test]
+    fn frequency_penalty_is_only_sent_when_configured() {
+        let url = "https://splash.paral.no/v1/chat/completions";
+        // Splash-like profile: no sampling overrides at all.
+        let plain = crate::config::ModelProfile::default();
+        let mut payload = serde_json::json!({});
+        apply_frequency_penalty(&mut payload, Some(&plain), url);
+        assert!(payload.get("frequency_penalty").is_none());
+
+        // `force_sampling = false` must not inject it either.
+        let no_sampling = crate::config::ModelProfile {
+            force_sampling: Some(false),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_frequency_penalty(&mut payload, Some(&no_sampling), url);
+        assert!(payload.get("frequency_penalty").is_none());
+
+        // An explicitly configured value is still sent.
+        let configured = crate::config::ModelProfile {
+            frequency_penalty: Some(0.3),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_frequency_penalty(&mut payload, Some(&configured), url);
+        assert_eq!(payload["frequency_penalty"], 0.3);
+    }
+
+    #[test]
     fn disabled_tools_omit_schema_and_tool_choice() {
         let mut payload = serde_json::json!({});
         let schema = vec![serde_json::json!({
@@ -3722,14 +3825,10 @@ async fn stream_request_with_timeouts(
         apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
         apply_profile_sampling_options(&mut payload, profile.as_ref());
 
-        if !url.contains("generativelanguage.googleapis.com") {
-            payload["frequency_penalty"] = serde_json::json!(
-                profile
-                    .as_ref()
-                    .and_then(|p| p.frequency_penalty)
-                    .unwrap_or(0.3)
-            );
-        }
+        // Only send `frequency_penalty` when the profile sets it: backends
+        // such as Splash reject the historical injected 0.3 default as an
+        // unsupported output transformation.
+        apply_frequency_penalty(&mut payload, profile.as_ref(), url);
         if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
             // A recovery turn may legitimately be the final answer for a
             // read-only task. Keep tools available, but do not require a tool call
@@ -4031,9 +4130,11 @@ async fn stream_request_with_timeouts(
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(request_payload_bytes.clone());
         if let Some(ref key) = api_key {
-            req = req
-                .header("Authorization", format!("Bearer {key}"))
-                .header("X-Api-Key", key);
+            req = apply_api_key_headers(
+                req,
+                key,
+                profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
+            );
         }
         let send_result = retry::race_cancellable(
             tokio::time::timeout(retry::HEADER_TIMEOUT, req.send()),
