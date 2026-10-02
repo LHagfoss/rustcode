@@ -680,6 +680,7 @@ fn sync_path_is_allowed(path: &str) -> bool {
     matches!(path, ".gitignore" | "config.toml")
         || path.starts_with("skills/")
         || path.starts_with("themes/")
+        || path.starts_with("commands/")
 }
 
 /// Remove already tracked runtime files from the sync index without deleting
@@ -739,7 +740,7 @@ pub(crate) fn untrack_non_sync_files(dir: &Path) -> Result<usize, String> {
 
 fn stage_sync_files(dir: &Path) -> Result<(), String> {
     let mut args = vec!["add", "-A", "--"];
-    for path in [".gitignore", "config.toml", "skills", "themes"] {
+    for path in [".gitignore", "config.toml", "skills", "themes", "commands"] {
         if dir.join(path).exists() {
             args.push(path);
         }
