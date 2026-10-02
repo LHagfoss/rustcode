@@ -1772,6 +1772,7 @@ Call `list_mcp_tools` for the live MCP server and tool names instead of guessing
         return p;
     }
 
+    p.push_str("For connected services (such as email), prefer their listed tools over guessed shell commands. Use `list_mcp_tools` to discover registered tools when needed.\n\n");
     p.push_str("Available tools:\n");
     for t in TOOLS {
         if !text_builtin_is_advertised(t, policy, agent_mode) {
