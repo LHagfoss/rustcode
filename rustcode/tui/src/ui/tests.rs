@@ -3191,8 +3191,8 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
     assert!(!high.iter().any(|line| line.contains("line 49")));
     assert!(!high.iter().any(|line| line.contains("… +31 lines")));
     assert!(!high.iter().any(|line| line.contains("line 25")));
-    assert!(low.iter().any(|line| line.contains("ctrl+o to expand")));
-    assert!(!high.iter().any(|line| line.contains("ctrl+o to expand")));
+    assert!(low.iter().any(|line| line.contains("(ctrl+o all")));
+    assert!(!high.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(state.history == history);
 }
 
@@ -3229,7 +3229,7 @@ fn low_verbosity_generic_output_stays_compact_and_wraps_narrow() {
     assert_eq!(collapsed.len(), 3);
     assert_eq!(collapsed[0], "• Ran");
     assert!(
-        collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("ctrl+o to expand"),
+        collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("(ctrl+o all"),
         "short generic output needs no expansion hint: {collapsed:?}"
     );
 
@@ -3321,7 +3321,7 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
         .collect::<Vec<_>>();
     assert!(!collapsed[0].contains("ctrl+o"), "{collapsed:?}");
     assert!(
-        collapsed.last().unwrap().contains("ctrl+o to expand"),
+        collapsed.last().unwrap().contains("(ctrl+o all"),
         "{collapsed:?}"
     );
     let body_start = collapsed
@@ -3351,7 +3351,7 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
     assert!(
         !expanded
             .iter()
-            .any(|line| line.contains("ctrl+o to expand"))
+            .any(|line| line.contains("(ctrl+o all"))
     );
 }
 
@@ -3395,7 +3395,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
     assert!(
         !rendered
             .iter()
-            .any(|line| line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("(ctrl+o all")),
         "fully visible shell output needs no expansion hint: {rendered:?}"
     );
     assert!(
@@ -3523,7 +3523,7 @@ fn expanded_command_body_renders_full_not_window() {
     assert!(
         collapsed
             .iter()
-            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("Bash") && line.contains("(ctrl+o all")),
         "collapsed command carries hint: {collapsed:?}"
     );
     assert!(
@@ -3592,7 +3592,7 @@ fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("ctrl+o to expand"))
+            .any(|line| line.contains("(ctrl+o all"))
     );
     assert!(rendered.iter().any(|line| line.contains("homo line 0")));
     assert!(rendered.iter().any(|line| line.contains("homo line 19")));
@@ -4272,7 +4272,7 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
     assert!(
         !rendered
             .iter()
-            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("Bash") && line.contains("(ctrl+o all")),
         "fully visible command needs no expansion hint: {rendered:?}"
     );
 
@@ -4310,7 +4310,7 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
     assert!(
         !expanded
             .iter()
-            .any(|line| line.contains("Bash") && line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("Bash") && line.contains("(ctrl+o all")),
         "an already expanded row must not advertise the expand hint: {expanded:?}"
     );
 }
@@ -4392,7 +4392,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     assert!(
         !expanded
             .iter()
-            .any(|line| line.contains("GetTime") && line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("GetTime") && line.contains("(ctrl+o all")),
         "an expanded row drops the hint it carried while collapsed: {expanded:?}"
     );
 
@@ -4494,7 +4494,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
     assert!(
         !rendered
             .iter()
-            .any(|line| line.contains("ctrl+o to expand")),
+            .any(|line| line.contains("(ctrl+o all")),
         "fully visible commands need no expansion hints: {rendered:?}"
     );
 }
@@ -8827,7 +8827,7 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     let mut transcript = TranscriptState::default();
 
     let collapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
-    assert!(collapsed.contains("ctrl+o to expand"), "{collapsed}");
+    assert!(collapsed.contains("(ctrl+o all"), "{collapsed}");
     assert!(
         !collapsed.contains("row 300"),
         "the collapsed window hides the body: {collapsed}"
@@ -8842,7 +8842,7 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
 
     let expanded = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
     assert!(
-        !expanded.contains("ctrl+o to expand"),
+        !expanded.contains("(ctrl+o all"),
         "an expanded row drops its hint: {expanded}"
     );
     assert!(
@@ -8924,7 +8924,7 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
         expanded.contains("3/3 expanded · ctrl+o all · ctrl+shift+o step"),
         "the whole-transcript state is visible while reading: {expanded}"
     );
-    assert!(!expanded.contains("ctrl+o to expand"), "{expanded}");
+    assert!(!expanded.contains("(ctrl+o all"), "{expanded}");
 
     let (outcome, _) =
         rustcode::controller::toggle_all_expanded_bodies(&mut state.expanded_thoughts, &candidates);
@@ -8932,7 +8932,7 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     assert!(state.expanded_thoughts.is_empty());
     let recollapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
     assert!(!recollapsed.contains("expanded ·"), "{recollapsed}");
-    assert!(!recollapsed.contains("ctrl+o to expand"), "{recollapsed}");
+    assert!(!recollapsed.contains("(ctrl+o all"), "{recollapsed}");
 }
 
 /// #1594: a selection releases follow, so pointing at a row is enough to keep
