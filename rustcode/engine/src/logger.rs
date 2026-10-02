@@ -884,9 +884,19 @@ pub fn install_panic_hook() {
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown location>".to_owned());
+            let thread = std::thread::current()
+                .name()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{:?}", std::thread::current().id()));
+            // Backtrace is critical evidence: without it a TUI render panic is
+            // indistinguishable from SIGKILL/OOM in session logs (#1631).
+            let backtrace = std::backtrace::Backtrace::capture().to_string();
+            let backtrace = backtrace.chars().take(4000).collect::<String>();
             // Never wait for a logger lock from the panic hook: a panic can
             // occur while the same thread is writing a log entry.
-            try_append_panic_line(&format!("[PANIC] {payload} at {location}"));
+            try_append_panic_line(&format!(
+                "[PANIC] {payload} at {location} thread={thread}\n{backtrace}"
+            ));
             previous(info);
         }));
     });
