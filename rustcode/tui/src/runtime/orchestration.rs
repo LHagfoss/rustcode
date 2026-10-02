@@ -301,7 +301,12 @@ impl AppRuntime {
             let should_draw = needs_redraw || frame_stream.try_next().is_some();
 
             if should_draw {
-                render_frame(RenderFrameContext {
+                // A render panic must never kill the agent process or leave the
+                // terminal tweaked (#1631). The panic hook already restores raw
+                // modes; here we catch the unwind, keep the turn alive, and
+                // surface a transient notice instead of dying mid-turn.
+                use futures_util::FutureExt as _;
+                let frame = std::panic::AssertUnwindSafe(render_frame(RenderFrameContext {
                     terminal_runtime: &mut terminal_runtime,
                     frame_requester: &frame_requester,
                     app_state: &app_state,
@@ -313,8 +318,27 @@ impl AppRuntime {
                     response_active,
                     response_just_finished,
                     last_progress_sent: &mut last_progress_sent,
-                })
-                .await?;
+                }))
+                .catch_unwind()
+                .await;
+                match frame {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e),
+                    Err(_) => {
+                        {
+                            let mut s = app_state.lock().await;
+                            s.set_transient_notice(
+                                "Render recovered from a panic; turn continues.",
+                            );
+                        }
+                        rustcode::logger::operational_event(
+                            "tui.render_recovery",
+                            serde_json::json!({"recovered": true}),
+                        );
+                        // Skip this frame; request a clean redraw next tick.
+                        frame_requester.schedule_frame();
+                    }
+                }
                 needs_redraw = false;
             }
 
