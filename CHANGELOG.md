@@ -1,3 +1,9 @@
+## [v0.56.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.5) - 2026-10-02
+
+### Fixes
+- Balance table column widths and use labeled records when a narrow terminal cannot fit a readable grid ([#1656](https://github.com/LHagfoss/rustcode/pull/1656)).
+- Keep the chat spinner visible throughout active work, add spacing above it, and preserve user-message background padding ([#1656](https://github.com/LHagfoss/rustcode/pull/1656)).
+- Truncate completed command headers to one line while retaining the exit status and expandable output ([#1656](https://github.com/LHagfoss/rustcode/pull/1656)).
 ## [v0.56.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.4) - 2026-10-02
 
 ### Features
