@@ -24,6 +24,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/context` | Live context panel; direct token arguments update configuration and show result/help in a panel. |
 | `/copy` | Immediate clipboard action with existing feedback. |
 | `/continue` | Immediate restored-work queue action. |
+| `/diff` | Asynchronous, read-only Git diff panel for staged and unstaged tracked changes; untracked paths are listed without file contents. |
 | `/exit` | Immediate exit. |
 | `/goal` | Immediate task submission with an argument; missing argument opens usage panel. |
 | `/about` | Scrollable About RustCode panel (alias of /info). |
@@ -41,6 +42,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/delete_chat` | Immediate session deletion and replacement. |
 | `/delegate` | Immediate next-task delegation setting; panel feedback. |
 | `/workspace` | Usage/status use a Workspace panel; create/archive/cleanup remain immediate actions. |
+| `/pwd` | Workspace path panel showing the effective workspace root. |
 | `/ollama` | Scrollable configuration/help and asynchronous model-list panel; arguments still update the profile. |
 | `/parser` | Alias of /protocol. |
 | `/provider` | Immediate profile configuration with arguments; result/help uses a Provider panel. |

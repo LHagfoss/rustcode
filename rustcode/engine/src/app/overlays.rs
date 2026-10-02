@@ -274,6 +274,28 @@ mod tests {
     }
 
     #[test]
+    fn async_command_refresh_cannot_replace_a_reopened_panel() {
+        let mut state = AppState::new();
+        let old_request = state.show_command_panel_request("Git diff", "Old loading");
+        let current_request = state.show_command_panel_request("Git diff", "Current loading");
+
+        state.update_command_panel_if_current("Git diff", old_request, "Stale result");
+        assert_eq!(
+            state.command_panel.as_ref().unwrap().content,
+            "Current loading"
+        );
+
+        state.update_command_panel_if_current("Git diff", current_request, "Current result");
+        assert_eq!(
+            state.command_panel.as_ref().unwrap().content,
+            "Current result"
+        );
+        state.overlays().close_all();
+        state.update_command_panel_if_current("Git diff", current_request, "Late result");
+        assert!(state.command_panel.is_none());
+    }
+
+    #[test]
     fn overlay_close_preserves_streaming_status_when_orchestrator_running() {
         let mut state = AppState::new();
         state.orchestrator_running = true;
