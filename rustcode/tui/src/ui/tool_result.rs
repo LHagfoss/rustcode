@@ -766,6 +766,22 @@ mod tests {
     }
 
     #[test]
+    fn file_edit_diff_handles_tabs_unicode_and_disjoint_hunks() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        let diff = "@@ -12 +12 @@\n-\t旧value\n+\t新value\n@@ -90 +90 @@\n+tail\n";
+        for width in [12, 24, 80] {
+            let lines = render_file_edit_diff(diff, width, false);
+            assert!(lines.iter().all(|line| line.width() <= width), "{lines:?}");
+            let text = lines.iter().map(text_of).collect::<Vec<_>>().join("\n");
+            assert!(!text.contains('\t'), "{text}");
+            assert!(text.contains('⋮'), "{text}");
+            assert!(text.contains("旧"), "{text}");
+            assert!(text.contains("新"), "{text}");
+            assert!(text.contains("90 +tail"), "{text}");
+        }
+    }
+
+    #[test]
     fn edit_diff_counts_ignore_file_headers_but_keep_plus_prefixed_code() {
         let diff = "--- a/file.rs\n+++ b/file.rs\n@@ -1 +1 @@\n--- old\n+++ new\n";
         assert_eq!(edit_diff_counts(diff), Some((1, 1)));
