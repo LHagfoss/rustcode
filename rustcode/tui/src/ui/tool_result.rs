@@ -354,7 +354,13 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
     let mut section = "stdout";
     let mut output = Vec::new();
 
-    for raw in result.lines() {
+    if result.trim().starts_with("[Side-effect replay suppressed:") {
+        return Vec::new();
+    }
+    for (index, raw) in result.lines().enumerate() {
+        if index == 0 && raw.starts_with("[command status:") && raw.ends_with(']') {
+            continue;
+        }
         if let Some(code) = raw.strip_prefix("exit code: ") {
             exit_code = code.trim().parse::<i32>().ok();
         } else if raw == "stdout:" {
