@@ -490,6 +490,19 @@ pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
 /// as count. A single verbose MCP schema must not consume the whole request
 /// budget or make the menu unstable across providers.
 pub(crate) const MAX_MCP_NATIVE_SCHEMA_BYTES: usize = 24 * 1024;
+/// Per-server cap so one heavy server (e.g. 118-tool gitlab at ~64KB) cannot
+/// starve the rest of the catalog (#1633). The global budget still applies.
+pub(crate) const MAX_MCP_PER_SERVER_SCHEMA_BYTES: usize = 8 * 1024;
+
+/// Effective MCP schema budget, overridable via
+/// `RUSTCODE_MCP_SCHEMA_BUDGET_BYTES` for heavy server mixes (#1633).
+pub(crate) fn mcp_schema_budget_bytes() -> usize {
+    std::env::var("RUSTCODE_MCP_SCHEMA_BUDGET_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 4096)
+        .unwrap_or(MAX_MCP_NATIVE_SCHEMA_BYTES)
+}
 pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 32 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
@@ -1191,10 +1204,13 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
     // all-or-none: if adding the complete set would exceed either hard limit,
     // the server is reported as rejected and none of its tools are bound for
     // this request.
+    let budget_bytes = mcp_schema_budget_bytes();
     let mut selected = Vec::new();
     let mut selected_indices = std::collections::HashSet::new();
     let mut rejected_indices = std::collections::HashSet::new();
     let mut selected_schema_bytes: usize = 0;
+    let mut per_server_bytes: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
     let mut schema_budget_exhausted = false;
     let mut reserved_servers = Vec::new();
     let mut rejected_reservations = Vec::new();
@@ -1215,9 +1231,15 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
             let (name, description, schema) = &tools[*index];
             total.saturating_add(mcp_schema_bytes(name, description, schema))
         });
+        // A single heavy server must not starve the rest of the catalog.
+        if group_bytes > MAX_MCP_PER_SERVER_SCHEMA_BYTES {
+            rejected_reservations.push(server.clone());
+            schema_budget_exhausted = true;
+            rejected_indices.extend(group);
+            continue;
+        }
         let count_fits = selected.len().saturating_add(group.len()) <= MAX_MCP_NATIVE_SCHEMAS;
-        let bytes_fit =
-            selected_schema_bytes.saturating_add(group_bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES;
+        let bytes_fit = selected_schema_bytes.saturating_add(group_bytes) <= budget_bytes;
         if count_fits && bytes_fit {
             for index in group {
                 if selected_indices.insert(index) {
@@ -1225,6 +1247,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
                 }
             }
             selected_schema_bytes = selected_schema_bytes.saturating_add(group_bytes);
+            per_server_bytes.insert(server.as_str(), group_bytes);
             reserved_servers.push(server.clone());
         } else {
             rejected_reservations.push(server.clone());
@@ -1283,7 +1306,18 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         }
         let (name, description, schema) = &tools[index];
         let bytes = mcp_schema_bytes(name, description, schema);
-        if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+        if selected_schema_bytes.saturating_add(bytes) > budget_bytes {
+            selected_indices.remove(&index);
+            schema_budget_exhausted = true;
+            continue;
+        }
+        // Per-server fairness: an explicit request always wins, but relevance
+        // alone must not let one heavy server consume the shared budget.
+        let owner = owners.get(index).map(String::as_str).unwrap_or("");
+        let server_bytes = per_server_bytes.get(owner).copied().unwrap_or(0);
+        if bucket != Admitted::Requested
+            && server_bytes.saturating_add(bytes) > MAX_MCP_PER_SERVER_SCHEMA_BYTES
+        {
             selected_indices.remove(&index);
             schema_budget_exhausted = true;
             continue;
@@ -1291,6 +1325,9 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         admitted.entry(index).or_insert(bucket);
         selected.push(index);
         selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
+        if !owner.is_empty() {
+            per_server_bytes.insert(owner, server_bytes.saturating_add(bytes));
+        }
     }
 
     let relevant_count = selected
@@ -1317,7 +1354,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
                 }
                 let (name, description, schema) = &tools[index];
                 let bytes = mcp_schema_bytes(name, description, schema);
-                if selected_schema_bytes.saturating_add(bytes) <= MAX_MCP_NATIVE_SCHEMA_BYTES {
+                if selected_schema_bytes.saturating_add(bytes) <= budget_bytes {
                     selected.push(index);
                     selected_schema_bytes = selected_schema_bytes.saturating_add(bytes);
                 } else {
@@ -1364,7 +1401,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         for index in selected {
             let (name, description, schema) = &tools[index];
             let bytes = mcp_schema_bytes(name, description, schema);
-            if selected_schema_bytes.saturating_add(bytes) > MAX_MCP_NATIVE_SCHEMA_BYTES {
+            if selected_schema_bytes.saturating_add(bytes) > budget_bytes {
                 schema_budget_exhausted = true;
                 continue;
             }
@@ -1405,7 +1442,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
         rejected_reservations,
         phase,
         mcp_schema_bytes: selected_schema_bytes,
-        mcp_schema_budget_bytes: MAX_MCP_NATIVE_SCHEMA_BYTES,
+        mcp_schema_budget_bytes: budget_bytes,
         schema_budget_exhausted,
         ..Default::default()
     };
@@ -1570,6 +1607,12 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
 /// rejection as the only feedback. (#1589)
 pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<String> {
     let mut lines = Vec::new();
+    // Failed servers are surfaced up front so the model does not burn rounds
+    // retrying tools that can never load (#1633). Recorded at startup in
+    // addition to the exit-summary/stderr paths.
+    for warning in crate::mcp::mcp_startup_warnings() {
+        lines.push(warning);
+    }
     if !stats.withheld_builtin_names.is_empty() {
         lines.push(format!(
             "Withheld built-ins, callable by exact name: {}.",
@@ -1580,6 +1623,13 @@ pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<S
         lines.push(format!(
             "{} registered MCP tools are not in this request's schema block; call `list_mcp_tools` for their live names instead of guessing.",
             stats.available - stats.selected
+        ));
+    }
+    if !stats.rejected_reservations.is_empty() {
+        lines.push(format!(
+            "Per-server schema cap ({} bytes) rejected reservations from: {}. Prefer recently used tools; call `list_mcp_tools` per server instead of assuming availability.",
+            MAX_MCP_PER_SERVER_SCHEMA_BYTES,
+            stats.rejected_reservations.join(", ")
         ));
     }
     (!lines.is_empty()).then(|| format!("# Tools Not Listed\n{}\n", lines.join("\n")))
