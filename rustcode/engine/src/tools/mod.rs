@@ -525,30 +525,126 @@ fn registered_tool_schema(name: &str) -> Option<Value> {
 }
 
 fn example_value_for_schema(schema: &Value) -> Value {
-    match schema.get("type").and_then(Value::as_str) {
+    example_value_resolved(schema, schema, 0)
+}
+
+/// Bound on `$ref`/`$defs` chasing so a self-referential schema cannot spin.
+const MAX_SCHEMA_REF_DEPTH: usize = 32;
+
+/// Cap on enum members quoted back in a rejection, so a server advertising a
+/// large enum cannot flood the model's correction window.
+const ENUM_OPTIONS_IN_ERROR: usize = 8;
+
+/// Resolve a local JSON Pointer reference (`#/$defs/FeedKind`) against the root
+/// schema that owns `$defs`/`definitions`.
+///
+/// schemars emits every named enum, struct and constant as a `$defs` entry and
+/// references it from `properties`, so a property carrying only `$ref` has no
+/// `type` of its own. Without this lookup the validator falls back to its
+/// object default and rejects every such property with a misleading
+/// "must be object" no matter what the provider sent.
+fn resolve_local_schema_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+    let pointer = reference.strip_prefix('#')?;
+    if pointer.is_empty() {
+        return Some(root);
+    }
+    let mut current = root;
+    for token in pointer.trim_start_matches('/').split('/') {
+        let token = token.replace("~1", "/").replace("~0", "~");
+        current = match current {
+            Value::Object(map) => map.get(&token)?,
+            Value::Array(items) => items.get(token.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+/// Merge a `$ref` node's sibling keywords over its resolved target. Siblings win
+/// so annotations and local constraints on the referencing node survive, while
+/// the target supplies the `type`/`enum` the reference stands for.
+fn merged_ref_schema(target: &Value, node: &Value) -> Option<Value> {
+    let Value::Object(siblings) = node else {
+        return None;
+    };
+    let mut merged = target.as_object().cloned().unwrap_or_default();
+    for (keyword, value) in siblings {
+        if keyword != "$ref" {
+            merged.insert(keyword.clone(), value.clone());
+        }
+    }
+    Some(Value::Object(merged))
+}
+
+fn example_value_resolved(schema: &Value, root: &Value, depth: usize) -> Value {
+    let resolved = match schema.get("$ref").and_then(Value::as_str) {
+        Some(reference) if depth < MAX_SCHEMA_REF_DEPTH => {
+            let Some(target) = resolve_local_schema_ref(root, reference) else {
+                return Value::Null;
+            };
+            match merged_ref_schema(target, schema) {
+                Some(merged) => return example_value_resolved(&merged, root, depth + 1),
+                // A boolean target accepts or rejects everything; show a neutral
+                // placeholder rather than inventing a shape for it.
+                None => return Value::Null,
+            }
+        }
+        _ => schema,
+    };
+    match resolved.get("type").and_then(Value::as_str) {
         Some("object") => {
             let mut object = serde_json::Map::new();
-            if let Some(properties) = schema.get("properties").and_then(Value::as_object)
-                && let Some(required) = schema.get("required").and_then(Value::as_array)
+            if let Some(properties) = resolved.get("properties").and_then(Value::as_object)
+                && let Some(required) = resolved.get("required").and_then(Value::as_array)
             {
                 for field in required.iter().filter_map(Value::as_str) {
                     if let Some(property) = properties.get(field) {
-                        object.insert(field.to_string(), example_value_for_schema(property));
+                        object.insert(
+                            field.to_string(),
+                            example_value_resolved(property, root, depth + 1),
+                        );
                     }
                 }
             }
+            // Without a `required` list every property is still legal, so show
+            // one to keep the guidance concrete instead of an empty `{}`.
+            if object.is_empty()
+                && let Some(properties) = resolved.get("properties").and_then(Value::as_object)
+                && let Some((field, property)) = properties.iter().next()
+            {
+                object.insert(
+                    field.clone(),
+                    example_value_resolved(property, root, depth + 1),
+                );
+            }
             Value::Object(object)
         }
-        Some("array") => schema
+        Some("array") => resolved
             .get("items")
-            .map(example_value_for_schema)
+            .map(|items| example_value_resolved(items, root, depth + 1))
             .map(|item| Value::Array(vec![item]))
             .unwrap_or_else(|| Value::Array(Vec::new())),
-        Some("boolean") => Value::Bool(false),
-        Some("integer") => Value::from(1),
-        Some("number") => Value::from(1),
-        Some("string") => Value::String("...".to_string()),
-        _ => Value::Null,
+        // Prefer a real member of an enum over a placeholder, since the enum is
+        // exactly the set of values the tool will accept.
+        _ if resolved
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|v| !v.is_empty()) =>
+        {
+            resolved
+                .get("enum")
+                .and_then(Value::as_array)
+                .and_then(|members| members.first())
+                .cloned()
+                .unwrap_or(Value::Null)
+        }
+        _ => match resolved.get("type").and_then(Value::as_str) {
+            Some("boolean") => Value::Bool(false),
+            Some("integer") => Value::from(1),
+            Some("number") => Value::from(1),
+            Some("string") => Value::String("...".to_string()),
+            _ => Value::Null,
+        },
     }
 }
 
@@ -593,13 +689,50 @@ fn validate_value_against_schema(
     path: &str,
     string_integers: bool,
 ) -> Result<(), String> {
+    validate_value_resolved(value, schema, path, string_integers, schema, 0)
+}
+
+fn validate_value_resolved(
+    value: &Value,
+    schema: &Value,
+    path: &str,
+    string_integers: bool,
+    root: &Value,
+    depth: usize,
+) -> Result<(), String> {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        if depth >= MAX_SCHEMA_REF_DEPTH {
+            return Err(format!(
+                "{path} exceeds the {MAX_SCHEMA_REF_DEPTH}-level schema reference limit"
+            ));
+        }
+        let Some(target) = resolve_local_schema_ref(root, reference) else {
+            return Err(format!(
+                "{path} references schema '{reference}', which this tool does not define"
+            ));
+        };
+        // A boolean target is a schema that accepts or rejects every value.
+        if let Value::Bool(always) = target {
+            return if *always {
+                Ok(())
+            } else {
+                Err(format!("{path} is not an accepted value"))
+            };
+        }
+        let merged = merged_ref_schema(target, schema)
+            .ok_or_else(|| format!("{path} has a malformed schema reference '{reference}'"))?;
+        return validate_value_resolved(value, &merged, path, string_integers, root, depth + 1);
+    }
+
     for keyword in ["anyOf", "oneOf"] {
         let Some(branches) = schema.get(keyword).and_then(Value::as_array) else {
             continue;
         };
         let results = branches
             .iter()
-            .map(|branch| validate_value_against_schema(value, branch, path, string_integers))
+            .map(|branch| {
+                validate_value_resolved(value, branch, path, string_integers, root, depth + 1)
+            })
             .collect::<Vec<_>>();
         let matching = results.iter().filter(|result| result.is_ok()).count();
         let valid = match keyword {
@@ -658,6 +791,32 @@ fn validate_value_against_schema(
         });
     if !type_matches {
         return Err(format!("{path} must be {}", expected_types.join(" or ")));
+    }
+
+    // An `enum` is the closed set of values the handler accepts. Without this
+    // check a mis-typed member that still satisfies `type` would reach the MCP
+    // server and fail there instead of being corrected from the listed options.
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.iter().any(|candidate| candidate == value)
+    {
+        let options = allowed
+            .iter()
+            .take(ENUM_OPTIONS_IN_ERROR)
+            .map(|option| match option {
+                Value::String(text) => format!("\"{text}\""),
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let elided = allowed.len().saturating_sub(ENUM_OPTIONS_IN_ERROR);
+        return Err(format!(
+            "{path} must be one of [{options}]{}",
+            if elided > 0 {
+                format!(", {elided} more")
+            } else {
+                String::new()
+            }
+        ));
     }
 
     if let Some(string) = value.as_str() {
@@ -720,22 +879,26 @@ fn validate_value_against_schema(
             && let Some(obj) = value.as_object()
         {
             for (key, val) in obj {
-                validate_value_against_schema(
+                validate_value_resolved(
                     val,
                     ap_schema,
                     &format!("{path}.{key}"),
                     string_integers,
+                    root,
+                    depth + 1,
                 )?;
             }
         }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
-                    validate_value_against_schema(
+                    validate_value_resolved(
                         actual,
                         child,
                         &format!("{path}.{key}"),
                         string_integers,
+                        root,
+                        depth + 1,
                     )?;
                 }
             }
@@ -745,11 +908,13 @@ fn validate_value_against_schema(
         && let Some(array) = value.as_array()
     {
         for (index, item) in array.iter().enumerate() {
-            validate_value_against_schema(
+            validate_value_resolved(
                 item,
                 items,
                 &format!("{path}[{index}]"),
                 string_integers,
+                root,
+                depth + 1,
             )?;
         }
     }

@@ -2611,6 +2611,163 @@ fn validation_accepts_json_schema_union_types() {
 }
 
 #[test]
+fn validation_resolves_defs_references_for_schemars_enums() {
+    // Verbatim shape emitted by schemars/rmcp for a Rust enum behind an
+    // optional field. The `kind` property carries only `$ref` plus a
+    // description, so a validator that ignores `$defs` sees no `type` at all.
+    let schema = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "$defs": {
+            "FeedKind": {
+                "type": "string",
+                "enum": ["foryou", "popular", "discussed", "tag", "source"]
+            }
+        },
+        "properties": {
+            "kind": {"$ref": "#/$defs/FeedKind", "description": "Feed type."},
+            "limit": {"type": ["integer", "null"]}
+        }
+    });
+
+    // The exact call rejected in session 01a0fc8b: a valid enum member behind a
+    // $ref must pass, not fail with a misleading "must be object".
+    assert!(
+        validate_value_against_schema(
+            &serde_json::json!({"kind": "foryou", "limit": 15}),
+            &schema,
+            "$",
+            false
+        )
+        .is_ok(),
+        "a $ref-backed string enum must accept its members"
+    );
+
+    // String-encoded integers stay rejected for MCP tools.
+    let lenient = validate_value_against_schema(
+        &serde_json::json!({"kind": "tag", "limit": "15"}),
+        &schema,
+        "$",
+        false,
+    )
+    .expect_err("MCP arguments arrive verbatim");
+    assert_eq!(lenient, "$.limit must be integer or null");
+
+    let wrong_type = validate_value_against_schema(
+        &serde_json::json!({"kind": {"nested": true}}),
+        &schema,
+        "$",
+        false,
+    )
+    .expect_err("a $ref-backed string must not accept an object");
+    assert_eq!(wrong_type, "$.kind must be string");
+
+    let unknown_member = validate_value_against_schema(
+        &serde_json::json!({"kind": "trending"}),
+        &schema,
+        "$",
+        false,
+    )
+    .expect_err("only advertised enum members may be sent");
+    assert_eq!(
+        unknown_member,
+        "$.kind must be one of [\"foryou\", \"popular\", \"discussed\", \"tag\", \"source\"]"
+    );
+}
+
+#[test]
+fn validation_rejects_unresolvable_and_self_referential_defs() {
+    let dangling = serde_json::json!({
+        "type": "object",
+        "properties": {"kind": {"$ref": "#/$defs/Missing"}}
+    });
+    let error = validate_value_against_schema(
+        &serde_json::json!({"kind": "foryou"}),
+        &dangling,
+        "$",
+        false,
+    )
+    .expect_err("a dangling reference must not silently pass as an object");
+    assert!(
+        error.contains("$.kind references schema '#/$defs/Missing'"),
+        "{error}"
+    );
+
+    // A self-referential definition must terminate on the depth bound.
+    let recursive = serde_json::json!({
+        "type": "object",
+        "$defs": {"Node": {"$ref": "#/$defs/Node"}},
+        "properties": {"next": {"$ref": "#/$defs/Node"}}
+    });
+    let error =
+        validate_value_against_schema(&serde_json::json!({"next": {}}), &recursive, "$", false)
+            .expect_err("a self-referential reference must not spin");
+    assert!(error.contains("schema reference limit"), "{error}");
+}
+
+#[test]
+fn validation_applies_sibling_keywords_next_to_a_reference() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "$defs": {"Name": {"type": "string"}},
+        "properties": {"tag": {"$ref": "#/$defs/Name", "maxLength": 4}}
+    });
+
+    assert!(
+        validate_value_against_schema(&serde_json::json!({"tag": "rust"}), &schema, "$", false)
+            .is_ok()
+    );
+    let error =
+        validate_value_against_schema(&serde_json::json!({"tag": "systems"}), &schema, "$", false)
+            .expect_err("a maxLength beside $ref must still apply");
+    assert_eq!(error, "$.tag must contain at most 4 characters");
+}
+
+#[test]
+fn validation_caps_the_enum_members_quoted_in_a_rejection() {
+    let members = (0..40)
+        .map(|index| format!("option{index}"))
+        .collect::<Vec<_>>();
+    let schema = serde_json::json!({
+        "type": "object",
+        "$defs": {"Wide": {"type": "string", "enum": members}},
+        "properties": {"pick": {"$ref": "#/$defs/Wide"}}
+    });
+
+    let error =
+        validate_value_against_schema(&serde_json::json!({"pick": "nope"}), &schema, "$", false)
+            .expect_err("an unknown enum member must be rejected");
+    assert!(error.contains("option0"), "{error}");
+    assert!(
+        !error.contains("option39"),
+        "large enums must stay bounded: {error}"
+    );
+    assert!(error.contains("32 more"), "{error}");
+}
+
+#[test]
+fn enum_guidance_resolves_references_and_prefers_a_real_member() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "$defs": {
+            "FeedKind": {"type": "string", "enum": ["foryou", "popular"]},
+            "Broken": {"$ref": "#/$defs/Absent"}
+        },
+        "properties": {
+            "kind": {"$ref": "#/$defs/FeedKind", "description": "Feed type."},
+            "odd": {"$ref": "#/$defs/Broken", "description": "Unresolvable."}
+        }
+    });
+
+    // No `required` list, so the guidance must still be concrete rather than `{}`.
+    assert_eq!(
+        example_value_for_schema(&schema),
+        serde_json::json!({"kind": "foryou"})
+    );
+}
+
+#[test]
 fn validation_accepts_nullable_strings_expressed_with_any_of() {
     let schema = serde_json::json!({
         "type": "object",
