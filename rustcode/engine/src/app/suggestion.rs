@@ -33,6 +33,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Continue restored pending session work",
     },
     CommandInfo {
+        name: "/diff",
+        desc: "Show staged and unstaged Git changes",
+    },
+    CommandInfo {
         name: "/exit",
         desc: "Exit the app",
     },
@@ -119,6 +123,10 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "/provider",
         desc: "Add/update model provider profile",
+    },
+    CommandInfo {
+        name: "/pwd",
+        desc: "Show the effective workspace path",
     },
     CommandInfo {
         name: "/protocol",
@@ -391,6 +399,18 @@ mod tests {
                 .any(|command| command.name == "/model")
         );
         assert!(command_token("plain text").is_none());
+    }
+
+    #[test]
+    fn workspace_inspection_commands_are_discoverable() {
+        for (input, expected) in [("/dif", "/diff"), ("/pw", "/pwd")] {
+            assert!(
+                filtered_commands(input)
+                    .iter()
+                    .any(|command| command.name == expected),
+                "{expected} should be suggested for {input}"
+            );
+        }
     }
 
     #[test]

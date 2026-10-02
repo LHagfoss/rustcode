@@ -197,6 +197,7 @@ pub struct AppState {
     pub subagent_picker_index: usize,
     pub settings_picker: Option<crate::app::SettingsPicker>,
     pub command_panel: Option<crate::app::CommandPanel>,
+    command_panel_generation: u64,
     pub show_context_modal: bool,
     pub show_status_modal: bool,
     pub show_stats_modal: bool,
@@ -1164,6 +1165,7 @@ impl AppState {
             subagent_picker_index: 0,
             settings_picker: None,
             command_panel: None,
+            command_panel_generation: 0,
             show_context_modal: false,
             show_status_modal: false,
             show_stats_modal: false,
@@ -1252,6 +1254,7 @@ impl AppState {
 
     /// Display command output outside the conversation/provider history.
     pub fn show_command_panel(&mut self, title: &'static str, content: impl Into<String>) {
+        self.command_panel_generation = self.command_panel_generation.wrapping_add(1);
         if self
             .command_panel
             .as_ref()
@@ -1264,6 +1267,34 @@ impl AppState {
             content: content.into(),
         });
         self.request_redraw();
+    }
+
+    pub(crate) fn show_command_panel_request(
+        &mut self,
+        title: &'static str,
+        content: impl Into<String>,
+    ) -> u64 {
+        self.show_command_panel(title, content);
+        self.command_panel_generation
+    }
+
+    /// Refresh an asynchronous command panel only while the request that
+    /// opened it remains current.
+    pub(crate) fn update_command_panel_if_current(
+        &mut self,
+        title: &'static str,
+        generation: u64,
+        content: impl Into<String>,
+    ) {
+        if self.command_panel_generation == generation
+            && let Some(panel) = self
+                .command_panel
+                .as_mut()
+                .filter(|panel| panel.title == title)
+        {
+            panel.content = content.into();
+            self.request_redraw();
+        }
     }
 
     /// Refresh an asynchronous command without reopening a dismissed panel.

@@ -530,6 +530,8 @@ pub fn build_help_text() -> String {
                 ("/archive", "Persist the current session"),
                 ("/continue", "Continue restored pending session work"),
                 ("/workspace", "Manage an isolated task workspace"),
+                ("/pwd", "Show the effective workspace path"),
+                ("/diff", "Show staged and unstaged Git changes"),
                 ("/agents", "Browse subagent conversation contexts"),
                 ("/delete_chat", "Delete current session and start fresh"),
                 ("/history", "Pick a previous session to resume"),

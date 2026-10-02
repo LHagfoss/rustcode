@@ -465,6 +465,71 @@ async fn enter_accepts_file_completion_without_submitting_the_prompt() {
 }
 
 #[tokio::test]
+async fn pwd_uses_the_effective_workspace_and_stays_out_of_provider_history() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = crate::app::AppState::new();
+    let root = tempfile::tempdir().unwrap();
+    app.workspace_root = Some(root.path().to_path_buf());
+    app.input_buffer = "/pwd".to_owned();
+    app.cursor_position = app.input_buffer.len();
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+
+    let state = state.lock().await;
+    let panel = state.command_panel.as_ref().unwrap();
+    assert_eq!(panel.title, "Workspace path");
+    assert!(panel.content.contains(root.path().to_str().unwrap()));
+    assert!(state.history.is_empty());
+}
+
+#[tokio::test]
+async fn diff_opens_a_panel_and_keeps_git_output_out_of_provider_history() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = crate::app::AppState::new();
+    let root = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    app.workspace_root = Some(root.path().to_path_buf());
+    app.input_buffer = "/diff".to_owned();
+    app.cursor_position = app.input_buffer.len();
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let state = state.lock().await;
+        let panel = state.command_panel.as_ref().unwrap();
+        assert_eq!(panel.title, "Git diff");
+        assert!(state.history.is_empty());
+        assert!(state.input_buffer.is_empty());
+        assert_eq!(state.cursor_position, 0);
+        if panel.content != "Reading workspace changes…" {
+            assert!(panel.content.contains("working tree is clean"));
+            break;
+        }
+        drop(state);
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
 async fn enter_routes_steer_mode_input_to_pending_steers() {
     use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
     use std::sync::Arc;
