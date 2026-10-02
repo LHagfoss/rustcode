@@ -62,10 +62,22 @@ pub(in crate::ui) fn render_model_picker_modal(
     );
 
     let mut list_lines = Vec::new();
+    let search = state.model_picker_search().to_lowercase();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let max_name_width = picker_column_budget(inner_area.width as usize, item.desc.width());
+        // The name uses middle-truncation, which would invalidate fuzzy match
+        // positions, so matches are marked on the description column that is
+        // never truncated (#1601). The selected row is already marked in full
+        // by its background, matching the command palette (#1588).
         let name_display = truncate_middle_to_width(&item.name, max_name_width);
+        let match_search: &str = if is_selected { "" } else { search.as_str() };
+        let desc_width = item.desc.width().max(1);
+        let desc_base = if is_selected {
+            Style::default().fg(COLOR_TEXT()).bg(COLOR_HOVER_BG())
+        } else {
+            Style::default().fg(COLOR_MUTED())
+        };
         let line = if is_selected {
             let left_text = format!("› {}", name_display);
             let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &item.desc);
@@ -89,11 +101,17 @@ pub(in crate::ui) fn render_model_picker_modal(
         } else {
             let left_text = format!("  {}", name_display);
             let padding_len = picker_row_padding(inner_area.width as usize, &left_text, &item.desc);
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(item.desc.clone(), Style::default().fg(COLOR_MUTED())),
-            ])
+            ];
+            spans.extend(highlight_match_spans(
+                &item.desc,
+                match_search,
+                desc_width,
+                desc_base,
+            ));
+            Line::from(spans)
         };
         list_lines.push(line);
     }
