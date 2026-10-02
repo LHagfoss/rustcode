@@ -65,6 +65,19 @@ pub(super) fn messages_for_response_continuation<'a>(
     Cow::Owned(messages)
 }
 
+fn messages_for_thinking_route<'a>(
+    messages: &'a [serde_json::Value],
+    previous: &str,
+) -> &'a [serde_json::Value] {
+    // Continuation assembly appends assistant output and then a synthetic user
+    // nudge. Keep the output, but preserve the latest actual user as task input.
+    if previous.is_empty() {
+        messages
+    } else {
+        &messages[..messages.len().saturating_sub(1)]
+    }
+}
+
 pub(super) struct RoundResponse {
     pub content: String,
     pub final_answer_boundary: FinalAnswerBoundary,
@@ -407,6 +420,7 @@ pub(super) async fn collect_round(
     let request_cancel = cancel_token.clone();
     let request_buffer = Arc::clone(stream_buffer);
     let request_allow_tools = !ctx.recovery.force_final;
+    let allow_thinking_router = !is_recovery_request(ctx);
     let request_thinking_mode = if ctx.recovery.force_final {
         super::super::stream_request::ThinkingMode::Disabled
     } else if std::mem::take(&mut ctx.recovery.reasoning_recovery_pending) {
@@ -481,6 +495,25 @@ pub(super) async fn collect_round(
                 request_buffer.lock().await.reset();
                 let current_msgs =
                     messages_for_response_continuation(&request_msgs, &request.previous);
+                let profile = if allow_thinking_router {
+                    let s = request_state.lock().await;
+                    s.config
+                        .models
+                        .iter()
+                        .find(|p| p.matches_request(&request_api_url, &request_model))
+                        .cloned()
+                } else {
+                    None
+                };
+                let routed_thinking_mode = super::super::thinking_router::route(
+                    &request_client,
+                    profile.as_ref(),
+                    messages_for_thinking_route(&current_msgs, &request.previous),
+                    request_thinking_mode,
+                    &request_cancel,
+                    &request_session_id,
+                )
+                .await;
                 let stream_result = stream_request(
                     &request_client,
                     Arc::clone(&request_state),
@@ -491,7 +524,7 @@ pub(super) async fn collect_round(
                     Arc::clone(&request_buffer),
                     false,
                     request_allow_tools,
-                    request_thinking_mode,
+                    routed_thinking_mode,
                     request_schema_policy,
                     Some(request_session_id.as_str()),
                     request.output_token_limit,
@@ -772,6 +805,23 @@ mod tests {
         prepare_request_steerability, recoverable_textual_stream_failure, retryable_stream_failure,
         should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
     };
+
+    #[test]
+    fn thinking_router_keeps_real_user_steering_during_continuations() {
+        let mut messages = vec![
+            serde_json::json!({"role":"user","content":"Initial task"}),
+            serde_json::json!({"role":"user","content":"LATEST_USER_STEERING"}),
+        ];
+        for _ in 0..6 {
+            messages.push(serde_json::json!({"role":"tool","content":"tool result"}));
+        }
+        let continuation =
+            super::messages_for_response_continuation(&messages, "partial assistant output");
+        let routed = super::messages_for_thinking_route(&continuation, "partial assistant output");
+        let snapshot = crate::network::thinking_router::snapshot(routed);
+        assert!(snapshot.contains("LATEST_USER_STEERING"));
+        assert!(snapshot.contains("partial assistant output"));
+    }
 
     #[test]
     fn recovery_request_entry_clears_the_marker_but_regular_rounds_retain_it() {

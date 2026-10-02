@@ -68,6 +68,7 @@ pub(crate) use stream::StreamBuffer;
 
 #[path = "network/stream_request.rs"]
 pub(crate) mod stream_request;
+mod thinking_router;
 pub use stream_request::stream_request;
 #[cfg(test)]
 pub(crate) use stream_request::{

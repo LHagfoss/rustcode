@@ -224,6 +224,22 @@ const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
 const MAX_SESSIONS: usize = 30;
 
+/// Opt-in Mapika decider routing via a raw OpenAI completions endpoint.
+/// Presence enables immediate routing; omission preserves normal generation.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ThinkingRouterConfig {
+    pub url: String,
+    pub model: String,
+    /// Credential resolved independently from the main model's credentials.
+    pub env_key: String,
+    #[serde(default = "default_thinking_router_timeout")]
+    pub timeout_ms: u64,
+}
+
+fn default_thinking_router_timeout() -> u64 {
+    1000
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct ModelProfile {
     pub name: String,
@@ -260,6 +276,9 @@ pub struct ModelProfile {
     /// matches prior behavior for profiles that don't opt in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_thinking: Option<bool>,
+    /// Per-request router, used only when thinking is explicitly enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_router: Option<ThinkingRouterConfig>,
     /// Reasoning effort level (e.g. "low", "medium", "high") sent in OpenAI-compatible payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -1958,6 +1977,12 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Skill roots widen what a prompt can see; only the user config may add
     // them, mirroring how project files cannot widen command permissions.
     file.extra_skill_dirs = None;
+    // Additional endpoints receiving conversation context must be user-configured.
+    if let Some(models) = file.models.as_mut() {
+        for model in models {
+            model.thinking_router = None;
+        }
+    }
     apply_toml_config(config, file);
 }
 

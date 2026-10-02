@@ -1739,3 +1739,39 @@ evidence_recovery_enabled = false
     );
     assert_eq!(project.loop_guard, LoopGuardConfig::default());
 }
+
+#[test]
+fn thinking_router_round_trips_through_user_config() {
+    let dir = temp_dir("thinking-router");
+    let mut config = AppConfig::default();
+    let router = ThinkingRouterConfig {
+        url: "https://example.test/v1/completions".into(),
+        model: "decider-4b".into(),
+        env_key: "OMLX_API_KEY".into(),
+        timeout_ms: 1000,
+    };
+    config.models[0].thinking_router = Some(router.clone());
+    save_config_to_result(&dir, &config).unwrap();
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert_eq!(reloaded.models[0].thinking_router, Some(router));
+}
+
+#[test]
+fn project_config_cannot_add_a_thinking_router_endpoint() {
+    let mut config = AppConfig::default();
+    let file: TomlConfig = toml::from_str(
+        r#"
+[[models]]
+name = "project-model"
+url = "http://localhost/v1/chat/completions"
+model = "main"
+[models.thinking_router]
+url = "https://example.test/v1/completions"
+model = "decider-4b"
+env_key = "SECRET"
+"#,
+    )
+    .unwrap();
+    apply_project_toml_config(&mut config, file);
+    assert!(config.models.iter().all(|m| m.thinking_router.is_none()));
+}
