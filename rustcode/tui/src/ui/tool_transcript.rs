@@ -846,14 +846,41 @@ pub(super) fn tool_transcript_entry(
     } else {
         tool_result_action(state, message_index, &tool_name)
     };
-    let (success, status) = tool_result_status(message, &tool_name, result);
-    let mut body = cached_tool_result(
-        &tool_name,
-        result,
-        width as usize,
-        &state.verbosity(),
-        show_picker,
-    );
+    let (success, mut status) = tool_result_status(message, &tool_name, result);
+    // Raw result bodies are useful for shell commands. Other tools stay
+    // compact; successful edits are the exception because their diff is the
+    // durable, reviewable record of what changed.
+    let mut body = match kind {
+        ToolTranscriptKind::Command => cached_tool_result(
+            &tool_name,
+            result,
+            width as usize,
+            &state.verbosity(),
+            show_picker,
+        ),
+        ToolTranscriptKind::Edit if success && result_has_embedded_diff(result) => {
+            cached_tool_result(
+                &tool_name,
+                result,
+                width as usize,
+                &state.verbosity(),
+                show_picker,
+            )
+        }
+        // The payload is the user's answer, not tool diagnostics. Keep it
+        // available when a long answer is expanded past the headline summary.
+        ToolTranscriptKind::Tool if tool_name == "ask_question" => cached_tool_result(
+            &tool_name,
+            result,
+            width as usize,
+            &state.verbosity(),
+            show_picker,
+        ),
+        _ => Vec::new(),
+    };
+    if kind == ToolTranscriptKind::Edit && success && edit_result_is_noop(result) {
+        status = "no changes".to_owned();
+    }
     // Write/edit calls whose result carries no embedded diff (e.g.
     // `write_to_file` reports only `wrote 'path' (N lines, M bytes)`) still
     // need their changed lines at low verbosity (#1567). Synthesize an
@@ -863,7 +890,6 @@ pub(super) fn tool_transcript_entry(
         && success
         && !edit_result_is_noop(result)
         && !result_has_embedded_diff(result)
-        && body.len() <= 1
     {
         let args = tool_call_arguments(state, message_index, &tool_name);
         let preview = synthesized_edit_preview(
@@ -1046,6 +1072,12 @@ pub(super) fn tool_child_line(
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
+    }
+    if !entry.success || entry.status == "running" || entry.status == "no changes" {
+        spans.push(Span::styled(
+            format!(" · {}", entry.status),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
     }
     let mut lines = Vec::new();
     let continuation = Span::styled(
@@ -1337,10 +1369,7 @@ pub(super) fn indent_full_tool_body(
 /// expand; no-op (`already applied`) and failed changes keep their truthful
 /// single-line status with no hint.
 pub(super) fn edit_entry_is_expandable(entry: &ToolTranscriptEntry) -> bool {
-    entry.kind == ToolTranscriptKind::Edit
-        && entry.success
-        && !entry.body.is_empty()
-        && entry.body.len() > 1
+    entry.kind == ToolTranscriptKind::Edit && entry.success && !entry.body.is_empty()
 }
 
 /// Keep a fitting title's hint inline; otherwise put it after the visible
