@@ -1643,6 +1643,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_request_cancellation_preserves_observed_sse_progress() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let event_line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n";
+        let keep_alive = ": keep-alive\n\n";
+        let expected_bytes = keep_alive.len() + event_line.len();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .expect("write streaming headers");
+            // Provider-only keep-alive comment followed by one model event,
+            // mirroring DeepSeek Responses emitting `: keep-alive` comments.
+            socket
+                .write_all(keep_alive.as_bytes())
+                .await
+                .expect("write keep-alive");
+            socket
+                .write_all(event_line.as_bytes())
+                .await
+                .expect("write model event");
+            socket.flush().await.expect("flush SSE progress");
+            let _ = release_rx.await;
+            let _ = socket.shutdown().await;
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let task_buffer = buffer.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            stream_request(
+                &client,
+                state,
+                task_cancel,
+                &endpoint,
+                "stream-test",
+                vec![serde_json::json!({"role": "user", "content": "hello"})],
+                task_buffer,
+                false,
+                false,
+                ThinkingMode::Normal,
+                crate::tools::ToolSchemaPolicy::read_only_inspection(),
+                Some(&session_id),
+                None,
+            )
+            .await
+        });
+        // Wait until the model event is deterministically consumed before
+        // cancelling, so the test does not race the stream reader.
+        let observed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if buffer.lock().await.content.contains("hi") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(observed.is_ok(), "model event must be observed before cancel");
+        cancel.cancel();
+        let error = task
+            .await
+            .expect("stream task must not panic")
+            .expect_err("cancelled stream must error");
+        assert_eq!(error.kind, StreamFailureKind::Cancelled);
+        assert_eq!(error.events_received, 1);
+        assert_eq!(error.bytes_received, expected_bytes);
+        release_tx.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn stream_request_retries_a_retryable_http_response_before_streaming() {
         use tokio::io::AsyncWriteExt;
         use tokio::net::TcpListener;
@@ -4133,9 +4220,18 @@ async fn stream_request_with_timeouts(
         if cancel_token.is_cancelled() {
             crate::dbg_log_for_session!(
                 request_session_id,
-                "stream_request: Stream reading cancelled via token"
+                "stream_request: Stream reading cancelled via token (events={stream_events_received}, bytes={stream_bytes_received})"
             );
-            return Err(StreamFailure::new(StreamFailureKind::Cancelled));
+            return Err(StreamFailure {
+                kind: StreamFailureKind::Cancelled,
+                status: None,
+                detail: Some(format!(
+                    "SSE stream cancelled with {stream_events_received} events after {stream_bytes_received} bytes"
+                )),
+                bytes_received: stream_bytes_received,
+                events_received: stream_events_received,
+                partial_event_bytes: line_buf.len(),
+            });
         }
 
         // Absolute deadline for this read (see `sse_progress_deadline`):
@@ -4590,8 +4686,17 @@ async fn stream_request_with_timeouts(
                 }
             }
             _ = cancel_token.cancelled() => {
-                crate::dbg_log_for_session!(request_session_id,"stream_request: Cancelled via select branch");
-                return Err(StreamFailure::new(StreamFailureKind::Cancelled));
+                crate::dbg_log_for_session!(request_session_id,"stream_request: Cancelled via select branch (events={stream_events_received}, bytes={stream_bytes_received})");
+                return Err(StreamFailure {
+                    kind: StreamFailureKind::Cancelled,
+                    status: None,
+                    detail: Some(format!(
+                        "SSE stream cancelled with {stream_events_received} events after {stream_bytes_received} bytes"
+                    )),
+                    bytes_received: stream_bytes_received,
+                    events_received: stream_events_received,
+                    partial_event_bytes: line_buf.len(),
+                });
             }
         }
     }
