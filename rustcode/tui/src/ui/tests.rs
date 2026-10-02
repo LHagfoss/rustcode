@@ -7732,6 +7732,33 @@ fn armed_ctrl_c_is_visible_in_the_production_composer_footer() {
 }
 
 #[test]
+fn armed_ctrl_c_keeps_the_copy_result_from_the_same_press_visible() {
+    let mut state = RenderState::new();
+    state.ctrl_c_exit_armed = true;
+    state
+        .transient_notice
+        .replace("Copied selection to clipboard".to_owned());
+
+    let rendered = render_state_to_text(&mut state, 100, 12);
+
+    assert!(
+        rendered.contains("Copied selection to clipboard · ⚠ Press Ctrl+C again to exit"),
+        "one press can copy and arm, so both answers belong on screen: {rendered:?}"
+    );
+
+    // An unrelated notice must not be presented as a copy result.
+    let mut other = RenderState::new();
+    other.ctrl_c_exit_armed = true;
+    other
+        .transient_notice
+        .replace("Model switched to something".to_owned());
+    assert!(
+        !render_state_to_text(&mut other, 100, 12).contains("Model switched to something"),
+        "an unrelated notice should not crowd the pending-exit warning"
+    );
+}
+
+#[test]
 fn composer_footer_shows_path_and_truncates_long_branch() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
