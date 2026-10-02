@@ -627,6 +627,26 @@ pub(super) fn indent_tool_result_body(
     }
 }
 
+/// Wrap a low-verbosity command body once, using the full output to decide
+/// whether the collapsed preview needs an expand hint. A collapsed body is a
+/// head/tail view of those same wrapped rows, so it can reuse the full layout.
+pub(super) fn command_preview_body(
+    lines: Vec<Line<'static>>,
+    tool_name: &str,
+    verbosity: &rustcode::controller::Verbosity,
+    width: u16,
+    expanded: bool,
+) -> (Vec<Line<'static>>, bool) {
+    let full_body = indent_tool_result_body(lines, tool_name, verbosity, width, true);
+    let show_hint = !expanded && full_body.len() > COLLAPSED_TOOL_BODY_MAX_LINES;
+    let body = if expanded {
+        full_body
+    } else {
+        cap_collapsed_tool_body(full_body, false)
+    };
+    (body, show_hint)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolTranscriptKind {
     Explored,
@@ -1433,18 +1453,8 @@ fn render_tool_result_group_snapshot(
             } else {
                 let entry = &group[0];
                 let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                let show_hint = !is_expanded
-                    && indent_tool_result_body(
-                        entry.body.clone(),
-                        &entry.tool_name,
-                        &state.verbosity(),
-                        width,
-                        true,
-                    )
-                    .len()
-                        > COLLAPSED_TOOL_BODY_MAX_LINES;
                 let title = command_summary_lines(entry, width, false, show_picker);
-                let body = indent_tool_result_body(
+                let (body, show_hint) = command_preview_body(
                     entry.body.clone(),
                     &entry.tool_name,
                     &state.verbosity(),
