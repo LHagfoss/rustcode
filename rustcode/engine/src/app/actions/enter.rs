@@ -272,6 +272,36 @@ async fn handle_enter_inner(
 
             "/workspace" => handle_workspace_command(&mut s, &tokens),
 
+            "/pwd" => {
+                let root = s.effective_workspace_root().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
+                s.show_command_panel(
+                    "Workspace path",
+                    crate::app::actions::workspace_inspection::cwd_text(&root),
+                );
+            }
+            "/diff" => {
+                let expected_workspace_root = s.effective_workspace_root();
+                let root = expected_workspace_root.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
+                let session_id = s.active_session_id.clone();
+                let generation =
+                    s.show_command_panel_request("Git diff", "Reading workspace changes…");
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                drop(s);
+                crate::app::actions::workspace_inspection::trigger(
+                    state,
+                    root,
+                    expected_workspace_root,
+                    session_id,
+                    generation,
+                );
+                return false;
+            }
+
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();

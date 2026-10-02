@@ -103,6 +103,8 @@ mod enter;
 mod session;
 #[path = "actions/submit.rs"]
 mod submit;
+#[path = "actions/workspace_inspection.rs"]
+mod workspace_inspection;
 
 #[cfg(test)]
 #[path = "actions/tests.rs"]

@@ -34,6 +34,7 @@ Now supports ollama or openai compatible APIs.
 - [Provider stream traces](docs/provider-stream-traces.md)
 - [Per-request thinking routing](docs/thinking-router.md)
 - [Runtime and workspace architecture](docs/architecture.md)
+- [TUI slash commands and command panels](docs/command-panels.md)
 - [Discord Rich Presence](docs/discord-rich-presence.md)
 - [Build-boundary benchmark](scripts/bench-build-boundaries.md)
 
