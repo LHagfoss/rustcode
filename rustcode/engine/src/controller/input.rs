@@ -29,6 +29,16 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
     crate::app::activity::summarize_tool_call(name, args)
 }
 
+/// Braille spinner glyph for a point on the shared animation timeline.
+pub fn spinner_frame(elapsed: std::time::Duration) -> char {
+    crate::app::activity::spinner_frame(elapsed)
+}
+
+/// Spinner frame index for a point on the shared animation timeline.
+pub fn spinner_frame_index(elapsed: std::time::Duration) -> u64 {
+    crate::app::activity::spinner_frame_index(elapsed)
+}
+
 /// Slash-command token from the first input line, if any.
 pub fn command_token(input: &str) -> Option<&str> {
     crate::app::suggestion::command_token(input)

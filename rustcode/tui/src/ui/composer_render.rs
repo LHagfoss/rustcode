@@ -492,7 +492,7 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
     let elapsed = Duration::ZERO;
     #[cfg(not(test))]
     let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
-    rustcode::app::activity::spinner_frame(elapsed)
+    rustcode::controller::spinner_frame(elapsed)
 }
 
 pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
