@@ -326,7 +326,7 @@ where
     }
 
     /// Resize the mutable viewport to `height` and paint one frame.
-    pub fn draw_height<F>(&mut self, height: u16, render: F) -> Result<(), B::Error>
+    pub fn draw_height<F>(&mut self, height: u16, render: F) -> Result<bool, B::Error>
     where
         F: FnOnce(&mut Frame<'_>),
     {
@@ -373,7 +373,18 @@ where
             viewport_area: self.viewport_area,
             buffer: &mut self.buffers[self.current],
         };
-        render(&mut frame);
+        // A render panic must never present a torn frame or poison the diff
+        // buffers: restore the working buffer to the last presented frame so
+        // the terminal keeps showing it, and report the skip so the caller
+        // schedules a clean redraw instead of leaving a blank viewport.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render(&mut frame);
+        }))
+        .is_err()
+        {
+            self.buffers[self.current] = self.buffers[1 - self.current].clone();
+            return Ok(false);
+        }
         let cursor_position = frame.cursor_position;
 
         let (previous, current) = if self.current == 0 {
@@ -399,7 +410,16 @@ where
         }
         self.buffers[1 - self.current].reset();
         self.current = 1 - self.current;
-        self.backend.flush()
+        self.backend.flush()?;
+        Ok(true)
+    }
+
+    /// Force the next draw to clear and repaint without presenting an
+    /// intermediate blank frame. This replaces the old `draw_height(0, |_| {})`
+    /// viewport reset, which visibly blanked the terminal when the repaint
+    /// that followed it panicked.
+    pub fn mark_viewport_dirty(&mut self) {
+        self.needs_clear = true;
     }
 
     /// Render finalized lines immediately above the mutable viewport.
@@ -518,7 +538,7 @@ where
         F: FnOnce(&mut Frame<'_>),
     {
         let height = self.size()?.height;
-        self.draw_height(height, render)
+        self.draw_height(height, render).map(|_| ())
     }
 }
 
@@ -717,6 +737,83 @@ mod tests {
         terminal.autoresize().unwrap();
         assert_eq!(terminal.size().unwrap(), Size::new(100, 30));
         assert_eq!(terminal.area().width, 100);
+    }
+
+    /// A render panic must never present a blank or torn frame: the terminal
+    /// keeps the last good frame, reports the skip, and the next draw
+    /// repaints cleanly.
+    #[test]
+    fn a_panicking_frame_keeps_the_last_good_frame_and_reports_the_skip() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+
+        let presented = terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("good frame"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        assert!(presented, "a clean frame is presented");
+        let before = terminal.backend().buffer().clone();
+
+        let presented = terminal
+            .draw_height(4, |_frame| panic!("render exploded"))
+            .unwrap();
+        assert!(!presented, "a panicking frame reports the skip");
+        assert_eq!(
+            &before,
+            terminal.backend().buffer(),
+            "the last good frame must stay on screen"
+        );
+
+        // The next frame repaints normally.
+        let presented = terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("recovered"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        assert!(presented);
+        let row = (0..40)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(row.contains("recovered"), "{row:?}");
+    }
+
+    #[test]
+    fn marking_the_viewport_dirty_repaints_without_a_blank_intermediate_frame() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("kept"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        let before = terminal.backend().buffer().clone();
+
+        // The history-commit reset path: no `draw_height(0)` blank present.
+        terminal.mark_viewport_dirty();
+        let presented = terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("after"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        assert!(presented);
+        assert_ne!(&before, terminal.backend().buffer());
+        let row = (0..40)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(row.contains("after"), "{row:?}");
     }
 
     #[test]

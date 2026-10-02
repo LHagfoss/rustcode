@@ -481,6 +481,20 @@ fn background_spinner_frame() -> char {
     FRAMES[frame]
 }
 
+/// Spinner glyph for the live running indicator at the bottom of the chat.
+/// Honours reduced motion and shares the engine's frame cadence so the chat
+/// row and the terminal tab title advance in step.
+pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
+    if state.config().reduced_motion {
+        return '•';
+    }
+    #[cfg(test)]
+    let elapsed = Duration::ZERO;
+    #[cfg(not(test))]
+    let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
+    rustcode::controller::spinner_frame(elapsed)
+}
+
 pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
     const MAX_VISIBLE_COMMANDS: usize = 3;
     const COMMAND_LABEL_CHARS: usize = 36;
@@ -1011,7 +1025,11 @@ pub(crate) fn render_input(
 }
 
 pub(super) fn composer_footer_visible(state: &RenderSnapshot) -> bool {
-    !state.modal_open()
+    // Panels hide the standing session metadata, but never a feedback row:
+    // a one-shot notice (e.g. "Copied selection to clipboard") is the answer
+    // to the key just pressed and must stay visible while a slash-command
+    // panel is open.
+    !state.modal_open() || state.transient_notice().is_some()
 }
 
 /// Hint shown under the composer while an inline completion popup is open. The
@@ -1163,16 +1181,8 @@ pub(super) fn render_composer_footer(
         if let Some(agent) = state.selected_subagent() {
             metadata.push(agent.name().to_string());
         }
-        let active = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-            || !state.running_tools().is_empty()
-            || !state.background_tasks().is_empty();
-        if active {
-            metadata.push(if state.config().reduced_motion {
-                "•".to_string()
-            } else {
-                background_spinner_frame().to_string()
-            });
-        }
+        // The running indicator lives at the bottom of the chat now, so the
+        // footer keeps only the model and workspace.
         metadata.push(state.model_name().to_string());
         metadata.push(location);
         (

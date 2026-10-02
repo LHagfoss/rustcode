@@ -2,6 +2,7 @@ use super::{AppStatus, LiveToolCall};
 use rustcode_core::activity::{
     exploration_tool_parameters, is_exploration_tool, safe_parameter, sanitize_tool_parameter,
 };
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
@@ -398,6 +399,25 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
         ),
         ActivityKind::Ready | ActivityKind::Queued | ActivityKind::ActionRequired => session,
     }
+}
+
+/// Cadence of the animated spinner, shared by the tab title and the chat's
+/// live activity row so both advance in step.
+pub const SPINNER_FRAME_MS: u64 = 120;
+
+/// Braille spinner frame for a point on the animation timeline.
+///
+/// Quantized to [`SPINNER_FRAME_MS`] so timer-only frames inside the same
+/// bucket render identical rows instead of invalidating caches every tick.
+pub fn spinner_frame(elapsed: Duration) -> char {
+    let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    TERMINAL_SPINNER[(millis / SPINNER_FRAME_MS) as usize % TERMINAL_SPINNER.len()]
+}
+
+/// Spinner frame index for a point on the animation timeline.
+pub fn spinner_frame_index(elapsed: Duration) -> u64 {
+    let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    (millis / SPINNER_FRAME_MS) as u64
 }
 
 #[cfg(test)]

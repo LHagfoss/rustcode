@@ -49,7 +49,7 @@ pub use input::{
     ActivityKind, ActivitySnapshot, CommandInfo, build_help_text, classify_activity,
     classify_live_tools, command_token, copy_selection_binding, filtered_commands,
     fuzzy_match_positions, fuzzy_matches, get_completion_len, list_project_file_paths,
-    summarize_tool_call,
+    spinner_frame, spinner_frame_index, summarize_tool_call,
 };
 pub use render_state::{RenderState, SubAgentView, render_state};
 pub use snapshot::{
