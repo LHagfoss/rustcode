@@ -354,7 +354,13 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
     let mut section = "stdout";
     let mut output = Vec::new();
 
-    for raw in result.lines() {
+    if result.trim().starts_with("[Side-effect replay suppressed:") {
+        return Vec::new();
+    }
+    for (index, raw) in result.lines().enumerate() {
+        if index == 0 && raw.starts_with("[command status:") && raw.ends_with(']') {
+            continue;
+        }
         if let Some(code) = raw.strip_prefix("exit code: ") {
             exit_code = code.trim().parse::<i32>().ok();
         } else if raw == "stdout:" {
@@ -1018,6 +1024,25 @@ mod tests {
                 "command output",
                 80,
                 &rustcode::controller::Verbosity::High,
+                false
+            )
+            .is_empty()
+        );
+    }
+    #[test]
+    fn command_preview_removes_only_transport_header() {
+        let result = "[command status: completed=true; success=true; exit_code=Some(0)]\nstdout:\n日本語\n[command status: real output]";
+        let text = super::render_command_result(result, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("completed=true"));
+        assert!(text.contains("日本語"));
+        assert!(text.contains("[command status: real output]"));
+        assert!(
+            super::render_command_result(
+                "[Side-effect replay suppressed: use recorded result]",
                 false
             )
             .is_empty()
