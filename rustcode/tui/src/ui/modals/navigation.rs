@@ -105,7 +105,12 @@ pub(in crate::ui) fn render_model_picker_modal(
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
             ];
-            spans.extend(highlight_match_spans(&item.desc, match_search, desc_width, desc_base));
+            spans.extend(highlight_match_spans(
+                &item.desc,
+                match_search,
+                desc_width,
+                desc_base,
+            ));
             Line::from(spans)
         };
         list_lines.push(line);
