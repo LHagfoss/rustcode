@@ -39,6 +39,22 @@ pub fn spinner_frame_index(elapsed: std::time::Duration) -> u64 {
     crate::app::activity::spinner_frame_index(elapsed)
 }
 
+/// Elapsed time on the shared animation timeline.
+///
+/// Frontends must use this rather than measuring from `Instant::now()`.
+pub fn spinner_elapsed() -> std::time::Duration {
+    crate::app::activity::spinner_elapsed()
+}
+
+/// Spinner frame index for *now* on the shared animation timeline.
+///
+/// Frontends must use this rather than measuring from `Instant::now()`:
+/// `Instant::now().elapsed()` is the gap between two adjacent clock reads, so
+/// it is always ~0 and pins the animation to its first frame.
+pub fn current_spinner_frame_index() -> u64 {
+    crate::app::activity::current_spinner_frame_index()
+}
+
 /// Slash-command token from the first input line, if any.
 pub fn command_token(input: &str) -> Option<&str> {
     crate::app::suggestion::command_token(input)

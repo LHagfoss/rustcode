@@ -490,8 +490,10 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
     }
     #[cfg(test)]
     let elapsed = Duration::ZERO;
+    // Read the shared timeline rather than a local clock so this row and the
+    // terminal tab title advance in step (see SPINNER_FRAME_MS).
     #[cfg(not(test))]
-    let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
+    let elapsed = rustcode::controller::spinner_elapsed();
     rustcode::controller::spinner_frame(elapsed)
 }
 
@@ -557,9 +559,6 @@ pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8,
     let b = (c1.2 as f32 * f + c2.2 as f32 * (1.0 - f)) as u8;
     (r, g, b)
 }
-
-#[cfg(not(test))]
-pub(super) static SHIMMER_START: OnceLock<Instant> = OnceLock::new();
 
 #[cfg(not(test))]
 static BACKGROUND_SPINNER_START: OnceLock<Instant> = OnceLock::new();
@@ -631,8 +630,9 @@ pub(super) fn shimmer_spans(
         // Quantize the sweep to the 120ms spinner cadence so timer-only ticks
         // within the same bucket render identical rows (#1632). Without this
         // every 16ms frame produced new RGB values and invalidated cached
-        // frames even with identical chat content.
-        let raw = SHIMMER_START.get_or_init(Instant::now).elapsed();
+        // frames even with identical chat content. Read the shared timeline so
+        // the sweep and the spinner glyph stay in step.
+        let raw = rustcode::controller::spinner_elapsed();
         Duration::from_millis(u64::try_from(raw.as_millis() / 120 * 120).unwrap_or(u64::MAX))
     };
     shimmer_spans_at(text, elapsed)
