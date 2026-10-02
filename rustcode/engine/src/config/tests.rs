@@ -1542,6 +1542,12 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
     fs::write(dir.path().join("skills/example/SKILL.md"), "# Example\n").unwrap();
     fs::create_dir_all(dir.path().join("themes")).unwrap();
     fs::write(dir.path().join("themes/default.toml"), "[theme]\n").unwrap();
+    fs::create_dir_all(dir.path().join("commands")).unwrap();
+    fs::write(
+        dir.path().join("commands/review.md"),
+        "Review this change.\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("sessions/2026/09/11/example")).unwrap();
     fs::write(
         dir.path().join("sessions/2026/09/11/example/history.json"),
@@ -1596,6 +1602,7 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
             .lines()
             .any(|path| path == "skills/example/SKILL.md")
     );
+    assert!(tracked.lines().any(|path| path == "commands/review.md"));
     assert!(tracked.lines().any(|path| path == "themes/default.toml"));
     assert!(!tracked.lines().any(|path| path.starts_with("sessions/")));
     assert!(!tracked.lines().any(|path| path.starts_with("backups/")));
