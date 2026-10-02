@@ -659,7 +659,11 @@ pub(crate) fn render_committed_history_block_snapshot(
                 message.thought_tokens,
             )
             .display_lines(width);
-            response.extend(render_turn_completion(message, width));
+            let completion = render_turn_completion(message, width);
+            if !completion.is_empty() {
+                response.extend(completion);
+                response.push(Line::from(""));
+            }
             return response;
         }
         "tool" => {
@@ -1101,6 +1105,20 @@ mod completion_tests {
         );
         assert!(text.contains("Sep 6, 2000 at"), "{text}");
         assert_eq!(text.matches("Worked for").count(), 1);
+        assert!(lines.last().unwrap().spans.is_empty());
+        state
+            .history
+            .push(rustcode::controller::ChatMessage::new("user", "Next task"));
+        let next = render_committed_history_block_snapshot(&render_snapshot(&state), 1, 100);
+        assert!(
+            next[0]
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(COLOR_PANEL()))
+        );
+        assert!(next[1].to_string().contains("Next task"));
+        assert!(lines[lines.len() - 2].to_string().contains("Worked for"));
+
         let timing = lines
             .iter()
             .find(|line| line.to_string().contains("Worked for"))
