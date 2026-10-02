@@ -50,6 +50,10 @@ pub(super) struct RenderFrameContext<'a> {
     pub response_active: bool,
     pub response_just_finished: bool,
     pub last_progress_sent: &'a mut std::time::Instant,
+    /// Set to false when the frame was skipped (render panic recovered
+    /// inside the terminal) so the loop can notice and schedule a clean
+    /// redraw instead of leaving a stale viewport.
+    pub frame_presented: &'a mut bool,
 }
 
 pub(super) async fn render_frame(
@@ -67,6 +71,7 @@ pub(super) async fn render_frame(
         response_active,
         response_just_finished,
         last_progress_sent,
+        frame_presented,
     } = context;
     let (
         snapshot,
@@ -122,9 +127,11 @@ pub(super) async fn render_frame(
                 rustcode::discord_rpc::workspace_basename(workspace.as_deref())
             });
         let title_display = rustcode::app::activity::format_terminal_title(
-            rustcode::controller::ActivityKind::Ready,
+            // The tab title carries the live spinner while a turn runs, so a
+            // backgrounded terminal still shows the session is working.
+            activity.kind,
             session_name,
-            0,
+            rustcode::app::activity::spinner_frame_index(std::time::Instant::now().elapsed()),
         );
         let old_title = guard.current_terminal_title.clone();
         if old_title.as_deref() != Some(title_display.as_str()) {
@@ -205,7 +212,7 @@ pub(super) async fn render_frame(
         terminal_height,
     );
     let mut frame_metrics = None;
-    terminal_runtime
+    let presented = terminal_runtime
         .terminal()
         .draw_height(desired_height, |f| {
             frame_metrics = Some(crate::ui::render_with_transcript_snapshot(
@@ -214,6 +221,12 @@ pub(super) async fn render_frame(
                 transcript_state,
             ));
         })?;
+    *frame_presented = presented;
+    if !presented {
+        // The terminal kept the last good frame; metrics from a skipped
+        // frame must not overwrite the live layout.
+        return Ok(());
+    }
     let (content_height, input_area) =
         frame_metrics.expect("render_with_transcript_snapshot must run once");
     app_state.lock().await.publish_render_metrics(
