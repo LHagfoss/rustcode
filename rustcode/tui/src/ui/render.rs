@@ -405,9 +405,9 @@ pub(crate) fn render_with_transcript_snapshot(
             Constraint::Length(activity_height),
             Constraint::Length(activity_gap_bottom),
             Constraint::Length(queue_block_height),
+            Constraint::Length(control_row_height),
             Constraint::Length(modal_height),
             Constraint::Length(popup_height),
-            Constraint::Length(control_row_height),
             Constraint::Length(input_height),
             Constraint::Length(footer_height),
         ])
@@ -418,7 +418,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // The composer indexes these as [chat, queue, popup, input, footer]; the
     // activity stays above the queue, panels and completions. Panels claim
     // the rows directly above input, exactly where their anchor paints.
-    let composer_chunks = [chunks[0], chunks[4], chunks[6], chunks[8], chunks[9]];
+    let composer_chunks = [chunks[0], chunks[4], chunks[7], chunks[8], chunks[9]];
     render_queue_line(f, &composer_chunks, state);
     // Optional breathing room around live activity (#1494). Gaps are empty
     // background rows; they are omitted when activity is absent or the
@@ -496,25 +496,25 @@ pub(crate) fn render_with_transcript_snapshot(
         let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[6].y,
+            chunks[7].y,
             input_inner.width,
-            chunks[6].height,
+            chunks[7].height,
         );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
         let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[6].y,
+            chunks[7].y,
             input_inner.width,
-            chunks[6].height,
+            chunks[7].height,
         );
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 
     let input_box_area = question_area.unwrap_or(chunks[8]);
 
-    f.render_in_area(chunks[5], |f| {
+    f.render_in_area(chunks[6], |f| {
         if state.show_model_picker() {
             render_model_picker_modal(f, state, input_box_area);
         }
@@ -587,7 +587,7 @@ pub(crate) fn render_with_transcript_snapshot(
         f,
         state,
         transcript,
-        (!control_row_suppressed).then_some(chunks[7]),
+        (!control_row_suppressed).then_some(chunks[5]),
     );
 
     let selection_area = if let Some(question_area) = question_area {

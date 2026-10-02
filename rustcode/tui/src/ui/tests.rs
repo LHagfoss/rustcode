@@ -528,6 +528,7 @@ fn render_snapshot_preserves_existing_ui_output() {
 
     for (index, state) in states.into_iter().enumerate() {
         let actual = render_snapshot_to_text(&state, 60, 16);
+
         assert_eq!(
             actual, golden_outputs[index],
             "render case {index} diverged"
@@ -3318,13 +3319,17 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(collapsed[0].contains("ctrl+o to expand"), "{collapsed:?}");
+    assert!(!collapsed[0].contains("ctrl+o"), "{collapsed:?}");
+    assert!(
+        collapsed.last().unwrap().contains("ctrl+o to expand"),
+        "{collapsed:?}"
+    );
     let body_start = collapsed
         .iter()
         .position(|line| line.contains("│"))
         .expect("rendered shell output begins below its command header");
     assert!(
-        collapsed.len() - body_start <= 5,
+        collapsed.len() - body_start - 1 <= 5,
         "collapsed body rows: {collapsed:?}"
     );
     assert!(collapsed.iter().any(|line| line.contains("lines")));
@@ -9036,4 +9041,33 @@ fn reduced_motion_footer_spinner_is_static_and_live_tools_are_hidden() {
     assert!(!text.contains("secret command"));
     assert!(!text.contains("Running"));
     assert!(!text.contains("Queued"));
+}
+
+#[test]
+fn slash_popup_is_flush_with_composer_when_tools_are_expanded() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state
+        .history
+        .push(ChatMessage::new("tool", "get_time: detail"));
+    state.expanded_thoughts.insert(0);
+    state.input_buffer = "/verbosity".to_owned();
+    state.cursor_position = state.input_buffer.len();
+    state.active_suggestion_index = Some(0);
+    let rendered = render_state_to_text(&mut state, 80, 24);
+    let rows = rendered.lines().collect::<Vec<_>>();
+    assert!(!rendered.contains("expanded ·"), "{rendered}");
+    let input = rows
+        .iter()
+        .rposition(|line| line.contains("› /verbosity"))
+        .unwrap();
+    let popup = rows
+        .iter()
+        .position(|line| line.contains("/verbosity"))
+        .unwrap();
+    assert_eq!(
+        input - popup,
+        2,
+        "only composer top padding belongs between picker and input: {rendered}"
+    );
 }
