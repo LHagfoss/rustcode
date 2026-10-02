@@ -222,6 +222,26 @@ fn row_is_blank(buffer: &ratatui::buffer::Buffer, area: ratatui::layout::Rect, r
     (area.x..area.right()).all(|x| buffer[(x, row)].symbol() == " ")
 }
 
+/// The first row after the last row that carries content in `area`.
+///
+/// Returns `None` when every row is blank, so callers can tell "anchor under
+/// the activity" apart from "there is nothing on screen yet".
+fn row_after_last_content(
+    buffer: &ratatui::buffer::Buffer,
+    area: ratatui::layout::Rect,
+) -> Option<u16> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    (area.y..area.bottom())
+        .rev()
+        .find(|row| !row_is_blank(buffer, area, *row))
+        .and_then(|row| {
+            let below = row.saturating_add(1);
+            (below < area.bottom()).then_some(below)
+        })
+}
+
 pub(crate) fn render_with_transcript_snapshot(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -424,18 +444,27 @@ pub(crate) fn render_with_transcript_snapshot(
 
     render_live_conversation(f, chunks[0], lines, layout_width);
 
-    // Running indicator sits at the bottom of the chat, in the trailing blank
-    // row. Overlaying the spare row instead of reserving one keeps the
-    // transcript geometry identical whether or not a turn is running, so
-    // nothing reflows and selection anchors stay valid when a turn starts.
+    // Anchor the running indicator directly under whatever is currently on
+    // screen, not at the bottom of the viewport. Pinned to the last row it sat
+    // far below a short transcript and read as unrelated to the work in
+    // progress; under the last non-blank row it continues the same column of
+    // activity.
+    //
+    // Overlaying a spare row instead of reserving one keeps the transcript
+    // geometry identical whether or not a turn is running, so nothing reflows
+    // and selection anchors stay valid when a turn starts.
     if let Some(indicator) = live_running_indicator(state)
         && chunks[0].height > 0
     {
-        let row = chunks[0].bottom().saturating_sub(1);
-        if row_is_blank(f.buffer(), chunks[0], row) {
+        // Prefer the row under the content; fall back to the bottom row when
+        // the chat is entirely blank so a running turn is never invisible.
+        let target = row_after_last_content(f.buffer(), chunks[0])
+            .unwrap_or_else(|| chunks[0].bottom().saturating_sub(1));
+        // Never paint over transcript text, whatever the scan concluded.
+        if target < chunks[0].bottom() && row_is_blank(f.buffer(), chunks[0], target) {
             f.render_widget(
                 Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
-                ratatui::layout::Rect::new(chunks[0].x, row, chunks[0].width, 1),
+                ratatui::layout::Rect::new(chunks[0].x, target, chunks[0].width, 1),
             );
         }
     }
