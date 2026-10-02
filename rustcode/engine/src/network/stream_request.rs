@@ -1716,7 +1716,10 @@ mod tests {
             }
         })
         .await;
-        assert!(observed.is_ok(), "model event must be observed before cancel");
+        assert!(
+            observed.is_ok(),
+            "model event must be observed before cancel"
+        );
         cancel.cancel();
         let error = task
             .await
