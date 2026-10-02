@@ -103,11 +103,6 @@ pub(super) async fn render_frame(
         let snapshot = render_snapshot(&rustcode::controller::render_state(&guard));
         let activity =
             rustcode::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
-        let animation_frame = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
-            / 100;
         let terminal_title = generated_title.clone().or(prompt_title);
         let session_name = terminal_title
             .as_deref()
@@ -127,9 +122,9 @@ pub(super) async fn render_frame(
                 rustcode::discord_rpc::workspace_basename(workspace.as_deref())
             });
         let title_display = rustcode::app::activity::format_terminal_title(
-            activity.kind,
+            rustcode::controller::ActivityKind::Ready,
             session_name,
-            animation_frame,
+            0,
         );
         let old_title = guard.current_terminal_title.clone();
         if old_title.as_deref() != Some(title_display.as_str()) {
