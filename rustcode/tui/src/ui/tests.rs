@@ -9144,6 +9144,62 @@ fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
 }
 
 #[test]
+fn the_running_indicator_sits_directly_under_the_transcript() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    // One short message in a tall viewport: plenty of blank rows below it.
+    state.history.push(ChatMessage::new("user", "hello"));
+    let snapshot = render_snapshot(&state);
+    let model = snapshot.model_name().to_string();
+
+    let height = 24u16;
+    let mut transcript = TranscriptState::default();
+    let mut terminal =
+        crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, height))
+            .unwrap();
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+
+    let rows = (0..height)
+        .map(|y| {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    let prompt = rows
+        .iter()
+        .position(|row| row.contains("hello"))
+        .expect("the user message is on screen");
+    // The indicator is the row that leads with the spinner and names the model.
+    // The welcome panel and the composer footer also name the model, so anchor
+    // on the glyph.
+    let indicator = rows
+        .iter()
+        .position(|row| row.trim_start().starts_with('•') && row.contains(&model))
+        .unwrap_or_else(|| panic!("the indicator must be on screen: {rows:?}"));
+
+    // Immediately below the last message, so it reads as a continuation of the
+    // transcript rather than floating at the bottom of the viewport.
+    assert_eq!(
+        indicator,
+        prompt + 1,
+        "the indicator must sit under the transcript, not at the viewport bottom: {rows:?}"
+    );
+    assert!(
+        indicator + 2 < height as usize,
+        "the chat had spare room, so a bottom-anchored indicator was not expected: {rows:?}"
+    );
+}
+
+#[test]
 fn idle_chat_shows_no_running_indicator() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
