@@ -896,8 +896,10 @@ pub(super) fn tool_group_header(title: &str, success: bool, show_picker: bool) -
 
 /// Expand affordance appended to a collapsed body row. Reserved out of the
 /// wrap width so it always lands on the entry's own first row (#1541).
-pub(super) const EXPAND_HINT: &str = " (ctrl+o to expand)";
-const COMPACT_EXPAND_HINT: &str = " (ctrl+o)";
+/// Ctrl+O toggles every collapsible entry while Ctrl+Shift+O steps a single
+/// entry, so the hint names both (#1601).
+pub(super) const EXPAND_HINT: &str = " (ctrl+o all · shift+o one)";
+const COMPACT_EXPAND_HINT: &str = " (ctrl+o all)";
 const SHORT_EXPAND_HINT: &str = " (o)";
 
 /// Maximum terminal rows in a collapsed tool-result preview, including the
@@ -2108,7 +2110,7 @@ mod tests {
         );
         let mut lines = Vec::new();
         super::append_tool_preview(&mut lines, title, body, &entry, true, 80, false);
-        assert!(lines[0].to_string().contains("GetTime (ctrl+o to expand)"));
+        assert!(lines[0].to_string().contains("GetTime (ctrl+o all"));
         assert_eq!(lines.len(), 6);
         assert!(lines.last().unwrap().to_string().contains("output 9"));
     }
@@ -2148,7 +2150,7 @@ mod tests {
             lines.iter().all(|line| line.width() <= usize::from(width)),
             "wrapped command rows plus expand hint must stay within the terminal width: {lines:?}"
         );
-        assert!(lines[0].to_string().contains("(ctrl+o)"), "{lines:?}");
+        assert!(lines[0].to_string().contains("(ctrl+o all)"), "{lines:?}");
         assert!(!lines[0].to_string().contains("to expand"), "{lines:?}");
 
         let area = Rect::new(0, 0, width, lines.len() as u16);
@@ -2157,7 +2159,7 @@ mod tests {
         let first_row = (0..width)
             .map(|column| buffer[(column, 0)].symbol())
             .collect::<String>();
-        assert!(first_row.contains("(ctrl+o)"), "{first_row:?}");
+        assert!(first_row.contains("(ctrl+o all)"), "{first_row:?}");
     }
 
     #[test]
