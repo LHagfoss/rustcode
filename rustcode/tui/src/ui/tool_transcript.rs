@@ -1412,7 +1412,16 @@ fn render_tool_result_group_snapshot(
             } else {
                 let entry = &group[0];
                 let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                let show_hint = !entry.body.is_empty() && !is_expanded;
+                let show_hint = !is_expanded
+                    && indent_tool_result_body(
+                        entry.body.clone(),
+                        &entry.tool_name,
+                        &state.verbosity(),
+                        width,
+                        true,
+                    )
+                    .len()
+                        > COLLAPSED_TOOL_BODY_MAX_LINES;
                 lines.extend(command_summary_lines(entry, width, show_hint, show_picker));
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
@@ -1451,16 +1460,27 @@ fn render_tool_result_group_snapshot(
                     // their bodies with the same expand affordance; Explored
                     // rows keep their kind-specific formatting. Edit previews
                     // differ: the collapsed form already shows a compact diff
-                    // window (#1567) while Tool/Command hide the body until
-                    // expanded.
+                    // window (#1567), while Tool/Command show bounded previews.
                     let expandable = matches!(
                         entry.kind,
                         ToolTranscriptKind::Tool
                             | ToolTranscriptKind::Command
                             | ToolTranscriptKind::Explored
                     ) || edit_entry_is_expandable(entry);
+                    let full_rows = if entry.kind == ToolTranscriptKind::Edit {
+                        indent_full_tool_body(entry.body.clone(), width, show_picker).len()
+                    } else {
+                        indent_tool_result_body(
+                            entry.body.clone(),
+                            &entry.tool_name,
+                            &state.verbosity(),
+                            width,
+                            true,
+                        )
+                        .len()
+                    };
                     let show_hint = expandable
-                        && !entry.body.is_empty()
+                        && full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
                         && !is_expanded
                         && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Command {
@@ -1501,14 +1521,14 @@ fn render_tool_result_group_snapshot(
                                 false,
                             ));
                         }
-                    } else if expandable && is_expanded && low {
+                    } else if expandable && low {
                         if entry.kind == ToolTranscriptKind::Command {
                             lines.extend(indent_tool_result_body(
                                 entry.body.clone(),
                                 &entry.tool_name,
                                 &state.verbosity(),
                                 width,
-                                true,
+                                is_expanded,
                             ));
                         } else {
                             lines.extend(indent_generic_tool_body(
@@ -1516,7 +1536,7 @@ fn render_tool_result_group_snapshot(
                                 &state.verbosity(),
                                 width,
                                 show_picker,
-                                true,
+                                is_expanded,
                             ));
                         }
                     }
