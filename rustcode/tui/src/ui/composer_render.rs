@@ -613,7 +613,14 @@ pub(super) fn shimmer_spans(
     #[cfg(test)]
     let elapsed = Duration::ZERO;
     #[cfg(not(test))]
-    let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
+    let elapsed = {
+        // Quantize the sweep to the 120ms spinner cadence so timer-only ticks
+        // within the same bucket render identical rows (#1632). Without this
+        // every 16ms frame produced new RGB values and invalidated cached
+        // frames even with identical chat content.
+        let raw = SHIMMER_START.get_or_init(Instant::now).elapsed();
+        Duration::from_millis(u64::try_from(raw.as_millis() / 120 * 120).unwrap_or(u64::MAX))
+    };
     shimmer_spans_at(text, elapsed)
 }
 
