@@ -1339,6 +1339,43 @@ pub(super) fn edit_entry_is_expandable(entry: &ToolTranscriptEntry) -> bool {
         && entry.body.len() > 1
 }
 
+/// Keep a fitting title's hint inline; otherwise put it after the visible
+/// output without shrinking the command or consuming its five-row preview.
+fn append_tool_preview(
+    lines: &mut Vec<Line<'static>>,
+    mut title: Vec<Line<'static>>,
+    body: Vec<Line<'static>>,
+    entry: &ToolTranscriptEntry,
+    show_hint: bool,
+    width: u16,
+    show_picker: bool,
+) {
+    let hint = expand_hint_span(width, show_picker);
+    let raw_command_fits = entry.kind != ToolTranscriptKind::Command
+        || (!entry.target.contains(['\n', '\r'])
+            && entry.target.width() + entry.status.width() + 14 + hint.content.width()
+                <= width as usize);
+    let inline = show_hint
+        && raw_command_fits
+        && title.len() == 1
+        && title[0].width() + hint.content.width() <= width as usize;
+    if inline {
+        title[0].spans.push(hint.clone());
+    }
+    lines.extend(title);
+    lines.extend(body);
+    if show_hint && !inline {
+        let mut hint_lines = Vec::new();
+        push_wrapped_with_continuation(
+            &mut hint_lines,
+            vec![Span::raw("    "), hint],
+            (width as usize).max(1),
+            Some(Span::raw("    ")),
+        );
+        lines.extend(hint_lines);
+    }
+}
+
 pub(crate) fn render_committed_tool_result_group_snapshot(
     state: &RenderSnapshot,
     message_indices: &[usize],
@@ -1422,14 +1459,23 @@ fn render_tool_result_group_snapshot(
                     )
                     .len()
                         > COLLAPSED_TOOL_BODY_MAX_LINES;
-                lines.extend(command_summary_lines(entry, width, show_hint, show_picker));
-                lines.extend(indent_tool_result_body(
+                let title = command_summary_lines(entry, width, false, show_picker);
+                let body = indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
                     &state.verbosity(),
                     width,
                     is_expanded,
-                ));
+                );
+                append_tool_preview(
+                    &mut lines,
+                    title,
+                    body,
+                    entry,
+                    show_hint,
+                    width,
+                    show_picker,
+                );
             }
         } else {
             if include_header {
@@ -1483,23 +1529,12 @@ fn render_tool_result_group_snapshot(
                         && full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
                         && !is_expanded
                         && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
-                    if entry.kind == ToolTranscriptKind::Command {
-                        lines.extend(command_child_lines(
-                            entry,
-                            first_child,
-                            show_hint,
-                            width,
-                            show_picker,
-                        ));
+                    let title = if entry.kind == ToolTranscriptKind::Command {
+                        command_child_lines(entry, first_child, false, width, show_picker)
                     } else {
-                        lines.extend(tool_child_line(
-                            entry,
-                            first_child,
-                            show_hint,
-                            width,
-                            show_picker,
-                        ));
-                    }
+                        tool_child_line(entry, first_child, false, width, show_picker)
+                    };
+                    let mut body = Vec::new();
                     first_child = false;
                     let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Edit
@@ -1507,13 +1542,13 @@ fn render_tool_result_group_snapshot(
                         && low
                     {
                         if is_expanded {
-                            lines.extend(indent_full_tool_body(
+                            body.extend(indent_full_tool_body(
                                 entry.body.clone(),
                                 width,
                                 show_picker,
                             ));
                         } else {
-                            lines.extend(indent_generic_tool_body(
+                            body.extend(indent_generic_tool_body(
                                 entry.body.clone(),
                                 &state.verbosity(),
                                 width,
@@ -1523,7 +1558,7 @@ fn render_tool_result_group_snapshot(
                         }
                     } else if expandable && low {
                         if entry.kind == ToolTranscriptKind::Command {
-                            lines.extend(indent_tool_result_body(
+                            body.extend(indent_tool_result_body(
                                 entry.body.clone(),
                                 &entry.tool_name,
                                 &state.verbosity(),
@@ -1531,7 +1566,7 @@ fn render_tool_result_group_snapshot(
                                 is_expanded,
                             ));
                         } else {
-                            lines.extend(indent_generic_tool_body(
+                            body.extend(indent_generic_tool_body(
                                 entry.body.clone(),
                                 &state.verbosity(),
                                 width,
@@ -1540,6 +1575,15 @@ fn render_tool_result_group_snapshot(
                             ));
                         }
                     }
+                    append_tool_preview(
+                        &mut lines,
+                        title,
+                        body,
+                        entry,
+                        show_hint,
+                        width,
+                        show_picker,
+                    );
                 }
             }
         }
@@ -1996,6 +2040,77 @@ mod tests {
         let long = collapse_command_preview("curl -sS https://example.com/very/long/path", 20);
         assert!(long.ends_with('…'), "{long:?}");
         assert!(long.width() <= 20, "{long:?}");
+    }
+
+    #[test]
+    fn expansion_hint_follows_long_command_output_without_using_preview_rows() {
+        for width in [24, 48, 80] {
+            let entry = super::ToolTranscriptEntry {
+                message_index: 0,
+                tool_name: "run_command".to_owned(),
+                action: "Bash".to_owned(),
+                target: format!("echo {}\necho done", "日本語".repeat(30)),
+                success: true,
+                status: "exit 0".to_owned(),
+                body: (0..10)
+                    .map(|i| ratatui::text::Line::from(format!("output {i}")))
+                    .collect(),
+                kind: super::ToolTranscriptKind::Command,
+            };
+            let title = super::command_summary_lines(&entry, width, false, false);
+            let body = super::indent_tool_result_body(
+                entry.body.clone(),
+                &entry.tool_name,
+                &rustcode::controller::Verbosity::Low,
+                width,
+                false,
+            );
+            assert_eq!(body.len(), 5);
+            let title_count = title.len();
+            let mut lines = Vec::new();
+            super::append_tool_preview(&mut lines, title, body, &entry, true, width, false);
+            assert!(
+                lines[..title_count]
+                    .iter()
+                    .all(|line| !line.to_string().contains("ctrl+o"))
+            );
+            assert!(lines.last().unwrap().to_string().contains("ctrl+o"));
+            assert!(lines[lines.len() - 2].to_string().contains("output 9"));
+            assert_eq!(lines.len(), title_count + 6);
+            assert!(
+                lines.iter().all(|line| line.width() <= width as usize),
+                "{lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fitting_generic_tool_title_keeps_hint_inline() {
+        let entry = super::ToolTranscriptEntry {
+            message_index: 0,
+            tool_name: "get_time".to_owned(),
+            action: "GetTime".to_owned(),
+            target: "".to_owned(),
+            success: true,
+            status: "completed".to_owned(),
+            body: (0..10)
+                .map(|i| ratatui::text::Line::from(format!("output {i}")))
+                .collect(),
+            kind: super::ToolTranscriptKind::Tool,
+        };
+        let title = super::tool_child_line(&entry, true, false, 80, false);
+        let body = super::indent_generic_tool_body(
+            entry.body.clone(),
+            &rustcode::controller::Verbosity::Low,
+            80,
+            false,
+            false,
+        );
+        let mut lines = Vec::new();
+        super::append_tool_preview(&mut lines, title, body, &entry, true, 80, false);
+        assert!(lines[0].to_string().contains("GetTime (ctrl+o to expand)"));
+        assert_eq!(lines.len(), 6);
+        assert!(lines.last().unwrap().to_string().contains("output 9"));
     }
 
     #[test]
