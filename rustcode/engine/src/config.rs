@@ -1115,6 +1115,18 @@ impl DefaultConfig {
             }
         }
     }
+
+    pub fn set_small(&mut self, new_small: String) {
+        match self {
+            DefaultConfig::Simple(s) => *s = new_small,
+            DefaultConfig::Table { small, .. } => *small = new_small,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first_mut() {
+                    first.small = new_small;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -81,8 +81,6 @@ struct ModelCatalog {
 struct CatalogModel {
     slug: String,
     #[serde(default)]
-    display_name: String,
-    #[serde(default)]
     visibility: String,
 }
 
@@ -243,6 +241,116 @@ pub(super) async fn login(
     .context("ChatGPT login task stopped while completing sign-in")?
 }
 
+/// Refresh an already connected account's current model catalog without
+/// starting an interactive browser flow. `None` means the caller should
+/// continue with normal sign-in because no active account could be selected.
+pub(super) async fn refresh_catalog(
+    config: &AppConfig,
+    requested_account: Option<&str>,
+) -> Result<Option<AuthCommandResult>> {
+    ensure_chatgpt_enabled(config)?;
+    let accounts = super::load_accounts()?
+        .into_iter()
+        .filter(|row| row.provider == "openai" && row.method == AuthMethod::ChatGpt && row.active)
+        .collect::<Vec<_>>();
+    let selected = requested_account
+        .and_then(|account| accounts.iter().find(|row| row.account == account))
+        .or_else(|| {
+            let default_binding = config
+                .models
+                .iter()
+                .find(|profile| profile.name == config.default.big())
+                .and_then(|profile| profile.credential.as_ref())?;
+            accounts.iter().find(|row| {
+                row.provider == default_binding.provider && row.account == default_binding.account
+            })
+        })
+        .or_else(|| (accounts.len() == 1).then(|| &accounts[0]));
+    let Some(account) = selected else {
+        return Ok(None);
+    };
+    refresh_catalog_for_account(account).await.map(Some)
+}
+
+pub(super) async fn refresh_catalog_for_provider(
+    config: &AppConfig,
+    provider: &str,
+    requested_account: Option<&str>,
+) -> Result<AuthCommandResult> {
+    if !provider.eq_ignore_ascii_case("openai") {
+        bail!("catalog refresh is currently supported for the OpenAI ChatGPT provider");
+    }
+    ensure_chatgpt_enabled(config)?;
+    let accounts = super::load_accounts()?
+        .into_iter()
+        .filter(|row| row.provider == "openai" && row.method == AuthMethod::ChatGpt && row.active)
+        .collect::<Vec<_>>();
+    let account = if let Some(requested) = requested_account {
+        accounts
+            .iter()
+            .find(|row| row.account == requested)
+            .ok_or_else(|| anyhow!("no active ChatGPT account has that account ID"))?
+    } else {
+        let default_account = config
+            .models
+            .iter()
+            .find(|profile| profile.name == config.default.big())
+            .and_then(|profile| profile.credential.as_ref())
+            .filter(|binding| binding.provider == "openai" && binding.method == AuthMethod::ChatGpt)
+            .and_then(|binding| accounts.iter().find(|row| row.account == binding.account));
+        default_account
+            .or_else(|| (accounts.len() == 1).then(|| &accounts[0]))
+            .ok_or_else(|| anyhow!("select an active ChatGPT profile or provide its account ID"))?
+    };
+    refresh_catalog_for_account(account).await
+}
+
+fn ensure_chatgpt_enabled(config: &AppConfig) -> Result<()> {
+    if !config.providers.iter().any(|provider| {
+        provider.id == "openai" && provider.auth_methods.contains(&AuthMethod::ChatGpt)
+    }) {
+        bail!("OpenAI ChatGPT sign-in is disabled in provider configuration");
+    }
+    Ok(())
+}
+
+async fn refresh_catalog_for_account(account: &AccountStatus) -> Result<AuthCommandResult> {
+    let profile = ModelProfile::for_chatgpt(account, "catalog-refresh-placeholder".into());
+    let binding = profile
+        .credential
+        .as_ref()
+        .ok_or_else(|| anyhow!("ChatGPT account binding is unavailable"))?;
+    let access_token = super::resolve_profile_credential(&profile)
+        .await?
+        .ok_or_else(|| anyhow!("ChatGPT account has no usable access token"))?;
+    let models = list_models(&http_client()?, &access_token).await?;
+    if models.is_empty() {
+        bail!("ChatGPT model catalog returned no displayable models");
+    }
+    let profiles = models
+        .into_iter()
+        .map(|model| ModelProfile::for_chatgpt(account, model.slug))
+        .collect::<Vec<_>>();
+    debug_assert!(profiles.iter().all(|candidate| {
+        candidate
+            .credential
+            .as_ref()
+            .is_some_and(|candidate_binding| {
+                candidate_binding.provider == binding.provider
+                    && candidate_binding.account == binding.account
+                    && candidate_binding.method == binding.method
+            })
+    }));
+    Ok(AuthCommandResult {
+        message: format!(
+            "Refreshed the ChatGPT model catalog ({} models). Use /model to choose one.",
+            profiles.len()
+        ),
+        profile: None,
+        profiles,
+    })
+}
+
 async fn finish_authorization(
     client: reqwest::Client,
     client_id: String,
@@ -294,11 +402,11 @@ async fn finish_authorization(
     }
     let expiry = unix_now()?.saturating_add(token.expires_in);
     let catalog = list_models(&client, &token.access_token).await?;
-    let Some(selected) = catalog.into_iter().next() else {
+    if catalog.is_empty() {
         bail!(
             "ChatGPT sign-in succeeded, but the account returned no displayable models; no usable profile was created"
         );
-    };
+    }
     let display = identity
         .email
         .clone()
@@ -314,6 +422,10 @@ async fn finish_authorization(
         expires_at: Some(expiry),
         active: true,
     };
+    let profiles = catalog
+        .iter()
+        .map(|model| ModelProfile::for_chatgpt(&record, model.slug.clone()))
+        .collect::<Vec<_>>();
     save_token_set(
         &account,
         &SecretTokens {
@@ -331,21 +443,15 @@ async fn finish_authorization(
         // local account metadata could not be atomically updated.
         return Err(error);
     }
-    let profile = ModelProfile::for_chatgpt(&record, selected.slug);
-    let message = if selected.display_name.is_empty() {
-        format!(
-            "Signed in to ChatGPT; created profile '{}' using an available model.",
-            profile.name
-        )
-    } else {
-        format!(
-            "Signed in to ChatGPT; created profile '{}' for {}.",
-            profile.name, selected.display_name
-        )
-    };
+    let profile = profiles[0].clone();
+    let message = format!(
+        "Signed in to ChatGPT; loaded {} models. Use /model to choose one.",
+        profiles.len()
+    );
     Ok(AuthCommandResult {
         message,
         profile: Some(profile),
+        profiles,
     })
 }
 
@@ -507,10 +613,15 @@ async fn list_models(client: &reqwest::Client, access_token: &str) -> Result<Vec
 }
 
 fn displayable_models(catalog: ModelCatalog) -> Vec<CatalogModel> {
+    let mut seen = std::collections::HashSet::new();
     catalog
         .models
         .into_iter()
-        .filter(|model| model.visibility == "list" && !model.slug.trim().is_empty())
+        .filter(|model| {
+            model.visibility == "list"
+                && !model.slug.trim().is_empty()
+                && seen.insert(model.slug.clone())
+        })
         .collect()
 }
 
@@ -1003,12 +1114,15 @@ mod tests {
         let catalog: ModelCatalog = serde_json::from_value(serde_json::json!({ "models": [
             {"slug":"hidden","display_name":"Hidden","visibility":"private"},
             {"slug":"","display_name":"No slug","visibility":"list"},
-            {"slug":"available-model","display_name":"Available Model","visibility":"list"}
+            {"slug":"available-model","display_name":"Available Model","visibility":"list"},
+            {"slug":"available-model","display_name":"Duplicate","visibility":"list"},
+            {"slug":"later-model","display_name":"Later Model","visibility":"list"}
         ]}))
         .unwrap();
         let available = displayable_models(catalog);
-        assert_eq!(available.len(), 1);
+        assert_eq!(available.len(), 2);
         assert_eq!(available[0].slug, "available-model");
+        assert_eq!(available[1].slug, "later-model");
     }
 
     #[tokio::test]

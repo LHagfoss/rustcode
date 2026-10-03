@@ -1362,6 +1362,59 @@ fn status_screen_uses_the_viewport_above_the_composer() {
 }
 
 #[test]
+fn status_and_usage_show_bound_provider_identity_and_usage_guidance() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let account_id = "render-test-account-1687";
+    let profile = rustcode::controller::ModelProfile {
+        name: "chatgpt-render-test".into(),
+        model: "gpt-test-model".into(),
+        url: "https://api.openai.com/v1/responses".into(),
+        engine: Some("openai".into()),
+        api_protocol: Some(rustcode::controller::ApiProtocol::Responses),
+        credential: Some(rustcode::controller::CredentialRef {
+            provider: "openai".into(),
+            account: account_id.into(),
+            method: rustcode::controller::AuthMethod::ChatGpt,
+        }),
+        ..Default::default()
+    };
+    let mut state = RenderState::new();
+    state.config.models.push(profile);
+    state.config.default.set_big("chatgpt-render-test".into());
+    state.model_name = "gpt-test-model".into();
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 20,
+        completion_tokens: 8,
+        total_tokens: 28,
+        ..Default::default()
+    });
+    state.current_turn_token_usage_is_estimated = true;
+    state.show_status_modal = true;
+    let status = render_state_to_text(&mut state, 100, 30);
+    assert!(status.contains("Session status"), "{status:?}");
+    assert!(status.contains("ChatGPT"), "{status:?}");
+    assert!(status.contains(account_id), "{status:?}");
+    assert!(status.contains("Method:"), "{status:?}");
+    assert!(status.contains("State:"), "{status:?}");
+    assert!(status.contains("gpt-test-model"), "{status:?}");
+
+    state.show_status_modal = false;
+    state.show_stats_modal = true;
+    let usage = render_state_to_text(&mut state, 100, 30);
+    assert!(usage.contains("Token usage"), "{usage:?}");
+    assert!(usage.contains("chatgpt.com/settings/usage"), "{usage:?}");
+    assert!(
+        usage.contains("Local token totals are not provider billing totals."),
+        "{usage:?}"
+    );
+    assert!(usage.contains(account_id), "{usage:?}");
+    assert!(
+        usage.contains("20 prompt + 8 completion = 28 tokens (estimated)"),
+        "{usage:?}"
+    );
+}
+
+#[test]
 fn slash_command_modal_leaves_the_transcript_visible_above_it() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let row_of = |rendered: &str, needle: &str| {
@@ -1512,11 +1565,16 @@ fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
             render_with_transcript(frame, &mut state, &mut transcript);
         })
         .unwrap();
-    assert_eq!(transcript.panel_selection_area, Some(previous_area));
+    assert_ne!(
+        transcript.panel_selection_area,
+        Some(previous_area),
+        "the taller provider-aware status panel should have its own selection surface"
+    );
     assert!(
         !transcript.panel_selection.has_selection(),
-        "a same-sized status panel must not inherit the session panel range"
+        "a resized status panel must not inherit the session panel range"
     );
+    assert!(transcript.panel_selection.selected_text().is_none());
 
     state.show_status_modal = false;
     terminal

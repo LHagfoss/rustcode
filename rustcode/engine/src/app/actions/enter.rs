@@ -51,7 +51,10 @@ async fn handle_enter_inner(
 
     // Record every submitted input for arrow-key recall — plain text and slash
     // commands alike. Consecutive duplicates are collapsed, shell-style.
-    if !is_provider_auth_command(&raw_input) && s.input_history.last() != Some(&raw_input) {
+    if (!is_provider_auth_command(&raw_input)
+        || is_safe_provider_auth_recall(&raw_input, &s.config))
+        && s.input_history.last() != Some(&raw_input)
+    {
         s.input_history.push(raw_input.clone());
     }
 
@@ -1215,10 +1218,99 @@ pub(super) fn is_provider_auth_command(input: &str) -> bool {
         .split_whitespace()
         .next()
         .is_some_and(|name| {
-            ["/login", "/auth", "/logout"]
+            ["/login", "/auth", "/logout", "/accounts", "/account"]
                 .iter()
                 .any(|valid| name.eq_ignore_ascii_case(valid))
         })
+}
+
+pub(super) fn is_safe_provider_auth_recall(input: &str, config: &crate::config::AppConfig) -> bool {
+    let words = input.split_whitespace().collect::<Vec<_>>();
+    let Some(command) = words.first() else {
+        return false;
+    };
+    let command = command.to_ascii_lowercase();
+    let provider = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    let account = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    let environment_variable = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.as_bytes()[0].is_ascii_digit()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    };
+    let provider_is_configured = |provider_name: &str| {
+        config
+            .providers
+            .iter()
+            .any(|provider| provider.id.eq_ignore_ascii_case(provider_name))
+    };
+    let known_account = |provider_name: &str, account_id: &str| {
+        config.providers.iter().any(|provider| {
+            provider.id.eq_ignore_ascii_case(provider_name)
+                && crate::provider_auth::has_saved_account(&provider.id, account_id)
+        })
+    };
+    match (command.as_str(), words.get(1..).unwrap_or_default()) {
+        ("/login", []) => true,
+        ("/login", [provider_name]) => {
+            provider(provider_name) && provider_is_configured(provider_name)
+        }
+        ("/login", [provider_name, new])
+            if provider_name.eq_ignore_ascii_case("openai") && new.eq_ignore_ascii_case("new") =>
+        {
+            provider_is_configured(provider_name)
+        }
+        ("/login", [provider_name, account_id]) if provider_name.eq_ignore_ascii_case("openai") => {
+            account(account_id)
+                && provider_is_configured(provider_name)
+                && known_account(provider_name, account_id)
+        }
+        ("/login", [provider_name, method, env_var])
+            if provider(provider_name)
+                && provider_is_configured(provider_name)
+                && method.eq_ignore_ascii_case("api-key") =>
+        {
+            environment_variable(env_var)
+        }
+        ("/auth", [status]) => {
+            status.eq_ignore_ascii_case("status") || status.eq_ignore_ascii_case("list")
+        }
+        ("/accounts", []) | ("/account", []) | ("/account", ["refresh"]) => true,
+        ("/account", [refresh, provider_name]) if refresh.eq_ignore_ascii_case("refresh") => {
+            provider(provider_name) && provider_is_configured(provider_name)
+        }
+        ("/account", [refresh, provider_name, account_id])
+            if refresh.eq_ignore_ascii_case("refresh") =>
+        {
+            provider(provider_name)
+                && account(account_id)
+                && known_account(provider_name, account_id)
+        }
+        ("/logout", [provider_name]) => {
+            provider(provider_name) && provider_is_configured(provider_name)
+        }
+        ("/logout", [provider_name, account_id]) => {
+            provider(provider_name)
+                && provider_is_configured(provider_name)
+                && account(account_id)
+                && known_account(provider_name, account_id)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn normalize_provider_auth_command(input: &str) -> String {
@@ -1247,27 +1339,17 @@ fn start_provider_auth(
         }
         match result {
             Ok(result) => {
-                if let Some(profile) = result.profile {
-                    let profile_name = profile.name.clone();
-                    state.model_name = profile.model.clone();
-                    state.api_base_url = profile.url.clone();
-                    if let Some(existing) = state
-                        .config
-                        .models
-                        .iter_mut()
-                        .find(|existing| existing.name == profile_name)
-                    {
-                        *existing = profile;
-                    } else {
-                        state.config.models.push(profile);
-                    }
-                    state.config.default.set_big(profile_name);
+                let persist_profiles = result.profile.is_some() || !result.profiles.is_empty();
+                let selected_profile = apply_provider_auth_result(&mut state, &result);
+                if persist_profiles {
                     crate::config::save_entire_config(&state.config);
-                    crate::config::record_session_settings_for_profile(
-                        &state.active_session_id,
-                        &state.config,
-                        state.config.default.big(),
-                    );
+                    if selected_profile.is_some() {
+                        crate::config::record_session_settings_for_profile(
+                            &state.active_session_id,
+                            &state.config,
+                            state.config.default.big(),
+                        );
+                    }
                 }
                 state.show_command_panel("Provider authentication", result.message);
             }
@@ -1277,6 +1359,18 @@ fn start_provider_auth(
             ),
         }
     });
+}
+
+pub(super) fn apply_provider_auth_result(
+    state: &mut AppState,
+    result: &crate::provider_auth::AuthCommandResult,
+) -> Option<crate::config::ModelProfile> {
+    let selected = crate::provider_auth::apply_auth_result(&mut state.config, result);
+    if let Some(profile) = &selected {
+        state.model_name = profile.model.clone();
+        state.api_base_url = profile.url.clone();
+    }
+    selected
 }
 
 fn prompt_command_roots(state: &AppState) -> crate::prompt_commands::Roots {

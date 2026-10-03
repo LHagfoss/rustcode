@@ -535,6 +535,18 @@ async fn run_native_slash(
             ));
             send_snapshot_locked(updates, session.generation, &state);
         }
+        NativeSlashCommand::Status => {
+            let mut state = session.state.lock().await;
+            let report = native_status_report(&state);
+            state.set_notice(report);
+            send_snapshot_locked(updates, session.generation, &state);
+        }
+        NativeSlashCommand::Usage => {
+            let mut state = session.state.lock().await;
+            let report = native_usage_report(&state);
+            state.set_notice(report);
+            send_snapshot_locked(updates, session.generation, &state);
+        }
         NativeSlashCommand::ProviderAuth(input) => {
             let (config, session_id) = {
                 let mut state = session.state.lock().await;
@@ -639,32 +651,68 @@ fn finish_native_provider_auth(
 ) {
     match result {
         Ok(result) => {
-            if let Some(profile) = result.profile {
-                let profile_name = profile.name.clone();
-                state.model_name = profile.model.clone();
-                state.api_base_url = profile.url.clone();
-                if let Some(existing) = state
-                    .config
-                    .models
-                    .iter_mut()
-                    .find(|existing| existing.name == profile_name)
-                {
-                    *existing = profile;
-                } else {
-                    state.config.models.push(profile);
+            if result.profile.is_some() || !result.profiles.is_empty() {
+                let profile = crate::provider_auth::apply_auth_result(&mut state.config, &result);
+                if let Some(profile) = profile {
+                    let profile_name = profile.name.clone();
+                    state.model_name = profile.model.clone();
+                    state.api_base_url = profile.url.clone();
+                    crate::config::record_session_settings_for_profile(
+                        &state.active_session_id,
+                        &state.config,
+                        &profile_name,
+                    );
                 }
-                state.config.default.set_big(profile_name);
                 crate::config::save_entire_config(&state.config);
-                crate::config::record_session_settings_for_profile(
-                    &state.active_session_id,
-                    &state.config,
-                    state.config.default.big(),
-                );
             }
             state.set_notice(result.message);
         }
         Err(error) => state.set_notice(format!("Provider authentication failed: {error:#}")),
     }
+}
+
+fn native_status_report(state: &AppState) -> String {
+    let provider = crate::provider_auth::provider_summary(&state.config);
+    let turn = if matches!(
+        &state.status,
+        crate::app::AppStatus::Streaming | crate::app::AppStatus::Queued
+    ) {
+        "active"
+    } else {
+        "inactive"
+    };
+    format!(
+        "{provider}\nSession: {}\nModel: {}\nTurn: {turn}\nQueue: {}",
+        state.active_session_id,
+        state.model_name,
+        state.pending_queue.len(),
+    )
+}
+
+fn native_usage_report(state: &AppState) -> String {
+    let provider = crate::provider_auth::provider_usage_summary(&state.config);
+    let local = state
+        .current_turn_token_usage
+        .as_ref()
+        .or(state.current_token_usage.as_ref());
+    let local_summary = match local {
+        Some(usage) => format!(
+            "Current session turn: {} prompt + {} completion = {} tokens{}",
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            if state.current_turn_token_usage_is_estimated {
+                " (estimated)"
+            } else {
+                ""
+            }
+        ),
+        None => "Current session turn: no token data yet".to_owned(),
+    };
+    format!(
+        "{}\n{provider}\n{local_summary}\nUsage help: provider usage is shown only when the provider exposes it; local token totals describe this session.",
+        crate::provider_auth::provider_summary(&state.config),
+    )
 }
 
 fn restore_session_profile(state: &mut AppState, profile_name: &str) {
@@ -682,9 +730,13 @@ fn restore_session_profile(state: &mut AppState, profile_name: &str) {
 
 #[cfg(test)]
 mod worker_tests {
-    use super::restore_session_profile;
+    use super::{
+        finish_native_provider_auth, native_status_report, native_usage_report,
+        restore_session_profile,
+    };
     use crate::app::AppState;
-    use crate::config::ModelProfile;
+    use crate::config::{ApiProtocol, ModelProfile};
+    use crate::provider_auth::{AuthCommandResult, AuthMethod, CredentialRef};
 
     #[test]
     fn restoring_profile_keeps_credential_identity_selected() {
@@ -701,6 +753,80 @@ mod worker_tests {
         assert_eq!(state.config.default.big(), "openai-chatgpt-account-b");
         assert_eq!(state.model_name, "gpt-5-codex");
         assert_eq!(state.api_base_url, "https://api.openai.com/v1/responses");
+    }
+
+    #[test]
+    fn provider_auth_catalog_installs_every_profile_and_activates_selection() {
+        let mut state = AppState::new();
+        let binding = CredentialRef {
+            provider: "openai".into(),
+            account: "native-catalog-test-account".into(),
+            method: AuthMethod::ChatGpt,
+        };
+        let profile = |name: &str, model: &str| ModelProfile {
+            name: name.into(),
+            model: model.into(),
+            url: "https://api.openai.com/v1/responses".into(),
+            engine: Some("openai".into()),
+            api_protocol: Some(ApiProtocol::Responses),
+            credential: Some(binding.clone()),
+            ..Default::default()
+        };
+        let selected = profile("openai-plan-selected", "gpt-plan-selected");
+        let other = profile("openai-plan-other", "gpt-plan-other");
+        finish_native_provider_auth(
+            &mut state,
+            Ok(AuthCommandResult {
+                message: "Model catalog refreshed.".into(),
+                profile: Some(selected.clone()),
+                profiles: vec![selected.clone(), other.clone()],
+            }),
+        );
+
+        assert!(
+            state
+                .config
+                .models
+                .iter()
+                .any(|item| item.model == other.model)
+        );
+        assert!(
+            state
+                .config
+                .models
+                .iter()
+                .any(|item| item.model == selected.model)
+        );
+        assert_eq!(state.config.default.big(), selected.name);
+        assert_eq!(state.model_name, selected.model);
+        assert!(
+            state
+                .history
+                .last()
+                .is_some_and(|item| item.content == "Model catalog refreshed.")
+        );
+    }
+
+    #[test]
+    fn native_status_and_usage_include_session_data_without_quota_claims() {
+        let mut state = AppState::new();
+        state.current_turn_token_usage = Some(crate::app::TokenUsage {
+            prompt_tokens: 20,
+            completion_tokens: 8,
+            total_tokens: 28,
+            ..Default::default()
+        });
+        state.current_turn_token_usage_is_estimated = true;
+
+        let status = native_status_report(&state);
+        assert!(status.contains(&format!("Session: {}", state.active_session_id)));
+        assert!(status.contains("Provider:"));
+        assert!(status.contains("Turn: inactive"));
+
+        let usage = native_usage_report(&state);
+        assert!(usage.contains("20 prompt + 8 completion = 28 tokens (estimated)"));
+        assert!(usage.contains("Usage help:"));
+        assert!(!usage.to_ascii_lowercase().contains("quota remaining"));
     }
 }
 

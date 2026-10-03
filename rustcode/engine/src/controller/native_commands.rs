@@ -8,6 +8,8 @@ pub(super) enum NativeSlashCommand {
     Cancel,
     Model(Option<String>),
     ProviderAuth(String),
+    Status,
+    Usage,
     ChangeTitle(Option<String>),
     Info,
     Unknown(String),
@@ -26,11 +28,15 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
         "/new" => NativeSlashCommand::New,
         "/clear" => NativeSlashCommand::Clear,
         "/cancel" => NativeSlashCommand::Cancel,
-        "/login" | "/logout" | "/auth" => NativeSlashCommand::ProviderAuth(format!(
-            "{}{}",
-            name.to_ascii_lowercase(),
-            &input[name.len()..]
-        )),
+        "/login" | "/logout" | "/auth" | "/account" | "/accounts" => {
+            NativeSlashCommand::ProviderAuth(format!(
+                "{}{}",
+                name.to_ascii_lowercase(),
+                &input[name.len()..]
+            ))
+        }
+        "/status" => NativeSlashCommand::Status,
+        "/usage" => NativeSlashCommand::Usage,
         "/model" => NativeSlashCommand::Model((!arguments.is_empty()).then(|| arguments.into())),
         "/change_title" => {
             NativeSlashCommand::ChangeTitle((!arguments.is_empty()).then(|| arguments.into()))
@@ -40,7 +46,7 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
     })
 }
 
-pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/login` — Show provider login methods\n- `/login <provider>` — Sign in to a provider\n- `/login <provider> api-key <ENV_VAR>` — Save an API key environment variable\n- `/auth status` — Show saved provider accounts\n- `/logout <provider> [account-id]` — Sign out of a provider account\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
+pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/login` — Show provider login methods\n- `/login <provider>` — Sign in to a provider\n- `/login <provider> api-key <ENV_VAR>` — Save an API key environment variable\n- `/auth status` — Show saved provider accounts\n- `/accounts` — List configured provider accounts\n- `/account refresh [provider] [account-id]` — Refresh a provider model catalog\n- `/logout <provider> [account-id]` — Sign out of a provider account\n- `/status` — Show provider and session status\n- `/usage` — Show provider usage and local session token totals\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
 
 #[cfg(test)]
 mod tests {
@@ -60,6 +66,18 @@ mod tests {
         );
         assert_eq!(parse("/model"), Some(NativeSlashCommand::Model(None)));
         assert_eq!(parse("/info"), Some(NativeSlashCommand::Info));
+        assert_eq!(parse("/status"), Some(NativeSlashCommand::Status));
+        assert_eq!(parse("/usage"), Some(NativeSlashCommand::Usage));
+        assert_eq!(
+            parse("/accounts"),
+            Some(NativeSlashCommand::ProviderAuth("/accounts".into()))
+        );
+        assert_eq!(
+            parse("/account refresh openai account-1"),
+            Some(NativeSlashCommand::ProviderAuth(
+                "/account refresh openai account-1".into()
+            ))
+        );
         assert_eq!(parse("ordinary prompt"), None);
         assert_eq!(
             parse("/not-supported argument"),

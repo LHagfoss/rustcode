@@ -89,6 +89,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Sign out of a provider account",
     },
     CommandInfo {
+        name: "/accounts",
+        desc: "List saved provider accounts",
+    },
+    CommandInfo {
+        name: "/account",
+        desc: "Show active profile and provider account status",
+    },
+    CommandInfo {
         name: "/models",
         desc: "Open the model picker",
     },
@@ -454,13 +462,14 @@ mod tests {
 
     #[test]
     fn provider_auth_commands_are_discoverable() {
-        for input in ["/log", "/au", "/logo"] {
+        for input in ["/log", "/au", "/logo", "/acc"] {
             let matches = filtered_commands(input);
-            assert!(
-                matches
-                    .iter()
-                    .any(|command| { matches!(command.name, "/login" | "/auth" | "/logout") })
-            );
+            assert!(matches.iter().any(|command| {
+                matches!(
+                    command.name,
+                    "/login" | "/auth" | "/logout" | "/accounts" | "/account"
+                )
+            }));
         }
     }
 

@@ -1256,18 +1256,23 @@ async fn informational_commands_open_panels_without_history_even_while_busy() {
 }
 
 #[test]
-fn provider_auth_slash_commands_are_not_added_to_input_recall() {
+fn provider_auth_commands_are_recognized_for_auth_dispatch() {
     for command in [
         "/login openai",
         "/login openai api-key OPENAI_KEY",
         "/auth status",
         "/logout openai",
+        "/accounts",
+        "/account",
+        "/account refresh",
     ] {
         assert!(super::enter::is_provider_auth_command(command), "{command}");
     }
     assert!(super::enter::is_provider_auth_command(
         "/LOGIN openai api-key POTENTIALLY_SENSITIVE"
     ));
+    assert!(super::enter::is_provider_auth_command("/accounts"));
+    assert!(super::enter::is_provider_auth_command("/account refresh"));
     assert_eq!(
         super::enter::normalize_provider_auth_command("/LOGIN OpenAI"),
         "/login OpenAI"
@@ -1276,6 +1281,138 @@ fn provider_auth_slash_commands_are_not_added_to_input_recall() {
     assert!(!super::enter::is_provider_auth_command(
         "plain prompt mentioning /login"
     ));
+}
+
+#[tokio::test]
+async fn auth_recall_keeps_safe_login_but_excludes_literal_key_attempts() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+    {
+        let mut state = state.lock().await;
+        state.input_buffer = "/login".into();
+        state.cursor_position = state.input_buffer.len();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+    assert_eq!(state.lock().await.input_history, ["/login"]);
+
+    {
+        let mut state = state.lock().await;
+        state.input_buffer = "/login openai api-key sk-live-secret".into();
+        state.cursor_position = state.input_buffer.len();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+    let state = state.lock().await;
+    assert_eq!(state.input_history, ["/login"]);
+    assert!(
+        state
+            .history
+            .iter()
+            .all(|message| !message.content.contains("sk-live-secret"))
+    );
+}
+
+#[test]
+fn provider_auth_recall_only_keeps_well_formed_non_secret_commands() {
+    let mut config = crate::config::AppConfig::default();
+    config.providers.push(crate::config::ProviderDefinition {
+        id: "my-provider".into(),
+        display_name: "My Provider".into(),
+        api_key_env: Some("MY_PROVIDER_KEY".into()),
+        auth_methods: vec![crate::provider_auth::AuthMethod::ApiKey],
+        base_url: Some("https://api.example.com/v1".into()),
+    });
+    for command in [
+        "/login",
+        "/login openai",
+        "/login openai new",
+        "/login my-provider api-key MY_PROVIDER_KEY",
+        "/auth status",
+        "/auth list",
+        "/accounts",
+        "/account",
+        "/account refresh",
+        "/account refresh openai",
+        "/logout openai",
+    ] {
+        assert!(
+            super::enter::is_safe_provider_auth_recall(command, &config),
+            "expected safe command to be recalled: {command}"
+        );
+    }
+
+    for command in [
+        "/login openai api-key sk-live-secret",
+        "/login sk-live-secret",
+        "/login unknown-provider",
+        "/login openai unknown-account",
+        "/login openai api-key-default",
+        "/login openai unexpected",
+        "/login my-provider api-key",
+        "/auth status extra",
+        "/accounts extra",
+        "/account refresh my-provider secret",
+        "/account refresh openai QWNjb3VudElE",
+        "/logout openai sk-live-secret",
+        "/logout openai QWNjb3VudElE",
+        "/logout unknown-provider",
+        "/logout openai extra secret",
+    ] {
+        assert!(
+            !super::enter::is_safe_provider_auth_recall(command, &config),
+            "unsafe command entered recall: {command}"
+        );
+    }
+}
+
+#[test]
+fn provider_account_aliases_appear_in_help() {
+    let help = super::commands::build_help_text();
+    for command in ["/login", "/auth", "/accounts", "/account", "/logout"] {
+        assert!(help.contains(command), "missing {command} from help");
+    }
+}
+
+#[test]
+fn tui_auth_completion_installs_all_catalog_profiles_and_selects_success_profile() {
+    let mut state = crate::app::AppState::new();
+    let credential = crate::provider_auth::CredentialRef {
+        provider: "openai".into(),
+        account: "account-id".into(),
+        method: crate::provider_auth::AuthMethod::ChatGpt,
+    };
+    let profiles = ["model-a", "model-b"]
+        .into_iter()
+        .map(|model| crate::config::ModelProfile {
+            name: format!("chatgpt-{model}"),
+            url: "https://api.openai.com/v1/responses".into(),
+            model: model.into(),
+            credential: Some(credential.clone()),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let result = crate::provider_auth::AuthCommandResult {
+        message: "Signed in".into(),
+        profile: Some(profiles[1].clone()),
+        profiles: profiles.clone(),
+    };
+
+    super::enter::apply_provider_auth_result(&mut state, &result);
+
+    assert!(profiles.iter().all(|incoming| {
+        state
+            .config
+            .models
+            .iter()
+            .any(|installed| installed.name == incoming.name)
+    }));
+    assert_eq!(state.config.default.big(), "chatgpt-model-b");
+    assert_eq!(state.model_name, "model-b");
+    assert_eq!(state.api_base_url, "https://api.openai.com/v1/responses");
 }
 
 #[tokio::test]
