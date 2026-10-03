@@ -67,7 +67,7 @@ struct IdClaims {
     sub: String,
     #[serde(rename = "exp")]
     _exp: usize,
-    nonce: String,
+    nonce: Option<String>,
     #[serde(default)]
     email: Option<String>,
 }
@@ -691,7 +691,7 @@ fn validate_id_token_with_jwks(
         .context("OpenAI ID token signature or claims were invalid")?
         .claims;
     if claims.iss != ISSUER
-        || nonce.is_some_and(|expected| claims.nonce != expected)
+        || nonce.is_some_and(|expected| claims.nonce.as_deref() != Some(expected))
         || claims.sub.trim().is_empty()
     {
         bail!("OpenAI ID token identity validation failed");
@@ -1071,6 +1071,22 @@ mod tests {
             validate_id_token_with_jwks(&token, "fixture-client", Some("expected-nonce"), &jwks)
                 .unwrap();
         assert_eq!(claims.sub, "fixture-subject");
+
+        // A token refresh has no new authorization nonce. A signed ID token
+        // without that claim must remain usable only in the refresh path.
+        let mut without_nonce = valid.clone();
+        without_nonce.as_object_mut().unwrap().remove("nonce");
+        let refresh_token = jsonwebtoken::encode(&header, &without_nonce, &encoding_key).unwrap();
+        assert!(validate_id_token_with_jwks(&refresh_token, "fixture-client", None, &jwks).is_ok());
+        assert!(
+            validate_id_token_with_jwks(
+                &refresh_token,
+                "fixture-client",
+                Some("expected-nonce"),
+                &jwks
+            )
+            .is_err()
+        );
 
         for invalid in [
             serde_json::json!({ "iss": "https://attacker.example", "sub": "fixture-subject", "aud": "fixture-client", "exp": unix_now().unwrap() + 600, "nonce": "expected-nonce" }),
