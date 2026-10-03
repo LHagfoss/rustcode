@@ -393,14 +393,14 @@ pub fn mcp_tool_display_name(name: &str) -> Option<String> {
 pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     collect_mcp_tools_with_servers()
         .into_iter()
-        .map(|(name, _, description, schema)| (name, description, schema))
+        .map(|(name, _, _, description, schema)| (name, description, schema))
         .collect()
 }
 
 /// Collect MCP schemas with their configured server name alongside the
 /// provider-facing tool name. The owner is needed for per-server reservations;
 /// the provider-facing name remains unchanged for compatibility.
-fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, Value)> {
+fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, String, Value)> {
     let mut discovered = Vec::new();
     let mut clients_for_names = Vec::new();
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
@@ -448,10 +448,10 @@ fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, Value)> {
         let name = if qualified {
             mcp_canonical_name_for_clients(&server, &raw_name, &clients_for_names)
         } else {
-            raw_name
+            raw_name.clone()
         };
         if emitted.insert(name.clone()) {
-            out.push((name, server, desc, schema));
+            out.push((name, server, raw_name, desc, schema));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1030,6 +1030,7 @@ fn user_mentions_mcp_server(messages: &[Value], server: &str) -> bool {
 fn mcp_tools_selected_by_discovery_calls(
     tools: &[(String, String, Value)],
     owners: &[String],
+    raw_names: &[String],
     messages: &[Value],
 ) -> std::collections::HashSet<String> {
     let mut selected = std::collections::HashSet::new();
@@ -1090,13 +1091,11 @@ fn mcp_tools_selected_by_discovery_calls(
     let mut matched = tools
         .iter()
         .zip(owners)
-        .filter_map(|((name, description, _), owner)| {
+        .zip(raw_names)
+        .filter_map(|(((name, description, _), owner), raw_name)| {
             if server.is_some_and(|server| server != owner) {
                 return None;
             }
-            let raw_name = name
-                .strip_prefix(&mcp_canonical_name(owner, ""))
-                .unwrap_or(name);
             if query.as_ref().is_some_and(|query| {
                 !raw_name.to_lowercase().contains(query)
                     && !description.to_lowercase().contains(query)
@@ -1128,11 +1127,12 @@ fn mcp_tools_selected_by_discovery_calls(
 fn explicitly_requested_mcp_tool_names(
     tools: &[(String, String, Value)],
     owners: &[String],
+    raw_names: &[String],
     messages: &[Value],
 ) -> std::collections::HashSet<String> {
     let mut requested = std::collections::HashSet::new();
     requested.extend(mcp_tools_selected_by_discovery_calls(
-        tools, owners, messages,
+        tools, owners, raw_names, messages,
     ));
     for (name, _, _) in tools {
         if user_message_mentions_name(messages, name)
@@ -1273,8 +1273,38 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
     sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
+    let raw_names = tools
+        .iter()
+        .zip(owners)
+        .map(|((name, _, _), owner)| {
+            name.strip_prefix(&mcp_canonical_name(owner, ""))
+                .unwrap_or(name)
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    select_mcp_tools_for_context_with_raw_names(
+        tools,
+        owners,
+        &raw_names,
+        always_include_servers,
+        messages,
+        sticky_names,
+        phase,
+    )
+}
+
+pub(super) fn select_mcp_tools_for_context_with_raw_names(
+    tools: &[(String, String, Value)],
+    owners: &[String],
+    raw_names: &[String],
+    always_include_servers: &[String],
+    messages: &[Value],
+    sticky_names: &[String],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
     let terms = context_terms(messages);
-    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, owners, messages);
+    let explicitly_requested =
+        explicitly_requested_mcp_tool_names(tools, owners, raw_names, messages);
     let mut requested = Vec::new();
     let mut previous = Vec::new();
     let mut relevant = Vec::new();
@@ -1650,17 +1680,22 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
         let collected = collect_mcp_tools_with_servers();
         let mcp_tools = collected
             .iter()
-            .map(|(name, _, description, schema)| {
+            .map(|(name, _, _, description, schema)| {
                 (name.clone(), description.clone(), schema.clone())
             })
             .collect::<Vec<_>>();
         let owners = collected
             .iter()
-            .map(|(_, server, _, _)| server.clone())
+            .map(|(_, server, _, _, _)| server.clone())
             .collect::<Vec<_>>();
-        let (selected, stats) = select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+        let raw_names = collected
+            .iter()
+            .map(|(_, _, raw_name, _, _)| raw_name.clone())
+            .collect::<Vec<_>>();
+        let (selected, stats) = select_mcp_tools_for_context_with_raw_names(
             &mcp_tools,
             &owners,
+            &raw_names,
             always_include_servers,
             messages,
             sticky_names,

@@ -590,6 +590,66 @@ fn discovery_handoff_uses_the_owner_boundary_for_double_underscore_servers() {
 }
 
 #[test]
+fn discovery_limit_handoff_orders_colliding_aliases_by_raw_tool_name() {
+    let mcp = vec![
+        (
+            "mcp__alpha___lookup__0000000000000001".to_string(),
+            "Lookup records".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "lookup__0".to_string(),
+            "Lookup zero records".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "mcp__alpha___lookup__0000000000000002".to_string(),
+            "Lookup records".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+    ];
+    let owners = vec![
+        "alpha!".to_string(),
+        "alpha!".to_string(),
+        "alpha_".to_string(),
+    ];
+    let raw_names = vec![
+        "lookup".to_string(),
+        "lookup__0".to_string(),
+        "lookup".to_string(),
+    ];
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Find one matching record"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"query\":\"lookup\",\"limit\":1}"
+                }
+            }]
+        }),
+    ];
+
+    let (selected, _) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &mcp,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &[],
+        super::schema::ToolSchemaPhase::Established,
+    );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    // Runtime inventory sorts by server then raw name; lookup is the first
+    // result even though its hashed callable alias sorts after lookup__0.
+    assert_eq!(names, ["mcp__alpha___lookup__0000000000000001"]);
+}
+
+#[test]
 fn a_pinned_menu_survives_a_transcript_that_rescores_every_tool() {
     let schema = serde_json::json!({"type":"object","properties":{}});
     // One more name-matching tool than the budget allows, so any change in the
