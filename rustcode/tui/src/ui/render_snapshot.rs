@@ -19,7 +19,13 @@ pub(crate) struct RenderSnapshot {
     recap_loading: bool,
     current_token_usage: Option<TokenUsage>,
     current_turn_token_usage: Option<TokenUsage>,
+    current_round_token_usage: Option<TokenUsage>,
+    current_round_estimated_input_tokens: u32,
+    current_round_estimated_output_tokens: u32,
+    current_provider_request_prompt_estimate: u32,
+    current_turn_token_usage_is_estimated: bool,
     token_usage_in_flight: bool,
+    provider_request_in_flight: bool,
     response_time: Option<std::time::Duration>,
     current_thought_time_ms: u64,
     current_thought_tokens: u32,
@@ -195,7 +201,13 @@ impl RenderSnapshot {
             recap_loading: view.recap_loading,
             current_token_usage: view.current_token_usage.clone(),
             current_turn_token_usage: view.current_turn_token_usage.clone(),
+            current_round_token_usage: view.current_round_token_usage.clone(),
+            current_round_estimated_input_tokens: view.current_round_estimated_input_tokens,
+            current_round_estimated_output_tokens: view.current_round_estimated_output_tokens,
+            current_provider_request_prompt_estimate: view.current_provider_request_prompt_estimate,
+            current_turn_token_usage_is_estimated: view.current_turn_token_usage_is_estimated,
             token_usage_in_flight: view.token_usage_in_flight,
+            provider_request_in_flight: view.provider_request_in_flight,
             response_time: view.response_time,
             current_thought_time_ms: view.current_thought_time_ms,
             current_thought_tokens: view.current_thought_tokens,
@@ -312,8 +324,26 @@ impl RenderSnapshot {
     pub(crate) fn current_turn_token_usage(&self) -> Option<&TokenUsage> {
         self.current_turn_token_usage.as_ref()
     }
+    pub(crate) fn current_round_token_usage(&self) -> Option<&TokenUsage> {
+        self.current_round_token_usage.as_ref()
+    }
+    pub(crate) fn current_round_estimated_input_tokens(&self) -> u32 {
+        self.current_round_estimated_input_tokens
+    }
+    pub(crate) fn current_round_estimated_output_tokens(&self) -> u32 {
+        self.current_round_estimated_output_tokens
+    }
+    pub(crate) fn current_provider_request_prompt_estimate(&self) -> u32 {
+        self.current_provider_request_prompt_estimate
+    }
+    pub(crate) fn current_turn_token_usage_is_estimated(&self) -> bool {
+        self.current_turn_token_usage_is_estimated
+    }
     pub(crate) fn token_usage_in_flight(&self) -> bool {
         self.token_usage_in_flight
+    }
+    pub(crate) fn provider_request_in_flight(&self) -> bool {
+        self.provider_request_in_flight
     }
     pub(crate) fn response_time(&self) -> Option<std::time::Duration> {
         self.response_time

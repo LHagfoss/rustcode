@@ -188,19 +188,36 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'sta
         rustcode::controller::ActivityKind::Ready
         | rustcode::controller::ActivityKind::ActionRequired => None,
         _ => {
-            let completed = state.current_turn_token_usage().map_or(0, |usage| {
-                u64::from(usage.prompt_tokens).saturating_add(u64::from(usage.completion_tokens))
-            });
-            let in_flight = state
-                .token_usage_in_flight()
-                .then(|| state.current_token_usage())
-                .flatten()
-                .map_or(0, |usage| {
+            let usage_tokens = |usage: Option<&rustcode::controller::TokenUsage>| {
+                usage.map_or(0, |usage| {
                     u64::from(usage.prompt_tokens)
                         .saturating_add(u64::from(usage.completion_tokens))
-                });
-            let tokens = completed.saturating_add(in_flight);
-            let provisional = state.token_usage_in_flight();
+                })
+            };
+            let completed = usage_tokens(state.current_turn_token_usage());
+            let completed_continuations = usage_tokens(state.current_round_token_usage())
+                .saturating_add(u64::from(state.current_round_estimated_input_tokens()))
+                .saturating_add(u64::from(state.current_round_estimated_output_tokens()));
+            let active_request = if state.provider_request_in_flight() {
+                if let Some(usage) = state.current_token_usage() {
+                    usage_tokens(Some(usage))
+                } else {
+                    state
+                        .stream_tracker()
+                        .map(|tracker| u64::from(tracker.snapshot().1))
+                        .unwrap_or_default()
+                        .saturating_add(u64::from(state.current_provider_request_prompt_estimate()))
+                }
+            } else {
+                0
+            };
+            let tokens = completed
+                .saturating_add(completed_continuations)
+                .saturating_add(active_request);
+            let provisional = state.token_usage_in_flight()
+                || state.current_turn_token_usage_is_estimated()
+                || state.current_round_estimated_input_tokens() > 0
+                || state.current_round_estimated_output_tokens() > 0;
             let mut spans = vec![
                 Span::styled(
                     format!("{} ", super::composer_render::running_spinner_char(state)),

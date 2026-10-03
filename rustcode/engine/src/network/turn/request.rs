@@ -138,14 +138,125 @@ fn should_retry_stream_transport(error: &runner::ResponseError, attempts: usize)
         && matches!(stream_output_phase(error), StreamOutputPhase::BeforeOutput)
 }
 
+fn add_projected_usage(total: &mut Option<crate::app::TokenUsage>, usage: &crate::app::TokenUsage) {
+    let target = total.get_or_insert_with(crate::app::TokenUsage::default);
+    target.prompt_tokens = target.prompt_tokens.saturating_add(usage.prompt_tokens);
+    target.completion_tokens = target
+        .completion_tokens
+        .saturating_add(usage.completion_tokens);
+    target.total_tokens = target.total_tokens.saturating_add(usage.total_tokens);
+    target.cached_tokens = Some(
+        target
+            .cached_tokens
+            .unwrap_or_default()
+            .saturating_add(usage.cached_tokens.unwrap_or_default()),
+    );
+    target.cache_write_tokens = Some(
+        target
+            .cache_write_tokens
+            .unwrap_or_default()
+            .saturating_add(usage.cache_write_tokens.unwrap_or_default()),
+    );
+    target.cache_discount = usage.cache_discount.or(target.cache_discount);
+}
+
+fn add_estimated_usage(
+    usage: Option<crate::app::TokenUsage>,
+    estimated_input: u32,
+    estimated_output: u32,
+) -> Option<crate::app::TokenUsage> {
+    if estimated_input == 0 && estimated_output == 0 {
+        return usage;
+    }
+    let usage = usage.unwrap_or_default();
+    Some(crate::app::TokenUsage {
+        prompt_tokens: usage.prompt_tokens.saturating_add(estimated_input),
+        completion_tokens: usage.completion_tokens.saturating_add(estimated_output),
+        total_tokens: usage
+            .total_tokens
+            .saturating_add(estimated_input)
+            .saturating_add(estimated_output),
+        cached_tokens: usage.cached_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        cache_discount: usage.cache_discount,
+    })
+}
+
+fn begin_provider_request(state: &mut crate::app::AppState, prompt_estimate: u32) {
+    state.current_token_usage = None;
+    state.stream_tracker = Some(crate::app::StreamTracker::new());
+    state.current_provider_request_prompt_estimate = prompt_estimate;
+    state.provider_request_in_flight = true;
+    state.request_redraw();
+}
+
+fn finish_provider_request(
+    state: &mut crate::app::AppState,
+    usage: Option<&crate::app::TokenUsage>,
+) {
+    if let Some(usage) = usage {
+        add_projected_usage(&mut state.current_round_token_usage, usage);
+    } else {
+        state.current_round_estimated_input_tokens = state
+            .current_round_estimated_input_tokens
+            .saturating_add(state.current_provider_request_prompt_estimate);
+        if let Some(tracker) = state.stream_tracker.as_ref() {
+            state.current_round_estimated_output_tokens = state
+                .current_round_estimated_output_tokens
+                .saturating_add(tracker.snapshot().1);
+        }
+    }
+    state.current_provider_request_prompt_estimate = 0;
+    state.provider_request_in_flight = false;
+    state.request_redraw();
+}
+
 /// Preserve usage from a provider attempt before retry setup clears the
 /// request-local field. This attempt is billable even when its stream later
 /// fails; taking the value also prevents it from being counted again with the
 /// successful retry response.
 fn settle_retry_attempt_usage(ctx: &mut TurnContext, state: &mut crate::app::AppState) {
-    let usage = state.current_token_usage.take();
+    let active_usage = state.current_token_usage.take();
+    let mut usage = state.current_round_token_usage.take();
+    if let Some(active_usage) = active_usage.as_ref() {
+        add_projected_usage(&mut usage, active_usage);
+    }
     ctx.record_token_usage(usage.as_ref());
+    let estimated_output =
+        state
+            .current_round_estimated_output_tokens
+            .saturating_add(if active_usage.is_none() {
+                state
+                    .stream_tracker
+                    .as_ref()
+                    .map(|tracker| tracker.snapshot().1)
+                    .unwrap_or_default()
+            } else {
+                0
+            });
+    let estimated_input =
+        state
+            .current_round_estimated_input_tokens
+            .saturating_add(if active_usage.is_none() {
+                state.current_provider_request_prompt_estimate
+            } else {
+                0
+            });
+    if estimated_input > 0 || estimated_output > 0 {
+        let estimate = crate::app::TokenUsage {
+            prompt_tokens: estimated_input,
+            completion_tokens: estimated_output,
+            total_tokens: estimated_input.saturating_add(estimated_output),
+            ..Default::default()
+        };
+        ctx.record_token_usage(Some(&estimate));
+        state.current_turn_token_usage_is_estimated = true;
+    }
+    state.current_round_estimated_input_tokens = 0;
+    state.current_round_estimated_output_tokens = 0;
+    state.current_provider_request_prompt_estimate = 0;
     state.current_turn_token_usage = ctx.response.turn_token_usage.clone();
+    state.provider_request_in_flight = false;
     state.request_redraw();
 }
 
@@ -391,7 +502,12 @@ pub(super) async fn collect_round(
         // value before a new request so an omitted usage footer cannot be
         // mistaken for a repeated report and counted twice.
         s.current_token_usage = None;
+        s.current_round_token_usage = None;
+        s.current_round_estimated_input_tokens = 0;
+        s.current_round_estimated_output_tokens = 0;
+        s.current_provider_request_prompt_estimate = 0;
         s.token_usage_in_flight = true;
+        s.provider_request_in_flight = false;
         s.current_thought_time_ms = 0;
         s.current_thought_tokens = 0;
         s.current_thought_started_at = None;
@@ -507,6 +623,14 @@ pub(super) async fn collect_round(
                 request_buffer.lock().await.reset();
                 let current_msgs =
                     messages_for_response_continuation(&request_msgs, &request.previous);
+                let prompt_estimate = estimate_token_usage(&current_msgs, "")
+                    .await
+                    .map(|usage| usage.prompt_tokens)
+                    .unwrap_or_default();
+                {
+                    let mut state = request_state.lock().await;
+                    begin_provider_request(&mut state, prompt_estimate);
+                }
                 let profile = if allow_thinking_router {
                     let s = request_state.lock().await;
                     s.config
@@ -545,6 +669,7 @@ pub(super) async fn collect_round(
                 let finish_reason = match stream_result {
                     Ok(finish_reason) => finish_reason,
                     Err(error) => {
+                        request_state.lock().await.provider_request_in_flight = false;
                         let (partial_content, partial_native_tool_calls) = {
                             let buffer = request_buffer.lock().await;
                             (
@@ -559,6 +684,12 @@ pub(super) async fn collect_round(
                         ));
                     }
                 };
+                let token_usage = {
+                    let mut state = request_state.lock().await;
+                    let usage = state.current_token_usage.clone();
+                    finish_provider_request(&mut state, usage.as_ref());
+                    usage
+                };
                 let buffer = request_buffer.lock().await;
                 Ok(runner::ResponseChunk {
                     content: buffer.content.clone(),
@@ -569,10 +700,7 @@ pub(super) async fn collect_round(
                     output_token_limit: buffer.output_token_limit,
                     thought_time_ms: buffer.thought_time_ms,
                     thought_tokens: buffer.thought_tokens,
-                    token_usage: {
-                        let state = request_state.lock().await;
-                        state.current_token_usage.clone()
-                    },
+                    token_usage,
                 })
             }
         })
@@ -609,6 +737,10 @@ pub(super) async fn collect_round(
     let collected = match collected {
         Ok(result) => result,
         Err(error) => {
+            {
+                let mut s = state.lock().await;
+                settle_retry_attempt_usage(ctx, &mut s);
+            }
             if !ctx.lifecycle.task_completed {
                 ctx.lifecycle.turn_machine.recover_error();
             }
@@ -758,22 +890,43 @@ pub(super) async fn collect_round(
             "content_bytes": content.len(),
         }),
     );
-    let latest_token_usage = {
+    let (latest_request_usage, has_round_estimates) = {
         let s = state.lock().await;
-        if s.current_token_usage.is_some() {
-            s.current_token_usage.clone()
-        } else {
-            drop(s);
-            let estimate = estimate_token_usage(&token_estimate_messages, &content).await;
-            state.lock().await.current_token_usage = estimate.clone();
-            estimate
-        }
+        (
+            s.current_token_usage.clone(),
+            s.current_round_estimated_input_tokens > 0
+                || s.current_round_estimated_output_tokens > 0,
+        )
     };
-    let token_usage = collected.token_usage.or_else(|| latest_token_usage.clone());
+    let latest_token_usage = if latest_request_usage.is_some() || has_round_estimates {
+        latest_request_usage
+    } else {
+        let estimate = estimate_token_usage(&token_estimate_messages, &content).await;
+        state.lock().await.current_token_usage = estimate.clone();
+        estimate
+    };
+    let (estimated_input, estimated_output) = {
+        let s = state.lock().await;
+        (
+            s.current_round_estimated_input_tokens,
+            s.current_round_estimated_output_tokens,
+        )
+    };
+    let has_provider_usage = collected.token_usage.is_some();
+    let has_latest_usage = latest_token_usage.is_some();
+    let token_usage = add_estimated_usage(
+        collected.token_usage.or_else(|| latest_token_usage.clone()),
+        estimated_input,
+        estimated_output,
+    );
     ctx.response.last_token_usage = latest_token_usage;
     ctx.record_token_usage(token_usage.as_ref());
     {
         let mut s = state.lock().await;
+        if estimated_input > 0 || estimated_output > 0 || (!has_provider_usage && has_latest_usage)
+        {
+            s.current_turn_token_usage_is_estimated = true;
+        }
         s.replace_current_response(content.clone());
         let reported = s
             .current_token_usage
@@ -813,11 +966,12 @@ pub(super) async fn collect_round(
 #[cfg(test)]
 mod tests {
     use super::{
-        StreamOutputPhase, TurnContext, native_stream_checkpoint_content,
-        prepare_request_steerability, recoverable_textual_stream_failure, retryable_stream_failure,
-        settle_retry_attempt_usage, should_retry_stream_transport, stream_interruption_notice,
-        stream_output_phase,
+        StreamOutputPhase, TurnContext, add_estimated_usage, begin_provider_request,
+        finish_provider_request, native_stream_checkpoint_content, prepare_request_steerability,
+        recoverable_textual_stream_failure, retryable_stream_failure, settle_retry_attempt_usage,
+        should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
     };
+    use crate::network::runner;
 
     #[test]
     fn thinking_router_keeps_real_user_steering_during_continuations() {
@@ -934,6 +1088,12 @@ mod tests {
 
     #[test]
     fn retry_after_provider_usage_keeps_both_attempts_once() {
+        let completed_continuation = crate::app::TokenUsage {
+            prompt_tokens: 900,
+            completion_tokens: 90,
+            total_tokens: 990,
+            ..Default::default()
+        };
         let failed_attempt = crate::app::TokenUsage {
             prompt_tokens: 1_000,
             completion_tokens: 120,
@@ -947,11 +1107,13 @@ mod tests {
             ..Default::default()
         };
         let mut state = crate::app::AppState::new();
+        state.current_round_token_usage = Some(completed_continuation.clone());
         state.current_token_usage = Some(failed_attempt);
         state.token_usage_in_flight = true;
         let mut ctx = TurnContext::new();
 
-        // A retryable stream can emit billable provider usage before failing.
+        // Earlier continuation chunks and the retryable failed stream are
+        // both billable, and must settle before retry state is cleared.
         settle_retry_attempt_usage(&mut ctx, &mut state);
         assert!(state.current_token_usage.is_none());
         assert!(state.token_usage_in_flight);
@@ -960,7 +1122,7 @@ mod tests {
                 .current_turn_token_usage
                 .as_ref()
                 .map(|usage| usage.total_tokens),
-            Some(1_120)
+            Some(2_110)
         );
 
         // The successful retry follows the normal completion accounting path.
@@ -974,7 +1136,153 @@ mod tests {
                     usage.total_tokens,
                 )
             }),
-            Some((2_080, 200, 2_280))
+            Some((2_980, 290, 3_270))
+        );
+    }
+
+    #[test]
+    fn mixed_footer_and_estimated_continuation_usage_accumulates_prompt_and_output_once() {
+        let footer = crate::app::TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            cached_tokens: Some(4),
+            ..Default::default()
+        };
+        let usage = add_estimated_usage(Some(footer), 27, 8).unwrap();
+        assert_eq!(
+            (
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+                usage.cached_tokens,
+            ),
+            (127, 28, 155, Some(4))
+        );
+    }
+
+    #[test]
+    fn each_provider_continuation_resets_live_state_and_keeps_round_usage() {
+        let completed_usage = crate::app::TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            ..Default::default()
+        };
+        let next_usage = crate::app::TokenUsage {
+            prompt_tokens: 140,
+            completion_tokens: 30,
+            total_tokens: 170,
+            ..Default::default()
+        };
+        let mut state = crate::app::AppState::new();
+        state.current_token_usage = Some(completed_usage.clone());
+        state.current_round_token_usage = Some(completed_usage.clone());
+        state.stream_tracker = Some(crate::app::StreamTracker::new());
+        state.stream_tracker.as_mut().unwrap().tokens_so_far = 55;
+
+        begin_provider_request(&mut state, 21);
+        assert!(state.current_token_usage.is_none());
+        assert_eq!(
+            state.stream_tracker.as_ref().unwrap().tokens_so_far,
+            0,
+            "a continuation must not inherit its previous stream estimate"
+        );
+        assert!(state.provider_request_in_flight);
+        assert_eq!(
+            state
+                .current_round_token_usage
+                .as_ref()
+                .unwrap()
+                .total_tokens,
+            120,
+            "completed continuation usage remains in the round projection"
+        );
+
+        state.stream_tracker.as_mut().unwrap().tokens_so_far = 8;
+        finish_provider_request(&mut state, None);
+        assert_eq!(state.current_round_estimated_input_tokens, 21);
+        assert_eq!(state.current_round_estimated_output_tokens, 8);
+        assert!(!state.provider_request_in_flight);
+
+        begin_provider_request(&mut state, 34);
+        assert!(state.current_token_usage.is_none());
+        assert_eq!(state.stream_tracker.as_ref().unwrap().tokens_so_far, 0);
+        state.current_token_usage = Some(next_usage.clone());
+        finish_provider_request(&mut state, Some(&next_usage));
+        let round = state.current_round_token_usage.as_ref().unwrap();
+        assert_eq!((round.prompt_tokens, round.completion_tokens), (240, 50));
+        assert_eq!(state.current_round_estimated_input_tokens, 21);
+        assert_eq!(state.current_round_estimated_output_tokens, 8);
+        assert_eq!(state.current_token_usage, Some(next_usage));
+    }
+
+    #[tokio::test]
+    async fn runner_does_not_reuse_usage_when_a_continuation_has_no_footer() {
+        let first_usage = crate::app::TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            ..Default::default()
+        };
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(crate::app::AppState::new()));
+        let mut calls = 0;
+        let collected = runner::collect_response(
+            runner::ContinuationPolicy {
+                max_continuations: 1,
+                ..Default::default()
+            },
+            |_request| {
+                calls += 1;
+                let call = calls;
+                let state = std::sync::Arc::clone(&state);
+                let first_usage = first_usage.clone();
+                async move {
+                    let mut app = state.lock().await;
+                    begin_provider_request(&mut app, 25 + call as u32);
+                    if call == 1 {
+                        app.current_token_usage = Some(first_usage.clone());
+                    } else {
+                        app.stream_tracker.as_mut().unwrap().tokens_so_far = 8;
+                    }
+                    let usage = app.current_token_usage.clone();
+                    finish_provider_request(&mut app, usage.as_ref());
+                    drop(app);
+                    Ok::<_, runner::ResponseError>(runner::ResponseChunk {
+                        content: if call == 1 { "part" } else { "ial" }.to_owned(),
+                        final_answer_boundary: crate::network::stream::FinalAnswerBoundary::None,
+                        provider_final_answer_state:
+                            crate::network::stream::ProviderFinalAnswerState::None,
+                        finish_reason: Some(if call == 1 { "length" } else { "stop" }.to_owned()),
+                        has_native_tool_calls: false,
+                        output_token_limit: None,
+                        thought_time_ms: 0,
+                        thought_tokens: 0,
+                        token_usage: usage,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("the provider continuation should finish");
+
+        assert_eq!(calls, 2);
+        assert_eq!(
+            collected.token_usage.as_ref().map(|usage| {
+                (
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                )
+            }),
+            Some((100, 20, 120))
+        );
+        let app = state.lock().await;
+        assert_eq!(app.current_round_estimated_input_tokens, 27);
+        assert_eq!(app.current_round_estimated_output_tokens, 8);
+        assert_eq!(
+            app.current_round_token_usage.as_ref().unwrap().total_tokens,
+            120
         );
     }
 

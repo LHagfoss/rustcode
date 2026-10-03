@@ -65,7 +65,12 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
             context.begin_next_segment();
         }
         state.current_turn_token_usage = context.response.turn_token_usage.clone();
+        state.current_round_token_usage = None;
+        state.current_round_estimated_input_tokens = 0;
+        state.current_round_estimated_output_tokens = 0;
+        state.current_provider_request_prompt_estimate = 0;
         state.token_usage_in_flight = false;
+        state.provider_request_in_flight = false;
         context
     } else {
         // A real user prompt starts a new logical task. Do not let a stale
@@ -73,7 +78,13 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // budgets.
         state.background_turn_context = None;
         state.current_turn_token_usage = None;
+        state.current_turn_token_usage_is_estimated = false;
+        state.current_round_token_usage = None;
+        state.current_round_estimated_input_tokens = 0;
+        state.current_round_estimated_output_tokens = 0;
+        state.current_provider_request_prompt_estimate = 0;
         state.token_usage_in_flight = false;
+        state.provider_request_in_flight = false;
         // Held-over tool calls belong to the previous task (#1590); the new
         // prompt's transcript never promised them.
         state.clear_deferred_tool_calls();
@@ -242,6 +253,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         let mut app = state.lock().await;
         app.token_usage_in_flight = false;
         app.current_turn_token_usage = ctx.response.turn_token_usage.clone();
+        app.current_turn_token_usage_is_estimated |= app.current_round_estimated_input_tokens > 0
+            || app.current_round_estimated_output_tokens > 0;
+        app.current_round_token_usage = None;
+        app.current_round_estimated_input_tokens = 0;
+        app.current_round_estimated_output_tokens = 0;
+        app.current_provider_request_prompt_estimate = 0;
+        app.provider_request_in_flight = false;
         app.request_redraw();
     }
     let round = match round {
