@@ -721,6 +721,7 @@ async fn run_interactive(
         eprintln!("rustcode: cannot resume session '{id}': {error}");
         std::process::exit(1);
     }
+    rustcode::clipboard::warm_image_paste();
     let terminal_runtime = TerminalRuntime::start(fullscreen, local_terminal)?;
     // Themes are a terminal-UI concern: shared state no longer applies them.
     // The interactive runtime seeds the palette once before the first frame;
