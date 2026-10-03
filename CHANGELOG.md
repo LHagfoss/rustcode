@@ -1,3 +1,10 @@
+## [v0.56.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.11) - 2026-10-03
+
+### Features
+- Load every displayable ChatGPT account model instead of only the first model, with short profile names and safe preservation of custom settings and selection.
+- Refresh connected model catalogs with `/login openai` or `/account refresh`, and inspect connections with `/accounts` and `/account`.
+- Show provider/account identity and provider usage guidance in `/status` and `/usage`, keeping local token totals separate from subscription quota and API billing.
+- Restore safe authentication commands to arrow-key recall and improve command help and compact status/usage panels.
 ## [v0.56.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.10) - 2026-10-03
 
 ### Features
