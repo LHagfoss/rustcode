@@ -158,12 +158,40 @@ fn recap_history(history: &[ChatMessage]) -> String {
         .join("\n\n")
 }
 
+fn automatic_recap_is_current(
+    live: &AppState,
+    session_id: &str,
+    revision: u64,
+    idle_since: Instant,
+    now: Instant,
+) -> bool {
+    let summary_history_len = live
+        .history
+        .iter()
+        .filter(|message| message.role != "system" && !message.conversation_recap)
+        .count();
+    live.active_session_id == session_id
+        && live.history.revision() == revision
+        && live.idle_since == idle_since
+        && now.saturating_duration_since(idle_since) >= RECAP_IDLE_DELAY
+        && live.status == AppStatus::Idle
+        && !live.orchestrator_running
+        && live.pending_queue.is_empty()
+        && live.config.auto_recap
+        && !live.modal_open()
+        && live.input_buffer.trim().is_empty()
+        && live.last_turn_had_model_final_response
+        && !crate::tools::has_background_tasks(&live.active_session_id)
+        && summary_history_len >= 2
+        && live.last_summary_history_len != Some(summary_history_len)
+}
+
 pub async fn generate_conversation_recap(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     manual: bool,
 ) {
-    let (temporary, request_id, session_id, revision, turns, transcript) = {
+    let (temporary, request_id, session_id, revision, turns, transcript, idle_since) = {
         let mut live = state.lock().await;
         if !manual
             && (live.status != AppStatus::Idle
@@ -171,6 +199,7 @@ pub async fn generate_conversation_recap(
                 || !live.pending_queue.is_empty()
                 || !live.summary_in_flight
                 || !live.config.auto_recap
+                || Instant::now().saturating_duration_since(live.idle_since) < RECAP_IDLE_DELAY
                 || live.modal_open()
                 || !live.input_buffer.trim().is_empty()
                 || !live.last_turn_had_model_final_response
@@ -233,6 +262,7 @@ pub async fn generate_conversation_recap(
             live.history.revision(),
             turns,
             transcript,
+            (!manual).then_some(live.idle_since),
         )
     };
     let (url, model) = {
@@ -266,7 +296,15 @@ pub async fn generate_conversation_recap(
             result = &mut request => break Some(result),
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 let live = state.lock().await;
-                if live.active_session_id != session_id || live.history.revision() != revision || live.status != AppStatus::Idle || live.orchestrator_running {
+                let current = if let Some(idle_since) = idle_since {
+                    automatic_recap_is_current(&live, &session_id, revision, idle_since, Instant::now())
+                } else {
+                    live.active_session_id == session_id
+                        && live.history.revision() == revision
+                        && live.status == AppStatus::Idle
+                        && !live.orchestrator_running
+                };
+                if !current {
                     cancel.cancel();
                     break None;
                 }
@@ -285,9 +323,13 @@ pub async fn generate_conversation_recap(
     }
     live.recap_request_id = None;
     live.summary_in_flight = false;
-    let stale = live.history.revision() != revision
-        || live.status != AppStatus::Idle
-        || live.orchestrator_running;
+    let stale = if let Some(idle_since) = idle_since {
+        !automatic_recap_is_current(&live, &session_id, revision, idle_since, Instant::now())
+    } else {
+        live.history.revision() != revision
+            || live.status != AppStatus::Idle
+            || live.orchestrator_running
+    };
     if !stale {
         if let Some(recap) = recap {
             live.history.push(
@@ -397,6 +439,71 @@ mod tests {
     }
 
     #[test]
+    fn automatic_recap_rechecks_draft_modal_and_background_guards() {
+        let mut state = AppState::new();
+        completed(&mut state, 1);
+        state.idle_since = Instant::now() - RECAP_IDLE_DELAY;
+        let session_id = state.active_session_id.clone();
+        let idle_since = state.idle_since;
+        let revision = state.history.revision();
+        let now = Instant::now();
+
+        assert!(automatic_recap_is_current(
+            &state,
+            &session_id,
+            revision,
+            idle_since,
+            now
+        ));
+        state.input_buffer = "draft".into();
+        assert!(!automatic_recap_is_current(
+            &state,
+            &session_id,
+            revision,
+            idle_since,
+            now
+        ));
+        state.input_buffer.clear();
+        state.show_status_modal = true;
+        assert!(!automatic_recap_is_current(
+            &state,
+            &session_id,
+            revision,
+            idle_since,
+            now
+        ));
+        state.show_status_modal = false;
+
+        crate::tools::spawn_background_task_for_test(
+            "automatic-recap-background-guard",
+            &session_id,
+            if cfg!(target_os = "windows") {
+                "ping -n 30 127.0.0.1 > NUL"
+            } else {
+                "sleep 30"
+            },
+        )
+        .unwrap();
+        for _ in 0..100 {
+            if crate::tools::background_task_snapshots(&session_id)
+                .first()
+                .is_some_and(|task| task.child_pid.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!automatic_recap_is_current(
+            &state,
+            &session_id,
+            revision,
+            idle_since,
+            Instant::now()
+        ));
+        crate::tools::stop_background_tasks(&session_id);
+    }
+
+    #[test]
     fn history_is_bounded_and_preserves_newest_corrections_and_answer_ends() {
         let mut history = Vec::new();
         for index in 0..10 {
@@ -472,6 +579,70 @@ mod tests {
 mod request_tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn delayed_provider() -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0);
+                bytes.extend_from_slice(&chunk[..read]);
+                if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            accepted_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            let content = r#"{"summary":"Implemented and tested the fix.","next_action":null}"#;
+            let delta = serde_json::json!({"choices":[{"delta":{"content":content}}]});
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {delta}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n"
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        (url, accepted_rx, release_tx, server)
+    }
+
+    fn automatic_recap_state(url: String) -> AppState {
+        let mut live = AppState::new();
+        live.api_base_url = url;
+        live.model_name = "recap-test".into();
+        live.config.models.clear();
+        live.history
+            .push(ChatMessage::new("user", "Fix scrolling."));
+        let mut answer = ChatMessage::new("assistant", "Implemented and tested.");
+        answer.completed_at = Some("2026-10-01T18:00:00Z".into());
+        live.history.push(answer);
+        live.last_turn_had_model_final_response = true;
+        live.idle_since = Instant::now() - RECAP_IDLE_DELAY;
+        assert!(live.claim_summary());
+        live
+    }
 
     #[tokio::test]
     async fn manual_recap_uses_tool_free_temporary_request_without_polluting_live_state() {
@@ -574,6 +745,71 @@ mod request_tests {
             assert!(!directory.join("history.json").exists());
             assert!(!directory.join("settings.json").exists());
         }
+    }
+
+    #[tokio::test]
+    async fn automatic_recap_is_cancelled_when_user_activity_resumes() {
+        let (url, accepted_rx, release_tx, server) = delayed_provider().await;
+        let live = automatic_recap_state(url);
+        let idle_since = live.idle_since;
+        let state = Arc::new(Mutex::new(live));
+        let task_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            generate_conversation_recap(&task_state, &reqwest::Client::new(), false).await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), accepted_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let mut live = state.lock().await;
+            live.mark_user_activity();
+            assert_ne!(live.idle_since, idle_since);
+        }
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("renewed activity cancels the automatic recap")
+            .unwrap();
+        release_tx.send(()).unwrap();
+        server.await.unwrap();
+
+        let live = state.lock().await;
+        assert_eq!(live.history.len(), 2);
+        assert!(
+            !live
+                .history
+                .iter()
+                .any(|message| message.conversation_recap)
+        );
+        assert!(!live.summary_in_flight);
+        assert!(live.recap_request_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn automatic_recap_completes_when_idle_state_is_unchanged() {
+        let (url, accepted_rx, release_tx, server) = delayed_provider().await;
+        let state = Arc::new(Mutex::new(automatic_recap_state(url)));
+        let task_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            generate_conversation_recap(&task_state, &reqwest::Client::new(), false).await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), accepted_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+
+        let live = state.lock().await;
+        assert_eq!(live.history.len(), 3);
+        assert!(live.history.last().unwrap().conversation_recap);
+        assert!(!live.summary_in_flight);
     }
 }
 
