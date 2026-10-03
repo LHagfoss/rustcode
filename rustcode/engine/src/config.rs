@@ -1203,7 +1203,8 @@ pub struct AppConfig {
     /// so project config may set it like `theme` and `fullscreen`.
     #[serde(default)]
     pub reduced_motion: bool,
-    /// Generate a catch-up recap after 30 minutes idle. Manual `/recap` remains available.
+    /// Generate a catch-up recap after 10 minutes idle following completed
+    /// work. Manual `/recap` remains available.
     #[serde(default = "default_true")]
     pub auto_recap: bool,
     /// Opaque legacy values retained through config rewrites, but never read
