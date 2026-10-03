@@ -118,7 +118,6 @@ pub struct AppState {
     pub(crate) last_recapped_turn_count: Option<usize>,
     pub(crate) recap_retry_after: Option<std::time::Instant>,
     pub(crate) recap_failed_turn_count: Option<usize>,
-    pub(crate) recap_unfocused_since: Option<std::time::Instant>,
     /// Count of conversational messages at which the last summary completed.
     /// A changed conversation is required before the idle timer can summarize again.
     pub(crate) last_summary_history_len: Option<usize>,
@@ -1116,7 +1115,6 @@ impl AppState {
             last_recapped_turn_count: None,
             recap_retry_after: None,
             recap_failed_turn_count: None,
-            recap_unfocused_since: None,
             last_summary_history_len: None,
             cursor_position: 0,
             composer_selection_anchor: None,
