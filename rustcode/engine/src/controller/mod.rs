@@ -29,14 +29,17 @@ pub(crate) fn next_approval_batch_id() -> String {
 #[cfg(test)]
 mod tests;
 
+pub use crate::provider_auth::{
+    AuthMethod, CredentialRef, provider_summary, provider_usage_summary,
+};
 pub use apply::{
     apply_approval_decision, apply_approval_decision_for_batch, apply_background_task_event,
     apply_question_answer, spawn_observed_orchestrator,
 };
 pub use attachments::save_image_attachment;
 pub use config::{
-    AgentMode, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta, ToolProtocol,
-    config_dir, sandbox_effective_description, save_config,
+    AgentMode, ApiProtocol, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta,
+    ToolProtocol, config_dir, sandbox_effective_description, save_config,
 };
 pub use context::{
     SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,

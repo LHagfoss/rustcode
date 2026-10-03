@@ -44,6 +44,15 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
                 .content
                 .contains("`/auth status` — Show saved provider accounts")
     }));
+    assert!(help.transcript.iter().any(|item| {
+        item.content
+            .contains("`/accounts` — List configured provider accounts")
+            && item.content.contains("`/account refresh")
+            && item
+                .content
+                .contains("`/status` — Show provider and session status")
+            && item.content.contains("`/usage` — Show provider usage")
+    }));
     assert!(
         !help
             .transcript
@@ -110,6 +119,55 @@ async fn native_info_command_reports_current_session_model_turn_and_queue() {
     assert!(notice.content.contains(&format!("Model: {model}")));
     assert!(notice.content.contains("Turn: inactive"));
     assert!(notice.content.contains("Queue: 0"));
+}
+
+#[tokio::test]
+async fn native_status_and_usage_report_provider_and_local_session_data() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let started = updates.recv().await.expect("session snapshot");
+    let ControllerUpdate::Snapshot(started) = started.update else {
+        panic!("expected session snapshot");
+    };
+    let session_id = started.session_id.expect("session id");
+    let model = started.selected_model.expect("selected model");
+
+    handle
+        .send(Command::Submit("/status".into()))
+        .expect("status");
+    let status = updates.recv().await.expect("status snapshot");
+    let ControllerUpdate::Snapshot(status) = status.update else {
+        panic!("expected status snapshot");
+    };
+    let status_text = status
+        .transcript
+        .iter()
+        .find(|item| item.content.contains(&format!("Session: {session_id}")))
+        .expect("provider-aware status notice");
+    assert!(status_text.content.contains(&format!("Model: {model}")));
+    assert!(status_text.content.contains("Provider:"));
+    assert!(status_text.content.contains("Turn: inactive"));
+
+    handle
+        .send(Command::Submit("/usage".into()))
+        .expect("usage");
+    let usage = updates.recv().await.expect("usage snapshot");
+    let ControllerUpdate::Snapshot(usage) = usage.update else {
+        panic!("expected usage snapshot");
+    };
+    let usage_text = usage
+        .transcript
+        .iter()
+        .find(|item| item.content.contains("Current session turn:"))
+        .expect("provider usage notice");
+    assert!(usage_text.content.contains("Usage help:"));
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 use super::*;
+use unicode_width::UnicodeWidthStr;
 
 /// Rectangle containing the selectable body of the active read-only info
 /// modal. The geometry mirrors the corresponding render function below, while
@@ -107,9 +108,9 @@ pub(in crate::ui) fn render_status_modal(
         .filter(|m| m.role == "assistant")
         .count();
     let tool_count = state.history().iter().filter(|m| m.role == "tool").count();
-    let mut lines = vec![
-        modal_header("Session status"),
-        Line::default(),
+    let mut lines = vec![modal_header("Session status"), Line::default()];
+    lines.extend(provider_summary_lines(state.config(), inner.width as usize));
+    lines.extend([
         panel_line("Model       ", state.model_name(), PanelEmphasis::Normal),
         panel_line(
             "Session     ",
@@ -121,7 +122,7 @@ pub(in crate::ui) fn render_status_modal(
             &format!("{user_count} user · {assistant_count} assistant · {tool_count} tool calls"),
             PanelEmphasis::Normal,
         ),
-    ];
+    ]);
     if let Some(usage) = state.current_token_usage() {
         lines.push(panel_line(
             "Last turn   ",
@@ -154,20 +155,32 @@ pub(in crate::ui) fn render_stats_modal(
         return;
     }
 
-    let mut lines = vec![modal_header("Token usage")];
-    match state.current_token_usage() {
+    let mut lines = vec![modal_header("Token usage"), Line::default()];
+    lines.extend(provider_summary_lines(state.config(), inner.width as usize));
+    lines.extend(provider_usage_lines(state.config(), inner.width as usize));
+    match state
+        .current_turn_token_usage()
+        .or_else(|| state.current_token_usage())
+    {
         Some(usage) => {
+            let estimate = if state.current_turn_token_usage().is_some()
+                && state.current_turn_token_usage_is_estimated()
+            {
+                " (estimated)"
+            } else {
+                ""
+            };
             lines.push(panel_line(
-                "Last turn   ",
+                "Session turn",
                 &format!(
-                    "{} prompt + {} completion = {} tokens",
+                    "{} prompt + {} completion = {} tokens{estimate}",
                     usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
                 ),
                 PanelEmphasis::Normal,
             ));
         }
         None => lines.push(panel_line(
-            "Last turn   ",
+            "Session turn",
             "no token data yet",
             PanelEmphasis::Normal,
         )),
@@ -179,6 +192,9 @@ pub(in crate::ui) fn render_stats_modal(
             PanelEmphasis::Normal,
         ));
     }
+    lines.push(Line::from(
+        "Local token totals are not provider billing totals.",
+    ));
     let usage_history = state.stats_usage_history();
     if usage_history.is_empty() {
         lines.push(Line::default());
@@ -267,6 +283,91 @@ fn render_modal_body(f: &mut Frame, lines: Vec<Line<'static>>, inner: ratatui::l
         Paragraph::new(lines).style(Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
         inner,
     );
+}
+
+fn provider_summary_lines(
+    config: &rustcode::controller::AppConfig,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let summary = rustcode::controller::provider_summary(config);
+    let mut provider = None;
+    let mut account = None;
+    let mut method = None;
+    let mut state = None;
+    for line in summary.lines() {
+        let Some((label, value)) = line.split_once(": ") else {
+            continue;
+        };
+        match label {
+            "Provider" => provider = Some(value),
+            "Account" => account = Some(value),
+            "Method" => method = Some(value),
+            "State" => state = Some(value),
+            _ => {}
+        }
+    }
+    if let (Some(provider), Some(account), Some(method), Some(state)) =
+        (provider, account, method, state)
+    {
+        let details = [
+            format!("Provider: {provider} · Method: {method}"),
+            format!("Account: {account} · State: {state}"),
+        ];
+        details
+            .iter()
+            .flat_map(|line| wrapped_text_lines(line, width))
+            .collect()
+    } else {
+        wrapped_text_lines(&summary, width)
+    }
+}
+
+fn provider_usage_lines(
+    config: &rustcode::controller::AppConfig,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let summary = rustcode::controller::provider_usage_summary(config);
+    if summary.contains("chatgpt.com/settings/usage") {
+        return [
+            "Subscription quota is not exposed here; API-key usage is separate.".to_owned(),
+            "Usage: https://chatgpt.com/settings/usage".to_owned(),
+        ]
+        .iter()
+        .flat_map(|line| wrapped_text_lines(line, width))
+        .collect();
+    }
+    wrapped_text_lines(&summary, width)
+}
+
+fn wrapped_text_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        if paragraph.is_empty() {
+            lines.push(Line::default());
+            continue;
+        }
+        let mut line = String::new();
+        let mut line_width = 0;
+        for word in paragraph.split_whitespace() {
+            let word_width = UnicodeWidthStr::width(word);
+            let separator_width = usize::from(!line.is_empty());
+            if !line.is_empty() && line_width + separator_width + word_width > width {
+                lines.push(Line::from(std::mem::take(&mut line)));
+                line_width = 0;
+            }
+            if !line.is_empty() {
+                line.push(' ');
+                line_width += 1;
+            }
+            line.push_str(word);
+            line_width += word_width;
+        }
+        if !line.is_empty() {
+            lines.push(Line::from(line));
+        }
+    }
+    lines
 }
 
 /// Thousands separators, so large monthly token counts stay readable.
