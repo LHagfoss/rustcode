@@ -1,3 +1,12 @@
+## [v0.56.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.13) - 2026-10-03
+
+### Fixes
+- Fix ChatGPT subscription profiles stopping every prompt at the context preflight: they now take their context window from the model catalog, with a 272k fallback for profiles saved without one ([#1694](https://github.com/LHagfoss/rustcode/pull/1694)).
+- Log each model the ChatGPT catalog returns, with its visibility and whether it was kept, as a `provider.model_catalog` event ([#1694](https://github.com/LHagfoss/rustcode/pull/1694)).
+- Show only the current turn's output tokens (thinking and answer) beside the running model instead of a total that grew with the whole conversation ([#1695](https://github.com/LHagfoss/rustcode/pull/1695)).
+- Paste clipboard images faster on macOS by reading PNG data in-process rather than launching `osascript` ([#1695](https://github.com/LHagfoss/rustcode/pull/1695)).
+- Keep the leading `/` when deleting a slash command name with Option+Backspace so the command picker stays open ([#1695](https://github.com/LHagfoss/rustcode/pull/1695)).
+- Point to `/account refresh` from the `/account` panel and command description ([#1695](https://github.com/LHagfoss/rustcode/pull/1695)).
 ## [v0.56.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.12) - 2026-10-03
 
 ### Fixes
