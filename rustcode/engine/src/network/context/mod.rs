@@ -13,7 +13,10 @@ pub(crate) use compact::durable_compaction_record_message;
 pub(crate) use compact::valid_compaction_boundary;
 #[cfg(test)]
 pub use compact::{force_compact, maybe_compact, maybe_compact_with_local_policy};
-pub use compact::{force_compact_with_budget, maybe_compact_with_local_policy_and_usage};
+pub use compact::{
+    force_compact_with_budget, force_compact_with_budget_deterministic,
+    maybe_compact_with_local_policy_and_usage, maybe_compact_with_local_policy_and_usage_mode,
+};
 #[allow(unused_imports)]
 pub use memory::{
     STRUCTURED_MEMORY_MARKER, StructuredSessionMemory, compact_with_structured_memory,

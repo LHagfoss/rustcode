@@ -51,7 +51,7 @@ async fn handle_enter_inner(
 
     // Record every submitted input for arrow-key recall — plain text and slash
     // commands alike. Consecutive duplicates are collapsed, shell-style.
-    if s.input_history.last() != Some(&raw_input) {
+    if !is_provider_auth_command(&raw_input) && s.input_history.last() != Some(&raw_input) {
         s.input_history.push(raw_input.clone());
     }
 
@@ -69,6 +69,17 @@ async fn handle_enter_inner(
         let cmd = tokens[0];
         s.overlays().close_all();
         let mut should_exit = false;
+
+        if is_provider_auth_command(&raw_input) {
+            s.input_buffer.clear();
+            s.cursor_position = 0;
+            let config = s.config.clone();
+            let session_id = s.active_session_id.clone();
+            s.show_command_panel("Provider authentication", "Working…");
+            drop(s);
+            start_provider_auth(state, raw_input, session_id, config);
+            return false;
+        }
 
         match cmd {
             "/prompts" => {
@@ -135,6 +146,12 @@ async fn handle_enter_inner(
                 }
                 let api_base_url = s.api_base_url.clone();
                 let model_name = s.model_name.clone();
+                let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
+                    profile
+                        .credential
+                        .as_ref()
+                        .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+                });
                 let active_session_id = s.active_session_id.clone();
                 let original_history = s.history.clone();
                 let mut history_to_compact = original_history.clone();
@@ -147,16 +164,25 @@ async fn handle_enter_inner(
                     s.get_history_token_budget() as usize
                 };
                 tokio::spawn(async move {
-                    match crate::network::compaction::force_compact_with_budget(
-                        &client_clone,
-                        &api_base_url,
-                        &model_name,
-                        history_to_compact.as_mut_vec(),
-                        Some(budget),
-                        Some(&compaction_cancel_token),
-                    )
-                    .await
-                    {
+                    let compact_result = if chatgpt_plan_profile {
+                        crate::network::compaction::force_compact_with_budget_deterministic(
+                            history_to_compact.as_mut_vec(),
+                            Some(budget),
+                        )
+                        .await
+                    } else {
+                        crate::network::compaction::force_compact_with_budget(
+                            &client_clone,
+                            &api_base_url,
+                            &model_name,
+                            history_to_compact.as_mut_vec(),
+                            Some(budget),
+                            Some(&compaction_cancel_token),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                    };
+                    match compact_result {
                         Ok((before, after)) => {
                             let mut s = state_clone.lock().await;
                             let live_session_id = s.active_session_id.clone();
@@ -1181,6 +1207,76 @@ async fn handle_enter_inner(
     )
     .await;
     false
+}
+
+pub(super) fn is_provider_auth_command(input: &str) -> bool {
+    input
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| {
+            ["/login", "/auth", "/logout"]
+                .iter()
+                .any(|valid| name.eq_ignore_ascii_case(valid))
+        })
+}
+
+pub(super) fn normalize_provider_auth_command(input: &str) -> String {
+    let input = input.trim_start();
+    let boundary = input.find(char::is_whitespace).unwrap_or(input.len());
+    format!(
+        "{}{}",
+        input[..boundary].to_ascii_lowercase(),
+        &input[boundary..]
+    )
+}
+
+fn start_provider_auth(
+    state: &Arc<Mutex<AppState>>,
+    input: String,
+    expected_session_id: String,
+    config: crate::config::AppConfig,
+) {
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        let command = normalize_provider_auth_command(&input);
+        let result = crate::provider_auth::execute_command(&command, &config).await;
+        let mut state = state.lock().await;
+        if state.active_session_id != expected_session_id {
+            return;
+        }
+        match result {
+            Ok(result) => {
+                if let Some(profile) = result.profile {
+                    let profile_name = profile.name.clone();
+                    state.model_name = profile.model.clone();
+                    state.api_base_url = profile.url.clone();
+                    if let Some(existing) = state
+                        .config
+                        .models
+                        .iter_mut()
+                        .find(|existing| existing.name == profile_name)
+                    {
+                        *existing = profile;
+                    } else {
+                        state.config.models.push(profile);
+                    }
+                    state.config.default.set_big(profile_name);
+                    crate::config::save_entire_config(&state.config);
+                    crate::config::record_session_settings_for_profile(
+                        &state.active_session_id,
+                        &state.config,
+                        state.config.default.big(),
+                    );
+                }
+                state.show_command_panel("Provider authentication", result.message);
+            }
+            Err(error) => state.show_command_panel(
+                "Provider authentication",
+                format!("Provider authentication failed: {error:#}"),
+            ),
+        }
+    });
 }
 
 fn prompt_command_roots(state: &AppState) -> crate::prompt_commands::Roots {

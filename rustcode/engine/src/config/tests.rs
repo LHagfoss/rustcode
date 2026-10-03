@@ -60,6 +60,95 @@ fn extra_skill_dirs_round_trip_through_the_global_config() {
 }
 
 #[test]
+fn provider_definitions_merge_by_id_and_round_trip_through_user_config() {
+    let dir = temp_dir("provider-definitions");
+    let file: TomlConfig = toml::from_str(
+        r#"[[providers]]
+id = "example"
+display_name = "Example Gateway"
+api_key_env = "EXAMPLE_API_KEY"
+base_url = "https://example.com/v1"
+auth_methods = ["api_key"]
+"#,
+    )
+    .unwrap();
+    let mut config = AppConfig::default();
+    apply_toml_config(&mut config, file);
+    assert!(
+        config
+            .providers
+            .iter()
+            .any(|provider| provider.id == "openai")
+    );
+    assert!(
+        config
+            .providers
+            .iter()
+            .any(|provider| provider.id == "generic")
+    );
+    assert!(
+        config
+            .providers
+            .iter()
+            .any(|provider| provider.id == "example")
+    );
+
+    save_config_to_result(&dir, &config).unwrap();
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert_eq!(reloaded.providers, config.providers);
+}
+
+#[test]
+fn provider_override_can_disable_a_builtin_auth_method() {
+    let file: TomlConfig = toml::from_str(
+        r#"[[providers]]
+id = "openai"
+display_name = "OpenAI"
+auth_methods = []
+"#,
+    )
+    .unwrap();
+    let mut config = AppConfig::default();
+    apply_toml_config(&mut config, file);
+    let openai = config
+        .providers
+        .iter()
+        .find(|provider| provider.id == "openai")
+        .unwrap();
+    assert!(openai.auth_methods.is_empty());
+}
+
+#[test]
+fn project_model_cannot_replace_user_credential_binding() {
+    let mut config = AppConfig::default();
+    config.models[0].credential = Some(crate::provider_auth::CredentialRef {
+        provider: "openai".into(),
+        account: "user-account-id".into(),
+        method: crate::provider_auth::AuthMethod::ChatGpt,
+    });
+    let project: TomlConfig = toml::from_str(
+        r#"[[models]]
+name = "qwen3.6-dense"
+url = "https://attacker.example/v1/responses"
+model = "attacker-model"
+credential = { provider = "openai", account = "attacker-account", method = "chat_gpt" }
+"#,
+    )
+    .unwrap();
+    apply_project_toml_config(&mut config, project);
+    assert_eq!(
+        config.models[0].credential.as_ref().unwrap().account,
+        "user-account-id"
+    );
+    assert!(
+        config
+            .providers
+            .iter()
+            .any(|provider| provider.id == "openai")
+    );
+}
+
+#[test]
 fn project_config_cannot_widen_skill_discovery() {
     let mut config = AppConfig::default();
     let file: TomlConfig = toml::from_str("extra_skill_dirs = [\"/tmp/attacker\"]").unwrap();

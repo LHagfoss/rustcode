@@ -930,21 +930,75 @@ pub async fn probe_function_calling(
             format!("{trimmed}/chat/completions")
         }
     };
-    let (api_key, responses_api, send_x_api_key) = {
+    let (profile, ambiguous_profile) = {
         let s = state.lock().await;
-        let profile = s
-            .config
-            .models
-            .iter()
-            .find(|m| m.url == url || m.endpoint_url() == resolved_url);
-        (
-            profile.and_then(|m| m.resolved_api_key()),
-            profile.is_some_and(|m| {
-                m.resolved_api_protocol() == crate::config::ApiProtocol::Responses
-            }),
-            profile.is_some_and(|m| m.send_x_api_key_header()),
-        )
+        match crate::network::stream_request::select_request_profile(
+            &s.config.models,
+            s.config.default.big(),
+            url,
+            model,
+        ) {
+            Ok(profile) => (profile, false),
+            Err(error) => {
+                dbg_log!("probe_function_calling: {error}");
+                (None, true)
+            }
+        }
     };
+    if ambiguous_profile {
+        return false;
+    }
+    let chatgpt_plan = profile
+        .as_ref()
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt);
+    if chatgpt_plan {
+        if profile.as_ref().is_some_and(|profile| {
+            profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+                && profile.endpoint_url() == "https://api.openai.com/v1/responses"
+        }) {
+            return true;
+        }
+        dbg_log!(
+            "probe_function_calling: refusing unsupported ChatGPT credential endpoint {}",
+            resolved_url
+        );
+        return false;
+    }
+    let api_key = if let Some(profile) = profile.as_ref() {
+        if profile.credential.is_some() {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                crate::provider_auth::resolve_profile_credential(profile),
+            )
+            .await
+            {
+                Ok(Ok(Some(key))) => Some(key),
+                Ok(Ok(None)) => {
+                    dbg_log!("probe_function_calling: configured credential is unavailable");
+                    return false;
+                }
+                Ok(Err(error)) => {
+                    dbg_log!("probe_function_calling: credential resolution failed: {error:#}");
+                    return false;
+                }
+                Err(_) => {
+                    dbg_log!("probe_function_calling: credential resolution timed out");
+                    return false;
+                }
+            }
+        } else {
+            profile.resolved_api_key()
+        }
+    } else {
+        None
+    };
+    let responses_api = profile.as_ref().is_some_and(|profile| {
+        profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+    });
+    let send_x_api_key = profile
+        .as_ref()
+        .is_some_and(|profile| profile.send_x_api_key_header());
     if responses_api {
         dbg_log!(
             "probe_function_calling: {} uses Responses function calling; skipping chat probe",
@@ -1119,18 +1173,25 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             model_name,
             budget,
             local_model,
+            deterministic_compaction,
             active_session_id,
             captured_history,
             provider_usage,
         ) = {
             let s = state.lock().await;
             let local_model = s.active_model_is_local();
+            let deterministic_compaction = s
+                .active_model_profile()
+                .as_ref()
+                .and_then(|profile| profile.credential.as_ref())
+                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt);
             let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
                 proactive_history_budget(&context_budget) as usize,
                 local_model,
+                deterministic_compaction,
                 s.active_session_id.clone(),
                 s.history.clone(),
                 s.current_token_usage.clone(),
@@ -1141,7 +1202,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         let mut working_history = captured_history;
 
         // Lock released here: this await performs I/O.
-        let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage(
+        let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage_mode(
             client,
             &api_url,
             &model_name,
@@ -1150,6 +1211,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             cancel_token,
             local_model,
             provider_usage.as_ref(),
+            deterministic_compaction,
         )
         .await;
         // Run the deterministic safety reduction in the same canonical

@@ -98,6 +98,31 @@ pub async fn maybe_compact_with_local_policy_and_usage(
     local_model: bool,
     provider_usage: Option<&TokenUsage>,
 ) -> bool {
+    maybe_compact_with_local_policy_and_usage_mode(
+        client,
+        url,
+        model,
+        history,
+        budget,
+        cancel_token,
+        local_model,
+        provider_usage,
+        false,
+    )
+    .await
+}
+
+pub async fn maybe_compact_with_local_policy_and_usage_mode(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    local_model: bool,
+    provider_usage: Option<&TokenUsage>,
+    deterministic_only: bool,
+) -> bool {
     // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
     //    have aged past the recent window, then apply the hard rolling token cap
     //    as a safety net.
@@ -196,7 +221,7 @@ pub async fn maybe_compact_with_local_policy_and_usage(
         let lower = url.to_ascii_lowercase();
         lower.contains("11434") || lower.contains("ollama")
     };
-    if is_local_engine {
+    if is_local_engine || deterministic_only {
         let structured = compact_with_structured_memory(history, keep_count, budget);
         emit_compaction_metrics(
             raw_tokens,
@@ -249,6 +274,45 @@ pub async fn maybe_compact_with_local_policy_and_usage(
         );
         structured || (duplicate_reads + historical_outputs + old_outputs > 0)
     }
+}
+
+/// Compact history without making a provider request. Used for plan-backed
+/// profiles whose authenticated transport is restricted to streaming
+/// Responses inference.
+pub async fn force_compact_with_budget_deterministic(
+    history: &mut Vec<ChatMessage>,
+    budget: Option<usize>,
+) -> Result<(usize, usize), String> {
+    let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
+    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    prune_historical_reasoning(history, KEEP_RECENT_TURNS);
+    let prune_threshold = budget
+        .map(|b| (b as f64 * 0.6) as usize)
+        .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
+    prune_old_tool_outputs(history, prune_threshold);
+
+    let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
+    if summarize_count < 1 {
+        return Err("Not enough messages to compact.".to_string());
+    }
+    let keep_count = history.len().saturating_sub(summarize_count);
+    let compacted = compact_with_structured_memory(
+        history,
+        keep_count,
+        budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD),
+    );
+    if !compacted {
+        return Err("Deterministic local compaction could not reduce the history.".to_string());
+    }
+    let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    if after_tokens < before_tokens {
+        LAST_COMPACTION_RECLAIMED.store(
+            before_tokens - after_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    Ok((before_tokens, after_tokens))
 }
 
 fn adjusted_after_pruning(
@@ -866,6 +930,47 @@ async fn generate_summary(
 #[cfg(test)]
 mod preserved_user_request_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deterministic_plan_compaction_never_opens_provider_http() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let mut history = Vec::new();
+        for turn in 0..6 {
+            history.push(ChatMessage::new("user", format!("task {turn}")));
+            history.push(ChatMessage::new("assistant", format!("work {turn}")));
+            history.push(ChatMessage::new(
+                "tool",
+                format!("view_file: {}", "file evidence\n".repeat(1000)),
+            ));
+        }
+
+        assert!(
+            maybe_compact_with_local_policy_and_usage_mode(
+                &reqwest::Client::new(),
+                &endpoint,
+                "chatgpt-plan-model",
+                &mut history,
+                5_000,
+                &tokio_util::sync::CancellationToken::new(),
+                false,
+                None,
+                true,
+            )
+            .await
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "plan-backed compaction must use deterministic local reduction"
+        );
+    }
 
     #[test]
     fn keeps_recent_authoritative_user_wording_within_budget() {

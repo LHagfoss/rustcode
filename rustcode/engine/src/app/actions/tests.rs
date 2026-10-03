@@ -1255,6 +1255,29 @@ async fn informational_commands_open_panels_without_history_even_while_busy() {
     }
 }
 
+#[test]
+fn provider_auth_slash_commands_are_not_added_to_input_recall() {
+    for command in [
+        "/login openai",
+        "/login openai api-key OPENAI_KEY",
+        "/auth status",
+        "/logout openai",
+    ] {
+        assert!(super::enter::is_provider_auth_command(command), "{command}");
+    }
+    assert!(super::enter::is_provider_auth_command(
+        "/LOGIN openai api-key POTENTIALLY_SENSITIVE"
+    ));
+    assert_eq!(
+        super::enter::normalize_provider_auth_command("/LOGIN OpenAI"),
+        "/login OpenAI"
+    );
+    assert!(!super::enter::is_provider_auth_command("/loginish openai"));
+    assert!(!super::enter::is_provider_auth_command(
+        "plain prompt mentioning /login"
+    ));
+}
+
 #[tokio::test]
 async fn settings_commands_keep_the_running_turn_status() {
     use std::sync::Arc;

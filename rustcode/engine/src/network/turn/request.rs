@@ -279,7 +279,21 @@ fn bounded_stream_recovery_checkpoint(content: &str) -> String {
     format!("{}{}", &content[..preview_end], marker)
 }
 
-fn recoverable_textual_stream_failure(content: &str) -> bool {
+fn recoverable_textual_stream_failure(
+    content: &str,
+    failure_kind: Option<lifecycle::StreamFailureKind>,
+) -> bool {
+    if !matches!(
+        failure_kind,
+        Some(
+            lifecycle::StreamFailureKind::FirstEventTimeout
+                | lifecycle::StreamFailureKind::StreamIdleTimeout
+                | lifecycle::StreamFailureKind::PrematureEof
+                | lifecycle::StreamFailureKind::ResponseBodyDecode
+        )
+    ) {
+        return false;
+    }
     if content.trim().is_empty() || !rustcode_tool_protocol::text::has_intended_tool_call(content) {
         return false;
     }
@@ -818,7 +832,7 @@ pub(super) async fn collect_round(
             }
             if !cancel_token.is_cancelled()
                 && ctx.recovery.stream_recovery_attempts < MAX_STREAM_RECOVERY_ATTEMPTS
-                && recoverable_textual_stream_failure(&error.partial_content)
+                && recoverable_textual_stream_failure(&error.partial_content, stream_failure_kind)
             {
                 ctx.recovery.stream_recovery_attempts =
                     ctx.recovery.stream_recovery_attempts.saturating_add(1);
@@ -973,6 +987,7 @@ mod tests {
         recoverable_textual_stream_failure, retryable_stream_failure, settle_retry_attempt_usage,
         should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
     };
+    use crate::network::lifecycle;
     use crate::network::runner;
 
     #[test]
@@ -1029,16 +1044,28 @@ mod tests {
     #[test]
     fn textual_tool_call_stream_failures_are_checkpointed_before_dispatch() {
         assert!(recoverable_textual_stream_failure(
-            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial"
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"partial",
+            Some(lifecycle::StreamFailureKind::PrematureEof)
         ));
         assert!(recoverable_textual_stream_failure(
-            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}"
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}",
+            Some(lifecycle::StreamFailureKind::StreamIdleTimeout)
         ));
         assert!(!recoverable_textual_stream_failure(
-            "ordinary partial prose"
+            "ordinary partial prose",
+            Some(lifecycle::StreamFailureKind::PrematureEof)
         ));
         assert!(recoverable_textual_stream_failure(
-            "[TOOL_CALLS]get_time[ARGS]{}"
+            "[TOOL_CALLS]get_time[ARGS]{}",
+            Some(lifecycle::StreamFailureKind::ResponseBodyDecode)
+        ));
+        assert!(!recoverable_textual_stream_failure(
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}",
+            Some(lifecycle::StreamFailureKind::ProviderError)
+        ));
+        assert!(!recoverable_textual_stream_failure(
+            "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}",
+            None
         ));
     }
 

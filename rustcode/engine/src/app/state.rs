@@ -1392,10 +1392,25 @@ impl AppState {
     }
 
     pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {
-        self.config
+        let selected_name = self.config.default.big();
+        let matching = self
+            .config
             .models
             .iter()
-            .find(|p| p.matches_request(&self.api_base_url, &self.model_name))
+            .filter(|profile| profile.matches_request(&self.api_base_url, &self.model_name))
+            .collect::<Vec<_>>();
+        if let Some(selected) = matching
+            .iter()
+            .find(|profile| profile.name == selected_name)
+        {
+            return Some((*selected).clone());
+        }
+        if matching.len() > 1 && matching.iter().any(|profile| profile.credential.is_some()) {
+            return None;
+        }
+        matching
+            .first()
+            .map(|profile| (*profile).clone())
             .or_else(|| {
                 let mut candidates = self
                     .config
@@ -1403,9 +1418,8 @@ impl AppState {
                     .iter()
                     .filter(|p| p.model == self.model_name || p.name == self.model_name);
                 let candidate = candidates.next()?;
-                candidates.next().is_none().then_some(candidate)
+                candidates.next().is_none().then(|| candidate.clone())
             })
-            .cloned()
     }
 
     /// Whether the active endpoint/model should receive the local-model
@@ -1424,8 +1438,17 @@ impl AppState {
         self.config
             .models
             .iter()
-            .find(|p| p.name == name || p.model == name)
+            .find(|p| p.name == name)
             .cloned()
+            .or_else(|| {
+                let mut matching = self
+                    .config
+                    .models
+                    .iter()
+                    .filter(|profile| profile.model == name);
+                let profile = matching.next()?;
+                matching.next().is_none().then(|| profile.clone())
+            })
     }
 
     pub fn get_history_token_budget(&self) -> u32 {

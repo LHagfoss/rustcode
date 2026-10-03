@@ -371,6 +371,13 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
             let Some(profile) = s.active_model_profile() else {
                 return;
             };
+            if profile
+                .credential
+                .as_ref()
+                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+            {
+                return;
+            }
             if profile.provider_context_window.is_some() {
                 return;
             }
@@ -391,7 +398,7 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
             .config
             .models
             .iter_mut()
-            .find(|profile| profile.matches_request(&url, &model))
+            .find(|profile| profile.name == name && profile.matches_request(&url, &model))
             && profile.provider_context_window.is_none()
         {
             let mismatch = profile
