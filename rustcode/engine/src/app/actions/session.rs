@@ -290,7 +290,6 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.last_recapped_turn_count = None;
     s.recap_retry_after = None;
     s.recap_failed_turn_count = None;
-    s.recap_unfocused_since = s.recap_unfocused_since.map(|_| Instant::now());
     s.image_analysis_cache.clear();
     s.clear_current_response();
     s.current_thought_time_ms = 0;
