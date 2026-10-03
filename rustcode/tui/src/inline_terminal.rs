@@ -330,35 +330,79 @@ where
     where
         F: FnOnce(&mut Frame<'_>),
     {
-        self.autoresize()?;
-        let mut area = self.viewport_area;
-        area.width = self.screen_size.width;
-        area.height = height.min(self.screen_size.height);
-
-        if area.height > 0 {
-            // Anchor the session before the growth scroll below moves the
-            // viewport, so the exit erase can follow the projection up instead
-            // of pointing at a row that has already scrolled into scrollback.
-            self.arm_session_top();
+        // Compute resize and viewport changes without applying them. Rendering
+        // is user code and can panic; until it succeeds, neither the terminal
+        // nor the last-presented buffers may change.
+        let screen_size = self.backend.size()?;
+        let resized = screen_size != self.screen_size;
+        let mut base_area = self.viewport_area;
+        let mut clear_from_y = self.clear_from_y;
+        let mut needs_clear = self.needs_clear;
+        if resized {
+            let was_at_bottom = self.screen_size.height > 0
+                && self.viewport_area.bottom() >= self.screen_size.height;
+            let old_y = self.viewport_area.y;
+            base_area.width = screen_size.width;
+            base_area.y = if was_at_bottom {
+                screen_size.height.saturating_sub(base_area.height)
+            } else {
+                base_area
+                    .y
+                    .min(screen_size.height.saturating_sub(base_area.height))
+            };
+            let clear_y = clear_from_y.map_or(old_y.min(base_area.y), |prev| {
+                prev.min(old_y).min(base_area.y)
+            });
+            clear_from_y = Some(clear_y);
+            needs_clear = true;
         }
 
-        if area.bottom() > self.screen_size.height {
-            let amount = area.bottom() - self.screen_size.height;
-            self.scroll_screen_up(amount)?;
-            area.y = self.screen_size.height.saturating_sub(area.height);
+        let mut area = base_area;
+        area.width = screen_size.width;
+        area.height = height.min(screen_size.height);
+        let scroll_amount = area.bottom().saturating_sub(screen_size.height);
+        if scroll_amount > 0 {
+            area.y = screen_size.height.saturating_sub(area.height);
         }
-
-        if area != self.viewport_area || self.needs_clear {
-            let clear_at = if self.viewport_area.is_empty() {
+        let clear_viewport = area != base_area || needs_clear;
+        let clear_at = if clear_viewport {
+            Some(if base_area.is_empty() {
                 area.as_position()
             } else {
-                let clear_y = self
-                    .clear_from_y
-                    .take()
-                    .unwrap_or(self.viewport_area.y)
-                    .min(area.y);
-                Position::new(0, clear_y)
-            };
+                Position::new(0, clear_from_y.unwrap_or(base_area.y).min(area.y))
+            })
+        } else {
+            None
+        };
+
+        let mut candidate = Buffer::empty(area);
+        let mut frame = Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut candidate,
+        };
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&mut frame))).is_err() {
+            return Ok(false);
+        }
+        let cursor_position = frame.cursor_position;
+
+        // Commit resize and scroll bookkeeping only after a complete frame is
+        // ready. A height/dirty transition clears against an empty buffer;
+        // an ordinary frame diffs against the last presented one.
+        if resized {
+            self.screen_size = screen_size;
+            self.viewport_area = base_area;
+            self.clear_from_y = clear_from_y;
+            self.needs_clear = needs_clear;
+        }
+        if area.height > 0 {
+            // Anchor before growth scrolls the viewport into scrollback.
+            self.arm_session_top();
+        }
+        if scroll_amount > 0 {
+            self.scroll_screen_up(scroll_amount)?;
+        }
+        if let Some(clear_at) = clear_at {
             self.backend.set_cursor_position(clear_at)?;
             self.backend.clear_region(ClearType::AfterCursor)?;
             self.set_viewport_area(area);
@@ -366,26 +410,10 @@ where
             self.buffers[1].reset();
             self.needs_clear = false;
             self.clear_from_y = None;
+        } else {
+            self.set_viewport_area(area);
         }
-
-        let mut frame = Frame {
-            cursor_position: None,
-            viewport_area: self.viewport_area,
-            buffer: &mut self.buffers[self.current],
-        };
-        // A render panic must never present a torn frame or poison the diff
-        // buffers: restore the working buffer to the last presented frame so
-        // the terminal keeps showing it, and report the skip so the caller
-        // schedules a clean redraw instead of leaving a blank viewport.
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render(&mut frame);
-        }))
-        .is_err()
-        {
-            self.buffers[self.current] = self.buffers[1 - self.current].clone();
-            return Ok(false);
-        }
-        let cursor_position = frame.cursor_position;
+        self.buffers[self.current] = candidate;
 
         let (previous, current) = if self.current == 0 {
             let (first, second) = self.buffers.split_at_mut(1);
@@ -782,6 +810,94 @@ mod tests {
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect::<String>();
         assert!(row.contains("recovered"), "{row:?}");
+    }
+
+    #[test]
+    fn a_height_change_panicking_frame_preserves_the_visible_frame_until_recovery() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("transcript and spinner"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        let before = terminal.backend().buffer().clone();
+        let old_area = terminal.area();
+
+        let presented = terminal
+            .draw_height(8, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("partial candidate"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+                panic!("height-change render exploded");
+            })
+            .unwrap();
+
+        assert!(!presented);
+        assert_eq!(terminal.area(), old_area);
+        assert_eq!(terminal.backend().buffer(), &before);
+
+        assert!(
+            terminal
+                .draw_height(8, |frame| {
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new("recovered spinner"),
+                        Rect::new(0, 0, frame.area().width, 1),
+                    );
+                })
+                .unwrap()
+        );
+        let row = (0..40)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(row.contains("recovered spinner"), "{row:?}");
+    }
+
+    #[test]
+    fn a_dirty_viewport_panicking_frame_preserves_the_visible_frame_until_recovery() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("committed transcript"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+            })
+            .unwrap();
+        let before = terminal.backend().buffer().clone();
+        terminal.mark_viewport_dirty();
+
+        let presented = terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("partial replacement"),
+                    Rect::new(0, 0, frame.area().width, 1),
+                );
+                panic!("dirty redraw exploded");
+            })
+            .unwrap();
+
+        assert!(!presented);
+        assert_eq!(terminal.backend().buffer(), &before);
+        assert!(
+            terminal
+                .draw_height(4, |frame| {
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new("clean replacement"),
+                        Rect::new(0, 0, frame.area().width, 1),
+                    );
+                })
+                .unwrap()
+        );
+        let row = (0..40)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(row.contains("clean replacement"), "{row:?}");
     }
 
     #[test]
