@@ -1,3 +1,10 @@
+## [v0.56.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.9) - 2026-10-03
+
+### Fixes
+- Keep forwarded Cmd+C copy-only so repeated copying from the session panel cannot trigger double-press exit; preserve Ctrl+C exit behavior ([#1679](https://github.com/LHagfoss/rustcode/pull/1679)).
+- Add `/discord` with explicit on/off/status commands, live worker control, and persistent project/global settings ([#1681](https://github.com/LHagfoss/rustcode/pull/1681)).
+- Show short tool-work durations, including `<1s`, on completion separators ([#1680](https://github.com/LHagfoss/rustcode/pull/1680)).
+- Refresh cached skill-routing metadata after `/skills`, `list_skills`, or `use_skill` discovers an edited, added, or removed skill ([#1683](https://github.com/LHagfoss/rustcode/pull/1683)).
 ## [v0.56.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.8) - 2026-10-03
 
 ### Features
