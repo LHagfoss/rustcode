@@ -93,6 +93,10 @@ impl SandboxMode {
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
+/// Fallback for ChatGPT subscription profiles when neither the profile nor the
+/// model catalog reports a window. The generic default is smaller than the
+/// built-in tool schemas, so it would stop every request at preflight.
+pub const CHATGPT_DEFAULT_CONTEXT_WINDOW: u32 = 272_000;
 /// Zero means no fixed round ceiling. Turns still terminate on context,
 /// token, cancellation, and progress/recovery safety budgets.
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 0;
@@ -644,6 +648,17 @@ impl ModelProfile {
         }
     }
 
+    fn default_context_window(&self) -> u32 {
+        let chatgpt = self.credential.as_ref().is_some_and(|credential| {
+            credential.method == crate::provider_auth::AuthMethod::ChatGpt
+        });
+        if chatgpt {
+            CHATGPT_DEFAULT_CONTEXT_WINDOW
+        } else {
+            DEFAULT_CONTEXT_WINDOW
+        }
+    }
+
     pub fn context_budget(&self) -> ContextBudget {
         // Keep the effective value bounded and honest. In particular, do not
         // inflate a deliberately small profile and then send a request that
@@ -651,7 +666,7 @@ impl ModelProfile {
         let configured_context_window = self
             .context_window
             .or(self.provider_context_window)
-            .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+            .unwrap_or_else(|| self.default_context_window())
             .max(1);
         let context_window = self
             .provider_context_window
