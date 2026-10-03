@@ -1595,7 +1595,13 @@ impl AppState {
         }
         let end = self.cursor_position;
         self.move_cursor_word_left();
-        let start = self.cursor_position;
+        let mut start = self.cursor_position;
+        // Deleting a slash command's name leaves the `/` so the command
+        // picker stays open; a lone `/` is still removed.
+        if start == 0 && end > 1 && self.input_buffer.starts_with('/') {
+            start = 1;
+            self.cursor_position = start;
+        }
         if start < end {
             self.input_buffer.replace_range(start..end, "");
         }

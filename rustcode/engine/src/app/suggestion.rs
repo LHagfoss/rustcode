@@ -94,7 +94,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/account",
-        desc: "Show active profile and provider account status",
+        desc: "Show provider account status; /account refresh reloads models",
     },
     CommandInfo {
         name: "/models",
