@@ -37,6 +37,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show staged and unstaged Git changes",
     },
     CommandInfo {
+        name: "/discord",
+        desc: "Toggle Discord Rich Presence, or use on|off|status",
+    },
+    CommandInfo {
         name: "/exit",
         desc: "Exit the app",
     },
@@ -411,6 +415,15 @@ mod tests {
                 "{expected} should be suggested for {input}"
             );
         }
+    }
+
+    #[test]
+    fn discord_presence_command_is_discoverable() {
+        let command = filtered_commands("/dis")
+            .into_iter()
+            .find(|command| command.name == "/discord")
+            .expect("/discord should be suggested");
+        assert!(command.desc.contains("status"));
     }
 
     #[test]

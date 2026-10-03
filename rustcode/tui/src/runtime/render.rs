@@ -123,6 +123,7 @@ pub(super) async fn render_frame(
             .find(|m| m.role == "user" && !m.content.starts_with('/'))
             .map(|_| rustcode::config::session_title(&guard.history));
         let snapshot = render_snapshot(&rustcode::controller::render_state(&guard));
+        discord_rpc.set_enabled(guard.config.discord_rpc_enabled);
         let activity =
             rustcode::app::activity::classify_activity(snapshot.status(), snapshot.running_tools());
         let terminal_title = generated_title.clone().or(prompt_title);
