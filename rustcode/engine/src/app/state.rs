@@ -85,6 +85,8 @@ pub struct AppState {
     pub current_thought_tokens: u32,
     pub current_thought_started_at: Option<std::time::Instant>,
     pub model_quota_remaining: Option<f32>,
+    /// Latest subscription quota windows the active provider reported.
+    pub provider_rate_limits: Option<crate::provider_auth::ProviderRateLimits>,
     pub pending_queue: Vec<String>,
     /// User instructions submitted during an explicitly steerable active turn.
     /// These remain separate from ordinary follow-up prompts until applied.
@@ -1129,6 +1131,7 @@ impl AppState {
             current_thought_tokens: 0,
             current_thought_started_at: None,
             model_quota_remaining: None,
+            provider_rate_limits: None,
             pending_queue: Vec::new(),
             pending_steers: Vec::new(),
             promoted_steer_prefix_count: 0,

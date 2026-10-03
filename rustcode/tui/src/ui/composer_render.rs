@@ -380,7 +380,50 @@ pub(crate) fn composer_byte_range_to_display(
     }
 }
 
+/// What the composer row carries while a slash-command panel is open. Panels
+/// that take typed input borrow the composer for it instead of drawing their
+/// own field; every other panel leaves the row as plain panel background.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PanelComposer<'a> {
+    Search(&'a str),
+    Hidden,
+}
+
+pub(super) fn panel_composer(state: &RenderSnapshot) -> Option<PanelComposer<'_>> {
+    if !state.modal_open() {
+        None
+    } else if state.show_model_picker() {
+        Some(PanelComposer::Search(state.model_picker_search()))
+    } else if state.show_command_picker() {
+        Some(PanelComposer::Search(state.command_picker_search()))
+    } else {
+        Some(PanelComposer::Hidden)
+    }
+}
+
+const PANEL_SEARCH_PLACEHOLDER: &str = "Type to filter";
+
+fn panel_search_styled_chars(query: &str) -> Vec<(char, Style)> {
+    let (text, style) = if query.is_empty() {
+        (
+            PANEL_SEARCH_PLACEHOLDER,
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, false),
+        )
+    } else {
+        (
+            query,
+            get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), false),
+        )
+    };
+    text.chars().map(|character| (character, style)).collect()
+}
+
 fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, Style)> {
+    match panel_composer(state) {
+        Some(PanelComposer::Search(query)) => return panel_search_styled_chars(query),
+        Some(PanelComposer::Hidden) => return Vec::new(),
+        None => {}
+    }
     let text_style = get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker);
     let marker_style =
         get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
@@ -963,12 +1006,30 @@ pub(crate) fn render_input(
     };
     let input_inner = area.inner(input_margin);
 
+    let panel = panel_composer(state);
+    if panel == Some(PanelComposer::Hidden) {
+        return input_margin;
+    }
+    let panel_search = match panel {
+        Some(PanelComposer::Search(query)) => Some(query),
+        _ => None,
+    };
+    let show_picker = show_picker && panel_search.is_none();
+
     let inner_width = input_inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_dx = 0u16;
     let mut cursor_dy = 0u16;
 
-    if inner_width > 0 {
+    if let Some(query) = panel_search.filter(|_| inner_width > 0) {
+        let prompt_style = get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false);
+        (lines, cursor_dx, cursor_dy) = wrap_input_chars(
+            &panel_search_styled_chars(query),
+            inner_width,
+            query.chars().count(),
+            prompt_style,
+        );
+    } else if inner_width > 0 {
         let styled_chars = input_styled_chars(state, show_picker);
 
         let safe_end = state.cursor_position().min(state.input_buffer().len());

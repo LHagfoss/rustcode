@@ -19,6 +19,7 @@ rustcode-tasks = { path = "../core/rustcode-tasks" }
 clap = { version = "4.6.4", features = ["derive"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "std"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
+iana-time-zone = "0.1.65"
 futures-util = "0.3.32"
 libc = "0.2"
 pulldown-cmark = { version = "0.12.2" }

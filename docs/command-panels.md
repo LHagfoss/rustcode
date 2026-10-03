@@ -35,7 +35,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/auth status` | Lists saved provider accounts and auth methods in a Provider authentication panel. |
 | `/accounts` | Lists saved provider accounts. |
 | `/account` | Shows the active profile and its provider account status. |
-| `/account refresh [provider] [account-id]` | Refreshes the selected provider's model catalog without browser sign-in. |
+| `/refresh [provider] [account-id]` | Refreshes the selected provider's model catalog without browser sign-in. `/account refresh` is the same command. |
 | `/logout` | Signs out of the selected provider account asynchronously and reports its result in a Provider authentication panel. |
 | `/memory` | Scrollable Memory panel for RAM, project-memory inspection, updates and help. |
 | `/mcp` | Existing MCP configuration/editor panel. |
@@ -69,7 +69,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/sync` | Immediate asynchronous configuration repository synchronization. |
 | `/update` | Immediate asynchronous update check/upgrade; retains update decision UI. |
 | `/tools` | Scrollable Tools reference panel. |
-| `/usage` | Alias of /stats; includes provider usage guidance and local token totals. |
+| `/usage` | Alias of /stats; shows subscription limit bars when the provider reports them, otherwise provider usage guidance, plus local token totals. |
 | `/verbosity` | Existing low/high chooser; direct arguments apply immediately with panel result/help. |
 | `/yolo` | Existing on/off chooser; direct arguments apply immediately with transient confirmation; invalid arguments use a panel. |
 | `/sandbox` | Scrollable supported-mode panel, retaining mode descriptions and user-level configuration guidance; direct arguments apply immediately with panel result/help. |
@@ -125,6 +125,11 @@ the shared marker, column gap and column budget in `ui/modals.rs`, so the
 absence here is a deliberate distinction and not a missing convention.
 
 ## Panel search
+
+While a searchable picker is open, its query is typed into the composer row
+(`› Type to filter`); the picker draws no field of its own. Panels that take no
+typed input leave the composer row as blank panel background. The draft that
+was in the composer is kept and returns when the panel closes.
 
 The slash-command popup, the command palette (Ctrl+P) and the model picker share
 one search rule (`app::fuzzy`): a query matches a row when its characters appear

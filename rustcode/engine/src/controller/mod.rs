@@ -30,7 +30,8 @@ pub(crate) fn next_approval_batch_id() -> String {
 mod tests;
 
 pub use crate::provider_auth::{
-    AuthMethod, CredentialRef, provider_summary, provider_usage_summary,
+    AuthMethod, CredentialRef, ProviderRateLimits, RateLimitWindow, provider_summary,
+    provider_usage_summary,
 };
 pub use apply::{
     apply_approval_decision, apply_approval_decision_for_batch, apply_background_task_event,
