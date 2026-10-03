@@ -9729,7 +9729,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
         .collect::<String>();
     assert_eq!(
         text,
-        format!("• {} · ~0 tokens", snapshot.model_name()),
+        format!("• {} · ↓ ~0 tokens", snapshot.model_name()),
         "{text}"
     );
     assert!(
@@ -9739,7 +9739,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
 }
 
 #[test]
-fn running_indicator_adds_live_usage_to_turn_total_and_marks_it_provisional() {
+fn running_indicator_adds_live_output_to_turn_total_and_marks_it_provisional() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
@@ -9768,7 +9768,7 @@ fn running_indicator_adds_live_usage_to_turn_total_and_marks_it_provisional() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("· ~1.2K tokens"), "{text}");
+    assert!(text.contains("· ↓ ~550 tokens"), "{text}");
 }
 
 #[test]
@@ -9800,7 +9800,7 @@ fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("· 800 tokens"), "{text}");
+    assert!(text.contains("· ↓ 300 tokens"), "{text}");
     assert!(
         !text.contains('~'),
         "completed usage is not provisional: {text}"
@@ -9834,9 +9834,9 @@ fn running_indicator_updates_provisional_stream_estimates_across_continuations()
     };
 
     state.stream_tracker.as_mut().unwrap().tokens_so_far = 5;
-    assert!(indicator_text(&state).contains("· ~55 tokens"));
+    assert!(indicator_text(&state).contains("· ↓ ~15 tokens"));
     state.stream_tracker.as_mut().unwrap().tokens_so_far = 12;
-    assert!(indicator_text(&state).contains("· ~62 tokens"));
+    assert!(indicator_text(&state).contains("· ↓ ~22 tokens"));
 
     // The first continuation finished without a usage footer. Its final
     // stream estimate remains in the round total while the next stream starts
@@ -9852,10 +9852,10 @@ fn running_indicator_updates_provisional_stream_estimates_across_continuations()
     state.current_turn_token_usage_is_estimated = true;
     state.current_token_usage = None;
     state.stream_tracker = Some(rustcode::controller::StreamTracker::new());
-    assert!(indicator_text(&state).contains("· ~82 tokens"));
+    assert!(indicator_text(&state).contains("· ↓ ~25 tokens"));
     state.current_provider_request_prompt_estimate = 9;
     state.stream_tracker.as_mut().unwrap().tokens_so_far = 8;
-    assert!(indicator_text(&state).contains("· ~99 tokens"));
+    assert!(indicator_text(&state).contains("· ↓ ~33 tokens"));
 }
 
 #[test]
@@ -9879,7 +9879,7 @@ fn running_indicator_keeps_estimated_marker_while_waiting_for_tools() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("· ~720 tokens"), "{text}");
+    assert!(text.contains("· ↓ ~120 tokens"), "{text}");
 }
 
 #[test]

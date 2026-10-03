@@ -184,6 +184,7 @@ impl TerminalRuntime {
         mouse_capture: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         terminal::enable_raw_mode()?;
+        rustcode::clipboard::warm_image_paste();
 
         let mut stdout = io::stdout();
         let mut alternate_screen = AlternateScreen::default();

@@ -402,6 +402,21 @@ async fn expired_ctrl_c_requires_a_fresh_second_press() {
 }
 
 #[test]
+fn word_delete_keeps_the_slash_of_a_command() {
+    let mut state = crate::app::AppState::new();
+    let mut delete_from = |input: &str| {
+        state.input_buffer = input.to_owned();
+        state.cursor_position = state.input_buffer.len();
+        state.delete_word_backspace();
+        (state.input_buffer.clone(), state.cursor_position)
+    };
+    assert_eq!(delete_from("/model"), ("/".to_owned(), 1));
+    assert_eq!(delete_from("/model --fast"), ("/model ".to_owned(), 7));
+    assert_eq!(delete_from("/"), (String::new(), 0));
+    assert_eq!(delete_from("hello"), (String::new(), 0));
+}
+
+#[test]
 fn command_autocomplete_replaces_only_the_command_token() {
     let mut state = crate::app::AppState::new();
     state.input_buffer = "/mo --fast".to_owned();

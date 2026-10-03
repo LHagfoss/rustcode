@@ -159,7 +159,7 @@ pub async fn execute_command(input: &str, config: &AppConfig) -> Result<AuthComm
             profiles: Vec::new(),
         }),
         ["account"] => Ok(AuthCommandResult {
-            message: provider_summary(config),
+            message: account_panel_message(config),
             profile: None,
             profiles: Vec::new(),
         }),
@@ -494,6 +494,23 @@ pub fn provider_summary(config: &AppConfig) -> String {
         auth_method_label(binding.method),
         state
     )
+}
+
+/// `/account` panel text: the summary plus the catalog refresh command for
+/// accounts whose model list comes from the provider.
+fn account_panel_message(config: &AppConfig) -> String {
+    let summary = provider_summary(config);
+    let refreshable = config
+        .models
+        .iter()
+        .find(|p| p.name == config.default.big())
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(|binding| binding.method == AuthMethod::ChatGpt);
+    if refreshable {
+        format!("{summary}\n\nRefresh the model catalog: /account refresh")
+    } else {
+        summary
+    }
 }
 
 pub fn provider_usage_summary(config: &AppConfig) -> String {
@@ -1191,6 +1208,8 @@ mod tests {
         assert!(summary.contains("State: unavailable"));
         assert!(!summary.contains("access-token"));
         assert!(provider_usage_summary(&config).contains("chatgpt.com/settings/usage"));
+        assert!(account_panel_message(&config).ends_with("/account refresh"));
+        assert!(!account_panel_message(&AppConfig::default()).contains("/account refresh"));
     }
 
     #[test]
