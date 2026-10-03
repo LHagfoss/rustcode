@@ -3119,7 +3119,7 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
 }
 
 #[test]
-fn worked_separator_only_labels_concrete_work_over_one_minute() {
+fn worked_separator_labels_all_known_work_durations() {
     use rustcode::controller::{ChatMessage, ToolResultRecord};
 
     let mut state = RenderState::new();
@@ -3144,10 +3144,26 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     );
     assert!(separator[1].to_string().is_empty());
 
-    state.history[2].response_time_ms = Some(12_000);
-    assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
-        "────────────"
+    for (duration_ms, expected) in [
+        (0, "<1s"),
+        (999, "<1s"),
+        (1_000, "1s"),
+        (12_000, "12s"),
+        (60_000, "1m 00s"),
+    ] {
+        state.history[2].response_time_ms = Some(duration_ms);
+        assert!(
+            super::render_work_separator_before_assistant(&state, 2, 80)[0]
+                .to_string()
+                .starts_with(&format!("─ Worked for {expected} ─")),
+            "duration {duration_ms} ms should render as {expected}"
+        );
+    }
+    state.history[2].response_time_ms = None;
+    assert!(
+        !super::render_work_separator_before_assistant(&state, 2, 80)[0]
+            .to_string()
+            .contains("Worked for")
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
 }
