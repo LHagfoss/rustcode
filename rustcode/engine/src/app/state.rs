@@ -63,6 +63,24 @@ pub struct AppState {
     /// Revision of the most recent clear or replacement, if any.
     pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
+    /// Provider usage accumulated across the current logical turn's completed
+    /// requests. While a request is in flight, the renderer adds its live
+    /// `current_token_usage` and marks the result provisional.
+    pub current_turn_token_usage: Option<TokenUsage>,
+    /// Usage reported by completed provider continuations in the current
+    /// response collection; provisional until the runner settles the round.
+    pub current_round_token_usage: Option<TokenUsage>,
+    /// Input and output estimates for completed provider requests with no
+    /// usage footer.
+    pub current_round_estimated_input_tokens: u32,
+    pub current_round_estimated_output_tokens: u32,
+    /// Estimated prompt tokens for the active provider request, if needed.
+    pub current_provider_request_prompt_estimate: u32,
+    /// The current turn total includes at least one locally estimated request.
+    pub current_turn_token_usage_is_estimated: bool,
+    pub token_usage_in_flight: bool,
+    /// True only while one provider request is streaming inside a runner round.
+    pub provider_request_in_flight: bool,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
     pub current_thought_started_at: Option<std::time::Instant>,
@@ -995,6 +1013,14 @@ impl AppState {
         self.clear_live_tool_calls();
         self.running_tools.clear();
         self.current_token_usage = None;
+        self.current_turn_token_usage = None;
+        self.current_round_token_usage = None;
+        self.current_round_estimated_input_tokens = 0;
+        self.current_round_estimated_output_tokens = 0;
+        self.current_provider_request_prompt_estimate = 0;
+        self.current_turn_token_usage_is_estimated = false;
+        self.token_usage_in_flight = false;
+        self.provider_request_in_flight = false;
         self.stream_tracker = None;
         self.generation_start_time = None;
         self.request_redraw();
@@ -1091,6 +1117,14 @@ impl AppState {
             current_response_revision: 0,
             current_response_last_rewrite_revision: 0,
             current_token_usage: None,
+            current_turn_token_usage: None,
+            current_round_token_usage: None,
+            current_round_estimated_input_tokens: 0,
+            current_round_estimated_output_tokens: 0,
+            current_provider_request_prompt_estimate: 0,
+            current_turn_token_usage_is_estimated: false,
+            token_usage_in_flight: false,
+            provider_request_in_flight: false,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
             current_thought_started_at: None,
