@@ -1,3 +1,8 @@
+## [v0.56.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.12) - 2026-10-03
+
+### Fixes
+- Fix ChatGPT account refresh failing when OpenAI returns an ID token without a nonce.
+- Preserve mandatory nonce matching for fresh browser sign-ins and all existing token signature and account identity checks.
 ## [v0.56.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.11) - 2026-10-03
 
 ### Features
