@@ -82,6 +82,16 @@ struct CatalogModel {
     slug: String,
     #[serde(default)]
     visibility: String,
+    #[serde(default)]
+    context_window: Option<u32>,
+}
+
+impl CatalogModel {
+    fn into_profile(self, account: &AccountStatus) -> ModelProfile {
+        let mut profile = ModelProfile::for_chatgpt(account, self.slug);
+        profile.context_window = self.context_window.filter(|window| *window > 0);
+        profile
+    }
 }
 
 struct Callback {
@@ -329,7 +339,7 @@ async fn refresh_catalog_for_account(account: &AccountStatus) -> Result<AuthComm
     }
     let profiles = models
         .into_iter()
-        .map(|model| ModelProfile::for_chatgpt(account, model.slug))
+        .map(|model| model.into_profile(account))
         .collect::<Vec<_>>();
     debug_assert!(profiles.iter().all(|candidate| {
         candidate
@@ -423,8 +433,8 @@ async fn finish_authorization(
         active: true,
     };
     let profiles = catalog
-        .iter()
-        .map(|model| ModelProfile::for_chatgpt(&record, model.slug.clone()))
+        .into_iter()
+        .map(|model| model.into_profile(&record))
         .collect::<Vec<_>>();
     save_token_set(
         &account,
@@ -614,15 +624,33 @@ async fn list_models(client: &reqwest::Client, access_token: &str) -> Result<Vec
 
 fn displayable_models(catalog: ModelCatalog) -> Vec<CatalogModel> {
     let mut seen = std::collections::HashSet::new();
-    catalog
+    let mut entries = Vec::with_capacity(catalog.models.len());
+    let models = catalog
         .models
         .into_iter()
         .filter(|model| {
-            model.visibility == "list"
+            let kept = model.visibility == "list"
                 && !model.slug.trim().is_empty()
-                && seen.insert(model.slug.clone())
+                && seen.insert(model.slug.clone());
+            entries.push(serde_json::json!({
+                "slug": model.slug,
+                "visibility": model.visibility,
+                "context_window": model.context_window,
+                "kept": kept,
+            }));
+            kept
         })
-        .collect()
+        .collect::<Vec<_>>();
+    crate::logger::operational_event(
+        "provider.model_catalog",
+        serde_json::json!({
+            "provider": "openai",
+            "returned": entries.len(),
+            "kept": models.len(),
+            "models": entries,
+        }),
+    );
+    models
 }
 
 fn validate_callback_state(callback: &Callback, expected: &str) -> Result<()> {
@@ -1139,6 +1167,39 @@ mod tests {
         assert_eq!(available.len(), 2);
         assert_eq!(available[0].slug, "available-model");
         assert_eq!(available[1].slug, "later-model");
+    }
+
+    #[test]
+    fn catalog_profile_uses_reported_context_window() {
+        let catalog: ModelCatalog = serde_json::from_value(serde_json::json!({ "models": [
+            {"slug":"sized","visibility":"list","context_window":400000},
+            {"slug":"unsized","visibility":"list"},
+            {"slug":"zero","visibility":"list","context_window":0}
+        ]}))
+        .unwrap();
+        let account = AccountStatus {
+            provider: "openai".into(),
+            account: "fixture".into(),
+            method: AuthMethod::ChatGpt,
+            display: "fixture".into(),
+            endpoint: RESOURCE.into(),
+            client_id: None,
+            scopes: vec![],
+            expires_at: None,
+            active: true,
+        };
+        let windows = displayable_models(catalog)
+            .into_iter()
+            .map(|model| model.into_profile(&account).context_budget().context_window)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            windows,
+            vec![
+                400_000,
+                crate::config::CHATGPT_DEFAULT_CONTEXT_WINDOW,
+                crate::config::CHATGPT_DEFAULT_CONTEXT_WINDOW
+            ]
+        );
     }
 
     #[tokio::test]

@@ -664,6 +664,7 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     let engine = profile.engine.clone();
     let tool_protocol = profile.tool_protocol.clone();
     let supports_vision = profile.supports_vision;
+    let context_window = profile.context_window;
     *profile = existing.clone();
     profile.name = name;
     profile.url = url;
@@ -675,6 +676,7 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     profile.api_protocol = Some(ApiProtocol::Responses);
     profile.tool_protocol = existing.tool_protocol.clone().or(tool_protocol);
     profile.supports_vision = existing.supports_vision.or(supports_vision);
+    profile.context_window = existing.context_window.or(context_window);
 }
 
 fn is_legacy_generated_name(name: &str, model: &str, account: &str) -> bool {
@@ -1073,6 +1075,34 @@ mod tests {
         assert_eq!(preserved.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(preserved.enable_thinking, Some(true));
         assert_eq!(preserved.url, "https://api.openai.com/v1/responses");
+    }
+
+    #[test]
+    fn catalog_apply_fills_missing_context_window_and_keeps_configured_one() {
+        let account = chatgpt_account("acct-a");
+        let mut config = AppConfig::default();
+        config.models.clear();
+        let unset = ModelProfile::for_chatgpt(&account, "gpt-6".into());
+        let mut configured = ModelProfile::for_chatgpt(&account, "gpt-6-astra".into());
+        configured.context_window = Some(64_000);
+        config.models.push(unset);
+        config.models.push(configured);
+
+        let mut result = catalog_result(&account, &["gpt-6", "gpt-6-astra"]);
+        for profile in &mut result.profiles {
+            profile.context_window = Some(400_000);
+        }
+        apply_auth_result(&mut config, &result).unwrap();
+        let window = |model: &str| {
+            config
+                .models
+                .iter()
+                .find(|p| p.model == model)
+                .unwrap()
+                .context_window
+        };
+        assert_eq!(window("gpt-6"), Some(400_000));
+        assert_eq!(window("gpt-6-astra"), Some(64_000));
     }
 
     #[test]
