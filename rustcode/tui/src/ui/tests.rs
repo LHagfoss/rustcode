@@ -9644,6 +9644,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
+    state.token_usage_in_flight = true;
     let snapshot = render_snapshot(&state);
     let indicator =
         super::live_running_indicator(&snapshot).expect("a running turn has an indicator");
@@ -9652,11 +9653,159 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert_eq!(text, format!("• {}", snapshot.model_name()), "{text}");
+    assert_eq!(
+        text,
+        format!("• {} · ~0 tokens", snapshot.model_name()),
+        "{text}"
+    );
     assert!(
         !text.contains('⠋'),
         "reduced motion must not animate: {text}"
     );
+}
+
+#[test]
+fn running_indicator_adds_live_usage_to_turn_total_and_marks_it_provisional() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        total_tokens: 800,
+        ..Default::default()
+    });
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 200,
+        completion_tokens: 250,
+        total_tokens: 450,
+        ..Default::default()
+    });
+    state.token_usage_in_flight = true;
+    state.provider_request_in_flight = true;
+    state.stream_tracker = Some(rustcode::controller::StreamTracker::new());
+    state.stream_tracker.as_mut().unwrap().tokens_so_far = 450;
+
+    let snapshot = render_snapshot(&state);
+    let text = super::live_running_indicator(&snapshot)
+        .expect("a running turn has an indicator")
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("· ~1.2K tokens"), "{text}");
+}
+
+#[test]
+fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.running_tools.push("run_command".to_owned());
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        total_tokens: 800,
+        ..Default::default()
+    });
+    // The completed response remains in current_token_usage while tools run;
+    // it must not be counted again after the request leaves flight.
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 200,
+        completion_tokens: 250,
+        total_tokens: 450,
+        ..Default::default()
+    });
+
+    let snapshot = render_snapshot(&state);
+    let text = super::live_running_indicator(&snapshot)
+        .expect("tool work has an indicator")
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("· 800 tokens"), "{text}");
+    assert!(
+        !text.contains('~'),
+        "completed usage is not provisional: {text}"
+    );
+}
+
+#[test]
+fn running_indicator_updates_provisional_stream_estimates_across_continuations() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 40,
+        completion_tokens: 10,
+        total_tokens: 50,
+        ..Default::default()
+    });
+    state.token_usage_in_flight = true;
+    state.provider_request_in_flight = true;
+    state.stream_tracker = Some(rustcode::controller::StreamTracker::new());
+
+    let indicator_text = |state: &RenderState| {
+        let snapshot = render_snapshot(state);
+        super::live_running_indicator(&snapshot)
+            .expect("a running turn has an indicator")
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    };
+
+    state.stream_tracker.as_mut().unwrap().tokens_so_far = 5;
+    assert!(indicator_text(&state).contains("· ~55 tokens"));
+    state.stream_tracker.as_mut().unwrap().tokens_so_far = 12;
+    assert!(indicator_text(&state).contains("· ~62 tokens"));
+
+    // The first continuation finished without a usage footer. Its final
+    // stream estimate remains in the round total while the next stream starts
+    // with a fresh tracker and a cleared request-local usage field.
+    state.current_round_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 10,
+        completion_tokens: 3,
+        total_tokens: 13,
+        ..Default::default()
+    });
+    state.current_round_estimated_input_tokens = 7;
+    state.current_round_estimated_output_tokens = 12;
+    state.current_turn_token_usage_is_estimated = true;
+    state.current_token_usage = None;
+    state.stream_tracker = Some(rustcode::controller::StreamTracker::new());
+    assert!(indicator_text(&state).contains("· ~82 tokens"));
+    state.current_provider_request_prompt_estimate = 9;
+    state.stream_tracker.as_mut().unwrap().tokens_so_far = 8;
+    assert!(indicator_text(&state).contains("· ~99 tokens"));
+}
+
+#[test]
+fn running_indicator_keeps_estimated_marker_while_waiting_for_tools() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 600,
+        completion_tokens: 120,
+        total_tokens: 720,
+        ..Default::default()
+    });
+    state.current_turn_token_usage_is_estimated = true;
+
+    let snapshot = render_snapshot(&state);
+    let text = super::live_running_indicator(&snapshot)
+        .expect("tool work has an indicator")
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("· ~720 tokens"), "{text}");
 }
 
 #[test]

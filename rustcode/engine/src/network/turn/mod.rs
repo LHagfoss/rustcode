@@ -64,12 +64,29 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         if context.budget.continuation_pending {
             context.begin_next_segment();
         }
+        state.current_turn_token_usage = context.response.turn_token_usage.clone();
+        state.current_turn_token_usage_is_estimated =
+            context.response.turn_token_usage_is_estimated;
+        state.current_round_token_usage = None;
+        state.current_round_estimated_input_tokens = 0;
+        state.current_round_estimated_output_tokens = 0;
+        state.current_provider_request_prompt_estimate = 0;
+        state.token_usage_in_flight = false;
+        state.provider_request_in_flight = false;
         context
     } else {
         // A real user prompt starts a new logical task. Do not let a stale
         // background result inherit the previous task's loop or verification
         // budgets.
         state.background_turn_context = None;
+        state.current_turn_token_usage = None;
+        state.current_turn_token_usage_is_estimated = false;
+        state.current_round_token_usage = None;
+        state.current_round_estimated_input_tokens = 0;
+        state.current_round_estimated_output_tokens = 0;
+        state.current_provider_request_prompt_estimate = 0;
+        state.token_usage_in_flight = false;
+        state.provider_request_in_flight = false;
         // Held-over tool calls belong to the previous task (#1590); the new
         // prompt's transcript never promised them.
         state.clear_deferred_tool_calls();
@@ -225,7 +242,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         ctx.lifecycle.stop_reason = None;
     }
 
-    let round = match request::collect_round(
+    let round = request::collect_round(
         client,
         state,
         cancel_token,
@@ -233,8 +250,22 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         ctx,
         turn_session_id,
     )
-    .await
+    .await;
     {
+        let mut app = state.lock().await;
+        app.token_usage_in_flight = false;
+        app.current_turn_token_usage = ctx.response.turn_token_usage.clone();
+        app.current_turn_token_usage_is_estimated |= ctx.response.turn_token_usage_is_estimated
+            || app.current_round_estimated_input_tokens > 0
+            || app.current_round_estimated_output_tokens > 0;
+        app.current_round_token_usage = None;
+        app.current_round_estimated_input_tokens = 0;
+        app.current_round_estimated_output_tokens = 0;
+        app.current_provider_request_prompt_estimate = 0;
+        app.provider_request_in_flight = false;
+        app.request_redraw();
+    }
+    let round = match round {
         Ok(round) => round,
         Err(request::RoundCollectionError::Stop) => return false,
     };
@@ -322,7 +353,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{messages_for_response_continuation, reasoning_loop_final_response};
+    use super::{
+        messages_for_response_continuation, reasoning_loop_final_response,
+        take_turn_context_for_prompt,
+    };
+    use crate::app::{AppState, TokenUsage};
     use crate::network::EMPTY_RESPONSE_RECOVERY_PROMPT;
 
     #[test]
@@ -362,5 +397,56 @@ mod tests {
         assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.len() <= 300);
         assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.contains("answer the user's request"));
         assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.contains("Do not call tools"));
+    }
+
+    #[test]
+    fn background_wakeup_keeps_usage_and_a_new_prompt_resets_it() {
+        let usage = TokenUsage {
+            prompt_tokens: 120,
+            completion_tokens: 30,
+            total_tokens: 150,
+            ..Default::default()
+        };
+        let mut context = super::TurnContext::new();
+        context.response.turn_token_usage = Some(usage.clone());
+        context.response.turn_token_usage_is_estimated = true;
+        let checkpoint = context.segment_checkpoint("session-1", true, false);
+        let checkpoint: super::SegmentCheckpoint = serde_json::from_str(
+            &serde_json::to_string(&checkpoint).expect("serialize segment checkpoint"),
+        )
+        .expect("restore segment checkpoint data");
+        let mut restored_context = super::TurnContext::new();
+        assert!(restored_context.restore_segment(&checkpoint, "session-1"));
+        let mut state = AppState::new();
+        state.background_turn_context = Some(Box::new(restored_context));
+
+        let resumed = take_turn_context_for_prompt(&mut state, true, 40);
+        assert_eq!(resumed.response.turn_token_usage, Some(usage.clone()));
+        assert_eq!(state.current_turn_token_usage, Some(usage));
+        assert!(resumed.response.turn_token_usage_is_estimated);
+        assert!(state.current_turn_token_usage_is_estimated);
+        assert!(!state.token_usage_in_flight);
+
+        let _new = take_turn_context_for_prompt(&mut state, false, 40);
+        assert!(state.current_turn_token_usage.is_none());
+        assert!(!state.current_turn_token_usage_is_estimated);
+        assert!(!state.token_usage_in_flight);
+
+        let provider_usage = TokenUsage {
+            prompt_tokens: 120,
+            completion_tokens: 30,
+            total_tokens: 150,
+            ..Default::default()
+        };
+        let mut provider_context = super::TurnContext::new();
+        provider_context.response.turn_token_usage = Some(provider_usage.clone());
+        let mut provider_state = AppState::new();
+        provider_state.background_turn_context = Some(Box::new(provider_context));
+        let provider_resumed = take_turn_context_for_prompt(&mut provider_state, true, 40);
+        assert_eq!(
+            provider_resumed.response.turn_token_usage,
+            Some(provider_usage)
+        );
+        assert!(!provider_state.current_turn_token_usage_is_estimated);
     }
 }
