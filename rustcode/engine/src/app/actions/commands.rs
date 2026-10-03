@@ -545,6 +545,17 @@ pub fn build_help_text() -> String {
             &[
                 ("/model", "Open model picker or switch profile"),
                 ("/quota", "Show provider quota and remaining limits"),
+                (
+                    "/login",
+                    "Sign in, refresh a model catalog, or store an API key",
+                ),
+                ("/auth", "Show configured auth methods and saved accounts"),
+                ("/accounts", "List saved provider accounts"),
+                (
+                    "/account",
+                    "Show active profile and provider account status",
+                ),
+                ("/logout", "Revoke or remove a provider account"),
                 ("/context", "Show context usage or set context window"),
                 ("/discord", "Toggle or configure Discord Rich Presence"),
                 ("/mcp", "Configure Model Context Protocol (MCP) servers"),

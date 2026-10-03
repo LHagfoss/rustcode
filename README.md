@@ -26,6 +26,7 @@
 `rustcode` is a lightweight Terminal User Interface (TUI) agent harness.
 Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
+Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/logout`; see the authentication guide for ChatGPT plan sign-in and API-key provider setup.
 
 ## Documentation
 

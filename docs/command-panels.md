@@ -31,9 +31,12 @@ an open user panel and resumes its input surface after dismissal.
 | `/info` | Scrollable About RustCode panel. |
 | `/help` | Scrollable Help panel. |
 | `/history` | Session picker; empty list uses a History panel. |
-| `/login` | Lists supported provider login methods; provider sign-in runs asynchronously and reports its result in a Provider authentication panel. |
+| `/login` | Lists supported provider login methods; sign-in runs asynchronously and reports its result in a Provider authentication panel. |
 | `/auth status` | Lists saved provider accounts and auth methods in a Provider authentication panel. |
-| `/logout` | Signs out of the selected provider account asynchronously and reports the result in a Provider authentication panel. |
+| `/accounts` | Lists saved provider accounts. |
+| `/account` | Shows the active profile and its provider account status. |
+| `/account refresh [provider] [account-id]` | Refreshes the selected provider's model catalog without browser sign-in. |
+| `/logout` | Signs out of the selected provider account asynchronously and reports its result in a Provider authentication panel. |
 | `/memory` | Scrollable Memory panel for RAM, project-memory inspection, updates and help. |
 | `/mcp` | Existing MCP configuration/editor panel. |
 | `/model` | Existing model picker; direct profile/model arguments apply immediately and show panel feedback. |
@@ -60,13 +63,13 @@ an open user panel and resumes its input surface after dismissal.
 | `/skills` | Scrollable Skills catalog panel. |
 | `/stats` | Existing usage panel with captured monthly data. |
 | `/stop` | Immediate background-terminal stop action. |
-| `/status` | Existing session status panel. |
+| `/status` | Existing session status panel with the active provider account. |
 | `/compact` | Immediate asynchronous conversation compaction; retains its existing task/result lifecycle. |
 | `/summarize` | Immediate asynchronous conversation summary; the resulting summary belongs to the transcript. |
 | `/sync` | Immediate asynchronous configuration repository synchronization. |
 | `/update` | Immediate asynchronous update check/upgrade; retains update decision UI. |
 | `/tools` | Scrollable Tools reference panel. |
-| `/usage` | Alias of /stats. |
+| `/usage` | Alias of /stats; includes provider usage guidance and local token totals. |
 | `/verbosity` | Existing low/high chooser; direct arguments apply immediately with panel result/help. |
 | `/yolo` | Existing on/off chooser; direct arguments apply immediately with transient confirmation; invalid arguments use a panel. |
 | `/sandbox` | Scrollable supported-mode panel, retaining mode descriptions and user-level configuration guidance; direct arguments apply immediately with panel result/help. |

@@ -403,12 +403,12 @@ pub(super) const MCP_CONFIG_HEIGHT: u16 = 14;
 pub(super) const COMMAND_PICKER_HEIGHT: u16 = 14;
 pub(super) const THEME_PICKER_HEIGHT: u16 = 12;
 pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 14;
-/// Header, blank row, model/session/messages, an optional token line and the
+/// Header, provider/account, model/session/messages, optional token line and
 /// one-row padding above and below the panel.
-pub(super) const STATUS_MODAL_HEIGHT: u16 = 8;
-/// Header, blank row, last-turn tokens, optional latency, a blank row, the
-/// monthly heading and up to three months of totals, plus panel padding.
-pub(super) const STATS_MODAL_HEIGHT: u16 = 12;
+pub(super) const STATUS_MODAL_HEIGHT: u16 = 10;
+/// Header, provider usage and help, local turn tokens, optional latency, and
+/// monthly totals, plus panel padding.
+pub(super) const STATS_MODAL_HEIGHT: u16 = 16;
 /// Header, blank row, id/model/messages and the one-row padding above and
 /// below the panel.
 pub(super) const SESSION_MODAL_HEIGHT: u16 = 8;
