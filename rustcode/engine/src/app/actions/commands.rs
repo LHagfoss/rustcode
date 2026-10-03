@@ -553,7 +553,7 @@ pub fn build_help_text() -> String {
                 ("/accounts", "List saved provider accounts"),
                 (
                     "/account",
-                    "Show active profile and provider account status",
+                    "Show provider account status; /account refresh reloads models",
                 ),
                 ("/logout", "Revoke or remove a provider account"),
                 ("/context", "Show context usage or set context window"),
