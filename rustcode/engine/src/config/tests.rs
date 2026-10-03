@@ -368,6 +368,57 @@ fn discord_rich_presence_defaults_enabled_and_round_trips() {
 }
 
 #[test]
+fn discord_rich_presence_updates_the_project_override_that_owns_it() {
+    let workspace = TempDir::new().unwrap();
+    let project_config = workspace.path().join(PROJECT_CONFIG_DIR);
+    fs::create_dir_all(&project_config).unwrap();
+    fs::write(
+        project_config.join(PROJECT_CONFIG_FILE),
+        "version = 1\ndiscord_rpc_enabled = false\nfuture_feature = { enabled = true }\n",
+    )
+    .unwrap();
+
+    let global_enabled = load_config().2.discord_rpc_enabled;
+    let (_, _, mut config) = load_config_for_workspace(workspace.path());
+    assert!(!config.discord_rpc_enabled);
+    config.discord_rpc_enabled = true;
+
+    save_discord_rpc_enabled(&config, Some(workspace.path())).unwrap();
+
+    let (_, _, reloaded) = load_config_for_workspace(workspace.path());
+    assert!(reloaded.discord_rpc_enabled);
+    assert_eq!(load_config().2.discord_rpc_enabled, global_enabled);
+    let project: toml::Value =
+        toml::from_str(&fs::read_to_string(project_config.join(PROJECT_CONFIG_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(project["discord_rpc_enabled"], toml::Value::Boolean(true));
+    assert_eq!(
+        project["future_feature"]["enabled"],
+        toml::Value::Boolean(true)
+    );
+}
+
+#[test]
+fn discord_global_toggle_preserves_project_overrides_for_the_given_workspace() {
+    let workspace = TempDir::new().unwrap();
+    let project_config = workspace.path().join(PROJECT_CONFIG_DIR);
+    fs::create_dir_all(&project_config).unwrap();
+    fs::write(
+        project_config.join(PROJECT_CONFIG_FILE),
+        "version = 1\n[default]\nbig = \"workspace-model\"\n",
+    )
+    .unwrap();
+    let mut config = load_config().2;
+    config.discord_rpc_enabled = false;
+
+    save_discord_rpc_enabled(&config, Some(workspace.path())).unwrap();
+
+    let (_, _, reloaded) = load_config_for_workspace(workspace.path());
+    assert!(!reloaded.discord_rpc_enabled);
+    assert_eq!(reloaded.default.big(), "workspace-model");
+}
+
+#[test]
 fn fullscreen_defaults_off_and_round_trips_in_toml() {
     assert!(!AppConfig::default().fullscreen);
 

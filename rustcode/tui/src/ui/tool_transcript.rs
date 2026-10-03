@@ -1773,7 +1773,9 @@ pub(super) fn format_elapsed_compact(milliseconds: u64) -> String {
     let seconds = milliseconds / 1_000;
     let minutes = seconds / 60;
     let seconds = seconds % 60;
-    if minutes > 0 {
+    if milliseconds < 1_000 {
+        "<1s".to_owned()
+    } else if minutes > 0 {
         format!("{minutes}m {seconds:02}s")
     } else {
         format!("{seconds}s")
@@ -1806,7 +1808,6 @@ pub(crate) fn render_work_separator_before_assistant_snapshot(
 
     let label = message
         .response_time_ms
-        .filter(|milliseconds| *milliseconds > 60_000)
         .map(|milliseconds| format!("─ Worked for {} ─", format_elapsed_compact(milliseconds)));
     let text = if let Some(label) = label {
         let label_width = label.width();

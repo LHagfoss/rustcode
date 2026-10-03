@@ -42,9 +42,8 @@ fn is_keyboard_range_key(key: crossterm::event::KeyEvent) -> bool {
 
 /// Whether the transcript selection claims Esc before any other handler.
 ///
-/// Ctrl/Cmd+C is deliberately absent: that chord is handled first so it can
-/// copy the selection *and* arm the double-press exit. Esc only ever dismisses,
-/// so giving it to a live selection costs nothing.
+/// Ctrl+C is deliberately absent because it can copy and arm double-press exit;
+/// Cmd+C is handled as copy-only first. Esc only dismisses the selection.
 fn selection_owns_key(transcript: &TranscriptState, key: crossterm::event::KeyEvent) -> bool {
     let selection = if transcript.panel_selection_area.is_some() {
         &transcript.panel_selection
@@ -134,16 +133,17 @@ async fn report_selection_copy(
     app_state.lock().await.set_transient_notice(notice);
 }
 
-/// Whether this event is the Ctrl/Cmd+C chord.
-///
-/// Apple Terminal reserves `cmd+c` for its native selection and never delivers
-/// it, but terminals that do forward it must behave the same way as `ctrl+c`
-/// so the chord is not a silent no-op that types a literal `c` (see #1566).
+/// Whether this event is the Ctrl+C copy/exit chord.
 fn is_copy_or_exit_chord(key: crossterm::event::KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
-        && key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Whether this event is Cmd+C without Control, which copies without exiting.
+fn is_cmd_copy_chord(key: crossterm::event::KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && key.modifiers.contains(KeyModifiers::SUPER)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 /// Copy the live transcript or composer selection, if there is one.
@@ -155,9 +155,22 @@ async fn copy_live_selection(
     app_state: &Arc<Mutex<AppState>>,
     transcript: &TranscriptState,
 ) -> bool {
+    copy_live_selection_with(
+        app_state,
+        transcript,
+        rustcode::clipboard::copy_to_clipboard,
+    )
+    .await
+}
+
+async fn copy_live_selection_with(
+    app_state: &Arc<Mutex<AppState>>,
+    transcript: &TranscriptState,
+    copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
+) -> bool {
     if app_state.lock().await.has_composer_selection() {
         if let Some(text) = app_state.lock().await.composer_selected_text() {
-            report_selection_copy(app_state, &text, rustcode::clipboard::copy_to_clipboard).await;
+            report_selection_copy(app_state, &text, copy).await;
             return true;
         }
     }
@@ -168,7 +181,7 @@ async fn copy_live_selection(
     };
     match selection.selected_text() {
         Some(text) => {
-            report_selection_copy(app_state, &text, rustcode::clipboard::copy_to_clipboard).await;
+            report_selection_copy(app_state, &text, copy).await;
             true
         }
         // Keyboard-select mode can own the chord with a collapsed caret, which
@@ -187,7 +200,7 @@ async fn copy_live_selection(
     }
 }
 
-/// Handle Ctrl/Cmd+C once, for both of its meanings.
+/// Handle Ctrl+C once, for both of its meanings.
 ///
 /// A selection owns this chord so it can be copied, which previously meant the
 /// key was consumed before the exit check ever ran: with any live selection the
@@ -207,6 +220,31 @@ async fn handle_copy_or_exit_chord(
         return InputFlow::Exit { update: false };
     }
     InputFlow::ContinueIteration
+}
+
+async fn handle_cmd_copy_chord_with(
+    app_state: &Arc<Mutex<AppState>>,
+    transcript: &TranscriptState,
+    copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
+) -> InputFlow {
+    // A different chord breaks the Ctrl+C double-press sequence.
+    app_state.lock().await.clear_ctrl_c_exit_arming();
+    if copy_live_selection_with(app_state, transcript, copy).await {
+        app_state.lock().await.request_redraw();
+    }
+    InputFlow::ContinueIteration
+}
+
+async fn handle_cmd_copy_chord(
+    app_state: &Arc<Mutex<AppState>>,
+    transcript: &TranscriptState,
+) -> InputFlow {
+    handle_cmd_copy_chord_with(
+        app_state,
+        transcript,
+        rustcode::clipboard::copy_to_clipboard,
+    )
+    .await
 }
 
 pub(super) async fn handle_app_event(
@@ -325,13 +363,13 @@ pub(super) async fn handle_app_event(
                     }
                 }
 
-                // Ctrl/Cmd+C must run before the selection handlers below,
-                // because a live selection owns this chord as its copy binding.
-                // Handling it last made the double-press exit unreachable for as
-                // long as any selection existed — including a pinned one, which
-                // survives a whole turn.
+                // Ctrl+C runs before selection handlers so the chord can copy
+                // and retain its double-press exit behavior. Cmd+C is copy-only.
                 if is_copy_or_exit_chord(key) {
                     return Ok(handle_copy_or_exit_chord(&app_state, transcript_state).await);
+                }
+                if is_cmd_copy_chord(key) {
+                    return Ok(handle_cmd_copy_chord(&app_state, transcript_state).await);
                 }
 
                 if selection_owns_key(transcript_state, key) {
@@ -2149,8 +2187,9 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        InputFlow, clear_selection_for_composer_key, handle_copy_or_exit_chord,
-        insert_clipboard_paste, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
+        InputFlow, clear_selection_for_composer_key, handle_cmd_copy_chord,
+        handle_cmd_copy_chord_with, handle_copy_or_exit_chord, insert_clipboard_paste,
+        is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
         is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
         scroll_panel_selection, selection_owns_key,
     };
@@ -2247,13 +2286,13 @@ mod tests {
             &transcript,
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
         ));
-        // The chord stays out of the selection's hands so it can arm the exit
-        // even while a selection is live.
+        // Ctrl+C stays out of the selection's hands so it can arm the exit;
+        // Cmd+C stays out too, but takes the copy-only path.
         assert!(is_copy_or_exit_chord(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL
         )));
-        assert!(is_copy_or_exit_chord(KeyEvent::new(
+        assert!(is_cmd_copy_chord(KeyEvent::new(
             KeyCode::Char('C'),
             KeyModifiers::SUPER
         )));
@@ -2281,11 +2320,17 @@ mod tests {
         assert_eq!(rustcode::controller::copy_selection_binding(), "ctrl+c");
         let copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(is_copy_or_exit_chord(copy));
-        // A terminal that forwards Cmd+C must not treat it as a typed letter.
-        assert!(is_copy_or_exit_chord(KeyEvent::new(
+        // Cmd+C is handled as copy-only; Control takes precedence when both
+        // modifiers arrive in the same event.
+        let cmd_copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER);
+        assert!(!is_copy_or_exit_chord(cmd_copy));
+        assert!(is_cmd_copy_chord(cmd_copy));
+        let mixed_copy = KeyEvent::new(
             KeyCode::Char('c'),
-            KeyModifiers::SUPER
-        )));
+            KeyModifiers::SUPER | KeyModifiers::CONTROL,
+        );
+        assert!(is_copy_or_exit_chord(mixed_copy));
+        assert!(!is_cmd_copy_chord(mixed_copy));
         assert!(!is_copy_or_exit_chord(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::NONE
@@ -2406,6 +2451,82 @@ mod tests {
             handle_copy_or_exit_chord(&app_state, &transcript).await,
             InputFlow::Exit { update: false }
         ));
+    }
+
+    #[tokio::test]
+    async fn repeated_cmd_c_copies_selection_without_arming_exit() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, "hello", ratatui::style::Style::default());
+        let mut transcript = TranscriptState::default();
+        // `/session` displays a fixed session panel whose selection is stored
+        // separately from the main transcript selection.
+        transcript.panel_selection_area = Some(area);
+        transcript.panel_selection_scrollable = false;
+        transcript.panel_selection.refresh(area, &buffer, &[false]);
+        for event in [
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 3,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 3,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+        ] {
+            transcript.panel_selection.mouse(event);
+        }
+        assert_eq!(
+            transcript.panel_selection.selected_text().as_deref(),
+            Some("hell")
+        );
+
+        let app_state = Arc::new(Mutex::new(AppState::new()));
+        for _ in 0..2 {
+            let copied = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let copied_by_backend = copied.clone();
+            assert!(matches!(
+                handle_cmd_copy_chord_with(&app_state, &transcript, move |text| {
+                    *copied_by_backend.lock().unwrap() = Some(text.to_owned());
+                    rustcode::clipboard::ClipboardCopyStatus::Confirmed
+                })
+                .await,
+                InputFlow::ContinueIteration
+            ));
+            assert_eq!(copied.lock().unwrap().as_deref(), Some("hell"));
+            assert!(!app_state.lock().await.ctrl_c_exit_armed());
+        }
+    }
+
+    #[tokio::test]
+    async fn cmd_c_without_app_selection_never_arms_exit() {
+        let app_state = Arc::new(Mutex::new(AppState::new()));
+        let transcript = TranscriptState::default();
+        // Cmd+C also breaks a pending Ctrl+C confirmation. A later Ctrl+C
+        // starts a fresh sequence instead of exiting unexpectedly.
+        assert!(!rustcode::app::handle_ctrl_c(&app_state).await);
+        assert!(app_state.lock().await.ctrl_c_exit_armed());
+        for _ in 0..2 {
+            assert!(matches!(
+                handle_cmd_copy_chord(&app_state, &transcript).await,
+                InputFlow::ContinueIteration
+            ));
+            assert!(!app_state.lock().await.ctrl_c_exit_armed());
+        }
+        assert!(!rustcode::app::handle_ctrl_c(&app_state).await);
+        assert!(app_state.lock().await.ctrl_c_exit_armed());
     }
 
     /// With no selection the chord is purely the exit affordance.

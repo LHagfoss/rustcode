@@ -705,6 +705,78 @@ async fn handle_enter_inner(
             "/status" => {
                 s.show_status_modal = true;
             }
+            "/discord" => {
+                let argument = tokens.get(1).copied();
+                if tokens.len() > 2
+                    || matches!(argument, Some(value) if !matches!(value, "on" | "off" | "status"))
+                {
+                    s.show_command_panel(
+                        "Discord Rich Presence",
+                        "Usage: /discord [on|off|status]\nBare /discord toggles Rich Presence.",
+                    );
+                } else {
+                    let ipc = if crate::discord_rpc::ipc_socket_detected() {
+                        "detected"
+                    } else {
+                        "not detected (Discord may be closed)"
+                    };
+                    match argument {
+                        Some("status") => {
+                            let state = if s.config.discord_rpc_enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            };
+                            s.show_command_panel(
+                                "Discord Rich Presence",
+                                format!(
+                                    "Rich Presence is {state}.\nDiscord desktop IPC: {ipc}\n\nUse /discord on or /discord off to change this setting."
+                                ),
+                            );
+                        }
+                        Some("on") | Some("off") | None => {
+                            let enabled = match argument {
+                                Some("on") => true,
+                                Some("off") => false,
+                                None => !s.config.discord_rpc_enabled,
+                                _ => unreachable!("Discord arguments were validated"),
+                            };
+                            let previous = s.config.discord_rpc_enabled;
+                            if enabled != previous {
+                                s.config.discord_rpc_enabled = enabled;
+                                if let Err(error) = crate::config::save_discord_rpc_enabled(
+                                    &s.config,
+                                    s.effective_workspace_root().as_deref(),
+                                ) {
+                                    s.config.discord_rpc_enabled = previous;
+                                    s.show_command_panel(
+                                        "Discord Rich Presence",
+                                        format!(
+                                            "Could not save Discord Rich Presence setting: {error}"
+                                        ),
+                                    );
+                                    s.input_buffer.clear();
+                                    s.cursor_position = 0;
+                                    return false;
+                                }
+                            }
+                            let state = if enabled { "enabled" } else { "disabled" };
+                            let action = if enabled == previous {
+                                format!("Rich Presence is already {state}.")
+                            } else {
+                                format!("Rich Presence is now {state}.")
+                            };
+                            s.show_command_panel(
+                                "Discord Rich Presence",
+                                format!(
+                                    "{action}\nDiscord desktop IPC: {ipc}\n\nUse /discord on or /discord off to change this setting."
+                                ),
+                            );
+                        }
+                        Some(_) => unreachable!("Discord arguments were validated"),
+                    }
+                }
+            }
             "/usage" | "/stats" => {
                 s.open_stats_modal();
             }

@@ -1801,3 +1801,73 @@ fn explicit_steer_falls_back_to_fifo_when_the_turn_cannot_accept_it() {
     assert_eq!(state.pending_queue, ["safe follow-up"]);
     assert!(state.pending_steers.is_empty());
 }
+
+#[tokio::test]
+async fn discord_command_toggles_and_reports_saved_presence_setting() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    state.lock().await.input_buffer = "/discord off".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    {
+        let state = state.lock().await;
+        assert!(!state.config.discord_rpc_enabled);
+        assert!(state.history.is_empty());
+    }
+    let config_path = crate::config::get_config_dir()
+        .expect("test config directory")
+        .join(crate::config::CONFIG_TOML_FILE);
+    let saved = std::fs::read_to_string(&config_path).expect("Discord setting should be saved");
+    assert!(saved.contains("discord_rpc_enabled = false"));
+
+    state.lock().await.input_buffer = "/discord status".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    {
+        let state = state.lock().await;
+        assert!(!state.config.discord_rpc_enabled);
+        assert!(state.history.is_empty());
+        let panel = state
+            .command_panel
+            .as_ref()
+            .expect("status panel should open");
+        assert!(panel.content.contains("Rich Presence is disabled"));
+        assert!(panel.content.contains("Discord desktop IPC:"));
+    }
+
+    state.lock().await.input_buffer = "/discord".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    assert!(state.lock().await.config.discord_rpc_enabled);
+
+    state.lock().await.input_buffer = "/discord off".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    assert!(!state.lock().await.config.discord_rpc_enabled);
+
+    state.lock().await.input_buffer = "/discord on".to_owned();
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    {
+        let mut state = state.lock().await;
+        assert!(state.config.discord_rpc_enabled);
+        state.config.is_valid = false;
+        state.input_buffer = "/discord off".to_owned();
+    }
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
+    {
+        let state = state.lock().await;
+        assert!(state.config.discord_rpc_enabled);
+        assert!(
+            state
+                .command_panel
+                .as_ref()
+                .expect("save failure should be shown")
+                .content
+                .contains("Could not save Discord Rich Presence setting")
+        );
+    }
+    let saved = std::fs::read_to_string(&config_path).expect("enabled setting should be saved");
+    assert!(saved.contains("discord_rpc_enabled = true"));
+}
