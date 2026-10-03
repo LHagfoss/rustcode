@@ -463,6 +463,133 @@ fn discovery_query_keeps_its_match_in_the_next_native_schema() {
 }
 
 #[test]
+fn newest_discovery_after_latest_user_turn_replaces_historical_matches() {
+    let mut mcp = (0..20)
+        .map(|index| {
+            (
+                format!("mcp__old__tool_{index:02}"),
+                "Archive a historical item".to_string(),
+                serde_json::json!({"type":"object","properties":{}}),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut owners = vec!["old".to_string(); 20];
+    mcp.push((
+        "mcp__new__latest_tool".to_string(),
+        "Current operation".to_string(),
+        serde_json::json!({"type":"object","properties":{}}),
+    ));
+    owners.push("new".to_string());
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Check the forecast"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"server\":\"old\",\"limit\":20}"
+                }
+            }]
+        }),
+        serde_json::json!({"role":"user","content":"Now do the current operation"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"query\":\"latest_tool\",\"limit\":4}"
+                }
+            }]
+        }),
+    ];
+
+    let (selected, _) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &mcp,
+            &owners,
+            &[],
+            &messages,
+            &[],
+            super::schema::ToolSchemaPhase::Established,
+        );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert_eq!(names, ["mcp__new__latest_tool"]);
+}
+
+#[test]
+fn discovery_handoff_trims_server_and_query_like_runtime() {
+    let mcp = vec![(
+        "mcp__mail__search_messages".to_string(),
+        "Find messages by attendee".to_string(),
+        serde_json::json!({"type":"object","properties":{}}),
+    )];
+    let owners = vec!["mail".to_string()];
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Compare the annual totals"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"server\":\" mail \",\"query\":\" attendee \",\"limit\":4}"
+                }
+            }]
+        }),
+    ];
+
+    let (selected, _) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &mcp,
+            &owners,
+            &[],
+            &messages,
+            &[],
+            super::schema::ToolSchemaPhase::Established,
+        );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert_eq!(names, ["mcp__mail__search_messages"]);
+}
+
+#[test]
+fn discovery_handoff_uses_the_owner_boundary_for_double_underscore_servers() {
+    let mcp = vec![(
+        "mcp__project__service__lookup".to_string(),
+        "Zeta operation".to_string(),
+        serde_json::json!({"type":"object","properties":{}}),
+    )];
+    let owners = vec!["project__service".to_string()];
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Do an unrelated action"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"query\":\"service\",\"limit\":4}"
+                }
+            }]
+        }),
+    ];
+
+    let (selected, _) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &mcp,
+            &owners,
+            &[],
+            &messages,
+            &[],
+            super::schema::ToolSchemaPhase::Established,
+        );
+    assert!(selected.is_empty());
+}
+
+#[test]
 fn a_pinned_menu_survives_a_transcript_that_rescores_every_tool() {
     let schema = serde_json::json!({"type":"object","properties":{}});
     // One more name-matching tool than the budget allows, so any change in the

@@ -1033,75 +1033,91 @@ fn mcp_tools_selected_by_discovery_calls(
     messages: &[Value],
 ) -> std::collections::HashSet<String> {
     let mut selected = std::collections::HashSet::new();
+    let Some(latest_user) = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    else {
+        return selected;
+    };
 
-    for message in messages {
-        let Some(calls) = message.get("tool_calls").and_then(Value::as_array) else {
-            continue;
-        };
-        for call in calls {
-            let Some(function) = call.get("function") else {
-                continue;
-            };
-            if function.get("name").and_then(Value::as_str) != Some("list_mcp_tools") {
-                continue;
-            }
-            let args = match function.get("arguments") {
-                Some(Value::Object(args)) => Value::Object(args.clone()),
-                Some(Value::String(args)) => match serde_json::from_str::<Value>(args) {
-                    Ok(Value::Object(args)) => Value::Object(args),
-                    _ => continue,
-                },
-                _ => continue,
-            };
-            let server = args.get("server").and_then(Value::as_str);
-            let query = args
-                .get("query")
-                .and_then(Value::as_str)
-                .map(str::to_lowercase);
-            if server.is_none() && query.is_none() {
-                continue;
-            }
-            let limit = match args.get("limit") {
-                None => 20,
-                Some(value) => match value.as_u64().filter(|value| (1..=50).contains(value)) {
-                    Some(value) => value as usize,
-                    None => continue,
-                },
-            };
-            let mut matched = tools
-                .iter()
-                .zip(owners)
-                .filter_map(|((name, description, _), owner)| {
-                    if server.is_some_and(|server| server != owner) {
-                        return None;
-                    }
-                    let raw_name = name
-                        .strip_prefix("mcp__")
-                        .and_then(|name| name.split_once("__").map(|(_, tool)| tool))
-                        .unwrap_or(name);
-                    if query.as_ref().is_some_and(|query| {
-                        !raw_name.to_lowercase().contains(query)
-                            && !description.to_lowercase().contains(query)
-                    }) {
-                        return None;
-                    }
-                    Some((owner, raw_name, name))
-                })
-                .collect::<Vec<_>>();
-            matched.sort_by(|left, right| {
-                left.0
-                    .cmp(right.0)
-                    .then_with(|| left.1.cmp(right.1))
-                    .then_with(|| left.2.cmp(right.2))
-            });
-            selected.extend(
-                matched
-                    .into_iter()
-                    .take(limit)
-                    .map(|(_, _, name)| name.clone()),
-            );
-        }
+    // Discovery hints belong to one logical user turn. Use only the newest
+    // discovery call after that turn began, so earlier searches cannot crowd
+    // out its current result on the next model request.
+    let latest_call = messages[latest_user..]
+        .iter()
+        .flat_map(|message| {
+            message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|call| call.get("function"))
+        .filter(|function| function.get("name").and_then(Value::as_str) == Some("list_mcp_tools"))
+        .last();
+    let Some(arguments) = latest_call.and_then(|function| function.get("arguments")) else {
+        return selected;
+    };
+    let args = match arguments {
+        Value::Object(args) => Value::Object(args.clone()),
+        Value::String(args) => match serde_json::from_str::<Value>(args) {
+            Ok(Value::Object(args)) => Value::Object(args),
+            _ => return selected,
+        },
+        _ => return selected,
+    };
+    let server = args
+        .get("server")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|server| !server.is_empty());
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(str::to_lowercase);
+    if server.is_none() && query.is_none() {
+        return selected;
     }
+    let limit = match args.get("limit") {
+        None => 20,
+        Some(value) => match value.as_u64().filter(|value| (1..=50).contains(value)) {
+            Some(value) => value as usize,
+            None => return selected,
+        },
+    };
+    let mut matched = tools
+        .iter()
+        .zip(owners)
+        .filter_map(|((name, description, _), owner)| {
+            if server.is_some_and(|server| server != owner) {
+                return None;
+            }
+            let raw_name = name
+                .strip_prefix(&mcp_canonical_name(owner, ""))
+                .unwrap_or(name);
+            if query.as_ref().is_some_and(|query| {
+                !raw_name.to_lowercase().contains(query)
+                    && !description.to_lowercase().contains(query)
+            }) {
+                return None;
+            }
+            Some((owner, raw_name, name))
+        })
+        .collect::<Vec<_>>();
+    matched.sort_by(|left, right| {
+        left.0
+            .cmp(right.0)
+            .then_with(|| left.1.cmp(right.1))
+            .then_with(|| left.2.cmp(right.2))
+    });
+    selected.extend(
+        matched
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, name)| name.clone()),
+    );
     selected
 }
 
