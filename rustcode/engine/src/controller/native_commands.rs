@@ -28,7 +28,7 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
         "/new" => NativeSlashCommand::New,
         "/clear" => NativeSlashCommand::Clear,
         "/cancel" => NativeSlashCommand::Cancel,
-        "/login" | "/logout" | "/auth" | "/account" | "/accounts" => {
+        "/login" | "/logout" | "/auth" | "/account" | "/accounts" | "/refresh" => {
             NativeSlashCommand::ProviderAuth(format!(
                 "{}{}",
                 name.to_ascii_lowercase(),

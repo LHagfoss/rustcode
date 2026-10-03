@@ -21,13 +21,23 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         (active_url, s.model_name.clone(), key, chatgpt_plan)
     };
 
-    // The ChatGPT plan HTTP flow has no account quota endpoint. Keep its
-    // footer indicator explicitly unavailable and never probe a proxy route.
+    // The ChatGPT plan HTTP flow has no account quota endpoint; quota windows
+    // arrive with its responses instead. Show the last reported short window
+    // and never probe a proxy route.
     if chatgpt_plan {
         let mut state = state.lock().await;
-        state.model_quota_remaining = None;
+        state.model_quota_remaining = state
+            .provider_rate_limits
+            .as_ref()
+            .and_then(|limits| limits.primary.as_ref())
+            .map(|primary| (100.0 - primary.used_percent) as f32);
         state.request_redraw();
         return;
+    }
+
+    {
+        // Quota windows belong to the ChatGPT account they were reported for.
+        state.lock().await.provider_rate_limits = None;
     }
 
     if !url.contains("localhost:3000")

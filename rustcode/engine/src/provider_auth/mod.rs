@@ -2,6 +2,7 @@
 //! only non-secret account bindings in RustCode's owner-only config folder.
 
 mod openai;
+mod rate_limits;
 mod store;
 
 use crate::config::{ApiProtocol, AppConfig, ModelProfile, ProviderDefinition};
@@ -10,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
+pub(crate) use rate_limits::rate_limit_header_pairs;
+pub use rate_limits::{ProviderRateLimits, RateLimitWindow};
 pub use store::{CredentialStore, NativeCredentialStore};
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,13 +166,13 @@ pub async fn execute_command(input: &str, config: &AppConfig) -> Result<AuthComm
             profile: None,
             profiles: Vec::new(),
         }),
-        ["account", "refresh"] => openai::refresh_catalog(config, None)
+        ["account", "refresh"] | ["refresh"] => openai::refresh_catalog(config, None)
             .await?
             .ok_or_else(|| anyhow!("select an active ChatGPT profile or provide its account ID")),
-        ["account", "refresh", provider] => {
+        ["account", "refresh", provider] | ["refresh", provider] => {
             openai::refresh_catalog_for_provider(config, provider, None).await
         }
-        ["account", "refresh", provider, account] => {
+        ["account", "refresh", provider, account] | ["refresh", provider, account] => {
             openai::refresh_catalog_for_provider(config, provider, Some(account)).await
         }
         ["login", provider] if provider.eq_ignore_ascii_case("openai") => {
@@ -202,7 +205,7 @@ pub async fn execute_command(input: &str, config: &AppConfig) -> Result<AuthComm
         ["logout", provider] => logout(provider, None).await,
         ["logout", provider, account] => logout(provider, Some(account)).await,
         _ => bail!(
-            "use /login [list], /login openai [account|new], /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account [refresh [provider] [account]], or /logout <provider> [account]"
+            "use /login [list], /login openai [account|new], /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account, /refresh [provider] [account], or /logout <provider> [account]"
         ),
     }
 }
@@ -507,7 +510,7 @@ fn account_panel_message(config: &AppConfig) -> String {
         .and_then(|profile| profile.credential.as_ref())
         .is_some_and(|binding| binding.method == AuthMethod::ChatGpt);
     if refreshable {
-        format!("{summary}\n\nRefresh the model catalog: /account refresh")
+        format!("{summary}\n\nRefresh the model catalog: /refresh")
     } else {
         summary
     }
@@ -1208,8 +1211,8 @@ mod tests {
         assert!(summary.contains("State: unavailable"));
         assert!(!summary.contains("access-token"));
         assert!(provider_usage_summary(&config).contains("chatgpt.com/settings/usage"));
-        assert!(account_panel_message(&config).ends_with("/account refresh"));
-        assert!(!account_panel_message(&AppConfig::default()).contains("/account refresh"));
+        assert!(account_panel_message(&config).ends_with(": /refresh"));
+        assert!(!account_panel_message(&AppConfig::default()).contains("/refresh"));
     }
 
     #[test]

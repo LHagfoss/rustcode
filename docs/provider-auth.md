@@ -9,7 +9,7 @@ RustCode separates a model profile from its authentication. Profiles describe a 
 - `/login <provider> api-key <ENV_VAR>` reads the named environment variable and stores the API key in the operating system credential store. Pass the variable name, never the key itself. RustCode fails if the native credential store is unavailable; it does not write a plaintext fallback.
 - `/auth status` lists saved provider accounts, methods, state, and account IDs. Use the account ID to target one of several accounts.
 - `/accounts` lists saved provider accounts. `/account` shows the active model profile and its provider account status.
-- `/account refresh [provider] [account-id]` refreshes the selected account's model catalog without opening a browser; omit arguments to refresh the active account.
+- `/refresh [provider] [account-id]` refreshes the selected account's model catalog without opening a browser; omit arguments to refresh the active account. `/account refresh` is the same command.
 - `/logout <provider> [account-id]` revokes or removes the selected saved connection. Omitting the ID signs out all matching accounts.
 - `/status` includes the active provider account with session details. `/usage` keeps local token totals and adds provider usage guidance; those local totals are not billing or quota data.
 
@@ -25,7 +25,7 @@ The first sign-in saves the account connection and creates profiles for all curr
 
 When a ChatGPT plan profile is selected, `/compact` uses RustCode's deterministic local history compaction. It does not send a separate non-streaming compaction request to OpenAI.
 
-For a ChatGPT plan profile, `/usage` links to [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage); RustCode does not expose subscription quota. With an `OPENAI_API_KEY` profile, API usage and billing are managed separately in the [OpenAI API platform](https://platform.openai.com/usage). The `/usage` panel also reports RustCode's local prompt/completion token totals and monthly session totals, which do not measure provider billing or ChatGPT plan limits.
+For a ChatGPT plan profile, `/usage` shows a bar per subscription limit window (used share and reset time) once OpenAI reports those limits with a response; until then it links to [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). With an `OPENAI_API_KEY` profile, API usage and billing are managed separately in the [OpenAI API platform](https://platform.openai.com/usage). The `/usage` panel also reports RustCode's local prompt/completion token totals and monthly session totals, which do not measure provider billing or ChatGPT plan limits.
 
 RustCode writes the returned profile to the user config and keeps the account secret in the OS credential store. The equivalent profile binding looks like this; normally `/login` creates it for you:
 
