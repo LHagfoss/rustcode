@@ -1439,8 +1439,8 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     //
     // The static system prompt is served from AppState's PromptCache: it's only
     // rebuilt when the protocol, agent mode, or MCP tool set changes, not on
-    // every turn. Skill metadata is also loaded lazily once by PromptCache and
-    // remains separate from the fresh list_skills/use_skill discovery paths.
+    // every turn. Skill metadata is cached separately and refreshed after a
+    // live list_skills/use_skill discovery changes the catalog generation.
     //
     // Build the turn-varying context tail (appended to the last message
     // after the history is assembled, to preserve the cached prefix). The
