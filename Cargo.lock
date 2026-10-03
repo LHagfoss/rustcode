@@ -7326,6 +7326,7 @@ dependencies = [
  "crossterm",
  "ctor",
  "futures-util",
+ "iana-time-zone",
  "libc",
  "pulldown-cmark",
  "ratatui",

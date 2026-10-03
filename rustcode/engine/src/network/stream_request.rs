@@ -3940,6 +3940,20 @@ fn resolve_request_session_id(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Keep the newest subscription quota windows for `/usage` and mirror the
+/// short window into the footer quota indicator.
+async fn record_provider_rate_limits(
+    state: &Arc<Mutex<AppState>>,
+    limits: crate::provider_auth::ProviderRateLimits,
+) {
+    let mut state = state.lock().await;
+    if let Some(primary) = &limits.primary {
+        state.model_quota_remaining = Some((100.0 - primary.used_percent) as f32);
+    }
+    state.provider_rate_limits = Some(limits);
+    state.request_redraw();
+}
+
 async fn stream_request_with_timeouts(
     client: &reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -4663,8 +4677,18 @@ async fn stream_request_with_timeouts(
                         "model": model,
                         "status": resp.status().as_u16(),
                         "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
+                        "rate_limit_headers":
+                            crate::provider_auth::rate_limit_header_pairs(resp.headers()),
                     }),
                 );
+                if chatgpt_plan
+                    && let Some(limits) = crate::provider_auth::ProviderRateLimits::from_headers(
+                        resp.headers(),
+                        chrono::Utc::now().timestamp(),
+                    )
+                {
+                    record_provider_rate_limits(&state, limits).await;
+                }
                 break resp;
             }
             Ok(resp) => {
@@ -4936,6 +4960,19 @@ async fn stream_request_with_timeouts(
                                         == Some("response.completed")
                                 {
                                     responses_completed = true;
+                                }
+                                if chatgpt_plan
+                                    && let Some(limits) = value
+                                        .get("rate_limits")
+                                        .or_else(|| value.pointer("/response/rate_limits"))
+                                        .and_then(|rate_limits| {
+                                            crate::provider_auth::ProviderRateLimits::from_json(
+                                                rate_limits,
+                                                chrono::Utc::now().timestamp(),
+                                            )
+                                        })
+                                {
+                                    record_provider_rate_limits(&state, limits).await;
                                 }
                                 let val = if responses_api {
                                     normalize_responses_event(

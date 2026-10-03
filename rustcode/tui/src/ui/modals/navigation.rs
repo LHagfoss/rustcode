@@ -34,17 +34,9 @@ pub(in crate::ui) fn render_model_picker_modal(
         ])
         .split(inner_area);
 
-    let search_part = if state.model_picker_search().is_empty() {
-        "".to_owned()
-    } else {
-        format!(" · {}", state.model_picker_search())
-    };
-    let title_text = format!("Select model{search_part}");
-    let right_esc = if state.model_picker_search().is_empty() {
-        "type to search  esc"
-    } else {
-        "esc"
-    };
+    // The search text is typed into the composer row below the panel.
+    let title_text = "Select model";
+    let right_esc = "esc";
     let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(
@@ -941,17 +933,9 @@ pub(in crate::ui) fn render_command_picker_modal(
         ])
         .split(inner_area);
 
-    let search_part = if state.command_picker_search().is_empty() {
-        "".to_owned()
-    } else {
-        format!(" · {}", state.command_picker_search())
-    };
-    let title_text = format!("Commands{search_part}");
-    let right_esc = if state.command_picker_search().is_empty() {
-        "type to search  esc"
-    } else {
-        "esc"
-    };
+    // The search text is typed into the composer row below the panel.
+    let title_text = "Commands";
+    let right_esc = "esc";
     let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(

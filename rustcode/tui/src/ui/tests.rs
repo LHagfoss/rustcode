@@ -528,7 +528,6 @@ fn render_snapshot_preserves_existing_ui_output() {
 
     for (index, state) in states.into_iter().enumerate() {
         let actual = render_snapshot_to_text(&state, 60, 16);
-
         assert_eq!(
             actual, golden_outputs[index],
             "render case {index} diverged"
@@ -1221,16 +1220,17 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
             } else {
                 "Show or set verbosity"
             };
+            if panel {
+                // A panel without typed input leaves the composer row blank.
+                assert!(rendered.contains(surface), "{rendered}");
+                assert!(!rendered.contains("Ask RustCode"), "{rendered}");
+                assert!(!rendered.contains(activity.trim()), "{rendered}");
+                continue;
+            }
             let composer = rendered
                 .lines()
                 .enumerate()
-                .filter(|(_, line)| {
-                    line.contains(if panel {
-                        "Ask RustCode"
-                    } else {
-                        "› /verbosity"
-                    })
-                })
+                .filter(|(_, line)| line.contains("› /verbosity"))
                 .map(|(row, _)| row)
                 .last()
                 .unwrap();
@@ -1352,13 +1352,93 @@ fn status_screen_uses_the_viewport_above_the_composer() {
     let rendered = render_state_to_text(&mut state, 80, 24);
     assert!(rendered.contains("Session status"));
     assert!(rendered.contains("status-test"));
-    assert!(rendered.contains("Ask RustCode to do anything"));
+    // A read-only panel takes no typed input, so the composer row is blank.
+    assert!(!rendered.contains("Ask RustCode to do anything"));
     assert!(
         rendered
             .lines()
             .next()
             .is_some_and(|line| line.trim().is_empty())
     );
+}
+
+#[test]
+fn pickers_type_their_search_into_the_composer_and_other_panels_blank_it() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.input_buffer = "half-written draft".to_owned();
+    state.show_command_picker = true;
+    let empty = render_state_to_text(&mut state, 80, 24);
+    assert!(empty.contains("› Type to filter"), "{empty}");
+    assert!(!empty.contains("half-written draft"), "{empty}");
+
+    state.command_picker_search = "usa".to_owned();
+    let searching = render_state_to_text(&mut state, 80, 24);
+    assert!(searching.contains("› usa"), "{searching}");
+    assert!(!searching.contains("Type to filter"), "{searching}");
+    assert!(!searching.contains("Commands · usa"), "{searching}");
+
+    state.show_command_picker = false;
+    state.show_model_picker = true;
+    state.model_picker_search = "luna".to_owned();
+    let models = render_state_to_text(&mut state, 80, 24);
+    assert!(models.contains("› luna"), "{models}");
+
+    state.show_model_picker = false;
+    state.show_session_modal = true;
+    let read_only = render_state_to_text(&mut state, 80, 24);
+    assert!(read_only.contains("Session"), "{read_only}");
+    assert!(!read_only.contains('›'), "{read_only}");
+    assert!(!read_only.contains("half-written draft"), "{read_only}");
+
+    // Closing the panel hands the composer back with the draft intact.
+    state.show_session_modal = false;
+    let closed = render_state_to_text(&mut state, 80, 24);
+    assert!(closed.contains("› half-written draft"), "{closed}");
+}
+
+#[test]
+fn usage_panel_draws_a_bar_per_reported_subscription_window() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.show_stats_modal = true;
+    let without = render_state_to_text(&mut state, 100, 40);
+    assert!(!without.contains("% used"), "{without}");
+
+    state.provider_rate_limits = Some(rustcode::controller::ProviderRateLimits {
+        primary: Some(rustcode::controller::RateLimitWindow {
+            used_percent: 9.0,
+            window_minutes: Some(300),
+            resets_at: None,
+        }),
+        secondary: Some(rustcode::controller::RateLimitWindow {
+            used_percent: 33.0,
+            window_minutes: Some(7 * 24 * 60),
+            resets_at: Some(chrono::Utc::now().timestamp() + 3 * 24 * 60 * 60),
+        }),
+    });
+    let usage = render_state_to_text(&mut state, 100, 40);
+    let row = |text: &str| {
+        usage
+            .lines()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("missing {text:?}: {usage}"))
+    };
+    assert_eq!(row("9% used"), row("Current session (5h)") + 1, "{usage}");
+    assert_eq!(row("Reset time not reported"), row("9% used") + 1);
+    assert_eq!(row("33% used"), row("Current week (all models)") + 1);
+    let reset = usage.lines().nth(row("33% used") + 1).expect("reset row");
+    assert!(
+        reset.contains("Resets ") && reset.contains(" at "),
+        "{reset}"
+    );
+    // The taller panel still has room for the local totals under the bars.
+    assert!(row("Session turn") > row("33% used"), "{usage}");
+    assert!(
+        usage.contains("Local token totals are not provider billing totals."),
+        "{usage}"
+    );
+    assert!(!usage.contains("chatgpt.com/settings/usage"), "{usage}");
 }
 
 #[test]

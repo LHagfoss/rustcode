@@ -409,6 +409,23 @@ pub(super) const STATUS_MODAL_HEIGHT: u16 = 10;
 /// Header, provider usage and help, local turn tokens, optional latency, and
 /// monthly totals, plus panel padding.
 pub(super) const STATS_MODAL_HEIGHT: u16 = 16;
+/// Rows one subscription quota window adds to the usage panel: label, bar,
+/// reset time, and a blank separator.
+pub(super) const STATS_QUOTA_WINDOW_ROWS: u16 = 4;
+
+/// Usage panel height: the local totals, plus a block per reported
+/// subscription quota window. The blocks and the blank row above them replace
+/// the two-row usage hint.
+pub(super) fn stats_modal_height(state: &RenderSnapshot) -> u16 {
+    let windows = state.provider_rate_limits().map_or(0, |limits| {
+        u16::from(limits.primary.is_some()) + u16::from(limits.secondary.is_some())
+    });
+    if windows == 0 {
+        STATS_MODAL_HEIGHT
+    } else {
+        STATS_MODAL_HEIGHT + windows * STATS_QUOTA_WINDOW_ROWS - 1
+    }
+}
 /// Header, blank row, id/model/messages and the one-row padding above and
 /// below the panel.
 pub(super) const SESSION_MODAL_HEIGHT: u16 = 8;
@@ -495,7 +512,7 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
     } else if state.show_status_modal() {
         STATUS_MODAL_HEIGHT
     } else if state.show_stats_modal() {
-        STATS_MODAL_HEIGHT
+        stats_modal_height(state)
     } else if state.show_session_modal() {
         SESSION_MODAL_HEIGHT
     } else if state.show_update_prompt() {

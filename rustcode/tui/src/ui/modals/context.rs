@@ -30,7 +30,7 @@ pub(in crate::ui) fn panel_selection_surface(
     let height = if state.show_status_modal() {
         STATUS_MODAL_HEIGHT
     } else if state.show_stats_modal() {
-        STATS_MODAL_HEIGHT
+        stats_modal_height(state)
     } else if state.show_session_modal() {
         SESSION_MODAL_HEIGHT
     } else if state.command_panel().is_some() {
@@ -141,7 +141,7 @@ pub(in crate::ui) fn render_stats_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let area = input_anchor_rect(f, input_area, STATS_MODAL_HEIGHT);
+    let area = input_anchor_rect(f, input_area, stats_modal_height(state));
     f.render_widget(Clear, area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -157,7 +157,18 @@ pub(in crate::ui) fn render_stats_modal(
 
     let mut lines = vec![modal_header("Token usage"), Line::default()];
     lines.extend(provider_summary_lines(state.config(), inner.width as usize));
-    lines.extend(provider_usage_lines(state.config(), inner.width as usize));
+    match state.provider_rate_limits() {
+        Some(limits) => {
+            lines.push(Line::default());
+            lines.extend(rate_limit_lines(
+                limits,
+                inner.width as usize,
+                chrono::Local::now().fixed_offset(),
+                &iana_time_zone::get_timezone().unwrap_or_else(|_| "local time".to_owned()),
+            ));
+        }
+        None => lines.extend(provider_usage_lines(state.config(), inner.width as usize)),
+    }
     match state
         .current_turn_token_usage()
         .or_else(|| state.current_token_usage())
@@ -329,7 +340,7 @@ fn provider_usage_lines(
     let summary = rustcode::controller::provider_usage_summary(config);
     if summary.contains("chatgpt.com/settings/usage") {
         return [
-            "Subscription quota is not exposed here; API-key usage is separate.".to_owned(),
+            "Subscription limits appear here once OpenAI reports them with a response.".to_owned(),
             "Usage: https://chatgpt.com/settings/usage".to_owned(),
         ]
         .iter()
@@ -337,6 +348,88 @@ fn provider_usage_lines(
         .collect();
     }
     wrapped_text_lines(&summary, width)
+}
+
+/// Widest quota bar; narrower panels shrink it to leave room for the value.
+const QUOTA_BAR_MAX_WIDTH: usize = 50;
+
+/// Bars for the subscription quota windows a provider reported: a label, a
+/// filled bar with the used share, and when the window resets.
+fn rate_limit_lines(
+    limits: &rustcode::controller::ProviderRateLimits,
+    width: usize,
+    now: chrono::DateTime<chrono::FixedOffset>,
+    time_zone: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (window, short) in [(&limits.primary, true), (&limits.secondary, false)] {
+        let Some(window) = window else { continue };
+        let used = window.used_percent.clamp(0.0, 100.0);
+        let value = format!("  {used:.0}% used");
+        let bar_width = width.saturating_sub(value.len()).min(QUOTA_BAR_MAX_WIDTH);
+        let filled = ((used / 100.0) * bar_width as f64).round() as usize;
+        // Any use at all shows as at least one cell, and only a full window
+        // fills the bar.
+        let filled = if used > 0.0 { filled.max(1) } else { filled };
+        let filled = if used < 100.0 {
+            filled.min(bar_width.saturating_sub(1))
+        } else {
+            bar_width
+        };
+        lines.push(Line::from(Span::styled(
+            quota_window_label(window.window_minutes, short),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(" ".repeat(filled), Style::default().bg(COLOR_PRIMARY())),
+            Span::styled(
+                " ".repeat(bar_width - filled),
+                Style::default().bg(COLOR_HOVER_BG()),
+            ),
+            Span::styled(value, Style::default().fg(COLOR_TEXT())),
+        ]));
+        let reset = window
+            .resets_at
+            .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+            .map(|at| at.with_timezone(now.offset()))
+            .map_or_else(
+                || "Reset time not reported".to_owned(),
+                |at| {
+                    let time = at.format("%-I:%M%P");
+                    if at.date_naive() == now.date_naive() {
+                        format!("Resets {time} ({time_zone})")
+                    } else {
+                        format!("Resets {} at {time} ({time_zone})", at.format("%b %-d"))
+                    }
+                },
+            );
+        lines.push(Line::from(Span::styled(
+            reset,
+            Style::default().fg(COLOR_MUTED()),
+        )));
+        lines.push(Line::default());
+    }
+    lines
+}
+
+fn quota_window_label(window_minutes: Option<u64>, short: bool) -> String {
+    const DAY: u64 = 24 * 60;
+    match window_minutes {
+        Some(minutes) if minutes == 7 * DAY => "Current week (all models)".to_owned(),
+        Some(minutes) if minutes <= DAY => {
+            let span = if minutes % 60 == 0 {
+                format!("{}h", minutes / 60)
+            } else {
+                format!("{minutes}m")
+            };
+            format!("Current session ({span})")
+        }
+        Some(minutes) => format!("Current {}-day window", minutes.div_ceil(DAY)),
+        None if short => "Current session".to_owned(),
+        None => "Current week (all models)".to_owned(),
+    }
 }
 
 fn wrapped_text_lines(text: &str, width: usize) -> Vec<Line<'static>> {

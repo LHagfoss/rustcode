@@ -551,10 +551,8 @@ pub fn build_help_text() -> String {
                 ),
                 ("/auth", "Show configured auth methods and saved accounts"),
                 ("/accounts", "List saved provider accounts"),
-                (
-                    "/account",
-                    "Show provider account status; /account refresh reloads models",
-                ),
+                ("/account", "Show provider account status"),
+                ("/refresh", "Reload the provider account's model catalog"),
                 ("/logout", "Revoke or remove a provider account"),
                 ("/context", "Show context usage or set context window"),
                 ("/discord", "Toggle or configure Discord Rich Presence"),

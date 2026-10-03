@@ -31,6 +31,7 @@ pub(crate) struct RenderSnapshot {
     current_thought_tokens: u32,
     current_thought_started_at: Option<std::time::Instant>,
     model_quota_remaining: Option<f32>,
+    provider_rate_limits: Option<rustcode::controller::ProviderRateLimits>,
     pending_queue: Vec<String>,
     pending_steers: Vec<String>,
     draft_submit_mode: rustcode::controller::DraftSubmitMode,
@@ -213,6 +214,7 @@ impl RenderSnapshot {
             current_thought_tokens: view.current_thought_tokens,
             current_thought_started_at: view.current_thought_started_at,
             model_quota_remaining: view.model_quota_remaining,
+            provider_rate_limits: view.provider_rate_limits.clone(),
             pending_queue: view.pending_queue.clone(),
             pending_steers: view.pending_steers.clone(),
             draft_submit_mode: view.draft_submit_mode,
@@ -359,6 +361,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn model_quota_remaining(&self) -> Option<f32> {
         self.model_quota_remaining
+    }
+    pub(crate) fn provider_rate_limits(&self) -> Option<&rustcode::controller::ProviderRateLimits> {
+        self.provider_rate_limits.as_ref()
     }
     pub(crate) fn pending_queue(&self) -> &[String] {
         &self.pending_queue

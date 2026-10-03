@@ -1218,9 +1218,16 @@ pub(super) fn is_provider_auth_command(input: &str) -> bool {
         .split_whitespace()
         .next()
         .is_some_and(|name| {
-            ["/login", "/auth", "/logout", "/accounts", "/account"]
-                .iter()
-                .any(|valid| name.eq_ignore_ascii_case(valid))
+            [
+                "/login",
+                "/auth",
+                "/logout",
+                "/accounts",
+                "/account",
+                "/refresh",
+            ]
+            .iter()
+            .any(|valid| name.eq_ignore_ascii_case(valid))
         })
 }
 
@@ -1289,7 +1296,15 @@ pub(super) fn is_safe_provider_auth_recall(input: &str, config: &crate::config::
         ("/auth", [status]) => {
             status.eq_ignore_ascii_case("status") || status.eq_ignore_ascii_case("list")
         }
-        ("/accounts", []) | ("/account", []) | ("/account", ["refresh"]) => true,
+        ("/accounts", []) | ("/account", []) | ("/account", ["refresh"]) | ("/refresh", []) => true,
+        ("/refresh", [provider_name]) => {
+            provider(provider_name) && provider_is_configured(provider_name)
+        }
+        ("/refresh", [provider_name, account_id]) => {
+            provider(provider_name)
+                && account(account_id)
+                && known_account(provider_name, account_id)
+        }
         ("/account", [refresh, provider_name]) if refresh.eq_ignore_ascii_case("refresh") => {
             provider(provider_name) && provider_is_configured(provider_name)
         }

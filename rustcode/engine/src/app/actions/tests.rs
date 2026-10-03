@@ -1280,6 +1280,8 @@ fn provider_auth_commands_are_recognized_for_auth_dispatch() {
         "/accounts",
         "/account",
         "/account refresh",
+        "/refresh",
+        "/refresh openai",
     ] {
         assert!(super::enter::is_provider_auth_command(command), "{command}");
     }
@@ -1352,6 +1354,8 @@ fn provider_auth_recall_only_keeps_well_formed_non_secret_commands() {
         "/account",
         "/account refresh",
         "/account refresh openai",
+        "/refresh",
+        "/refresh openai",
         "/logout openai",
     ] {
         assert!(
