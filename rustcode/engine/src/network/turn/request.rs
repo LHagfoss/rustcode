@@ -250,6 +250,7 @@ fn settle_retry_attempt_usage(ctx: &mut TurnContext, state: &mut crate::app::App
             ..Default::default()
         };
         ctx.record_token_usage(Some(&estimate));
+        ctx.response.turn_token_usage_is_estimated = true;
         state.current_turn_token_usage_is_estimated = true;
     }
     state.current_round_estimated_input_tokens = 0;
@@ -925,6 +926,7 @@ pub(super) async fn collect_round(
         let mut s = state.lock().await;
         if estimated_input > 0 || estimated_output > 0 || (!has_provider_usage && has_latest_usage)
         {
+            ctx.response.turn_token_usage_is_estimated = true;
             s.current_turn_token_usage_is_estimated = true;
         }
         s.replace_current_response(content.clone());

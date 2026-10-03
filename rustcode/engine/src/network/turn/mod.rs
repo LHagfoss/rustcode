@@ -65,6 +65,8 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
             context.begin_next_segment();
         }
         state.current_turn_token_usage = context.response.turn_token_usage.clone();
+        state.current_turn_token_usage_is_estimated =
+            context.response.turn_token_usage_is_estimated;
         state.current_round_token_usage = None;
         state.current_round_estimated_input_tokens = 0;
         state.current_round_estimated_output_tokens = 0;
@@ -253,7 +255,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         let mut app = state.lock().await;
         app.token_usage_in_flight = false;
         app.current_turn_token_usage = ctx.response.turn_token_usage.clone();
-        app.current_turn_token_usage_is_estimated |= app.current_round_estimated_input_tokens > 0
+        app.current_turn_token_usage_is_estimated |= ctx.response.turn_token_usage_is_estimated
+            || app.current_round_estimated_input_tokens > 0
             || app.current_round_estimated_output_tokens > 0;
         app.current_round_token_usage = None;
         app.current_round_estimated_input_tokens = 0;
@@ -406,16 +409,44 @@ mod tests {
         };
         let mut context = super::TurnContext::new();
         context.response.turn_token_usage = Some(usage.clone());
+        context.response.turn_token_usage_is_estimated = true;
+        let checkpoint = context.segment_checkpoint("session-1", true, false);
+        let checkpoint: super::SegmentCheckpoint = serde_json::from_str(
+            &serde_json::to_string(&checkpoint).expect("serialize segment checkpoint"),
+        )
+        .expect("restore segment checkpoint data");
+        let mut restored_context = super::TurnContext::new();
+        assert!(restored_context.restore_segment(&checkpoint, "session-1"));
         let mut state = AppState::new();
-        state.background_turn_context = Some(Box::new(context));
+        state.background_turn_context = Some(Box::new(restored_context));
 
         let resumed = take_turn_context_for_prompt(&mut state, true, 40);
         assert_eq!(resumed.response.turn_token_usage, Some(usage.clone()));
         assert_eq!(state.current_turn_token_usage, Some(usage));
+        assert!(resumed.response.turn_token_usage_is_estimated);
+        assert!(state.current_turn_token_usage_is_estimated);
         assert!(!state.token_usage_in_flight);
 
         let _new = take_turn_context_for_prompt(&mut state, false, 40);
         assert!(state.current_turn_token_usage.is_none());
+        assert!(!state.current_turn_token_usage_is_estimated);
         assert!(!state.token_usage_in_flight);
+
+        let provider_usage = TokenUsage {
+            prompt_tokens: 120,
+            completion_tokens: 30,
+            total_tokens: 150,
+            ..Default::default()
+        };
+        let mut provider_context = super::TurnContext::new();
+        provider_context.response.turn_token_usage = Some(provider_usage.clone());
+        let mut provider_state = AppState::new();
+        provider_state.background_turn_context = Some(Box::new(provider_context));
+        let provider_resumed = take_turn_context_for_prompt(&mut provider_state, true, 40);
+        assert_eq!(
+            provider_resumed.response.turn_token_usage,
+            Some(provider_usage)
+        );
+        assert!(!provider_state.current_turn_token_usage_is_estimated);
     }
 }
