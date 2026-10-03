@@ -1370,11 +1370,11 @@ fn status_and_usage_show_bound_provider_identity_and_usage_guidance() {
         model: "gpt-test-model".into(),
         url: "https://api.openai.com/v1/responses".into(),
         engine: Some("openai".into()),
-        api_protocol: Some(rustcode::config::ApiProtocol::Responses),
-        credential: Some(rustcode::provider_auth::CredentialRef {
+        api_protocol: Some(rustcode::controller::ApiProtocol::Responses),
+        credential: Some(rustcode::controller::CredentialRef {
             provider: "openai".into(),
             account: account_id.into(),
-            method: rustcode::provider_auth::AuthMethod::ChatGpt,
+            method: rustcode::controller::AuthMethod::ChatGpt,
         }),
         ..Default::default()
     };

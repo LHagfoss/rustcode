@@ -289,7 +289,7 @@ fn provider_summary_lines(
     config: &rustcode::controller::AppConfig,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let summary = rustcode::provider_auth::provider_summary(config);
+    let summary = rustcode::controller::provider_summary(config);
     let mut provider = None;
     let mut account = None;
     let mut method = None;
@@ -326,7 +326,7 @@ fn provider_usage_lines(
     config: &rustcode::controller::AppConfig,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let summary = rustcode::provider_auth::provider_usage_summary(config);
+    let summary = rustcode::controller::provider_usage_summary(config);
     if summary.contains("chatgpt.com/settings/usage") {
         return [
             "Subscription quota is not exposed here; API-key usage is separate.".to_owned(),
