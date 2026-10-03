@@ -3495,6 +3495,7 @@ fn skill_catalog_is_not_embedded_in_the_base_prompt() {
 
 #[test]
 fn list_skills_returns_metadata_without_instruction_bodies() {
+    let _catalog = crate::skills::lock_skill_catalog_tests();
     let result = super::misc::list_skills(&serde_json::json!({})).unwrap();
     assert!(!result.contains("<skill_content"));
     if result.starts_with("<available_skills") {

@@ -2,6 +2,20 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
+
+static SKILL_CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static SKILL_CATALOG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_skill_catalog_tests() -> MutexGuard<'static, ()> {
+    SKILL_CATALOG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 pub struct SkillInfo {
     pub name: String,
@@ -22,6 +36,25 @@ pub struct SkillMetadata {
 
 pub fn discover_skills() -> Vec<SkillMetadata> {
     discover_skills_in(current_root_inputs())
+}
+
+/// Generation of the live skill catalog. Prompt caches use this to refresh
+/// after an explicit catalog read without rescanning roots on every turn.
+pub fn skill_catalog_generation() -> u64 {
+    SKILL_CATALOG_GENERATION.load(Ordering::Relaxed)
+}
+
+/// Invalidate cached routing metadata after a live skill lookup.
+pub fn bump_skill_catalog_generation() {
+    SKILL_CATALOG_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Discover skills for a user-facing catalog request and invalidate cached
+/// routing metadata so the next model request observes the same catalog.
+pub fn discover_skills_for_catalog() -> Vec<SkillMetadata> {
+    let skills = discover_skills();
+    bump_skill_catalog_generation();
+    skills
 }
 
 /// The roots this process should search, read from the workspace, the

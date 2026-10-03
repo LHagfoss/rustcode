@@ -616,7 +616,7 @@ async fn handle_enter_inner(
                 should_exit = true;
             }
             "/skills" => {
-                let skills = crate::skills::discover_skills();
+                let skills = crate::skills::discover_skills_for_catalog();
                 s.show_command_panel("Skills", crate::skills::format_skill_catalog(&skills));
             }
             "/changelog" => {

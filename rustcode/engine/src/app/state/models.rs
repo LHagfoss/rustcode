@@ -713,6 +713,7 @@ pub struct PromptCache {
     key: Option<PromptCacheKey>,
     system_prompt: String,
     skill_metadata: Option<Arc<Vec<crate::skills::SkillMetadata>>>,
+    skill_metadata_generation: u64,
     mcp_selection_generation: u64,
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
@@ -760,10 +761,18 @@ impl PromptCache {
     }
 
     pub(crate) fn skill_metadata(&mut self) -> Arc<Vec<crate::skills::SkillMetadata>> {
-        let metadata = self
-            .skill_metadata
-            .get_or_insert_with(|| Arc::new(crate::skills::discover_skills()));
-        Arc::clone(metadata)
+        // Capture before discovery so a concurrent live catalog read during
+        // this scan leaves the cache stale and forces a refresh next time.
+        let generation = crate::skills::skill_catalog_generation();
+        if self.skill_metadata.is_none() || self.skill_metadata_generation != generation {
+            self.skill_metadata = Some(Arc::new(crate::skills::discover_skills()));
+            self.skill_metadata_generation = generation;
+        }
+        Arc::clone(
+            self.skill_metadata
+                .as_ref()
+                .expect("skill metadata was initialized"),
+        )
     }
 
     pub(crate) fn native_tool_schema_snapshot(
