@@ -525,7 +525,7 @@ pub fn list_skills(args: &Value) -> Result<String, String> {
         return Err("arguments must be a JSON object".to_string());
     }
 
-    let mut skills = crate::skills::discover_skills();
+    let mut skills = crate::skills::discover_skills_for_catalog();
     if skills.is_empty() {
         return Ok(crate::skills::no_skills_message());
     }
@@ -1034,7 +1034,9 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing 'name' argument")?;
 
-    let skill = crate::skills::get_skill_content(name).ok_or_else(|| {
+    let skill = crate::skills::get_skill_content(name);
+    crate::skills::bump_skill_catalog_generation();
+    let skill = skill.ok_or_else(|| {
         format!(
             "Skill '{}' not found. Call list_skills to discover available skills.",
             name

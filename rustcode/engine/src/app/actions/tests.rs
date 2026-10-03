@@ -1241,7 +1241,13 @@ async fn informational_commands_open_panels_without_history_even_while_busy() {
             s.history.push(ChatMessage::new("user", "active task"));
             s.input_buffer = command.to_owned();
         }
-        assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+        let should_exit = if command == "/skills" {
+            let _catalog = crate::skills::lock_skill_catalog_tests();
+            super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await
+        } else {
+            super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await
+        };
+        assert!(!should_exit);
         let s = state.lock().await;
         assert_eq!(s.history.len(), 1, "{command} must not enter model history");
         assert!(s.modal_open(), "{command} must open a panel");
