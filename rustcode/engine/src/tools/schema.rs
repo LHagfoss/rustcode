@@ -1023,15 +1023,101 @@ fn user_mentions_mcp_server(messages: &[Value], server: &str) -> bool {
         || user_message_mentions_name(messages, &format!("{server}_mcp"))
 }
 
+/// Keep schemas returned by a completed MCP discovery search in the next
+/// request's tool block. The discovery result itself is tool output, which
+/// relevance scoring intentionally ignores; without this hint, a tool found
+/// by query could be omitted before the model gets a chance to call it.
+fn mcp_tools_selected_by_discovery_calls(
+    tools: &[(String, String, Value)],
+    owners: &[String],
+    messages: &[Value],
+) -> std::collections::HashSet<String> {
+    let mut selected = std::collections::HashSet::new();
+
+    for message in messages {
+        let Some(calls) = message.get("tool_calls").and_then(Value::as_array) else {
+            continue;
+        };
+        for call in calls {
+            let Some(function) = call.get("function") else {
+                continue;
+            };
+            if function.get("name").and_then(Value::as_str) != Some("list_mcp_tools") {
+                continue;
+            }
+            let args = match function.get("arguments") {
+                Some(Value::Object(args)) => Value::Object(args.clone()),
+                Some(Value::String(args)) => match serde_json::from_str::<Value>(args) {
+                    Ok(Value::Object(args)) => Value::Object(args),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let server = args.get("server").and_then(Value::as_str);
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .map(str::to_lowercase);
+            if server.is_none() && query.is_none() {
+                continue;
+            }
+            let limit = match args.get("limit") {
+                None => 20,
+                Some(value) => match value.as_u64().filter(|value| (1..=50).contains(value)) {
+                    Some(value) => value as usize,
+                    None => continue,
+                },
+            };
+            let mut matched = tools
+                .iter()
+                .zip(owners)
+                .filter_map(|((name, description, _), owner)| {
+                    if server.is_some_and(|server| server != owner) {
+                        return None;
+                    }
+                    let raw_name = name
+                        .strip_prefix("mcp__")
+                        .and_then(|name| name.split_once("__").map(|(_, tool)| tool))
+                        .unwrap_or(name);
+                    if query.as_ref().is_some_and(|query| {
+                        !raw_name.to_lowercase().contains(query)
+                            && !description.to_lowercase().contains(query)
+                    }) {
+                        return None;
+                    }
+                    Some((owner, raw_name, name))
+                })
+                .collect::<Vec<_>>();
+            matched.sort_by(|left, right| {
+                left.0
+                    .cmp(right.0)
+                    .then_with(|| left.1.cmp(right.1))
+                    .then_with(|| left.2.cmp(right.2))
+            });
+            selected.extend(
+                matched
+                    .into_iter()
+                    .take(limit)
+                    .map(|(_, _, name)| name.clone()),
+            );
+        }
+    }
+    selected
+}
+
 /// Find MCP schemas named by the user, including every tool from a named MCP
 /// server. This intentionally reads user messages only: assistant/tool output
 /// can describe a tool without being an instruction to make its whole server
 /// sticky.
 fn explicitly_requested_mcp_tool_names(
     tools: &[(String, String, Value)],
+    owners: &[String],
     messages: &[Value],
 ) -> std::collections::HashSet<String> {
     let mut requested = std::collections::HashSet::new();
+    requested.extend(mcp_tools_selected_by_discovery_calls(
+        tools, owners, messages,
+    ));
     for (name, _, _) in tools {
         if user_message_mentions_name(messages, name)
             || canonical_mcp_server(name)
@@ -1172,7 +1258,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
     let terms = context_terms(messages);
-    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, messages);
+    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, owners, messages);
     let mut requested = Vec::new();
     let mut previous = Vec::new();
     let mut relevant = Vec::new();

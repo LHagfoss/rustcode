@@ -419,6 +419,50 @@ fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
 }
 
 #[test]
+fn discovery_query_keeps_its_match_in_the_next_native_schema() {
+    let mcp = vec![
+        (
+            "mcp__calendar__search_events".to_string(),
+            "Find calendar events by date or attendee".to_string(),
+            serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
+        ),
+        (
+            "mcp__mail__search_messages".to_string(),
+            "Find email messages by sender or subject".to_string(),
+            serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
+        ),
+    ];
+    let owners = vec!["calendar".to_string(), "mail".to_string()];
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Look up the next appointment"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"query\":\"attendee\",\"limit\":4}"
+                }
+            }]
+        }),
+    ];
+
+    let (selected, _) =
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &mcp,
+            &owners,
+            &[],
+            &messages,
+            &[],
+            super::schema::ToolSchemaPhase::Established,
+        );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert_eq!(names, ["mcp__calendar__search_events"]);
+}
+
+#[test]
 fn a_pinned_menu_survives_a_transcript_that_rescores_every_tool() {
     let schema = serde_json::json!({"type":"object","properties":{}});
     // One more name-matching tool than the budget allows, so any change in the
