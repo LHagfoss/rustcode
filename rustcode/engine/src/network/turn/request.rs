@@ -138,6 +138,17 @@ fn should_retry_stream_transport(error: &runner::ResponseError, attempts: usize)
         && matches!(stream_output_phase(error), StreamOutputPhase::BeforeOutput)
 }
 
+/// Preserve usage from a provider attempt before retry setup clears the
+/// request-local field. This attempt is billable even when its stream later
+/// fails; taking the value also prevents it from being counted again with the
+/// successful retry response.
+fn settle_retry_attempt_usage(ctx: &mut TurnContext, state: &mut crate::app::AppState) {
+    let usage = state.current_token_usage.take();
+    ctx.record_token_usage(usage.as_ref());
+    state.current_turn_token_usage = ctx.response.turn_token_usage.clone();
+    state.request_redraw();
+}
+
 fn bounded_stream_recovery_checkpoint(content: &str) -> String {
     if content.len() <= MAX_STREAM_RECOVERY_CHECKPOINT_BYTES {
         return content.to_owned();
@@ -584,9 +595,9 @@ pub(super) async fn collect_round(
                     }),
                 );
                 let mut s = request_state.lock().await;
+                settle_retry_attempt_usage(ctx, &mut s);
                 s.clear_current_response();
                 s.clear_live_tool_calls();
-                s.current_token_usage = None;
                 s.status = crate::app::AppStatus::Streaming;
                 s.stream_tracker = Some(crate::app::StreamTracker::new());
                 drop(s);
@@ -804,7 +815,8 @@ mod tests {
     use super::{
         StreamOutputPhase, TurnContext, native_stream_checkpoint_content,
         prepare_request_steerability, recoverable_textual_stream_failure, retryable_stream_failure,
-        should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
+        settle_retry_attempt_usage, should_retry_stream_transport, stream_interruption_notice,
+        stream_output_phase,
     };
 
     #[test]
@@ -918,6 +930,52 @@ mod tests {
         );
         assert_eq!(stream_output_phase(&partial), StreamOutputPhase::TextOutput);
         assert!(!should_retry_stream_transport(&partial, 0));
+    }
+
+    #[test]
+    fn retry_after_provider_usage_keeps_both_attempts_once() {
+        let failed_attempt = crate::app::TokenUsage {
+            prompt_tokens: 1_000,
+            completion_tokens: 120,
+            total_tokens: 1_120,
+            ..Default::default()
+        };
+        let retry_success = crate::app::TokenUsage {
+            prompt_tokens: 1_080,
+            completion_tokens: 80,
+            total_tokens: 1_160,
+            ..Default::default()
+        };
+        let mut state = crate::app::AppState::new();
+        state.current_token_usage = Some(failed_attempt);
+        state.token_usage_in_flight = true;
+        let mut ctx = TurnContext::new();
+
+        // A retryable stream can emit billable provider usage before failing.
+        settle_retry_attempt_usage(&mut ctx, &mut state);
+        assert!(state.current_token_usage.is_none());
+        assert!(state.token_usage_in_flight);
+        assert_eq!(
+            state
+                .current_turn_token_usage
+                .as_ref()
+                .map(|usage| usage.total_tokens),
+            Some(1_120)
+        );
+
+        // The successful retry follows the normal completion accounting path.
+        state.current_token_usage = Some(retry_success.clone());
+        ctx.record_token_usage(Some(&retry_success));
+        assert_eq!(
+            ctx.response.turn_token_usage.as_ref().map(|usage| {
+                (
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                )
+            }),
+            Some((2_080, 200, 2_280))
+        );
     }
 
     #[test]
