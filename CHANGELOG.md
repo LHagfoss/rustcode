@@ -1,3 +1,10 @@
+## [v0.56.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.10) - 2026-10-03
+
+### Features
+- Add configurable provider login with `/login`, `/auth status`, and `/logout` in terminal and native frontends.
+- Support OpenAI Sign in with ChatGPT for eligible subscription-backed Responses models, with account-aware model selection and automatic token refresh.
+- Store provider tokens and imported API keys in the native operating system credential manager, with endpoint binding and no plaintext fallback.
+- Preserve existing API-key configurations and document custom providers, multiple accounts, and reconnect workflows.
 ## [v0.56.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.9) - 2026-10-03
 
 ### Fixes
