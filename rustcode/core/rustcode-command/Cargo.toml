@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-command"
-version = "0.56.8"
+version = "0.56.9"
 edition = "2024"
 license = "Apache-2.0"
 
