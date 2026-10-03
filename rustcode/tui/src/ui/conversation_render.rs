@@ -187,16 +187,44 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'sta
         // approval/question panel is its own signal, so no indicator is added.
         rustcode::controller::ActivityKind::Ready
         | rustcode::controller::ActivityKind::ActionRequired => None,
-        _ => Some(Line::from(vec![
-            Span::styled(
-                format!("{} ", super::composer_render::running_spinner_char(state)),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
-            ),
-            Span::styled(
-                state.model_name().to_string(),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-            ),
-        ])),
+        _ => {
+            let completed = state.current_turn_token_usage().map_or(0, |usage| {
+                u64::from(usage.prompt_tokens).saturating_add(u64::from(usage.completion_tokens))
+            });
+            let in_flight = state
+                .token_usage_in_flight()
+                .then(|| state.current_token_usage())
+                .flatten()
+                .map_or(0, |usage| {
+                    u64::from(usage.prompt_tokens)
+                        .saturating_add(u64::from(usage.completion_tokens))
+                });
+            let tokens = completed.saturating_add(in_flight);
+            let provisional = state.token_usage_in_flight();
+            let mut spans = vec![
+                Span::styled(
+                    format!("{} ", super::composer_render::running_spinner_char(state)),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+                ),
+                Span::styled(
+                    state.model_name().to_string(),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+                ),
+            ];
+            if provisional || state.current_turn_token_usage().is_some() {
+                spans.push(Span::styled(
+                    format!(
+                        " · {}{} tokens",
+                        if provisional { "~" } else { "" },
+                        super::composer_render::format_token_count(
+                            tokens.min(u64::from(u32::MAX)) as u32
+                        )
+                    ),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+                ));
+            }
+            Some(Line::from(spans))
+        }
     }
 }
 

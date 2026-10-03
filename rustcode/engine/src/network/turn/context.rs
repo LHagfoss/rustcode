@@ -148,7 +148,7 @@ pub struct LifecycleState {
 /// a restart: detectors rebuild from new observations and the transcript
 /// keeps the completed-work evidence. Written when a turn ends with a pending
 /// continuation or background turn, cleared otherwise.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SegmentCheckpoint {
     pub schema_version: u32,
     pub session_id: String,
@@ -165,6 +165,10 @@ pub struct SegmentCheckpoint {
     pub failed_mutations: usize,
     pub changed_paths: Vec<String>,
     pub phase_checkpoint: Option<String>,
+    /// Request usage accumulated before this productive turn was backgrounded.
+    /// Older checkpoint files omit this field and restore with no usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_token_usage: Option<TokenUsage>,
 }
 
 impl SegmentCheckpoint {
@@ -327,6 +331,7 @@ impl TurnContext {
             failed_mutations: self.progress.failed_mutations,
             changed_paths: self.progress.changed_paths.iter().cloned().collect(),
             phase_checkpoint: self.progress.phase_checkpoint.clone(),
+            turn_token_usage: self.response.turn_token_usage.clone(),
         }
     }
 
@@ -358,6 +363,7 @@ impl TurnContext {
         self.progress.failed_mutations = checkpoint.failed_mutations;
         self.progress.changed_paths = checkpoint.changed_paths.iter().cloned().collect();
         self.progress.phase_checkpoint = checkpoint.phase_checkpoint.clone();
+        self.response.turn_token_usage = checkpoint.turn_token_usage.clone();
         true
     }
 
@@ -485,6 +491,12 @@ mod tests {
         ctx.progress.made_edits = true;
         ctx.progress.changed_paths.insert("src/a.rs".to_string());
         ctx.progress.phase_checkpoint = Some("phase".to_string());
+        ctx.response.turn_token_usage = Some(TokenUsage {
+            prompt_tokens: 120,
+            completion_tokens: 30,
+            total_tokens: 150,
+            ..Default::default()
+        });
 
         let checkpoint = ctx.segment_checkpoint("session-1", true, false);
         // Sidecar must survive JSON serialization.
@@ -500,6 +512,10 @@ mod tests {
         assert!(restored.has_progress_in_current_segment());
         assert!(restored.progress.made_edits);
         assert!(restored.progress.changed_paths.contains("src/a.rs"));
+        assert_eq!(
+            restored.response.turn_token_usage,
+            ctx.response.turn_token_usage
+        );
 
         let mut foreign = TurnContext::with_budgets(40, 200);
         assert!(!foreign.restore_segment(&reparsed, "session-2"));

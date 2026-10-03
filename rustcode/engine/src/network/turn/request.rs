@@ -380,6 +380,7 @@ pub(super) async fn collect_round(
         // value before a new request so an omitted usage footer cannot be
         // mistaken for a repeated report and counted twice.
         s.current_token_usage = None;
+        s.token_usage_in_flight = true;
         s.current_thought_time_ms = 0;
         s.current_thought_tokens = 0;
         s.current_thought_started_at = None;

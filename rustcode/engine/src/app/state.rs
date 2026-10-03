@@ -63,6 +63,11 @@ pub struct AppState {
     /// Revision of the most recent clear or replacement, if any.
     pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
+    /// Provider usage accumulated across the current logical turn's completed
+    /// requests. While a request is in flight, the renderer adds its live
+    /// `current_token_usage` and marks the result provisional.
+    pub current_turn_token_usage: Option<TokenUsage>,
+    pub token_usage_in_flight: bool,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
     pub current_thought_started_at: Option<std::time::Instant>,
@@ -996,6 +1001,8 @@ impl AppState {
         self.clear_live_tool_calls();
         self.running_tools.clear();
         self.current_token_usage = None;
+        self.current_turn_token_usage = None;
+        self.token_usage_in_flight = false;
         self.stream_tracker = None;
         self.generation_start_time = None;
         self.request_redraw();
@@ -1092,6 +1099,8 @@ impl AppState {
             current_response_revision: 0,
             current_response_last_rewrite_revision: 0,
             current_token_usage: None,
+            current_turn_token_usage: None,
+            token_usage_in_flight: false,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
             current_thought_started_at: None,

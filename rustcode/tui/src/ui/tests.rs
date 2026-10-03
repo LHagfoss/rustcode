@@ -9644,6 +9644,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
+    state.token_usage_in_flight = true;
     let snapshot = render_snapshot(&state);
     let indicator =
         super::live_running_indicator(&snapshot).expect("a running turn has an indicator");
@@ -9652,10 +9653,80 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert_eq!(text, format!("• {}", snapshot.model_name()), "{text}");
+    assert_eq!(
+        text,
+        format!("• {} · ~0 tokens", snapshot.model_name()),
+        "{text}"
+    );
     assert!(
         !text.contains('⠋'),
         "reduced motion must not animate: {text}"
+    );
+}
+
+#[test]
+fn running_indicator_adds_live_usage_to_turn_total_and_marks_it_provisional() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        total_tokens: 800,
+        ..Default::default()
+    });
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 200,
+        completion_tokens: 250,
+        total_tokens: 450,
+        ..Default::default()
+    });
+    state.token_usage_in_flight = true;
+
+    let snapshot = render_snapshot(&state);
+    let text = super::live_running_indicator(&snapshot)
+        .expect("a running turn has an indicator")
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("· ~1.2K tokens"), "{text}");
+}
+
+#[test]
+fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.running_tools.push("run_command".to_owned());
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        total_tokens: 800,
+        ..Default::default()
+    });
+    // The completed response remains in current_token_usage while tools run;
+    // it must not be counted again after the request leaves flight.
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 200,
+        completion_tokens: 250,
+        total_tokens: 450,
+        ..Default::default()
+    });
+
+    let snapshot = render_snapshot(&state);
+    let text = super::live_running_indicator(&snapshot)
+        .expect("tool work has an indicator")
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("· 800 tokens"), "{text}");
+    assert!(
+        !text.contains('~'),
+        "completed usage is not provisional: {text}"
     );
 }
 

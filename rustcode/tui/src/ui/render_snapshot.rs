@@ -18,6 +18,8 @@ pub(crate) struct RenderSnapshot {
     current_response: Arc<String>,
     recap_loading: bool,
     current_token_usage: Option<TokenUsage>,
+    current_turn_token_usage: Option<TokenUsage>,
+    token_usage_in_flight: bool,
     response_time: Option<std::time::Duration>,
     current_thought_time_ms: u64,
     current_thought_tokens: u32,
@@ -192,6 +194,8 @@ impl RenderSnapshot {
             current_response: Arc::clone(&view.current_response),
             recap_loading: view.recap_loading,
             current_token_usage: view.current_token_usage.clone(),
+            current_turn_token_usage: view.current_turn_token_usage.clone(),
+            token_usage_in_flight: view.token_usage_in_flight,
             response_time: view.response_time,
             current_thought_time_ms: view.current_thought_time_ms,
             current_thought_tokens: view.current_thought_tokens,
@@ -304,6 +308,12 @@ impl RenderSnapshot {
     }
     pub(crate) fn current_token_usage(&self) -> Option<&TokenUsage> {
         self.current_token_usage.as_ref()
+    }
+    pub(crate) fn current_turn_token_usage(&self) -> Option<&TokenUsage> {
+        self.current_turn_token_usage.as_ref()
+    }
+    pub(crate) fn token_usage_in_flight(&self) -> bool {
+        self.token_usage_in_flight
     }
     pub(crate) fn response_time(&self) -> Option<std::time::Duration> {
         self.response_time
