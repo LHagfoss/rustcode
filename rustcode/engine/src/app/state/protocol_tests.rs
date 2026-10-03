@@ -16,6 +16,41 @@ fn notices_are_appended_to_history() {
 }
 
 #[test]
+fn active_profile_prefers_selected_identity_and_fails_closed_on_ambiguity() {
+    let mut state = AppState::new();
+    let first = crate::config::ModelProfile {
+        name: "api-key".into(),
+        url: "https://api.openai.com/v1/responses".into(),
+        model: "shared-model".into(),
+        ..Default::default()
+    };
+    let selected = crate::config::ModelProfile {
+        name: "chatgpt-plan".into(),
+        credential: Some(crate::provider_auth::CredentialRef {
+            provider: "openai".into(),
+            account: "account-1".into(),
+            method: crate::provider_auth::AuthMethod::ChatGpt,
+        }),
+        ..first.clone()
+    };
+    state.api_base_url = first.url.clone();
+    state.model_name = first.model.clone();
+    state.config.models = vec![first, selected];
+
+    state.config.default.set_big("chatgpt-plan".into());
+    assert_eq!(
+        state
+            .active_model_profile()
+            .as_ref()
+            .map(|profile| profile.name.as_str()),
+        Some("chatgpt-plan")
+    );
+
+    state.config.default.set_big("missing".into());
+    assert!(state.active_model_profile().is_none());
+}
+
+#[test]
 fn expired_ctrl_c_arming_is_cleared_and_requests_a_redraw() {
     let mut state = AppState::new();
     state.ctrl_c_exit_deadline =

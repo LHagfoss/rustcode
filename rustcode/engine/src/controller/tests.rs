@@ -37,6 +37,13 @@ async fn native_slash_commands_stay_out_of_the_model_queue() {
         item.content
             .contains("`/info` — Show session and turn status")
     }));
+    assert!(help.transcript.iter().any(|item| {
+        item.content
+            .contains("`/login <provider>` — Sign in to a provider")
+            && item
+                .content
+                .contains("`/auth status` — Show saved provider accounts")
+    }));
     assert!(
         !help
             .transcript

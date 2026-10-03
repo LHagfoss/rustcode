@@ -450,6 +450,32 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
     input
 }
 
+/// ChatGPT plan requests reject Responses system-message items. Developer
+/// messages carry the same local instructions while preserving their position
+/// and content in the complete stateless history.
+fn chatgpt_plan_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    responses_input_from_messages(messages)
+        .into_iter()
+        .map(|mut item| {
+            if item.get("role").and_then(serde_json::Value::as_str) == Some("system") {
+                item["role"] = serde_json::json!("developer");
+            }
+            item
+        })
+        .collect()
+}
+
+fn chatgpt_plan_additional_tools(schemas: &[serde_json::Value]) -> Option<serde_json::Value> {
+    let tools = responses_tool_schemas(schemas);
+    (!tools.is_empty()).then(|| {
+        serde_json::json!({
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": tools,
+        })
+    })
+}
+
 fn response_message_text(content: Option<&serde_json::Value>) -> String {
     let Some(content) = content else {
         return String::new();
@@ -519,6 +545,65 @@ fn apply_responses_sampling_options(
     if let Some(top_p) = profile.and_then(|p| p.top_p) {
         payload["top_p"] = serde_json::json!(top_p);
     }
+}
+
+fn is_chatgpt_credential(profile: Option<&crate::config::ModelProfile>) -> bool {
+    profile
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+}
+
+fn chatgpt_endpoint_is_supported(profile: &crate::config::ModelProfile) -> bool {
+    profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
+        && profile.endpoint_url() == "https://api.openai.com/v1/responses"
+}
+
+pub(crate) fn select_request_profile(
+    profiles: &[crate::config::ModelProfile],
+    selected_name: &str,
+    url: &str,
+    model: &str,
+) -> Result<Option<crate::config::ModelProfile>, String> {
+    let matches = profiles
+        .iter()
+        .filter(|profile| profile.matches_request(url, model))
+        .collect::<Vec<_>>();
+    if let Some(selected) = matches.iter().find(|profile| profile.name == selected_name) {
+        return Ok(Some((*selected).clone()));
+    }
+    if matches.len() > 1 && matches.iter().any(|profile| profile.credential.is_some()) {
+        return Err(format!(
+            "multiple credential-bearing model profiles match {model} at {url}; select the intended profile with /model <profile> before sending"
+        ));
+    }
+    Ok(matches.first().map(|profile| (*profile).clone()))
+}
+
+fn chatgpt_stream_payload(
+    model: &str,
+    messages: &[serde_json::Value],
+    native_tool_schemas: &[serde_json::Value],
+    profile: Option<&crate::config::ModelProfile>,
+    thinking_mode: ThinkingMode,
+) -> serde_json::Value {
+    let mut input = chatgpt_plan_input_from_messages(messages);
+    if let Some(tools) = chatgpt_plan_additional_tools(native_tool_schemas) {
+        let insert_at = input
+            .iter()
+            .position(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+            })
+            .unwrap_or(input.len());
+        input.insert(insert_at, tools);
+    }
+    let mut payload = serde_json::json!({
+        "model": model,
+        "stream": true,
+        "store": false,
+        "input": input,
+    });
+    apply_responses_generation_options(&mut payload, profile, thinking_mode);
+    payload
 }
 
 fn responses_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
@@ -654,26 +739,43 @@ fn normalize_responses_event(
             "choices": [{"delta": {}, "finish_reason": "stop"}],
             "usage": responses_usage(value),
         })),
-        "response.incomplete" => Some(serde_json::json!({
-            "choices": [{"delta": {}, "finish_reason": "length"}],
-            "usage": responses_usage(value),
-        })),
+        "response.incomplete" => {
+            let reason = value
+                .get("response")
+                .and_then(|response| response.get("incomplete_details"))
+                .and_then(|details| details.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            Some(serde_json::json!({
+                "error": {
+                    "code": "response_incomplete",
+                    "message": format!("Responses API did not complete the response (reason: {reason})"),
+                }
+            }))
+        }
         "response.failed" => {
-            let message = value
+            let error = value
                 .get("response")
                 .and_then(|response| response.get("error"))
-                .and_then(|error| error.get("message"))
-                .and_then(|message| message.as_str())
-                .unwrap_or("Responses API request failed");
-            Some(serde_json::json!({"error": {"message": message}}))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Some(serde_json::json!({
+                "error": {
+                    "code": error.get("code").cloned().unwrap_or(serde_json::Value::Null),
+                    "message": error.get("message").and_then(serde_json::Value::as_str).unwrap_or("Responses API request failed"),
+                    "param": error.get("param").cloned().unwrap_or(serde_json::Value::Null),
+                    "status_code": error.get("status_code").cloned().unwrap_or(serde_json::Value::Null),
+                }
+            }))
         }
-        "error" => {
-            let message = value
-                .get("message")
-                .and_then(|message| message.as_str())
-                .unwrap_or("Responses API request failed");
-            Some(serde_json::json!({"error": {"message": message}}))
-        }
+        "error" => Some(serde_json::json!({
+            "error": {
+                "code": value.get("code").cloned().unwrap_or(serde_json::Value::Null),
+                "message": value.get("message").and_then(serde_json::Value::as_str).unwrap_or("Responses API request failed"),
+                "param": value.get("param").cloned().unwrap_or(serde_json::Value::Null),
+                "status_code": value.get("status_code").cloned().unwrap_or(serde_json::Value::Null),
+            }
+        })),
         _ => None,
     }
 }
@@ -1397,7 +1499,7 @@ mod tests {
         (state, session_id)
     }
 
-    async fn read_http_request(socket: &mut tokio::net::TcpStream) {
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
         use tokio::io::AsyncReadExt;
 
         let mut request = Vec::new();
@@ -1409,6 +1511,7 @@ mod tests {
             }
             request.extend_from_slice(&chunk[..bytes]);
         }
+        request
     }
 
     async fn write_sse_response(socket: &mut tokio::net::TcpStream, status: &str, body: &[u8]) {
@@ -1481,6 +1584,157 @@ mod tests {
             })
         );
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_done_without_completed_is_a_premature_stream_failure() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "200 OK", &body).await;
+            socket.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        state.lock().await.config.models[0].api_protocol =
+            Some(crate::config::ApiProtocol::Responses);
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new()));
+        let error = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect_err("[DONE] cannot substitute for Responses response.completed");
+
+        assert_eq!(error.kind, StreamFailureKind::PrematureEof);
+        assert!(
+            error
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("before response.completed"))
+        );
+        assert_eq!(buffer.lock().await.content, "partial");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chatgpt_credentials_never_reach_a_handcrafted_endpoint() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        {
+            let mut state = state.lock().await;
+            state.config.models[0].api_protocol = Some(crate::config::ApiProtocol::Responses);
+            state.config.models[0].api_key = Some("must-never-be-used-as-fallback".into());
+            state.config.models[0].credential = Some(crate::provider_auth::CredentialRef {
+                provider: "openai".into(),
+                account: "account-1".into(),
+                method: crate::provider_auth::AuthMethod::ChatGpt,
+            });
+        }
+        let result = stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role":"user","content":"hello"})],
+            std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new())),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await;
+        let failure = result.expect_err("unsupported endpoint must fail locally");
+        assert!(
+            failure
+                .detail
+                .unwrap()
+                .contains("public https://api.openai.com/v1/responses")
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "the local endpoint must never receive the ChatGPT token or legacy API key"
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_api_key_responses_keep_existing_auth_headers() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let body = concat!(
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "200 OK", &body).await;
+            socket.shutdown().await.unwrap();
+            request
+        });
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        {
+            let mut state = state.lock().await;
+            state.config.models[0].api_protocol = Some(crate::config::ApiProtocol::Responses);
+            state.config.models[0].api_key = Some("legacy-key".into());
+        }
+        stream_request(
+            &reqwest::Client::new(),
+            state,
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role":"user","content":"hello"})],
+            std::sync::Arc::new(tokio::sync::Mutex::new(StreamBuffer::new())),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("ordinary API-key Responses request should complete");
+        let request = String::from_utf8(server.await.unwrap())
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(request.contains("authorization: bearer legacy-key"));
+        assert!(!request.contains("x-api-key:"));
     }
 
     #[tokio::test]
@@ -2055,6 +2309,130 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_plan_payload_is_stateless_and_roundtrips_tools() {
+        let profile = crate::config::ModelProfile {
+            name: "chatgpt".into(),
+            url: "https://api.openai.com/v1/responses".into(),
+            model: "gpt-6.1-sol".into(),
+            api_protocol: Some(crate::config::ApiProtocol::Responses),
+            credential: Some(crate::provider_auth::CredentialRef {
+                provider: "openai".into(),
+                account: "test-account".into(),
+                method: crate::provider_auth::AuthMethod::ChatGpt,
+            }),
+            reasoning_effort: Some("high".into()),
+            supports_reasoning_effort: Some(true),
+            max_output_tokens: Some(4096),
+            temperature: Some(0.7),
+            top_p: Some(0.8),
+            ..Default::default()
+        };
+        let messages = vec![
+            serde_json::json!({"role":"system","content":"system instructions"}),
+            serde_json::json!({"role":"developer","content":"developer instructions"}),
+            serde_json::json!({"role":"user","content":"inspect"}),
+            serde_json::json!({
+                "role":"assistant",
+                "tool_calls":[{"id":"call-1","type":"function","function":{"name":"mcp__files__read","arguments":r#"{"path":"a.rs"}"#}}]
+            }),
+            serde_json::json!({"role":"tool","tool_call_id":"call-1","content":"source"}),
+        ];
+        let schemas = vec![serde_json::json!({
+            "type":"function",
+            "function":{"name":"mcp__files__read","description":"Read a file","parameters":{"type":"object","properties":{}}}
+        })];
+
+        let payload = chatgpt_stream_payload(
+            "gpt-6.1-sol",
+            &messages,
+            &schemas,
+            Some(&profile),
+            ThinkingMode::Normal,
+        );
+
+        assert_eq!(payload["stream"], true);
+        assert_eq!(payload["store"], false);
+        assert_eq!(payload["reasoning"]["effort"], "high");
+        for unsupported in [
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "tools",
+            "parallel_tool_calls",
+            "previous_response_id",
+        ] {
+            assert!(
+                payload.get(unsupported).is_none(),
+                "unexpected {unsupported}: {payload}"
+            );
+        }
+        let input = payload["input"].as_array().expect("stateless input");
+        assert_eq!(input[0]["role"], "developer");
+        assert_eq!(input[0]["content"][0]["text"], "system instructions");
+        assert_eq!(input[1]["role"], "developer");
+        let additional_tools = input
+            .iter()
+            .position(|item| item["type"] == "additional_tools")
+            .expect("client-side tool declaration");
+        let function_call = input
+            .iter()
+            .position(|item| item["type"] == "function_call")
+            .expect("historical call");
+        assert!(additional_tools < function_call);
+        assert_eq!(
+            input[additional_tools]["tools"][0]["name"],
+            "mcp__files__read"
+        );
+        assert_eq!(input[function_call]["name"], "mcp__files__read");
+        assert_eq!(input[function_call + 1]["type"], "function_call_output");
+        assert_eq!(input[function_call + 1]["call_id"], "call-1");
+    }
+
+    #[test]
+    fn profile_selection_uses_selected_identity_and_rejects_credential_ambiguity() {
+        let chatgpt = crate::config::ModelProfile {
+            name: "chatgpt-plan".into(),
+            url: "https://api.openai.com/v1/responses".into(),
+            model: "shared-model".into(),
+            api_protocol: Some(crate::config::ApiProtocol::Responses),
+            credential: Some(crate::provider_auth::CredentialRef {
+                provider: "openai".into(),
+                account: "account-1".into(),
+                method: crate::provider_auth::AuthMethod::ChatGpt,
+            }),
+            ..Default::default()
+        };
+        let api_key = crate::config::ModelProfile {
+            name: "ordinary-responses".into(),
+            api_key: Some("legacy-key".into()),
+            credential: None,
+            ..chatgpt.clone()
+        };
+        let profiles = vec![api_key.clone(), chatgpt.clone()];
+        let endpoint = chatgpt.endpoint_url();
+
+        assert_eq!(
+            select_request_profile(&profiles, "chatgpt-plan", &endpoint, "shared-model")
+                .unwrap()
+                .unwrap()
+                .name,
+            "chatgpt-plan"
+        );
+        assert_eq!(
+            select_request_profile(&profiles, "ordinary-responses", &endpoint, "shared-model")
+                .unwrap()
+                .unwrap()
+                .name,
+            "ordinary-responses"
+        );
+        assert!(
+            select_request_profile(&profiles, "missing", &endpoint, "shared-model")
+                .unwrap_err()
+                .contains("select the intended profile")
+        );
+    }
+
+    #[test]
     fn responses_events_normalize_text_tools_usage_and_errors() {
         let mut call_ids = HashMap::new();
         let mut argument_deltas = HashSet::new();
@@ -2135,12 +2513,35 @@ mod tests {
         assert_eq!(completed["usage"]["prompt_tokens"], 10);
 
         let error = normalize_responses_event(
-            &serde_json::json!({"type": "error", "message": "bad request"}),
+            &serde_json::json!({
+                "type": "response.failed",
+                "response": {"error": {
+                    "code": "subscription_sharing_usage_limit_exceeded",
+                    "message": "limit reached",
+                    "status_code": 429
+                }}
+            }),
             &mut call_ids,
             &mut argument_deltas,
         )
         .unwrap();
-        assert_eq!(error["error"]["message"], "bad request");
+        assert_eq!(error["error"]["message"], "limit reached");
+        assert_eq!(
+            error["error"]["code"],
+            "subscription_sharing_usage_limit_exceeded"
+        );
+        assert_eq!(error["error"]["status_code"], 429);
+
+        let incomplete = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.incomplete",
+                "response": {"incomplete_details": {"reason": "max_output_tokens"}}
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(incomplete["error"]["code"], "response_incomplete");
     }
 
     #[test]
@@ -3556,17 +3957,26 @@ async fn stream_request_with_timeouts(
     first_event_timeout: std::time::Duration,
     stream_idle_timeout: std::time::Duration,
 ) -> Result<Option<String>, StreamFailure> {
-    let (profile, active_session_id) = {
+    let (profile, profile_error, active_session_id) = {
         let app = state.lock().await;
-        (
-            app.config
-                .models
-                .iter()
-                .find(|p| p.matches_request(url, model))
-                .cloned(),
-            app.active_session_id.clone(),
-        )
+        let selected_name = app.config.default.big();
+        let (profile, error) =
+            match select_request_profile(&app.config.models, selected_name, url, model) {
+                Ok(profile) => (profile, None),
+                Err(error) => (None, Some(error)),
+            };
+        (profile, error, app.active_session_id.clone())
     };
+    if let Some(detail) = profile_error {
+        return Err(StreamFailure {
+            kind: StreamFailureKind::ProviderError,
+            status: None,
+            detail: Some(detail),
+            bytes_received: 0,
+            events_received: 0,
+            partial_event_bytes: 0,
+        });
+    }
     let request_session_id = resolve_request_session_id(expected_session_id, &active_session_id);
     macro_rules! request_event {
         ($event:expr, $fields:expr $(,)?) => {{
@@ -3590,6 +4000,19 @@ async fn stream_request_with_timeouts(
                 .unwrap_or_default()
         });
     let responses_api = matches!(api_protocol, crate::config::ApiProtocol::Responses);
+    let chatgpt_plan = is_chatgpt_credential(profile.as_ref());
+    if chatgpt_plan && !profile.as_ref().is_some_and(chatgpt_endpoint_is_supported) {
+        return Err(StreamFailure {
+            kind: StreamFailureKind::ProviderError,
+            status: None,
+            detail: Some(
+                "ChatGPT plan credentials require the public https://api.openai.com/v1/responses endpoint and the Responses protocol; request stopped before sending credentials.".to_owned(),
+            ),
+            bytes_received: 0,
+            events_received: 0,
+            partial_event_bytes: 0,
+        });
+    }
     let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
     let (tool_protocol, agent_mode, workspace_root) = {
@@ -3790,7 +4213,15 @@ async fn stream_request_with_timeouts(
         } else {
             0
         };
-    let mut payload = if responses_api {
+    let mut payload = if chatgpt_plan {
+        chatgpt_stream_payload(
+            model,
+            &aligned_messages,
+            &native_tool_schemas,
+            profile.as_ref(),
+            thinking_mode,
+        )
+    } else if responses_api {
         let mut payload = serde_json::json!({
             "model": model,
             "stream": true,
@@ -3873,7 +4304,9 @@ async fn stream_request_with_timeouts(
         );
     }
 
-    apply_provider_parallel_tool_call_policy(&mut payload, api_protocol, allow_tools);
+    if !chatgpt_plan {
+        apply_provider_parallel_tool_call_policy(&mut payload, api_protocol, allow_tools);
+    }
     apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
 
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
@@ -4085,18 +4518,67 @@ async fn stream_request_with_timeouts(
             }
         });
 
-    let api_key = {
-        let s = state.lock().await;
-        s.config
-            .models
-            .iter()
-            .find(|m| {
-                m.matches_request(url, model)
-                    || m.url == url
-                    || m.name == s.model_name
-                    || m.endpoint_url() == resolved_url
-            })
-            .and_then(|m| m.resolved_api_key())
+    let api_key = if let Some(profile) = profile.as_ref() {
+        let credential = tokio::select! {
+            _ = cancel_token.cancelled() => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                crate::provider_auth::resolve_profile_credential(profile),
+            ) => match result {
+                Err(_) => return Err(StreamFailure {
+                    kind: StreamFailureKind::ProviderError,
+                    status: None,
+                    detail: Some("credential resolution timed out before the provider request was sent".to_owned()),
+                    bytes_received: 0,
+                    events_received: 0,
+                    partial_event_bytes: 0,
+                }),
+                Ok(Err(error)) => return Err(StreamFailure {
+                    kind: StreamFailureKind::ProviderError,
+                    status: None,
+                    detail: Some(format!("credential resolution failed before the provider request was sent: {error:#}")),
+                    bytes_received: 0,
+                    events_received: 0,
+                    partial_event_bytes: 0,
+                }),
+                Ok(Ok(key)) => key,
+            }
+        };
+        if profile.credential.is_some() && credential.is_none() {
+            return Err(StreamFailure {
+                kind: StreamFailureKind::ProviderError,
+                status: None,
+                detail: Some(
+                    "the configured provider credential could not be resolved; no request was sent"
+                        .to_owned(),
+                ),
+                bytes_received: 0,
+                events_received: 0,
+                partial_event_bytes: 0,
+            });
+        }
+        credential
+    } else {
+        None
+    };
+    let chatgpt_client = if chatgpt_plan {
+        Some(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| StreamFailure {
+                    kind: StreamFailureKind::ProviderError,
+                    status: None,
+                    detail: Some(format!(
+                        "could not initialize the protected ChatGPT transport: {error}"
+                    )),
+                    bytes_received: 0,
+                    events_received: 0,
+                    partial_event_bytes: 0,
+                })?,
+        )
+    } else {
+        None
     };
     let (trace_session_id, assistant_turn) = {
         let s = state.lock().await;
@@ -4125,7 +4607,8 @@ async fn stream_request_with_timeouts(
         if cancel_token.is_cancelled() {
             return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
-        let mut req = client
+        let request_client = chatgpt_client.as_ref().unwrap_or(client);
+        let mut req = request_client
             .post(&resolved_url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(request_payload_bytes.clone());
@@ -4133,7 +4616,7 @@ async fn stream_request_with_timeouts(
             req = apply_api_key_headers(
                 req,
                 key,
-                profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
+                !chatgpt_plan && profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
             );
         }
         let send_result = retry::race_cancellable(
@@ -4144,7 +4627,7 @@ async fn stream_request_with_timeouts(
         let send_result = match send_result {
             None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
             Some(Err(_elapsed)) => {
-                if attempt < retry::MAX_RETRIES {
+                if !chatgpt_plan && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
                     crate::dbg_log_for_session!(
                         request_session_id,
@@ -4213,7 +4696,8 @@ async fn stream_request_with_timeouts(
                     parallel_tool_calls_fallback_attempted = true;
                     continue;
                 }
-                if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
+                if !chatgpt_plan && retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES
+                {
                     let delay = retry::delay_for_attempt(attempt, code);
                     crate::dbg_log_for_session!(
                         request_session_id,
@@ -4248,7 +4732,10 @@ async fn stream_request_with_timeouts(
                 });
             }
             Err(e) => {
-                if retry::is_retryable_transport(&e) && attempt < retry::MAX_RETRIES {
+                if !chatgpt_plan
+                    && retry::is_retryable_transport(&e)
+                    && attempt < retry::MAX_RETRIES
+                {
                     let delay = retry::delay_for_attempt(attempt, 0);
                     crate::dbg_log_for_session!(
                         request_session_id,
@@ -4298,6 +4785,7 @@ async fn stream_request_with_timeouts(
     let mut line_buf = String::with_capacity(4096);
     let mut in_reasoning = false;
     let mut finish_reason: Option<String> = None;
+    let mut responses_completed = false;
     let mut stream_bytes_received = 0usize;
     let mut stream_events_received = 0usize;
 
@@ -4416,6 +4904,19 @@ async fn stream_request_with_timeouts(
                         stream_bytes_received += line_buf.len();
                         let trimmed = line_buf.trim();
                         if trimmed == "data: [DONE]" {
+                            if responses_api && !responses_completed {
+                                return Err(StreamFailure {
+                                    kind: StreamFailureKind::PrematureEof,
+                                    status: None,
+                                    detail: Some(
+                                        "Responses SSE stream ended with [DONE] before response.completed"
+                                            .to_owned(),
+                                    ),
+                                    bytes_received: stream_bytes_received,
+                                    events_received: stream_events_received,
+                                    partial_event_bytes: 0,
+                                });
+                            }
                             buffer.lock().await.termination =
                                 Some(StreamTermination::ProviderStop);
                             line_buf.clear();
@@ -4430,6 +4931,12 @@ async fn stream_request_with_timeouts(
                                 // absolute first-event / idle budgets.
                                 last_progress = tokio::time::Instant::now();
                                 stream_trace.record(line_buf.len(), &value);
+                                if responses_api
+                                    && value.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("response.completed")
+                                {
+                                    responses_completed = true;
+                                }
                                 let val = if responses_api {
                                     normalize_responses_event(
                                         &value,
@@ -4445,11 +4952,24 @@ async fn stream_request_with_timeouts(
                                         .get("status_code")
                                         .and_then(|value| value.as_u64())
                                         .and_then(|value| u16::try_from(value).ok());
-                                    let detail = error
+                                    let message = error
                                         .get("message")
                                         .and_then(|value| value.as_str())
                                         .map(str::to_owned)
                                         .unwrap_or_else(|| error.to_string());
+                                    let code = error.get("code").and_then(|value| value.as_str());
+                                    let detail = match code {
+                                        Some(code @ "subscription_sharing_usage_limit_exceeded") => format!(
+                                            "ChatGPT plan usage limit reached ({code}): {message}. Wait for the account limit to reset or select another eligible ChatGPT account. RustCode did not retry with an API key."
+                                        ),
+                                        Some(code @ "subscription_sharing_usage_unavailable") => format!(
+                                            "ChatGPT plan usage is unavailable ({code}): {message}. Check the selected account's plan usage permission and sign in again if needed. RustCode did not retry with an API key."
+                                        ),
+                                        Some("response_incomplete") => format!(
+                                            "ChatGPT Responses request ended without a completed response: {message}. Review the response limit and retry the request."
+                                        ),
+                                        _ => message,
+                                    };
                                     return Err(StreamFailure {
                                         kind: StreamFailureKind::ProviderError,
                                         status,

@@ -18,6 +18,7 @@ pub mod network;
 mod notifications;
 mod platform;
 pub mod prompt_commands;
+pub mod provider_auth;
 pub mod raw_cli;
 pub mod serve;
 pub mod shell_env;

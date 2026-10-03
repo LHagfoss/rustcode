@@ -253,6 +253,10 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
+    /// Reference to a credential stored in the operating system credential store.
+    /// The secret itself is never serialized with the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<crate::provider_auth::CredentialRef>,
     /// Send the resolved API key as an `X-Api-Key` header in addition to
     /// `Authorization: Bearer`. Defaults to off: OpenAI-compatible gateways
     /// (e.g. Splash/MLX) reject requests carrying both headers even when the
@@ -1143,6 +1147,10 @@ impl From<DefaultConfig> for DefaultOverride {
 pub struct AppConfig {
     pub default: DefaultConfig,
     pub models: Vec<ModelProfile>,
+    /// Provider authentication methods and defaults. These are configuration
+    /// metadata only; account bindings and secrets are stored separately.
+    #[serde(default = "default_provider_definitions")]
+    pub providers: Vec<ProviderDefinition>,
     /// Profile name (or model id) used for image analysis fallback requests.
     #[serde(default)]
     pub vision_model: Option<String>,
@@ -1238,6 +1246,44 @@ pub struct AppConfig {
     pub is_valid: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ProviderDefinition {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default = "default_provider_auth_methods")]
+    pub auth_methods: Vec<crate::provider_auth::AuthMethod>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+fn default_provider_auth_methods() -> Vec<crate::provider_auth::AuthMethod> {
+    vec![crate::provider_auth::AuthMethod::ApiKey]
+}
+
+fn default_provider_definitions() -> Vec<ProviderDefinition> {
+    vec![
+        ProviderDefinition {
+            id: "openai".to_string(),
+            display_name: "OpenAI".to_string(),
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            auth_methods: vec![
+                crate::provider_auth::AuthMethod::ApiKey,
+                crate::provider_auth::AuthMethod::ChatGpt,
+            ],
+            base_url: Some("https://api.openai.com/v1".to_string()),
+        },
+        ProviderDefinition {
+            id: "generic".to_string(),
+            display_name: "Generic OpenAI-compatible provider".to_string(),
+            api_key_env: None,
+            auth_methods: vec![crate::provider_auth::AuthMethod::ApiKey],
+            base_url: None,
+        },
+    ]
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ModelsConfig {
     default: DefaultConfig,
@@ -1302,6 +1348,8 @@ struct TomlConfig {
     default: Option<DefaultOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models: Option<Vec<ModelProfile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    providers: Option<Vec<ProviderDefinition>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     vision_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1466,6 +1514,7 @@ impl Default for AppConfig {
                     ..Default::default()
                 },
             ],
+            providers: default_provider_definitions(),
             tool_protocol: ToolProtocol::default(),
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_total_tool_rounds: DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
@@ -1857,6 +1906,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         version: Some(CONFIG_FORMAT_VERSION),
         default: Some(config.default.clone().into()),
         models: Some(config.models.clone()),
+        providers: Some(config.providers.clone()),
         vision_model: config.vision_model.clone(),
         tool_protocol: Some(config.tool_protocol),
         max_tool_rounds: Some(config.max_tool_rounds),
@@ -1926,6 +1976,19 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(models) = file.models {
         config.models = models;
+    }
+    if let Some(providers) = file.providers {
+        for provider in providers {
+            if let Some(existing) = config
+                .providers
+                .iter_mut()
+                .find(|entry| entry.id.eq_ignore_ascii_case(&provider.id))
+            {
+                *existing = provider;
+            } else {
+                config.providers.push(provider);
+            }
+        }
     }
     if let Some(vision_model) = file.vision_model {
         config.vision_model = Some(vision_model);
@@ -2035,10 +2098,23 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Skill roots widen what a prompt can see; only the user config may add
     // them, mirroring how project files cannot widen command permissions.
     file.extra_skill_dirs = None;
+    // Provider definitions and OS credential bindings are user-owned. Keep
+    // project model profiles selectable, but never let the checkout create or
+    // redirect a binding to a machine's credential-store entry.
+    file.providers = None;
+    let user_credentials: std::collections::HashMap<
+        String,
+        Option<crate::provider_auth::CredentialRef>,
+    > = config
+        .models
+        .iter()
+        .map(|model| (model.name.clone(), model.credential.clone()))
+        .collect();
     // Additional endpoints receiving conversation context must be user-configured.
     if let Some(models) = file.models.as_mut() {
         for model in models {
             model.thinking_router = None;
+            model.credential = user_credentials.get(&model.name).cloned().flatten();
         }
     }
     apply_toml_config(config, file);
@@ -2050,6 +2126,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     }
     if file.models.is_some() {
         persisted.models = global.models.clone();
+    }
+    if file.providers.is_some() {
+        persisted.providers = global.providers.clone();
     }
     if file.vision_model.is_some() {
         persisted.vision_model = global.vision_model.clone();
@@ -2116,6 +2195,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         version: Some(CONFIG_FORMAT_VERSION),
         default: Some(global.default.into()),
         models: None,
+        providers: None,
         vision_model: None,
         tool_protocol: None,
         max_tool_rounds: None,

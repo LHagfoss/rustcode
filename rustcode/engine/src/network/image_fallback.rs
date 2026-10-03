@@ -150,6 +150,15 @@ pub(crate) async fn request_vision_analysis(
     bytes: Vec<u8>,
     cancel_token: &CancellationToken,
 ) -> Result<String, String> {
+    if profile
+        .credential
+        .as_ref()
+        .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+    {
+        return Err(
+            "ChatGPT plan image analysis requires the streaming main Responses request; configure a vision-capable main model or use an API-key vision profile.".to_owned(),
+        );
+    }
     use base64::{Engine as _, engine::general_purpose};
     let mime = if bytes.starts_with(b"\x89PNG") {
         "image/png"
@@ -176,7 +185,24 @@ pub(crate) async fn request_vision_analysis(
         data_url,
     );
     let mut request = client.post(profile.endpoint_url()).json(&payload);
-    if let Some(key) = profile.resolved_api_key() {
+    let credential = tokio::select! {
+        _ = cancel_token.cancelled() => return Err("cancelled".to_string()),
+        result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            crate::provider_auth::resolve_profile_credential(profile),
+        ) => match result {
+            Err(_) => return Err("credential resolution timed out before image analysis was sent".to_string()),
+            Ok(Err(error)) => return Err(format!("credential resolution failed before image analysis was sent: {error:#}")),
+            Ok(Ok(credential)) => credential,
+        }
+    };
+    if profile.credential.is_some() && credential.is_none() {
+        return Err(
+            "the configured vision provider credential could not be resolved; no request was sent"
+                .to_string(),
+        );
+    }
+    if let Some(key) = credential {
         request = request.header("Authorization", format!("Bearer {key}"));
     }
     let response = tokio::select! {

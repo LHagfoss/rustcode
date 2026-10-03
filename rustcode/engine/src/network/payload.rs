@@ -3,17 +3,32 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
-    let (url, model_name, api_key_opt) = {
+    let (url, model_name, api_key_opt, chatgpt_plan) = {
         let s = state.lock().await;
         let active_url = s.api_base_url.clone();
+        let chatgpt_plan = s.active_model_profile().is_some_and(|profile| {
+            profile
+                .credential
+                .as_ref()
+                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+        });
         let key = s
             .config
             .models
             .iter()
             .find(|m| m.url == active_url || m.model == s.model_name)
             .and_then(|m| m.api_key.clone());
-        (active_url, s.model_name.clone(), key)
+        (active_url, s.model_name.clone(), key, chatgpt_plan)
     };
+
+    // The ChatGPT plan HTTP flow has no account quota endpoint. Keep its
+    // footer indicator explicitly unavailable and never probe a proxy route.
+    if chatgpt_plan {
+        let mut state = state.lock().await;
+        state.model_quota_remaining = None;
+        state.request_redraw();
+        return;
+    }
 
     if !url.contains("localhost:3000")
         && !url.contains("127.0.0.1:3000")
