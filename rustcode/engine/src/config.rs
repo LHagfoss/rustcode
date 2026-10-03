@@ -1769,27 +1769,77 @@ pub fn save_entire_config(config: &AppConfig) {
     if !config.is_valid {
         return;
     }
-    if let Some(dir) = get_config_dir() {
-        let mut persisted = config.clone();
-        if let Ok(workspace) = std::env::current_dir() {
-            let (_, _, global) = load_config_from(&dir);
-            for path in project_config_paths(&workspace) {
-                if let Ok(file) = read_toml_config(&path) {
-                    preserve_project_overrides(&mut persisted, &global, &file);
-                }
-            }
-        }
-        save_config_to(&dir, &persisted);
-        if let Some(session_id) = persisted.last_active_session_id.as_deref() {
-            session::record_session_settings(session_id, &persisted);
-        }
+    if let Err(error) = save_entire_config_result(config) {
+        eprintln!("[rustcode] WARNING: {error}");
     }
 }
 
-fn save_config_to(dir: &Path, config: &AppConfig) {
-    if let Err(error) = save_config_to_result(dir, config) {
-        eprintln!("[rustcode] WARNING: {error}");
+/// Save the complete configuration and report failures to interactive callers.
+fn save_entire_config_result(config: &AppConfig) -> Result<(), String> {
+    save_entire_config_for_workspace_result(config, None)
+}
+
+fn save_entire_config_for_workspace_result(
+    config: &AppConfig,
+    workspace: Option<&Path>,
+) -> Result<(), String> {
+    if !config.is_valid {
+        return Err("configuration is invalid".to_owned());
     }
+    let dir =
+        get_config_dir().ok_or_else(|| "could not determine the config directory".to_owned())?;
+    let mut persisted = config.clone();
+    let workspace = workspace
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(workspace) = workspace {
+        let (_, _, global) = load_config_from(&dir);
+        for path in project_config_paths(&workspace) {
+            if let Ok(file) = read_toml_config(&path) {
+                preserve_project_overrides(&mut persisted, &global, &file);
+            }
+        }
+    }
+    save_config_to_result(&dir, &persisted)?;
+    if let Some(session_id) = persisted.last_active_session_id.as_deref() {
+        session::record_session_settings(session_id, &persisted);
+    }
+    Ok(())
+}
+
+/// Persist Discord Rich Presence in the nearest project file that owns an
+/// override, or in the user config when the setting is global.
+pub fn save_discord_rpc_enabled(
+    config: &AppConfig,
+    workspace: Option<&Path>,
+) -> Result<(), String> {
+    if !config.is_valid {
+        return Err("configuration is invalid".to_owned());
+    }
+    if let Some(workspace) = workspace {
+        for path in project_config_paths(workspace).into_iter().rev() {
+            let file = read_toml_config(&path)?;
+            if file.discord_rpc_enabled.is_some() {
+                let contents = fs::read_to_string(&path)
+                    .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+                let mut value: toml::Value = toml::from_str(&contents)
+                    .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+                let Some(table) = value.as_table_mut() else {
+                    return Err(format!("{} must contain a TOML table", path.display()));
+                };
+                table.insert(
+                    "discord_rpc_enabled".to_owned(),
+                    toml::Value::Boolean(config.discord_rpc_enabled),
+                );
+                let updated = toml::to_string_pretty(&value)
+                    .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
+                write_config_file(&path, &updated)
+                    .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+                return Ok(());
+            }
+        }
+    }
+    save_entire_config_for_workspace_result(config, workspace)
 }
 
 fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
@@ -1838,6 +1888,13 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
     write_config_file(&path, &contents)
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+#[cfg(test)]
+fn save_config_to(dir: &Path, config: &AppConfig) {
+    if let Err(error) = save_config_to_result(dir, config) {
+        eprintln!("[rustcode] WARNING: {error}");
+    }
 }
 
 fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {

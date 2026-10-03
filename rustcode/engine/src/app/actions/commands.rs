@@ -546,6 +546,7 @@ pub fn build_help_text() -> String {
                 ("/model", "Open model picker or switch profile"),
                 ("/quota", "Show provider quota and remaining limits"),
                 ("/context", "Show context usage or set context window"),
+                ("/discord", "Toggle or configure Discord Rich Presence"),
                 ("/mcp", "Configure Model Context Protocol (MCP) servers"),
                 ("/ollama", "Configure or list Ollama models"),
                 ("/provider", "Add or update model provider profile"),

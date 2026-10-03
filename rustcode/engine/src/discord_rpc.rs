@@ -9,6 +9,7 @@ use crate::app::activity::{ActivityKind, ActivitySnapshot};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -285,6 +286,17 @@ impl DiscordRpcHandler {
         self.enabled = false;
         self.disconnect();
     }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
+        if enabled {
+            self.enabled = true;
+        } else {
+            self.shutdown();
+        }
+    }
 }
 
 impl Drop for DiscordRpcHandler {
@@ -295,6 +307,7 @@ impl Drop for DiscordRpcHandler {
 
 enum Command {
     Update(DiscordPresence),
+    SetEnabled(bool),
     Shutdown,
 }
 
@@ -303,6 +316,7 @@ enum Command {
 pub struct DiscordRpcWorker {
     sender: Sender<Command>,
     last_presence: Arc<Mutex<Option<DiscordPresence>>>,
+    enabled: AtomicBool,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -316,6 +330,7 @@ impl DiscordRpcWorker {
         Self {
             sender,
             last_presence: Arc::new(Mutex::new(None)),
+            enabled: AtomicBool::new(enabled),
             thread: Some(thread),
         }
     }
@@ -329,6 +344,12 @@ impl DiscordRpcWorker {
         }
         *last_presence = Some(presence.clone());
         let _ = self.sender.send(Command::Update(presence));
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        if self.enabled.swap(enabled, Ordering::Relaxed) != enabled {
+            let _ = self.sender.send(Command::SetEnabled(enabled));
+        }
     }
 
     pub fn shutdown(mut self) {
@@ -350,7 +371,6 @@ impl Drop for DiscordRpcWorker {
 
 fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
     let mut handler = DiscordRpcHandler::new();
-    let enabled = initially_enabled;
     handler.enabled = initially_enabled;
     let mut desired = None;
     let mut retry_at = Instant::now();
@@ -359,11 +379,14 @@ fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
     loop {
         match receiver.recv_timeout(Duration::from_secs(1)) {
             Ok(Command::Update(presence)) => desired = Some(presence),
+            Ok(Command::SetEnabled(enabled)) => {
+                apply_enablement(&mut handler, enabled, &mut retry_at, &mut retry_delay);
+            }
             Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
 
-        if !enabled {
+        if !handler.enabled {
             continue;
         }
         let Some(presence) = desired.as_ref() else {
@@ -379,6 +402,20 @@ fn run_worker(receiver: mpsc::Receiver<Command>, initially_enabled: bool) {
             retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
         }
     }
+}
+
+fn apply_enablement(
+    handler: &mut DiscordRpcHandler,
+    enabled: bool,
+    retry_at: &mut Instant,
+    retry_delay: &mut Duration,
+) {
+    if handler.enabled == enabled {
+        return;
+    }
+    handler.set_enabled(enabled);
+    *retry_at = Instant::now();
+    *retry_delay = INITIAL_RETRY_DELAY;
 }
 
 #[cfg(test)]
@@ -403,6 +440,29 @@ mod tests {
         );
         assert_eq!(presence.state, "Running tools");
         assert_eq!(presence.details, "Fix parser · run_command");
+    }
+
+    #[test]
+    fn worker_queues_only_discord_enablement_transitions() {
+        let (sender, receiver) = mpsc::channel();
+        let worker = DiscordRpcWorker {
+            sender,
+            last_presence: Arc::new(Mutex::new(None)),
+            enabled: AtomicBool::new(false),
+            thread: None,
+        };
+
+        worker.set_enabled(false);
+        worker.set_enabled(true);
+        worker.set_enabled(true);
+        worker.set_enabled(false);
+
+        assert!(matches!(receiver.try_recv(), Ok(Command::SetEnabled(true))));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::SetEnabled(false))
+        ));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
@@ -509,6 +569,29 @@ mod tests {
             .map(|index| temporary.path().join(format!("discord-ipc-{index}")))
             .collect::<Vec<_>>();
         assert!(!ipc_socket_detected_in(&candidates));
+    }
+
+    #[test]
+    fn repeated_enablement_keeps_retry_backoff_and_changes_clear_the_worker() {
+        let mut handler = DiscordRpcHandler::new();
+        let mut retry_at = Instant::now() + MAX_RETRY_DELAY;
+        let pending_retry = retry_at;
+        let mut retry_delay = MAX_RETRY_DELAY;
+
+        apply_enablement(&mut handler, false, &mut retry_at, &mut retry_delay);
+        assert_eq!(retry_at, pending_retry);
+        assert_eq!(retry_delay, MAX_RETRY_DELAY);
+        assert!(!handler.enabled);
+
+        apply_enablement(&mut handler, true, &mut retry_at, &mut retry_delay);
+        assert!(handler.enabled);
+        assert_eq!(retry_delay, INITIAL_RETRY_DELAY);
+        assert!(retry_at <= Instant::now());
+
+        apply_enablement(&mut handler, false, &mut retry_at, &mut retry_delay);
+        assert!(!handler.enabled);
+        assert!(handler.client.is_none());
+        assert_eq!(retry_delay, INITIAL_RETRY_DELAY);
     }
 
     #[test]
