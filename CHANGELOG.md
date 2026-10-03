@@ -1,3 +1,13 @@
+## [v0.56.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.8) - 2026-10-03
+
+### Features
+- Show cumulative input and output tokens beside the running model, including provisional live output estimates, provider continuations and retried requests ([#1672](https://github.com/LHagfoss/rustcode/pull/1672)).
+- Reduce MCP discovery context with compact server summaries, bounded tool search and per-server listings; carry matching tools into native requests within schema limits ([#1673](https://github.com/LHagfoss/rustcode/pull/1673)).
+
+### Fixes
+- Generate a catch-up recap after 10 minutes idle following completed work, including a focused terminal; require new progress before repeating ([#1670](https://github.com/LHagfoss/rustcode/pull/1670)).
+- Preserve the last terminal frame when a dirty or height-changing redraw fails, then recover on the next successful frame ([#1674](https://github.com/LHagfoss/rustcode/pull/1674)).
+- Cancel an automatic recap when user activity resumes or idle guards change while the recap provider is pending ([#1676](https://github.com/LHagfoss/rustcode/pull/1676)).
 ## [v0.56.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.7) - 2026-10-02
 
 ### Fixes
