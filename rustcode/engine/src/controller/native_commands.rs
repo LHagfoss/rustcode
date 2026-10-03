@@ -7,6 +7,7 @@ pub(super) enum NativeSlashCommand {
     Clear,
     Cancel,
     Model(Option<String>),
+    ProviderAuth(String),
     ChangeTitle(Option<String>),
     Info,
     Unknown(String),
@@ -25,6 +26,11 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
         "/new" => NativeSlashCommand::New,
         "/clear" => NativeSlashCommand::Clear,
         "/cancel" => NativeSlashCommand::Cancel,
+        "/login" | "/logout" | "/auth" => NativeSlashCommand::ProviderAuth(format!(
+            "{}{}",
+            name.to_ascii_lowercase(),
+            &input[name.len()..]
+        )),
         "/model" => NativeSlashCommand::Model((!arguments.is_empty()).then(|| arguments.into())),
         "/change_title" => {
             NativeSlashCommand::ChangeTitle((!arguments.is_empty()).then(|| arguments.into()))
@@ -34,7 +40,7 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
     })
 }
 
-pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
+pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/login` — Show provider login methods\n- `/login <provider>` — Sign in to a provider\n- `/login <provider> api-key <ENV_VAR>` — Save an API key environment variable\n- `/auth status` — Show saved provider accounts\n- `/logout <provider> [account-id]` — Sign out of a provider account\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
 
 #[cfg(test)]
 mod tests {
@@ -58,6 +64,38 @@ mod tests {
         assert_eq!(
             parse("/not-supported argument"),
             Some(NativeSlashCommand::Unknown("/not-supported".into()))
+        );
+    }
+
+    #[test]
+    fn parses_provider_auth_commands_as_native_commands() {
+        assert_eq!(
+            parse("/login openai"),
+            Some(NativeSlashCommand::ProviderAuth("/login openai".into()))
+        );
+        assert_eq!(
+            parse("/auth status"),
+            Some(NativeSlashCommand::ProviderAuth("/auth status".into()))
+        );
+        assert_eq!(
+            parse("/logout openai"),
+            Some(NativeSlashCommand::ProviderAuth("/logout openai".into()))
+        );
+        assert_eq!(
+            parse("/LOGIN OpenAI"),
+            Some(NativeSlashCommand::ProviderAuth("/login OpenAI".into()))
+        );
+    }
+
+    #[test]
+    fn leaves_unrelated_slashes_out_of_provider_auth_dispatch() {
+        assert_eq!(
+            parse("/loginish openai"),
+            Some(NativeSlashCommand::Unknown("/loginish".into()))
+        );
+        assert_eq!(
+            parse("/authenticate"),
+            Some(NativeSlashCommand::Unknown("/authenticate".into()))
         );
     }
 }

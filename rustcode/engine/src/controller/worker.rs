@@ -46,6 +46,11 @@ async fn controller_worker(
     let mut generation = 0;
     let mut auto_approve = true;
     let client = reqwest::Client::new();
+    let (provider_auth_sender, mut provider_auth_receiver) = mpsc::unbounded_channel::<(
+        u64,
+        String,
+        anyhow::Result<crate::provider_auth::AuthCommandResult>,
+    )>();
     let mut task_subscriptions = HashMap::<String, TaskSubscription>::new();
     let mut task_poll = tokio::time::interval(std::time::Duration::from_millis(25));
     task_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -149,17 +154,8 @@ async fn controller_worker(
                 }
                 if let Some(profile_name) = crate::config::load_session_settings(&session_id)
                     .map(|settings| settings.active_profile)
-                    && let Some((model, url)) = state
-                        .config
-                        .models
-                        .iter()
-                        .find(|profile| {
-                            profile.name == profile_name || profile.model == profile_name
-                        })
-                        .map(|profile| (profile.model.clone(), profile.url.clone()))
                 {
-                    state.model_name = model;
-                    state.api_base_url = url;
+                    restore_session_profile(&mut state, &profile_name);
                 }
                 generation += 1;
                 state.auto_confirm = auto_approve;
@@ -179,7 +175,7 @@ async fn controller_worker(
                     continue;
                 };
                 if let Some(command) = super::native_commands::parse(&prompt) {
-                    run_native_slash(command, session, &mut generation, &updates).await;
+                    run_native_slash(command, session, &mut generation, &updates, &provider_auth_sender).await;
                     continue;
                 }
                 match queue_prompt(&session.state, prompt).await {
@@ -208,7 +204,7 @@ async fn controller_worker(
                     continue;
                 };
                 if let Some(command) = super::native_commands::parse(&prompt) {
-                    run_native_slash(command, session, &mut generation, &updates).await;
+                    run_native_slash(command, session, &mut generation, &updates, &provider_auth_sender).await;
                     continue;
                 }
                 match queue_prompt_with_mode(&session.state, prompt, mode).await {
@@ -340,6 +336,7 @@ async fn controller_worker(
                 {
                     state.model_name = model_name;
                     state.api_base_url = api_base_url;
+                    state.config.default.set_big(profile_name.clone());
                     crate::config::record_session_settings_for_profile(
                         &state.active_session_id,
                         &state.config,
@@ -450,6 +447,23 @@ async fn controller_worker(
             }
                 }
             }
+            auth_result = provider_auth_receiver.recv() => {
+                let Some((auth_generation, session_id, result)) = auth_result else {
+                    continue;
+                };
+                let Some(session) = active.as_mut() else {
+                    continue;
+                };
+                if session.generation != auth_generation {
+                    continue;
+                }
+                let mut state = session.state.lock().await;
+                if state.active_session_id != session_id {
+                    continue;
+                }
+                finish_native_provider_auth(&mut state, result);
+                send_snapshot_locked(&updates, session.generation, &state);
+            }
             _ = task_poll.tick() => {}
         }
     }
@@ -463,6 +477,11 @@ async fn run_native_slash(
     session: &mut ActiveSession,
     generation: &mut u64,
     updates: &mpsc::UnboundedSender<ControllerEvent>,
+    provider_auth_sender: &mpsc::UnboundedSender<(
+        u64,
+        String,
+        anyhow::Result<crate::provider_auth::AuthCommandResult>,
+    )>,
 ) {
     use super::native_commands::{HELP, NativeSlashCommand};
 
@@ -516,6 +535,20 @@ async fn run_native_slash(
             ));
             send_snapshot_locked(updates, session.generation, &state);
         }
+        NativeSlashCommand::ProviderAuth(input) => {
+            let (config, session_id) = {
+                let mut state = session.state.lock().await;
+                state.set_notice("Provider authentication is running…");
+                send_snapshot_locked(updates, session.generation, &state);
+                (state.config.clone(), state.active_session_id.clone())
+            };
+            let auth_generation = session.generation;
+            let sender = provider_auth_sender.clone();
+            tokio::spawn(async move {
+                let result = crate::provider_auth::execute_command(&input, &config).await;
+                let _ = sender.send((auth_generation, session_id, result));
+            });
+        }
         NativeSlashCommand::Model(None) => {
             let mut state = session.state.lock().await;
             let choices = state
@@ -562,6 +595,7 @@ async fn run_native_slash(
             {
                 state.model_name = model_name;
                 state.api_base_url = api_base_url;
+                state.config.default.set_big(profile_name.clone());
                 crate::config::record_session_settings_for_profile(
                     &state.active_session_id,
                     &state.config,
@@ -596,6 +630,77 @@ async fn run_native_slash(
             ));
             send_snapshot_locked(updates, session.generation, &state);
         }
+    }
+}
+
+fn finish_native_provider_auth(
+    state: &mut AppState,
+    result: anyhow::Result<crate::provider_auth::AuthCommandResult>,
+) {
+    match result {
+        Ok(result) => {
+            if let Some(profile) = result.profile {
+                let profile_name = profile.name.clone();
+                state.model_name = profile.model.clone();
+                state.api_base_url = profile.url.clone();
+                if let Some(existing) = state
+                    .config
+                    .models
+                    .iter_mut()
+                    .find(|existing| existing.name == profile_name)
+                {
+                    *existing = profile;
+                } else {
+                    state.config.models.push(profile);
+                }
+                state.config.default.set_big(profile_name);
+                crate::config::save_entire_config(&state.config);
+                crate::config::record_session_settings_for_profile(
+                    &state.active_session_id,
+                    &state.config,
+                    state.config.default.big(),
+                );
+            }
+            state.set_notice(result.message);
+        }
+        Err(error) => state.set_notice(format!("Provider authentication failed: {error:#}")),
+    }
+}
+
+fn restore_session_profile(state: &mut AppState, profile_name: &str) {
+    if let Some(profile) = state
+        .config
+        .models
+        .iter()
+        .find(|profile| profile.name == profile_name || profile.model == profile_name)
+    {
+        state.model_name = profile.model.clone();
+        state.api_base_url = profile.url.clone();
+        state.config.default.set_big(profile.name.clone());
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::restore_session_profile;
+    use crate::app::AppState;
+    use crate::config::ModelProfile;
+
+    #[test]
+    fn restoring_profile_keeps_credential_identity_selected() {
+        let mut state = AppState::new();
+        state.config.models.push(ModelProfile {
+            name: "openai-chatgpt-account-b".into(),
+            url: "https://api.openai.com/v1/responses".into(),
+            model: "gpt-5-codex".into(),
+            ..ModelProfile::default()
+        });
+
+        restore_session_profile(&mut state, "openai-chatgpt-account-b");
+
+        assert_eq!(state.config.default.big(), "openai-chatgpt-account-b");
+        assert_eq!(state.model_name, "gpt-5-codex");
+        assert_eq!(state.api_base_url, "https://api.openai.com/v1/responses");
     }
 }
 

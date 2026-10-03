@@ -31,6 +31,9 @@ an open user panel and resumes its input surface after dismissal.
 | `/info` | Scrollable About RustCode panel. |
 | `/help` | Scrollable Help panel. |
 | `/history` | Session picker; empty list uses a History panel. |
+| `/login` | Lists supported provider login methods; provider sign-in runs asynchronously and reports its result in a Provider authentication panel. |
+| `/auth status` | Lists saved provider accounts and auth methods in a Provider authentication panel. |
+| `/logout` | Signs out of the selected provider account asynchronously and reports the result in a Provider authentication panel. |
 | `/memory` | Scrollable Memory panel for RAM, project-memory inspection, updates and help. |
 | `/mcp` | Existing MCP configuration/editor panel. |
 | `/model` | Existing model picker; direct profile/model arguments apply immediately and show panel feedback. |

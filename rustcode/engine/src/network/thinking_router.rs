@@ -26,6 +26,10 @@ fn parse_decision(response: &Value) -> ThinkingMode {
 
 fn eligible(profile: &ModelProfile, mode: ThinkingMode) -> bool {
     mode == ThinkingMode::Normal
+        && !profile
+            .credential
+            .as_ref()
+            .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
         && profile.enable_thinking == Some(true)
         && profile.resolved_api_protocol() == ApiProtocol::ChatCompletions
         && profile

@@ -77,6 +77,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Open model picker, switch profile, or override model",
     },
     CommandInfo {
+        name: "/login",
+        desc: "Sign in or configure a provider account",
+    },
+    CommandInfo {
+        name: "/auth",
+        desc: "Show provider authentication status",
+    },
+    CommandInfo {
+        name: "/logout",
+        desc: "Sign out of a provider account",
+    },
+    CommandInfo {
         name: "/models",
         desc: "Open the model picker",
     },
@@ -438,6 +450,18 @@ mod tests {
         );
         assert!(matches[0].desc.contains("composer for review"));
         assert!(matches[1].desc.contains("List available prompt templates"));
+    }
+
+    #[test]
+    fn provider_auth_commands_are_discoverable() {
+        for input in ["/log", "/au", "/logo"] {
+            let matches = filtered_commands(input);
+            assert!(
+                matches
+                    .iter()
+                    .any(|command| { matches!(command.name, "/login" | "/auth" | "/logout") })
+            );
+        }
     }
 
     #[test]
