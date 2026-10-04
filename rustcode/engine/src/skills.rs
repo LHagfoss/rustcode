@@ -289,6 +289,27 @@ pub fn skill_routing_hint(
     ))
 }
 
+/// Small deterministic vocabulary shared by all skills, not application names.
+fn routing_terms(text: &str) -> std::collections::BTreeSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| {
+            let normalized = match word {
+                "song" | "songs" | "music" | "tracks" | "track" => "music",
+                "listening" | "listen" | "playing" | "play" | "playback" => "playback",
+                "meetings" | "meeting" | "calendar" => "calendar",
+                "entries" | "entry" => "entry",
+                "what" | "which" | "when" | "where" | "how" | "the" | "a" | "an" | "i" | "am"
+                | "to" | "of" | "and" | "or" | "for" | "use" | "using" | "with" | "my" | "me"
+                | "you" | "is" | "are" | "can" | "please" | "current" | "currently" | "manage"
+                | "control" | "want" => return None,
+                value => value,
+            };
+            (normalized.len() > 2).then(|| normalized.to_string())
+        })
+        .collect()
+}
+
 fn skill_relevance_score(prompt_lower: &str, skill: &SkillMetadata) -> i32 {
     let mut score: i32 = 0;
     for trigger in &skill.triggers {
@@ -299,6 +320,31 @@ fn skill_relevance_score(prompt_lower: &str, skill: &SkillMetadata) -> i32 {
     for keyword in &skill.keywords {
         if !keyword.is_empty() && prompt_lower.contains(keyword) {
             score += 5;
+        }
+    }
+    // Description-only routing requires two distinct intent terms. Coding
+    // requests cannot activate live-app workflows just because source mentions
+    // music, email or calendar data. Explicit metadata remains authoritative.
+    if score == 0 {
+        let prompt_terms = routing_terms(prompt_lower);
+        let coding = [
+            "implement",
+            "parser",
+            "function",
+            "struct",
+            "code",
+            "refactor",
+            "bug",
+            "api",
+        ]
+        .iter()
+        .any(|word| prompt_terms.contains(*word));
+        if !coding {
+            let description_terms = routing_terms(&skill.description);
+            let overlap = prompt_terms.intersection(&description_terms).count();
+            if overlap >= 2 {
+                score = (overlap.min(4) as i32) * 3;
+            }
         }
     }
     // Priority nudges ordering but never promotes an irrelevant skill alone.
@@ -341,16 +387,23 @@ pub fn relevant_skills_hint(
     loaded_skills: &[String],
 ) -> Option<String> {
     let ranked = select_skills_for_prompt(prompt, skills, loaded_skills, 3);
+    crate::logger::operational_event(
+        "skills.route",
+        serde_json::json!({"considered": skills.len(), "shortlisted": ranked.iter().map(|(skill, score)| serde_json::json!({"name": skill.name, "score": score})).collect::<Vec<_>>() }),
+    );
     if ranked.is_empty() {
         return None;
     }
     let mut out = String::from(
-        "# Relevant skills\nThe prompt matches these skills by trigger/keyword. Consider `list_skills`, then `use_skill` for the best match before exploring:",
+        "# Relevant skills\nThe prompt matches these skills by metadata or description intent. Consider `list_skills`, then `use_skill` for the best match before exploring:",
     );
     for (skill, score) in ranked {
         out.push_str(&format!(
             "\n- {} (score {score}): {}",
-            skill.name, skill.description
+            skill.name,
+            &skill.description[..skill
+                .description
+                .floor_char_boundary(320.min(skill.description.len()))]
         ));
     }
     Some(out)
@@ -1047,6 +1100,9 @@ mod tests {
                 format!("use_skill: <skill_content name=\"{name}\">\ninstructions"),
             )
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "use_skill".to_string(),
                 success: true,
                 ..Default::default()
@@ -1070,6 +1126,9 @@ mod tests {
             crate::app::ChatMessage::new("user", "use solidtime"),
             crate::app::ChatMessage::new("tool", "use_skill: Skill not found").with_tool_result(
                 crate::app::ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: "use_skill".to_string(),
                     success: false,
                     ..Default::default()
@@ -1117,5 +1176,38 @@ mod tests {
         // Explicit name mentions stay on the routing-hint path, not relevance.
         assert!(select_skills_for_prompt("use deploy now", &skills, &[], 3).is_empty());
         assert!(relevant_skills_hint("unrelated prompt", &skills, &[]).is_none());
+    }
+    #[test]
+    fn description_routes_natural_music_state_without_explicit_metadata() {
+        let mut spotify = trigger_metadata("spotify", &[], &[], 0);
+        spotify.description =
+            "Control Spotify playback, play music/artists, manage playlists, volume, or devices"
+                .into();
+        let skills = vec![spotify];
+        assert_eq!(
+            select_skills_for_prompt("what song am I listening to", &skills, &[], 3).len(),
+            1
+        );
+        assert!(
+            select_skills_for_prompt("write a song parser in Rust", &skills, &[], 3).is_empty()
+        );
+        assert!(select_skills_for_prompt("what is the time", &skills, &[], 3).is_empty());
+        assert!(select_skills_for_prompt("play", &skills, &[], 3).is_empty());
+    }
+    #[test]
+    fn description_routing_has_bounded_catalog_overhead() {
+        let skills = (0..1000)
+            .map(|i| {
+                let mut skill = trigger_metadata(&format!("music-{i}"), &[], &[], 0);
+                skill.description = "Control music playback".into();
+                skill
+            })
+            .collect::<Vec<_>>();
+        let hint = relevant_skills_hint("what song am I listening to", &skills, &[]).unwrap();
+        assert_eq!(
+            hint.lines().filter(|line| line.starts_with("- ")).count(),
+            3
+        );
+        assert!(hint.len() < 2000);
     }
 }
