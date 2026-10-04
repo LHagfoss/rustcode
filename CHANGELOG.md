@@ -1,3 +1,11 @@
+## [v0.56.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.15) - 2026-10-04
+
+### Features
+- Add structured turn performance reports and bounded parallel inspections with ordered results.
+- Cache workspace snapshots, incremental symbols and valid successful verification; preserve evidence provenance across session restore.
+- Add isolated persistent agent trees, explicit context inheritance, bounded messaging and cancellation-safe lifecycle control.
+- Improve skill intent routing and reduce first-selection stalls in large legacy transcripts.
+- Document measured performance and remaining live-terminal/provider reproduction limits.
 ## [v0.56.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.14) - 2026-10-04
 
 ### Features
