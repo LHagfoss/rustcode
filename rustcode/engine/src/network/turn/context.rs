@@ -402,18 +402,18 @@ impl TurnContext {
             .completion_tokens
             .saturating_add(usage.completion_tokens);
         total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
-        total.cached_tokens = Some(
-            total
-                .cached_tokens
-                .unwrap_or_default()
-                .saturating_add(usage.cached_tokens.unwrap_or_default()),
-        );
-        total.cache_write_tokens = Some(
-            total
-                .cache_write_tokens
-                .unwrap_or_default()
-                .saturating_add(usage.cache_write_tokens.unwrap_or_default()),
-        );
+        total.cached_tokens = total
+            .cached_tokens
+            .zip(usage.cached_tokens)
+            .map(|(a, b)| a.saturating_add(b))
+            .or(total.cached_tokens)
+            .or(usage.cached_tokens);
+        total.cache_write_tokens = total
+            .cache_write_tokens
+            .zip(usage.cache_write_tokens)
+            .map(|(a, b)| a.saturating_add(b))
+            .or(total.cache_write_tokens)
+            .or(usage.cache_write_tokens);
         total.cache_discount = usage.cache_discount.or(total.cache_discount);
     }
 

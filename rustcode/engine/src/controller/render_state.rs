@@ -56,6 +56,8 @@ pub struct SubAgentView {
     pub status: SubAgentStatus,
     pub active_turn: bool,
     pub parent_id: Option<u32>,
+    pub model: Option<String>,
+    pub elapsed_ms: u64,
 }
 
 impl From<&crate::app::SubAgent> for SubAgentView {
@@ -68,6 +70,11 @@ impl From<&crate::app::SubAgent> for SubAgentView {
             status: agent.status,
             active_turn: agent.active_turn,
             parent_id: agent.parent_id,
+            model: agent.model.clone(),
+            elapsed_ms: agent
+                .finished_at_ms
+                .unwrap_or_else(crate::app::subagent_controller::now_ms)
+                .saturating_sub(agent.created_at_ms),
         }
     }
 }

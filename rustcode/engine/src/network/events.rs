@@ -46,6 +46,7 @@ impl ToolResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolResultMetadata {
     pub execution_us: u64,
+    pub workspace_generation: Option<u64>,
     pub call_id: Option<String>,
     pub arguments_hash: String,
     pub success: bool,

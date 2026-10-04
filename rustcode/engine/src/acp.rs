@@ -1221,6 +1221,9 @@ mod tests {
         let mut result = crate::app::ChatMessage::new("tool", "file contents");
         result.tool_call_id = Some("call-1".into());
         result.tool_result = Some(crate::app::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "read_file".into(),
             success: true,
             ..Default::default()
@@ -1640,6 +1643,7 @@ mod tests {
                 file_preview: None,
                 metadata: crate::network::events::ToolResultMetadata {
                     execution_us: 0,
+                    workspace_generation: None,
                     pending: false,
                     command: None,
                     call_id: Some("call-1".to_string()),
@@ -1732,6 +1736,7 @@ mod tests {
                 file_preview: None,
                 metadata: crate::network::events::ToolResultMetadata {
                     execution_us: 0,
+                    workspace_generation: None,
                     pending: true,
                     call_id: Some("call-1".to_string()),
                     arguments_hash: "hash".to_string(),
@@ -1756,6 +1761,7 @@ mod tests {
                 file_preview: None,
                 metadata: crate::network::events::ToolResultMetadata {
                     execution_us: 0,
+                    workspace_generation: None,
                     pending: false,
                     command: None,
                     call_id: Some("call-1".to_string()),

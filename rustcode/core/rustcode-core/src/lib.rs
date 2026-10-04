@@ -216,6 +216,12 @@ pub struct CommandResultMetadata {
 /// Authoritative metadata for one tool result, persisted with history.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolResultRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_hash: Option<String>,
     pub tool_name: String,
     pub arguments_hash: String,
     pub success: bool,
