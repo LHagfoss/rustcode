@@ -152,6 +152,7 @@ pub struct AppState {
 
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
     pub response_time: Option<std::time::Duration>,
+    pub last_turn_performance: Option<crate::benchmark::TurnPerformance>,
     pub history_index: Option<usize>,
     pub temp_input: String,
     /// Every input the user submitted this run, oldest first — both plain text
@@ -290,6 +291,7 @@ pub struct AppState {
     /// File paths the agent has read this session, mapped to the file's mtime at
     /// read time. Surfaced back to the model so it doesn't re-read unchanged files,
     /// and used by the repeat guard to ALLOW re-reads when a file changed on disk.
+    pub read_workspace_generation: Option<(std::path::PathBuf, u64)>,
     pub read_file_mtimes: std::collections::HashMap<String, std::time::SystemTime>,
 
     /// Signatures of recent read-only tool calls, used by the repeat-loop guard
@@ -1108,7 +1110,7 @@ impl AppState {
         );
         let cwd_and_branch = workspace_location.display();
 
-        let app = Self {
+        let mut app = Self {
             input_buffer: String::new(),
             ctrl_c_exit_deadline: None,
             scroll_to_bottom_btn: None,
@@ -1158,6 +1160,7 @@ impl AppState {
             composer_selecting: false,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
+            last_turn_performance: None,
             history_index: None,
             temp_input: String::new(),
             input_history: Vec::new(),
@@ -1236,6 +1239,7 @@ impl AppState {
             delegation_active: false,
             next_subagent_id: 1,
             todos: Vec::new(),
+            read_workspace_generation: None,
             read_file_mtimes: std::collections::HashMap::new(),
             recent_read_calls: std::collections::VecDeque::new(),
             recent_read_outputs: std::collections::HashMap::new(),
@@ -1272,6 +1276,9 @@ impl AppState {
             prompt_cache: PromptCache::default(),
             exit_warnings: Vec::new(),
         };
+        if session.is_some() {
+            crate::app::subagent_persistence::restore(&mut app);
+        }
         app
     }
 

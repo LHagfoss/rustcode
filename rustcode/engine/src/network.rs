@@ -1062,11 +1062,6 @@ pub async fn probe_function_calling(
     }
 }
 
-fn push_status_line(s: &mut AppState, text: String) {
-    s.history.push(ChatMessage::new("system", text));
-    crate::config::save_history(&s.history);
-}
-
 fn history_scope_for_preflight(
     preflight: &compaction::PreflightBudget,
 ) -> history::RequestHistoryScope {
@@ -1535,8 +1530,13 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let instructions =
+    let mut instructions =
         history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref());
+    let evidence_root = state.lock().await.effective_workspace_root();
+    instructions.generation = evidence_root
+        .as_deref()
+        .and_then(|root| crate::workspace_intelligence::snapshot(root).ok())
+        .map(|snapshot| snapshot.generation);
     let context_budget = state.lock().await.active_context_budget();
     let mut history_scope = history::RequestHistoryScope::Full;
     let mut rendered_history = history::to_messages_for_request(&history_snapshot, instructions);
@@ -1964,6 +1964,9 @@ pub(crate) fn unanswered_call_results_with_kind(
             ChatMessage::new("tool", format!("{}: error: {reason}", call.name))
                 .answering(Some(call.id.clone()))
                 .with_tool_result(crate::app::ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: call.name.clone(),
                     success: false,
                     error_kind: Some(format!("{error_kind:?}")),

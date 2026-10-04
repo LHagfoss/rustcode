@@ -161,6 +161,8 @@ fn history_tool_result_event(
         diff: message.diff.clone(),
         file_preview: message.file_preview.clone(),
         metadata: ToolResultMetadata {
+            execution_us: 0,
+            workspace_generation: None,
             pending: record.pending,
             command: record.command.clone(),
             call_id: Some(id.clone()),
@@ -759,6 +761,9 @@ mod tests {
                 crate::app::ChatMessage::new("tool", "file contents")
                     .answering(Some("call-read".to_owned()))
                     .with_tool_result(crate::app::ToolResultRecord {
+                        workspace_generation: None,
+                        workspace_epoch: None,
+                        evidence_hash: None,
                         tool_name: "view_file".to_owned(),
                         success: true,
                         ..Default::default()
@@ -822,6 +827,9 @@ mod tests {
             ChatMessage::new("tool", "done")
                 .answering(id.map(str::to_owned))
                 .with_tool_result(crate::app::ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: "view_file".to_owned(),
                     arguments_hash: hash.to_owned(),
                     success: true,
@@ -947,6 +955,8 @@ mod tests {
             diff: None,
             file_preview: None,
             metadata: ToolResultMetadata {
+                execution_us: 0,
+                workspace_generation: None,
                 call_id: Some("call-1".to_owned()),
                 success: true,
                 ..ToolResultMetadata::default()
@@ -1366,6 +1376,9 @@ mod tests {
         let ordinary = crate::app::ChatMessage::new("tool", "file contents")
             .answering(Some("call-read".to_owned()))
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "read_file".to_owned(),
                 success: true,
                 ..Default::default()

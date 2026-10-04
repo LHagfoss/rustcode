@@ -1,4 +1,7 @@
+#[path = "tool_exec/parallel.rs"]
+mod parallel;
 use crate::app::{AppState, AppStatus, StreamTracker, ToolConfirmation};
+pub(crate) use parallel::parallel_inspection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -649,6 +652,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     }
                 }
                 _ = cancel_token.cancelled(), if !is_cancellable_process => {
+                    if parallel::parallel_inspection(&crate::tools::ToolCall { name: name.to_owned(), arguments: args.clone(), call_id: None }) {
+                        let _ = (&mut run_fut).await;
+                    }
                     dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
                     break crate::tools::ToolExecutionOutput::failure_with_kind(
                         "error: tool execution cancelled by user".to_string(),
@@ -980,6 +986,50 @@ pub(crate) async fn execute_tool_batch_with_assessments(
     deferred_notice: Option<String>,
     assessment_cache: &crate::tools::ShellAssessmentCache,
 ) -> Vec<ToolResult> {
+    let root = state.lock().await.effective_workspace_root();
+    if let Some(root) = root {
+        let snapshot = crate::workspace_intelligence::snapshot(&root);
+        let mut app = state.lock().await;
+        let generation = snapshot
+            .as_ref()
+            .ok()
+            .map(|s| (s.root.clone(), s.generation));
+        if generation.is_none() || app.read_workspace_generation != generation {
+            app.recent_read_calls.clear();
+            app.recent_read_outputs.clear();
+            app.read_file_mtimes.clear();
+        }
+        app.read_workspace_generation = generation;
+    }
+    execute_tool_batch_validated(
+        client,
+        state,
+        cancel_token,
+        tool_calls,
+        approved,
+        edit_root,
+        compile_dirty,
+        compile_cache,
+        user_wait_duration,
+        deferred_notice,
+        assessment_cache,
+    )
+    .await
+}
+
+async fn execute_tool_batch_validated(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    tool_calls: &[crate::tools::ToolCall],
+    approved: bool,
+    edit_root: &Option<std::path::PathBuf>,
+    compile_dirty: &mut bool,
+    compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    user_wait_duration: &mut std::time::Duration,
+    deferred_notice: Option<String>,
+    assessment_cache: &crate::tools::ShellAssessmentCache,
+) -> Vec<ToolResult> {
     if cancel_token.is_cancelled() {
         return tool_calls.iter().map(cancelled_tool_result).collect();
     }
@@ -1002,29 +1052,81 @@ pub(crate) async fn execute_tool_batch_with_assessments(
             .collect::<Vec<_>>();
     }
 
-    // Keep the executor's per-call compiler-check and cache invalidation
-    // semantics for internal callers, but never run calls concurrently. The
-    // model-round boundary normally supplies one call; this sequential
-    // fallback also keeps direct/test callers deterministic.
+    // Contiguous independent inspections overlap. A mutation, control call,
+    // shell call or duplicate signature closes the group and stays ordered.
     if tool_calls.len() > 1 {
         let mut results = Vec::with_capacity(tool_calls.len());
-        for call in tool_calls {
-            results.extend(
-                Box::pin(execute_tool_batch_with_assessments(
-                    client,
-                    state,
-                    cancel_token,
-                    std::slice::from_ref(call),
-                    approved,
-                    edit_root,
-                    compile_dirty,
-                    compile_cache,
-                    user_wait_duration,
-                    deferred_notice.clone(),
-                    assessment_cache,
-                ))
-                .await,
-            );
+        let mut offset = 0;
+        while offset < tool_calls.len() {
+            let mut end = offset + 1;
+            if parallel::parallel_inspection(&tool_calls[offset]) {
+                let mut signatures = std::collections::HashSet::new();
+                signatures.insert(tool_signature(
+                    &tool_calls[offset].name,
+                    &tool_calls[offset].arguments,
+                ));
+                while end < tool_calls.len()
+                    && parallel::parallel_inspection(&tool_calls[end])
+                    && signatures.insert(tool_signature(
+                        &tool_calls[end].name,
+                        &tool_calls[end].arguments,
+                    ))
+                {
+                    end += 1;
+                }
+            }
+            if end - offset > 1 {
+                let group = parallel::ordered_bounded(
+                    tool_calls[offset..end].iter().collect(),
+                    4,
+                    |call| {
+                        let mut dirty = *compile_dirty;
+                        let mut cache = compile_cache.clone();
+                        let notice = deferred_notice.clone();
+                        async move {
+                            let mut wait = std::time::Duration::ZERO;
+                            let result = Box::pin(execute_tool_batch_validated(
+                                client,
+                                state,
+                                cancel_token,
+                                std::slice::from_ref(call),
+                                approved,
+                                edit_root,
+                                &mut dirty,
+                                &mut cache,
+                                &mut wait,
+                                notice,
+                                assessment_cache,
+                            ))
+                            .await;
+                            (result, wait)
+                        }
+                    },
+                )
+                .await;
+                for (result, wait) in group {
+                    results.extend(result);
+                    *user_wait_duration += wait;
+                }
+            } else {
+                results.extend(
+                    Box::pin(execute_tool_batch_validated(
+                        client,
+                        state,
+                        cancel_token,
+                        &tool_calls[offset..end],
+                        approved,
+                        edit_root,
+                        compile_dirty,
+                        compile_cache,
+                        user_wait_duration,
+                        deferred_notice.clone(),
+                        assessment_cache,
+                    ))
+                    .await,
+                );
+            }
+            offset = end;
         }
         return results;
     }
@@ -1032,6 +1134,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
     dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
     let mut results = Vec::with_capacity(tool_calls.len());
     for call in tool_calls {
+        let execution_started = std::time::Instant::now();
         let name = &call.name;
         let args = &call.arguments;
         let replay = {
@@ -1192,6 +1295,10 @@ pub(crate) async fn execute_tool_batch_with_assessments(
             } else if is_repeat {
                 let tuple = match cached_repeat {
                     Some((previous, covered_subrange)) => {
+                        let canonical_retained = {
+                            let state = state_clone.lock().await;
+                            state.history.is_empty() || previous.replayable_content.as_ref().is_some_and(|body| state.history.iter().any(|message| message.role == "tool" && message.content.contains(body)))
+                        };
                         let mut content = if covered_subrange {
                             replay_cached_view_file_subrange(
                                 &name_clone,
@@ -1205,12 +1312,10 @@ pub(crate) async fn execute_tool_batch_with_assessments(
                                     previous.replayable_content.as_deref(),
                                 )
                             })
+                        } else if canonical_retained {
+                            compact_replayed_read_result(&name_clone, &args_clone, previous.replayable_content.as_deref())
                         } else {
-                            compact_replayed_read_result(
-                                &name_clone,
-                                &args_clone,
-                                previous.replayable_content.as_deref(),
-                            )
+                            previous.replayable_content.clone().unwrap_or_default()
                         };
                         if let Some(path) = previous.full_output_artifact.as_deref() {
                             content.push_str(&format!(
@@ -1351,7 +1456,47 @@ pub(crate) async fn execute_tool_batch_with_assessments(
         };
         let final_diff = final_tool_diff(&execution.content, preview_fallback);
         let title_was_set = executed_name == "set_session_title" && execution.success;
+        let workspace_root = state.lock().await.effective_workspace_root();
+        if let Some(root) = workspace_root {
+            let unknown_mutation = (name == "run_command"
+                && !crate::tools::is_read_only_call(call)
+                && crate::network::compiler::verification_identity(
+                    &root,
+                    args.get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                    state.lock().await.effective_sandbox_mode(),
+                )
+                .is_none())
+                || (crate::tools::tool_safety(name) == crate::tools::ToolSafety::Unknown
+                    && !crate::tools::mcp_tool_read_only_hint(name));
+            if unknown_mutation {
+                crate::workspace_intelligence::invalidate(&root);
+            }
+            if unknown_mutation
+                || name == "run_command"
+                || crate::tools::tool_safety(name) == crate::tools::ToolSafety::WorkspaceMutation
+            {
+                let revision = crate::workspace_intelligence::snapshot(&root)
+                    .ok()
+                    .map(|snapshot| (snapshot.root, snapshot.generation));
+                let mut app = state.lock().await;
+                if revision != app.read_workspace_generation {
+                    app.recent_read_calls.clear();
+                    app.recent_read_outputs.clear();
+                    app.read_file_mtimes.clear();
+                }
+                app.read_workspace_generation = revision;
+            }
+        }
         let mut result = tool_result_from_execution(&executed_name, args, execution, final_diff);
+        result.metadata.execution_us = crate::benchmark::elapsed_us(execution_started);
+        result.metadata.workspace_generation = state
+            .lock()
+            .await
+            .read_workspace_generation
+            .as_ref()
+            .map(|(_, generation)| *generation);
         result.metadata.full_output_artifact = replay_artifact;
         results.push(result);
         if title_was_set {
@@ -1882,6 +2027,81 @@ mod question_tests {
             let out = map_question_channel_result(cancelled);
             assert!(!out.success, "cancel must fail: {}", out.content);
             assert!(out.content.contains("cancelled"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod performance_benchmarks {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "manual tool execution baseline"]
+    async fn inspection_batch_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let calls = (0..16)
+            .map(|index| {
+                let path = root.path().join(format!("file-{index}.rs"));
+                std::fs::write(&path, "fn example() {}\n".repeat(4000)).unwrap();
+                crate::tools::ToolCall {
+                    name: "view_file".into(),
+                    arguments: serde_json::json!({"path":path,"start_line":1,"end_line":4000}),
+                    call_id: Some(format!("read-{index}")),
+                }
+            })
+            .collect::<Vec<_>>();
+        let client = reqwest::Client::new();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        for parallel in [false, true] {
+            let mut fixture = AppState::new();
+            fixture.workspace_root = Some(root.path().to_path_buf());
+            let state = Arc::new(Mutex::new(fixture));
+            let started = std::time::Instant::now();
+            let mut dirty = false;
+            let mut cache = None;
+            let mut wait = std::time::Duration::ZERO;
+            let mut results = Vec::new();
+            if parallel {
+                results = execute_tool_batch(
+                    &client,
+                    &state,
+                    &cancellation,
+                    &calls,
+                    true,
+                    &None,
+                    &mut dirty,
+                    &mut cache,
+                    &mut wait,
+                    None,
+                )
+                .await;
+            } else {
+                for call in &calls {
+                    results.extend(
+                        execute_tool_batch(
+                            &client,
+                            &state,
+                            &cancellation,
+                            std::slice::from_ref(call),
+                            true,
+                            &None,
+                            &mut dirty,
+                            &mut cache,
+                            &mut wait,
+                            None,
+                        )
+                        .await,
+                    );
+                }
+            }
+            assert_eq!(results.len(), calls.len());
+            assert!(results.iter().all(|result| result.metadata.success));
+            println!(
+                "inspection batch: parallel={parallel} calls={} wall_us={} work_us={}",
+                calls.len(),
+                crate::benchmark::elapsed_us(started),
+                results.iter().map(|r| r.metadata.execution_us).sum::<u64>()
+            );
         }
     }
 }

@@ -830,7 +830,7 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
         .or_else(|| std::env::current_dir().ok())
         .ok_or("cannot determine current directory")?;
 
-    let _ = crate::symbols::update_index(&cwd);
+    crate::symbols::update_index(&cwd)?;
 
     let symbols = crate::symbols::find_symbol(&cwd, query)?;
     let ranked = crate::symbols::fuzzy_filter_symbols(&symbols, query, 20);
@@ -869,7 +869,7 @@ pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
         .or_else(|| std::env::current_dir().ok())
         .ok_or("cannot determine current directory")?;
 
-    let _ = crate::symbols::update_index(&cwd);
+    crate::symbols::update_index(&cwd)?;
 
     crate::symbols::get_project_map(&cwd)
 }

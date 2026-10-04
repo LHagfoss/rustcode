@@ -8,8 +8,7 @@ use super::runner;
 use super::stream_request::stream_request;
 use super::{
     StreamBuffer, compact_history_to_budget, confirm_and_execute, final_tool_diff,
-    is_read_only_tool, push_status_line, subagent_tool_history_message,
-    tool_result_precludes_preview_fallback,
+    is_read_only_tool, subagent_tool_history_message, tool_result_precludes_preview_fallback,
 };
 use rustcode_tool_protocol::text::{
     continuation_nudge_for_category, format_continuation_assistant_message, strip_leading_think,
@@ -160,10 +159,28 @@ pub(crate) async fn run_subagent(
     agent_id: u32,
     owner_session_id: &str,
 ) -> Result<String, String> {
+    let child_started = std::time::Instant::now();
     crate::logger::operational_event(
         "subagent.start",
         serde_json::json!({"agent_id": agent_id, "session_id": owner_session_id}),
     );
+    {
+        let mut s = state.lock().await;
+        if s.active_session_id != owner_session_id {
+            return Err("error: agent owner session changed".into());
+        }
+        let _ = crate::app::SubagentController.set_status(
+            &mut s,
+            crate::app::SubagentId::from_raw(agent_id),
+            crate::app::SubAgentStatus::Running,
+        );
+        if let Some(agent) = s.subagents.iter().find(|agent| agent.id == agent_id) {
+            crate::logger::operational_event(
+                "subagent.queue.finish",
+                serde_json::json!({"agent_id":agent_id,"session_id":owner_session_id,"queue_ms":agent.started_at_ms.unwrap_or(agent.created_at_ms).saturating_sub(agent.queued_at_ms),"depth":agent.depth}),
+            );
+        }
+    }
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
     let loop_abort = { state.lock().await.config.loop_guard.effective_loop_abort() };
@@ -177,7 +194,19 @@ pub(crate) async fn run_subagent(
             return Err("error: cancelled".to_string());
         }
         let mut history_snapshot: Vec<ChatMessage> = {
-            let s = state.lock().await;
+            let mut s = state.lock().await;
+            if s.active_session_id != owner_session_id {
+                return Err("error: agent owner session changed".into());
+            }
+            if let Some(agent) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+                let pending = agent.mailbox.drain(..).collect::<Vec<_>>();
+                Arc::make_mut(&mut agent.history).extend(
+                    pending
+                        .into_iter()
+                        .map(|message| ChatMessage::new("user", message)),
+                );
+            }
+            crate::app::subagent_persistence::save(&s);
             s.subagents
                 .iter()
                 .find(|a| a.id == agent_id)
@@ -253,7 +282,7 @@ rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
 reply compact and information-dense. {delegation_contract}\n\n{}",
             crate::tools::tool_system_prompt_for_policy(
-                crate::tools::ToolSchemaPolicy::subagent(),
+                crate::tools::ToolSchemaPolicy::subagent_with_delegation(),
                 protocol,
                 agent_mode,
             ),
@@ -290,8 +319,16 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
         let request_msgs: Arc<[serde_json::Value]> = msgs.into();
+        let request_started = std::time::Instant::now();
+        let context_bytes = request_msgs
+            .iter()
+            .map(|message| message.to_string().len())
+            .sum::<usize>();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let request_counter = Arc::clone(&requests);
         let collected =
             match runner::collect_response(runner::ContinuationPolicy::default(), move |request| {
+                request_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut current_msgs = Vec::with_capacity(
                     request_msgs.len() + if request.previous.is_empty() { 0 } else { 2 },
                 );
@@ -328,7 +365,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         true,
                         true,
                         super::stream_request::ThinkingMode::Normal,
-                        crate::tools::ToolSchemaPolicy::subagent(),
+                        crate::tools::ToolSchemaPolicy::subagent_with_delegation(),
                         Some(owner_session_id),
                         request.output_token_limit,
                     )
@@ -353,6 +390,24 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 Ok(result) => result,
                 Err(e) => return Err(format!("error: subagent request failed: {e}")),
             };
+        let request_performance = stream_buffer.lock().await.performance.clone();
+        {
+            let mut s = state.lock().await;
+            if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == agent_id) {
+                agent.performance.model_us += crate::benchmark::elapsed_us(request_started);
+                agent.performance.requests += requests.load(std::sync::atomic::Ordering::Relaxed);
+                agent.performance.rounds += 1;
+                agent.performance.context_bytes = context_bytes;
+                agent.performance.ttft_us = request_performance.ttft_us;
+                agent.performance.input_tokens = request_performance.input_tokens;
+                agent.performance.output_tokens = request_performance.output_tokens;
+                agent.performance.cached_input_tokens = request_performance.cached_input_tokens;
+            }
+        }
+        crate::logger::operational_event(
+            "subagent.model.finish",
+            serde_json::json!({"agent_id":agent_id,"session_id":owner_session_id,"model_us":crate::benchmark::elapsed_us(request_started),"context_bytes":context_bytes,"input_tokens":request_performance.input_tokens,"output_tokens":request_performance.output_tokens}),
+        );
         let content = collected.content;
         let native_tool_calls = stream_buffer.lock().await.native_tool_calls.clone();
 
@@ -498,8 +553,19 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                                 || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
                         })
                     });
-                let (execution, diff_opt, _user_wait) = if !write_access && !is_read_only_tool(name)
-                {
+                let tool_started = std::time::Instant::now();
+                let (execution, diff_opt, _user_wait) = if crate::tools::is_agent_tool(name) {
+                    let execution = Box::pin(handle_agent_tool_for_parent(
+                        client,
+                        state,
+                        cancel_token,
+                        name,
+                        args,
+                        Some(agent_id),
+                    ))
+                    .await;
+                    (execution, None, std::time::Duration::ZERO)
+                } else if !write_access && !is_read_only_tool(name) {
                     (
                         crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
@@ -520,17 +586,6 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         None,
                         std::time::Duration::ZERO,
                     )
-                } else if crate::tools::is_agent_tool(name) {
-                    (
-                        crate::tools::ToolExecutionOutput::failure_with_kind(
-                            "error: subagents cannot spawn, message, wait on, or cancel other agents"
-                                .to_string(),
-                            crate::tools::ToolErrorKind::UnavailableDependency,
-                            false,
-                        ),
-                        None,
-                        std::time::Duration::ZERO,
-                    )
                 } else {
                     {
                         let mut s = state.lock().await;
@@ -539,7 +594,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             .or_else(|| args.get("command"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        push_status_line(&mut s, format!("agent-{agent_id} → {name} {target}"));
+                        agent_notice(&mut s, format!("agent-{agent_id} → {name} {target}"));
                     }
                     confirm_and_execute(
                         client,
@@ -560,6 +615,15 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     )
                     .await
                 };
+                {
+                    let mut s = state.lock().await;
+                    if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == agent_id) {
+                        let elapsed = crate::benchmark::elapsed_us(tool_started);
+                        agent.performance.tool_calls += 1;
+                        agent.performance.tool_wall_us += elapsed;
+                        agent.performance.tool_work_us += elapsed;
+                    }
+                }
                 let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content)
                 {
                     None
@@ -606,7 +670,21 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let mut s = state.lock().await;
         if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
             Arc::make_mut(&mut a.history).push(ChatMessage::new("assistant", &content));
+            // A message admitted during the request must be processed before completion.
+            if !a.mailbox.is_empty() {
+                continue;
+            }
+            // Close message admission atomically with the final history append.
+            // The supervisor publishes terminal state after durable completion projection.
+            a.active_turn = false;
+            a.performance.wall_us = crate::benchmark::elapsed_us(child_started);
+            a.performance.completed = true;
+            crate::logger::operational_event(
+                "subagent.summary",
+                serde_json::json!({"agent_id":agent_id,"session_id":owner_session_id,"performance":a.performance}),
+            );
         }
+        crate::app::subagent_persistence::save(&s);
         crate::logger::operational_event(
             "subagent.finish",
             serde_json::json!({"agent_id": agent_id, "status": "completed", "rounds": rounds, "session_id": owner_session_id}),
@@ -618,9 +696,42 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
 async fn project_subagent_completion(
     state: &Arc<Mutex<AppState>>,
     completion: crate::app::SubagentCompletion,
+    owner_session_id: &str,
 ) {
+    // A cancelled parent is terminal only after its owned descendants cleaned up.
+    if completion.status == crate::app::SubAgentStatus::Cancelled {
+        let (supervisor, descendants) = {
+            let s = state.lock().await;
+            if s.active_session_id != owner_session_id {
+                return;
+            }
+            let mut ids = vec![completion.id.raw()];
+            for _ in 0..3 {
+                for agent in &s.subagents {
+                    if agent.parent_id.is_some_and(|parent| ids.contains(&parent))
+                        && !ids.contains(&agent.id)
+                    {
+                        ids.push(agent.id);
+                    }
+                }
+            }
+            (
+                s.subagent_supervisor.clone(),
+                ids.into_iter().skip(1).collect::<Vec<_>>(),
+            )
+        };
+        for id in descendants {
+            let id = crate::app::SubagentId::from_raw(id);
+            if supervisor.is_active(id) {
+                let _ = supervisor.wait(id).await;
+            }
+        }
+    }
     let review_manifest = {
         let state = state.lock().await;
+        if state.active_session_id != owner_session_id {
+            return;
+        }
         state
             .subagents
             .iter()
@@ -634,10 +745,16 @@ async fn project_subagent_completion(
         crate::app::SubAgentStatus::Completed => rustcode_session::WorkspaceLifecycle::Completed,
         crate::app::SubAgentStatus::Failed => rustcode_session::WorkspaceLifecycle::Failed,
         crate::app::SubAgentStatus::Cancelled => rustcode_session::WorkspaceLifecycle::Cancelled,
-        crate::app::SubAgentStatus::Running => rustcode_session::WorkspaceLifecycle::Running,
+        crate::app::SubAgentStatus::Queued | crate::app::SubAgentStatus::Running => {
+            rustcode_session::WorkspaceLifecycle::Running
+        }
+        crate::app::SubAgentStatus::Interrupted => rustcode_session::WorkspaceLifecycle::Cancelled,
     };
     let workspace_path = {
         let state = state.lock().await;
+        if state.active_session_id != owner_session_id {
+            return;
+        }
         state
             .subagents
             .iter()
@@ -652,6 +769,9 @@ async fn project_subagent_completion(
     }
 
     let mut state = state.lock().await;
+    if state.active_session_id != owner_session_id {
+        return;
+    }
     if let Some(agent) = state
         .subagents
         .iter_mut()
@@ -664,9 +784,11 @@ async fn project_subagent_completion(
             Arc::make_mut(&mut agent.history).push(ChatMessage::new("system", &completion.output));
         }
         agent.review_manifest = review_manifest;
+        agent.completion = Some(completion.output.clone());
     }
     let _ = crate::app::SubagentController.set_status(&mut state, completion.id, completion.status);
-    push_status_line(
+    crate::app::subagent_persistence::save(&state);
+    agent_notice(
         &mut state,
         format!(
             "agent-{} {}",
@@ -675,13 +797,15 @@ async fn project_subagent_completion(
                 crate::app::SubAgentStatus::Completed => "completed",
                 crate::app::SubAgentStatus::Failed => "failed",
                 crate::app::SubAgentStatus::Cancelled => "cancelled",
+                crate::app::SubAgentStatus::Queued => "queued",
+                crate::app::SubAgentStatus::Interrupted => "interrupted",
                 crate::app::SubAgentStatus::Running => "running",
             }
         ),
     );
 }
 
-fn launch_subagent_turn(
+pub(crate) fn launch_subagent_turn(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     parent_cancel: &tokio_util::sync::CancellationToken,
@@ -709,6 +833,7 @@ fn launch_subagent_turn(
     let child_state = Arc::clone(state);
     let completion_state = Arc::downgrade(state);
     let mcp_registry = crate::mcp::get_mcp_registry();
+    let completion_owner = owner_session_id.clone();
     supervisor.spawn_with_token_and_completion(
         crate::app::SubagentId::from_raw(agent_id),
         parent_cancel.clone(),
@@ -728,10 +853,17 @@ fn launch_subagent_turn(
         },
         move |completion| async move {
             if let Some(state) = completion_state.upgrade() {
-                project_subagent_completion(&state, completion).await;
+                if state.lock().await.active_session_id != completion_owner {
+                    return;
+                }
+                project_subagent_completion(&state, completion, &completion_owner).await;
             }
         },
     )
+}
+
+fn agent_notice(state: &mut AppState, message: String) {
+    state.set_notice(message);
 }
 
 fn agent_id_arg(args: &serde_json::Value) -> Option<u32> {
@@ -751,9 +883,42 @@ pub(crate) async fn handle_agent_tool(
     name: &str,
     args: &serde_json::Value,
 ) -> crate::tools::ToolExecutionOutput {
+    handle_agent_tool_for_parent(client, state, cancel_token, name, args, None).await
+}
+
+async fn handle_agent_tool_for_parent(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &serde_json::Value,
+    parent_id: Option<u32>,
+) -> crate::tools::ToolExecutionOutput {
+    if parent_id.is_some() && matches!(name, "set_goal" | "todo_write") {
+        return crate::tools::ToolExecutionOutput::failure(
+            "error: child agents cannot modify root goals or plans".into(),
+        );
+    }
     match name {
+        "list_agents" | "inspect_agent" => {
+            let s = state.lock().await;
+            let id = agent_id_arg(args);
+            if name == "inspect_agent" && !s.subagents.iter().any(|agent| Some(agent.id) == id) {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: unknown agent id".into(),
+                );
+            }
+            let agents = s.subagents.iter().filter(|agent| name != "inspect_agent" || Some(agent.id) == id).map(|agent| {
+                let transcript = if name == "inspect_agent" { agent.history.iter().rev().take(8).map(|message| serde_json::json!({"role":message.role,"content":message.content.chars().take(768).collect::<String>()})).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>() } else { Vec::new() };
+                serde_json::json!({"id":agent.id,"parent_id":agent.parent_id,"root_id":agent.root_id,"depth":agent.depth,"name":agent.name,"task":agent.task.chars().take(256).collect::<String>(),"status":agent.status,"model":agent.model.as_deref().unwrap_or(&s.model_name),"context_inheritance":agent.context_inheritance,"elapsed_ms":agent.finished_at_ms.unwrap_or_else(crate::app::subagent_controller::now_ms).saturating_sub(agent.created_at_ms),"pending_messages":agent.mailbox.len(),"performance":agent.performance,"transcript_tail":transcript,"completion":agent.completion})
+            }).collect::<Vec<_>>();
+            crate::tools::ToolExecutionOutput::success(
+                serde_json::json!({"agents":agents}).to_string(),
+            )
+        }
         "spawn_agent" => {
-            if !state.lock().await.delegation_active {
+            let spawn_started = std::time::Instant::now();
+            if parent_id.is_none() && !state.lock().await.delegation_active {
                 return crate::tools::ToolExecutionOutput::failure(
                     "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
                 );
@@ -817,6 +982,57 @@ pub(crate) async fn handle_agent_tool(
             let (agent_id, supervisor, owner_session_id) = {
                 let mut s = state.lock().await;
                 let owner_session_id = s.active_session_id.clone();
+                if s.subagents.len() >= 64 {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: session agent limit is 64".into(),
+                    );
+                }
+                let parent =
+                    parent_id.and_then(|id| s.subagents.iter().find(|agent| agent.id == id));
+                if parent_id.is_some() && parent.is_none() {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: parent agent unavailable".into(),
+                    );
+                }
+                if parent.is_some_and(|agent| agent.depth >= 3) {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: maximum agent depth is 3".into(),
+                    );
+                }
+                if parent.is_some_and(|agent| agent.write_access) {
+                    return crate::tools::ToolExecutionOutput::failure("error: write-enabled agents cannot delegate; return their verified handoff first".into());
+                }
+                if parent_id.is_some() && write_access {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: nested delegation is read-only".into(),
+                    );
+                }
+                let strategy = match crate::app::subagent_context::ContextInheritance::parse(
+                    args.get("context_inheritance")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("minimal"),
+                ) {
+                    Ok(strategy) => strategy,
+                    Err(error) => {
+                        return crate::tools::ToolExecutionOutput::failure(format!(
+                            "error: {error}"
+                        ));
+                    }
+                };
+                let evidence = args.get("evidence").and_then(|value| value.as_str());
+                if evidence.is_some_and(|text| text.len() > 8192) {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: selected evidence exceeds 8192 bytes".into(),
+                    );
+                }
+                let inherited = crate::app::subagent_context::inherit_context(
+                    parent
+                        .map(|agent| agent.history.as_slice())
+                        .unwrap_or(&s.history),
+                    task,
+                    strategy,
+                    evidence,
+                );
                 let id = s.next_subagent_id;
                 let workspace_root = if workspace_mode == "isolated" {
                     let Some(base_sha) = args
@@ -889,15 +1105,25 @@ pub(crate) async fn handle_agent_tool(
                         &mut s,
                         task,
                         model,
-                        None,
+                        parent_id.map(crate::app::SubagentId::from_raw),
                         write_access,
                         allowed_paths,
                         verification_command,
                         workspace_root,
                     )
                     .raw();
+                if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id) {
+                    agent.history = Arc::new(inherited);
+                    agent.context_inheritance = strategy;
+                    agent.status = crate::app::SubAgentStatus::Queued;
+                }
+                crate::app::subagent_persistence::save(&s);
+                crate::logger::operational_event(
+                    "subagent.spawn",
+                    serde_json::json!({"agent_id":id,"session_id":owner_session_id,"parent_id":parent_id,"context_inheritance":strategy,"inherited_messages":s.subagents.last().map(|agent|agent.history.len()).unwrap_or(0)}),
+                );
                 let brief: String = task.chars().take(60).collect();
-                push_status_line(
+                agent_notice(
                     &mut s,
                     format!(
                         "agent-{id} spawned: {brief} (write_access={write_access}, workspace_mode={workspace_mode}, verify={})",
@@ -919,12 +1145,16 @@ pub(crate) async fn handle_agent_tool(
                     "error: unable to start subagent {agent_id}: {error}"
                 ));
             }
+            crate::logger::operational_event(
+                "subagent.spawn.finish",
+                serde_json::json!({"agent_id":agent_id,"spawn_us":crate::benchmark::elapsed_us(spawn_started)}),
+            );
             crate::tools::ToolExecutionOutput::success(format!(
                 "subagent {agent_id} started; use wait_agent to receive its terminal result"
             ))
         }
-        "send_agent" => {
-            if !state.lock().await.delegation_active {
+        "send_agent" | "send_message" | "followup_task" => {
+            if parent_id.is_none() && !state.lock().await.delegation_active {
                 return crate::tools::ToolExecutionOutput::failure(
                     "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
                 );
@@ -943,6 +1173,24 @@ pub(crate) async fn handle_agent_tool(
                     "error: missing 'message' argument".to_string(),
                 );
             };
+            if id == 0 {
+                if name != "send_message" || parent_id.is_none() {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: root accepts queue-only messages from child agents".into(),
+                    );
+                }
+                let s = state.lock().await;
+                if let Err(error) = s
+                    .subagent_supervisor
+                    .send_root_message(parent_id.unwrap(), message.to_owned())
+                {
+                    return crate::tools::ToolExecutionOutput::failure(format!("error: {error}"));
+                }
+                crate::app::subagent_persistence::save(&s);
+                return crate::tools::ToolExecutionOutput::success(
+                    "message queued for main agent at its next safe boundary".into(),
+                );
+            }
             let (supervisor, owner_session_id) = {
                 let mut s = state.lock().await;
                 let Some(task) = s
@@ -961,6 +1209,36 @@ pub(crate) async fn handle_agent_tool(
                         )
                     });
                 };
+                let active = s
+                    .subagents
+                    .iter()
+                    .find(|agent| agent.id == id)
+                    .is_some_and(|agent| agent.active_turn);
+                if name == "send_message" && !active {
+                    if s.subagent_supervisor
+                        .is_active(crate::app::SubagentId::from_raw(id))
+                    {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: child is finishing; retry after its terminal result".into(),
+                        );
+                    }
+                    let agent = s
+                        .subagents
+                        .iter_mut()
+                        .find(|agent| agent.id == id)
+                        .expect("checked above");
+                    if agent.mailbox.len() >= 32 || message.len() > 8192 {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: mailbox limit reached".into(),
+                        );
+                    }
+                    agent.mailbox.push_back(message.to_owned());
+                    s.subagent_supervisor.notify_activity();
+                    crate::app::subagent_persistence::save(&s);
+                    return crate::tools::ToolExecutionOutput::success(format!(
+                        "message queued for subagent {id}; idle agent remains idle"
+                    ));
+                }
                 if let Err(error) = crate::app::SubagentController.send_input(
                     &mut s,
                     crate::app::SubagentId::from_raw(id),
@@ -968,7 +1246,13 @@ pub(crate) async fn handle_agent_tool(
                 ) {
                     return crate::tools::ToolExecutionOutput::failure(format!("error: {error}"));
                 }
-                push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
+                crate::app::subagent_persistence::save(&s);
+                if active {
+                    return crate::tools::ToolExecutionOutput::success(format!(
+                        "message queued for active subagent {id}"
+                    ));
+                }
+                agent_notice(&mut s, format!("agent-{id} ← follow-up ({task})"));
                 (s.subagent_supervisor.clone(), s.active_session_id.clone())
             };
             if let Err(error) = launch_subagent_turn(
@@ -989,7 +1273,7 @@ pub(crate) async fn handle_agent_tool(
             ))
         }
         "wait_agent" => {
-            if !state.lock().await.delegation_active {
+            if parent_id.is_none() && !state.lock().await.delegation_active {
                 return crate::tools::ToolExecutionOutput::failure(
                     "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
                 );
@@ -1000,22 +1284,93 @@ pub(crate) async fn handle_agent_tool(
                 );
             };
             let supervisor = state.lock().await.subagent_supervisor.clone();
-            let completion = match supervisor.wait(crate::app::SubagentId::from_raw(id)).await {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return crate::tools::ToolExecutionOutput::failure(format!("error: {error}"));
+            if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
+                let s = state.lock().await;
+                if let Some(agent) = s.subagents.iter().find(|agent| agent.id == id)
+                    && !supervisor.has_result(crate::app::SubagentId::from_raw(id))
+                    && let Some(summary) = &agent.completion
+                {
+                    let status = match agent.status {
+                        crate::app::SubAgentStatus::Completed => "completed",
+                        crate::app::SubAgentStatus::Failed => "failed",
+                        crate::app::SubAgentStatus::Cancelled => "cancelled",
+                        crate::app::SubAgentStatus::Interrupted => "interrupted",
+                        crate::app::SubAgentStatus::Queued => "queued",
+                        crate::app::SubAgentStatus::Running => "running",
+                    };
+                    let (content, truncated) = bounded_completion_output(
+                        id,
+                        status,
+                        summary,
+                        false,
+                        "restored session result",
+                    );
+                    let mut result = if agent.status == crate::app::SubAgentStatus::Completed {
+                        crate::tools::ToolExecutionOutput::success(content)
+                    } else {
+                        crate::tools::ToolExecutionOutput::failure(content)
+                    };
+                    if truncated {
+                        result.truncated = true;
+                        result.completeness = rustcode_core::ToolResultCompleteness::ByteTruncated;
+                    }
+                    return result;
                 }
-            };
+            }
+            if let Some(caller) = parent_id {
+                let s = state.lock().await;
+                let mut ancestor = Some(caller);
+                while let Some(candidate) = ancestor {
+                    if candidate == id {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: an agent cannot wait on itself or an ancestor".into(),
+                        );
+                    }
+                    ancestor = s
+                        .subagents
+                        .iter()
+                        .find(|agent| agent.id == candidate)
+                        .and_then(|agent| agent.parent_id);
+                }
+            }
+            let timeout_ms = args
+                .get("timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60_000)
+                .clamp(1, 300_000);
+            let wait = supervisor.yield_while_waiting(parent_id.map(crate::app::SubagentId::from_raw), async {
+                tokio::select! {
+                    result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), supervisor.wait_event(crate::app::SubagentId::from_raw(id))) => result,
+                    _ = cancel_token.cancelled() => Ok(Err(crate::app::SubagentError::WaitCancelled(crate::app::SubagentId::from_raw(id)))),
+                }
+            }).await;
+            let completion =
+                match wait {
+                    Ok(result) => match result {
+                        Ok(Some(completion)) => completion,
+                        Ok(None) => return crate::tools::ToolExecutionOutput::success(
+                            "Agent activity received; inspect agents or continue the current task"
+                                .into(),
+                        ),
+                        Err(error) => {
+                            return crate::tools::ToolExecutionOutput::failure(format!(
+                                "error: {error}"
+                            ));
+                        }
+                    },
+                    Err(_) => {
+                        return crate::tools::ToolExecutionOutput::success(format!(
+                            "subagent {id} wait timed out; task remains available"
+                        ));
+                    }
+                };
             let status = match completion.status {
                 crate::app::SubAgentStatus::Completed => "completed",
                 crate::app::SubAgentStatus::Failed => "failed",
                 crate::app::SubAgentStatus::Cancelled => "cancelled",
+                crate::app::SubAgentStatus::Queued => "queued",
+                crate::app::SubAgentStatus::Interrupted => "interrupted",
                 crate::app::SubAgentStatus::Running => "running",
-            };
-            let truncation = if completion.truncated {
-                "\n[tool_result_incomplete: completeness=byte_truncated; child output was bounded and must not be treated as complete.]"
-            } else {
-                ""
             };
             let handoff = {
                 let workspace = state
@@ -1034,13 +1389,16 @@ pub(crate) async fn handle_agent_tool(
             let handoff = handoff
                 .map(|value| format!("\n\n{value}"))
                 .unwrap_or_default();
-            let content = format!(
-                "subagent {id} {status}\n{}{truncation}{handoff}",
-                completion.output
+            let (content, output_truncated) = bounded_completion_output(
+                id,
+                status,
+                &completion.output,
+                completion.truncated,
+                &handoff,
             );
             if completion.status == crate::app::SubAgentStatus::Completed {
                 let mut output = crate::tools::ToolExecutionOutput::success(content);
-                if completion.truncated {
+                if output_truncated {
                     output.truncated = true;
                     output.completeness = rustcode_core::ToolResultCompleteness::ByteTruncated;
                     output.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
@@ -1057,7 +1415,7 @@ pub(crate) async fn handle_agent_tool(
             }
         }
         "cancel_agent" => {
-            if !state.lock().await.delegation_active {
+            if parent_id.is_none() && !state.lock().await.delegation_active {
                 return crate::tools::ToolExecutionOutput::failure(
                     "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
                 );
@@ -1068,6 +1426,45 @@ pub(crate) async fn handle_agent_tool(
                 );
             };
             let supervisor = state.lock().await.subagent_supervisor.clone();
+            if parent_id == Some(id) {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: an agent cannot cancel itself".into(),
+                );
+            }
+            if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
+                let mut s = state.lock().await;
+                if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id)
+                    && agent.status == crate::app::SubAgentStatus::Interrupted
+                {
+                    agent.completion = Some("error: cancelled".into());
+                    let _ = crate::app::SubagentController.set_status(
+                        &mut s,
+                        crate::app::SubagentId::from_raw(id),
+                        crate::app::SubAgentStatus::Cancelled,
+                    );
+                    crate::app::subagent_persistence::save(&s);
+                    return crate::tools::ToolExecutionOutput::success(format!(
+                        "subagent {id} cancelled"
+                    ));
+                }
+            }
+            let descendants = {
+                let s = state.lock().await;
+                let mut ids = vec![id];
+                for _ in 0..3 {
+                    for agent in &s.subagents {
+                        if agent.parent_id.is_some_and(|parent| ids.contains(&parent))
+                            && !ids.contains(&agent.id)
+                        {
+                            ids.push(agent.id);
+                        }
+                    }
+                }
+                ids
+            };
+            for child in descendants.iter().skip(1) {
+                let _ = supervisor.cancel(crate::app::SubagentId::from_raw(*child));
+            }
             match supervisor.cancel(crate::app::SubagentId::from_raw(id)) {
                 Ok(()) => crate::tools::ToolExecutionOutput::success(format!(
                     "cancellation requested for subagent {id}; use wait_agent for its terminal result"
@@ -1144,6 +1541,29 @@ pub(crate) async fn handle_agent_tool(
     }
 }
 
+fn bounded_completion_output(
+    id: u32,
+    status: &str,
+    output: &str,
+    truncated: bool,
+    handoff: &str,
+) -> (String, bool) {
+    let mut summary = output.to_owned();
+    let handoff = crate::tools::truncate_bytes(handoff, 1024);
+    let mut incomplete = truncated;
+    loop {
+        let result = format!(
+            "subagent {id} {status}\n{}",
+            serde_json::json!({"status":status,"summary":summary,"truncated":incomplete,"handoff":handoff})
+        );
+        if result.len() <= 8192 {
+            return (result, incomplete);
+        }
+        summary = crate::tools::truncate_bytes(&summary, summary.len() / 2);
+        incomplete = true;
+    }
+}
+
 fn subagent_context_workspace_root(
     state: &crate::app::AppState,
     agent_workspace: Option<std::path::PathBuf>,
@@ -1154,6 +1574,114 @@ fn subagent_context_workspace_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn nested_depth_limit_rejects_before_creating_or_launching_another_child() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let controller = crate::app::SubagentController;
+        let first = controller.spawn(&mut s, "first", None, None, false, Vec::new(), None, None);
+        let second = controller.spawn(
+            &mut s,
+            "second",
+            None,
+            Some(first),
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+        let third = controller.spawn(
+            &mut s,
+            "third",
+            None,
+            Some(second),
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+        assert_eq!(s.subagents[2].depth, 3);
+        assert_eq!(s.subagents[2].root_id, Some(first.raw()));
+        let state = Arc::new(Mutex::new(s));
+        let result = handle_agent_tool_for_parent(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "spawn_agent",
+            &serde_json::json!({"task":"fourth"}),
+            Some(third.raw()),
+        )
+        .await;
+        assert!(!result.success);
+        assert!(result.content.contains("depth"));
+        assert_eq!(state.lock().await.subagents.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn wait_timeout_preserves_active_agent_and_idle_mail_delivers_before_followup() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let id = crate::app::SubagentController.spawn(
+            &mut s,
+            "original",
+            None,
+            None,
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+        let supervisor = s.subagent_supervisor.clone();
+        supervisor
+            .spawn(
+                id,
+                tokio_util::sync::CancellationToken::new(),
+                std::future::pending(),
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(s));
+        let result = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "wait_agent",
+            &serde_json::json!({"id":id.raw(),"timeout_ms":1}),
+        )
+        .await;
+        assert!(result.success && result.content.contains("timed out"));
+        assert!(supervisor.is_active(id));
+        supervisor.shutdown_and_wait().await;
+        let mut s = state.lock().await;
+        crate::app::SubagentController
+            .set_status(&mut s, id, crate::app::SubAgentStatus::Completed)
+            .unwrap();
+        s.subagents[0].mailbox.push_back("older evidence".into());
+        crate::app::SubagentController
+            .send_input(&mut s, id, "followup")
+            .unwrap();
+        assert_eq!(
+            s.subagents[0]
+                .history
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            ["original", "older evidence", "followup"]
+        );
+    }
+
+    #[test]
+    fn structured_completion_is_bounded_after_json_escaping() {
+        let output = "\n\t".repeat(20_000);
+        let (result, truncated) =
+            bounded_completion_output(1, "completed", &output, false, &"handoff".repeat(1000));
+        assert!(truncated);
+        assert!(result.len() <= 8192);
+        let value: serde_json::Value =
+            serde_json::from_str(result.split_once('\n').unwrap().1).unwrap();
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["truncated"], true);
+    }
 
     #[test]
     fn subagent_context_defaults_to_session_source_and_prefers_agent_workspace() {
@@ -1329,6 +1857,9 @@ mod tests {
         let result = ChatMessage::new("tool", "view_file: content")
             .answering(Some("call-1".to_string()))
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "view_file".to_string(),
                 truncated: true,
                 completeness: rustcode_core::ToolResultCompleteness::ByteTruncated,
@@ -1435,7 +1966,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn running_child_rejects_send_and_cancel_tool_stops_it() {
+    async fn running_child_accepts_message_and_cancel_tool_stops_it() {
         let (url, accepted, release) = gated_subagent_server().await;
         let state = delegated_test_state(url).await;
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -1460,8 +1991,15 @@ mod tests {
             &serde_json::json!({"id": 1, "message": "duplicate turn"}),
         )
         .await;
-        assert!(!sent.success);
-        assert!(sent.content.contains("already running"));
+        assert!(sent.success);
+        assert!(sent.content.contains("queued"));
+        assert_eq!(
+            state.lock().await.subagents[0]
+                .mailbox
+                .front()
+                .map(String::as_str),
+            Some("duplicate turn")
+        );
 
         let cancelled = handle_agent_tool(
             &reqwest::Client::new(),

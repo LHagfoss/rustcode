@@ -96,3 +96,124 @@ mod tests {
         assert!(report.contains("completed=true"));
     }
 }
+
+/// Provider-neutral timings in microseconds. Tool work can overlap; only the
+/// elapsed batch wall time is subtracted when deriving harness overhead.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TurnPerformance {
+    pub wall_us: u64,
+    pub context_us: u64,
+    pub schema_us: u64,
+    pub serialization_us: u64,
+    pub model_us: u64,
+    pub ttft_us: Option<u64>,
+    pub tool_wall_us: u64,
+    pub tool_work_us: u64,
+    pub persistence_enqueue_us: u64,
+    pub context_bytes: usize,
+    pub requests: usize,
+    pub rounds: usize,
+    pub tool_calls: usize,
+    pub recoveries: usize,
+    pub replayed_reads: usize,
+    pub parallel_groups: usize,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub completed: bool,
+}
+
+impl TurnPerformance {
+    pub fn harness_us(&self) -> u64 {
+        self.wall_us
+            .saturating_sub(self.model_us)
+            .saturating_sub(self.tool_wall_us)
+    }
+    pub fn report(&self) -> String {
+        let metric = |value: Option<u64>| {
+            value
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        };
+        format!(
+            "Turn: {:.2}s; completed={}\nModel: {:.2}ms; TTFT: {} us\nTools: {:.2}ms wall / {:.2}ms work\nHarness: {:.2}ms\n  Context: {:.2}ms; schema: {:.2}ms; serialization: {:.2}ms\n  Persistence enqueue: {:.2}ms\nInput: {}; output: {}; cached input: {}\nRequests: {}; rounds: {}; calls: {}; recoveries: {}\nRead replays: {}; parallel groups: {}; context: {} bytes",
+            self.wall_us as f64 / 1e6,
+            self.completed,
+            self.model_us as f64 / 1000.,
+            metric(self.ttft_us),
+            self.tool_wall_us as f64 / 1000.,
+            self.tool_work_us as f64 / 1000.,
+            self.harness_us() as f64 / 1000.,
+            self.context_us as f64 / 1000.,
+            self.schema_us as f64 / 1000.,
+            self.serialization_us as f64 / 1000.,
+            self.persistence_enqueue_us as f64 / 1000.,
+            metric(self.input_tokens),
+            metric(self.output_tokens),
+            metric(self.cached_input_tokens),
+            self.requests,
+            self.rounds,
+            self.tool_calls,
+            self.recoveries,
+            self.replayed_reads,
+            self.parallel_groups,
+            self.context_bytes
+        )
+    }
+}
+
+pub(crate) fn elapsed_us(start: std::time::Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    #[test]
+    fn overlapping_tool_work_does_not_inflate_harness_time() {
+        let p = TurnPerformance {
+            wall_us: 1000,
+            model_us: 600,
+            tool_wall_us: 200,
+            tool_work_us: 500,
+            ..Default::default()
+        };
+        assert_eq!(p.harness_us(), 200);
+        let value = serde_json::to_value(&p).unwrap();
+        assert!(value["ttft_us"].is_null());
+        assert!(p.report().contains("Harness"));
+    }
+    #[test]
+    fn unavailable_cache_usage_stays_unknown() {
+        let p = TurnPerformance::default();
+        assert!(p.report().contains("unavailable"));
+    }
+}
+
+/// Compare actual telemetry files without using the legacy synthetic grade.
+pub fn compare_reports(before: &TurnPerformance, after: &TurnPerformance) -> String {
+    let change = |a: u64, b: u64| {
+        if a == 0 {
+            "unavailable".into()
+        } else {
+            format!("{:+.1}%", (b as f64 / a as f64 - 1.) * 100.)
+        }
+    };
+    format!(
+        "Wall: {}\nModel: {}\nHarness: {}\nTool wall: {}\nInput tokens: {}\nCalls: {} → {}\nSuccess: {} → {}",
+        change(before.wall_us, after.wall_us),
+        change(before.model_us, after.model_us),
+        change(before.harness_us(), after.harness_us()),
+        change(before.tool_wall_us, after.tool_wall_us),
+        before
+            .input_tokens
+            .zip(after.input_tokens)
+            .map(|(a, b)| change(a, b))
+            .unwrap_or_else(|| "unavailable".into()),
+        before.tool_calls,
+        after.tool_calls,
+        before.completed,
+        after.completed
+    )
+}

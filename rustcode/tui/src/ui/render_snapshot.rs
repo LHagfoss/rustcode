@@ -14,6 +14,7 @@ pub(crate) struct RenderSnapshot {
     cursor_position: usize,
     composer_selection_anchor: Option<usize>,
     history: History,
+    tool_call_candidates: std::sync::OnceLock<Vec<usize>>,
     history_display_start: usize,
     current_response: Arc<String>,
     recap_loading: bool,
@@ -197,6 +198,7 @@ impl RenderSnapshot {
             cursor_position: view.cursor_position,
             composer_selection_anchor: view.composer_selection_anchor,
             history: view.history.snapshot(),
+            tool_call_candidates: std::sync::OnceLock::new(),
             history_display_start: view.history_display_start,
             current_response: Arc::clone(&view.current_response),
             recap_loading: view.recap_loading,
@@ -306,6 +308,25 @@ impl RenderSnapshot {
             .as_ref()
             .map(|agent| agent.history())
             .unwrap_or_else(|| self.history.as_slice())
+    }
+    /// Candidate assistant positions in this immutable displayed revision.
+    /// Selection retains the snapshot, so legacy result correlation scans
+    /// ordinary history once rather than once per exposed tool result.
+    /// Only indices are retained; canonical messages and their ownership stay
+    /// unchanged. Delimiters deliberately include tolerant/malformed envelopes.
+    pub(crate) fn tool_call_candidate_indices(&self) -> &[usize] {
+        self.tool_call_candidates.get_or_init(|| {
+            self.active_history()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, message)| {
+                    (message.role == "assistant"
+                        && (!message.tool_calls.is_empty()
+                            || message.content.contains(['{', '[', '<', '`'])))
+                    .then_some(index)
+                })
+                .collect()
+        })
     }
     pub(crate) fn active_history_display_start(&self) -> usize {
         if self.selected_subagent.is_some() {
@@ -610,6 +631,9 @@ pub(crate) struct SubAgentSnapshot {
     history_tokens: usize,
     last_message: String,
     pub(crate) status: SubAgentStatus,
+    pub(crate) parent_id: Option<u32>,
+    pub(crate) model: Option<String>,
+    pub(crate) elapsed_ms: u64,
 }
 
 impl SubAgentSnapshot {
@@ -640,6 +664,9 @@ impl SubAgentSnapshot {
             history_tokens,
             last_message,
             status: agent.status,
+            parent_id: agent.parent_id,
+            model: agent.model.clone(),
+            elapsed_ms: agent.elapsed_ms,
         }
     }
 }
@@ -695,6 +722,50 @@ mod tests {
     };
     use std::sync::Arc;
 
+    #[test]
+    fn tool_candidates_are_lazy_reused_and_isolated_to_displayed_revision() {
+        let mut state = RenderState::new();
+        state
+            .history
+            .push(ChatMessage::new("assistant", "plain prose"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "{name: run_command}"));
+        state.history.push(ChatMessage::new("tool", "{output}"));
+        let snapshot = render_snapshot(&state);
+        assert!(snapshot.tool_call_candidates.get().is_none());
+        assert_eq!(snapshot.tool_call_candidate_indices(), &[1]);
+        let pointer = snapshot.tool_call_candidate_indices().as_ptr();
+        assert_eq!(pointer, snapshot.tool_call_candidate_indices().as_ptr());
+
+        state
+            .history
+            .replace(vec![ChatMessage::new("assistant", "[TOOL_CALLS]new")]);
+        let replaced = render_snapshot(&state);
+        assert_eq!(replaced.tool_call_candidate_indices(), &[0]);
+        assert_eq!(snapshot.tool_call_candidate_indices(), &[1]);
+        state
+            .history
+            .push(ChatMessage::new("assistant", "```tool new"));
+        assert_eq!(
+            render_snapshot(&state).tool_call_candidate_indices(),
+            &[0, 1]
+        );
+
+        state.selected_subagent = Some(subagent(
+            9,
+            "worker",
+            "task",
+            vec![ChatMessage::new("assistant", "<tool_call>new")],
+            SubAgentStatus::Running,
+            true,
+            None,
+        ));
+        let selected = render_snapshot(&state);
+        assert_eq!(selected.tool_call_candidate_indices(), &[0]);
+        assert_eq!(snapshot.tool_call_candidate_indices(), &[1]);
+    }
+
     fn subagent(
         id: u32,
         name: &str,
@@ -712,6 +783,8 @@ mod tests {
             status,
             active_turn,
             parent_id,
+            model: None,
+            elapsed_ms: 0,
         }
     }
 

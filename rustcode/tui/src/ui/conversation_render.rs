@@ -598,6 +598,8 @@ pub(super) fn render_selected_subagent_context(
         return Vec::new();
     };
     let status = match agent.status() {
+        rustcode::controller::SubAgentStatus::Queued => "queued",
+        rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
         rustcode::controller::SubAgentStatus::Running => "running",
         rustcode::controller::SubAgentStatus::Completed => "completed",
         rustcode::controller::SubAgentStatus::Failed => "failed",

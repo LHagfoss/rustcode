@@ -1,5 +1,50 @@
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EnvironmentRevision {
+    workspace: u64,
+    task: u64,
+    git: u64,
+    directory: String,
+    date: String,
+    environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+fn environment_revision(workspace: &Path, task: &Path) -> Option<EnvironmentRevision> {
+    let snapshot = crate::workspace_intelligence::snapshot(workspace).ok()?;
+    if !snapshot.cache_safe {
+        return None;
+    }
+    let workspace_revision = snapshot.generation;
+    let task_revision = if workspace == task {
+        workspace_revision
+    } else {
+        let snapshot = crate::workspace_intelligence::snapshot(task).ok()?;
+        if !snapshot.cache_safe {
+            return None;
+        }
+        snapshot.generation
+    };
+    let mut environment: Vec<_> = std::env::vars_os().collect();
+    environment.sort();
+    Some(EnvironmentRevision {
+        workspace: workspace_revision,
+        task: task_revision,
+        git: crate::workspace_intelligence::git_revision(task),
+        directory: crate::workspace_intelligence::directory_revision(task),
+        date: chrono::Local::now().format("%A %Y-%m-%d").to_string(),
+        environment,
+    })
+}
+type SnapshotCache = HashMap<(PathBuf, PathBuf), (EnvironmentRevision, ContextSnapshot)>;
+type RenderedCache = HashMap<(PathBuf, PathBuf, bool), (EnvironmentRevision, String)>;
+static SNAPSHOT_CACHE: LazyLock<Mutex<SnapshotCache>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static ENVIRONMENT_CACHE: LazyLock<Mutex<RenderedCache>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Snapshot of environment context for delta diffing.
 /// Stores the last-rendered context so subsequent rounds only send changes.
 #[derive(Clone, Default)]
@@ -31,6 +76,31 @@ impl ContextSnapshot {
     /// Capture the task-facing project state while retaining the broader
     /// workspace identity used as the security boundary.
     pub fn capture_at_scope(workspace_root: &Path, task_working_directory: &Path) -> Self {
+        let revision = environment_revision(workspace_root, task_working_directory);
+        let key = (
+            workspace_root.to_path_buf(),
+            task_working_directory.to_path_buf(),
+        );
+        if let Some(revision) = &revision {
+            let cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((previous, snapshot)) = cache.get(&key)
+                && previous == revision
+            {
+                return snapshot.clone();
+            }
+        }
+        let snapshot = Self::capture_uncached(workspace_root, task_working_directory);
+        if let Some(revision) = revision {
+            let mut cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.len() >= 64 {
+                cache.clear();
+            }
+            cache.insert(key, (revision, snapshot.clone()));
+        }
+        snapshot
+    }
+
+    fn capture_uncached(workspace_root: &Path, task_working_directory: &Path) -> Self {
         let cwd = task_working_directory.to_string_lossy().to_string();
         let workspace_root = workspace_root.to_string_lossy().to_string();
         let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
@@ -207,6 +277,37 @@ pub fn environment_context_for_scope(
 }
 
 fn environment_context_for_scope_with_instructions(
+    workspace_root: &Path,
+    task_working_directory: &Path,
+    include_instructions: bool,
+) -> String {
+    let revision = environment_revision(workspace_root, task_working_directory);
+    let key = (
+        workspace_root.to_path_buf(),
+        task_working_directory.to_path_buf(),
+        include_instructions,
+    );
+    if let Some(revision) = &revision {
+        let cache = ENVIRONMENT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((previous, text)) = cache.get(&key)
+            && previous == revision
+        {
+            return text.clone();
+        }
+    }
+    let text =
+        render_environment_context(workspace_root, task_working_directory, include_instructions);
+    if let Some(revision) = revision {
+        let mut cache = ENVIRONMENT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= 64 {
+            cache.clear();
+        }
+        cache.insert(key, (revision, text.clone()));
+    }
+    text
+}
+
+fn render_environment_context(
     workspace_root: &Path,
     task_working_directory: &Path,
     include_instructions: bool,
@@ -391,6 +492,51 @@ fn load_agent_doc(cwd: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_cache_observes_external_instructions_and_tree_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "first rule").unwrap();
+        let first = environment_context_at(dir.path());
+        assert_eq!(first, environment_context_at(dir.path()));
+        std::fs::write(dir.path().join("AGENTS.md"), "other rule").unwrap();
+        let changed = environment_context_at(dir.path());
+        assert!(changed.contains("other rule"));
+        assert!(!changed.contains("first rule"));
+        std::fs::create_dir(dir.path().join("new-directory")).unwrap();
+        assert!(environment_context_at(dir.path()).contains("new-directory/"));
+        assert!(
+            ContextSnapshot::capture_at(dir.path())
+                .project_instructions()
+                .unwrap()
+                .contains("other rule")
+        );
+    }
+
+    #[test]
+    fn environment_cache_observes_external_git_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(dir.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["symbolic-ref", "HEAD", "refs/heads/first"]);
+        git(&["config", "user.email", "context@example.test"]);
+        git(&["config", "user.name", "Context Test"]);
+        std::fs::write(dir.path().join("README.md"), "fixture").unwrap();
+        git(&["add", "README.md"]);
+        git(&["commit", "-qm", "fixture"]);
+        assert!(environment_context_at(dir.path()).contains("Current branch: first"));
+        git(&["checkout", "-qb", "other"]);
+        assert!(environment_context_at(dir.path()).contains("Current branch: other"));
+    }
 
     #[test]
     fn environment_context_includes_cwd() {

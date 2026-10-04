@@ -648,6 +648,9 @@ fn explicit_verification_hydrates_the_terminal_background_result() {
         ChatMessage::new("user", "Run `custom-tool --strict` and report the result."),
         ChatMessage::new("tool", "background task failed").with_tool_result(
             crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "background_task".to_string(),
                 pending: false,
                 command: Some("custom-tool --strict".to_string()),
@@ -770,6 +773,9 @@ fn execution_envelope_preserves_authoritative_failure_kind() {
 #[test]
 fn persisted_tool_error_kind_round_trips_explicitly() {
     let record = crate::app::ToolResultRecord {
+        workspace_generation: None,
+        workspace_epoch: None,
+        evidence_hash: None,
         error_kind: Some(crate::tools::ToolErrorKind::McpFailed.as_str().to_string()),
         retryable: true,
         replayed: true,
@@ -4196,6 +4202,9 @@ async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
                 ),
             )
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_string(),
                 success: false,
                 error_kind: Some("CompilerFailed".to_string()),
@@ -4272,6 +4281,9 @@ async fn local_context_preserves_task_state_across_model_window_sizes() {
                     },
                 )
                 .with_tool_result(crate::app::ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: "run_command".to_string(),
                     success: round == 17,
                     error_kind: (!round.eq(&17)).then(|| "CompilerFailed".to_string()),
@@ -4841,6 +4853,9 @@ async fn productive_persisted_40_round_segments_continue_without_replaying_histo
         s.history.push(
             ChatMessage::new("tool", "completed call-1").with_tool_result(
                 crate::app::ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: "write_file_chunk".to_string(),
                     success: true,
                     ..Default::default()
@@ -6681,6 +6696,9 @@ async fn repeated_use_skill_returns_actionable_success_after_same_turn_load() {
                 "use_skill: <skill_content name=\"synthetic-skill\">\ninstructions",
             )
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "use_skill".to_string(),
                 success: true,
                 ..Default::default()
@@ -7139,6 +7157,9 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         "run_command: cargo test\nerror: compilation failed\nexit code: 1",
     );
     failed_tool.tool_result = Some(crate::app::ToolResultRecord {
+        workspace_generation: None,
+        workspace_epoch: None,
+        evidence_hash: None,
         tool_name: "run_command".to_string(),
         arguments_hash: "hash".to_string(),
         success: false,

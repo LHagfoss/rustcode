@@ -3,9 +3,258 @@ use super::events::ToolResult;
 use crate::platform::{compiler_augmented_path, resolve_bin};
 use regex::Regex;
 use rustcode_tool_protocol::text::strip_ansi_escapes;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use tokio_util::sync::CancellationToken;
+
+/// Success receipts are in-memory only: resume must establish fresh evidence.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct VerificationIdentity {
+    root: PathBuf,
+    generation: u64,
+    command: String,
+    inputs: [u8; 32],
+    sandbox: String,
+    checker_environment: bool,
+}
+static VERIFIED: LazyLock<Mutex<HashMap<VerificationIdentity, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn is_verification_command(command: &str) -> bool {
+    // Reject shell composition/substitution and arbitrary scripts. Exact argv
+    // identity distinguishes targeted tests, flags and checker configuration.
+    let words: Vec<_> = command.split_whitespace().collect();
+    !words.is_empty()
+        && !words.iter().any(|word| {
+            matches!(
+                *word,
+                "-h" | "--help"
+                    | "-V"
+                    | "--version"
+                    | "--list"
+                    | "--fix"
+                    | "--write"
+                    | "-w"
+                    | "--apply"
+                    | "--apply-unsafe"
+                    | "--watch"
+            )
+        })
+        && !command.chars().any(|c| ";&|<>`$\\\n\r\"'".contains(c))
+        && matches!(
+            words.as_slice(),
+            ["cargo", "check" | "test" | "clippy", ..]
+                | ["bunx" | "npx", "tsc", "--noEmit", ..]
+                | ["bunx", "biome", "check", ..]
+                | ["npx", "@biomejs/biome", "check", ..]
+        )
+}
+
+pub(crate) fn verification_identity(
+    root: &Path,
+    command: &str,
+    sandbox_mode: crate::config::SandboxMode,
+) -> Option<VerificationIdentity> {
+    verification_identity_with_environment(
+        root,
+        command,
+        sandbox_mode,
+        std::env::vars_os().collect(),
+    )
+}
+
+fn compiler_verification_identity(
+    root: &Path,
+    command: &str,
+    sandbox_mode: crate::config::SandboxMode,
+) -> Option<VerificationIdentity> {
+    let mut identity = verification_identity(root, command, sandbox_mode)?;
+    // Automatic checkers augment PATH and install scratch/cache variables.
+    // A normal shell check has a different effective environment, even when
+    // the visible command is identical; do not share its receipt.
+    identity.checker_environment = true;
+    Some(identity)
+}
+
+fn verification_identity_with_environment(
+    root: &Path,
+    command: &str,
+    sandbox_mode: crate::config::SandboxMode,
+    mut environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> Option<VerificationIdentity> {
+    if !is_verification_command(command)
+        || command.contains("--manifest-path")
+        || command.contains("--config")
+        || command.contains("--help")
+    {
+        return None;
+    }
+    let snapshot = crate::workspace_intelligence::snapshot(root).ok()?;
+    if !snapshot.cache_safe {
+        return None;
+    }
+    // A nested crate may depend on workspace state outside this root. A fresh
+    // process is cheaper than incorrectly treating that state as verified.
+    if snapshot
+        .root
+        .ancestors()
+        .skip(1)
+        .any(|p| p.join("Cargo.toml").exists())
+    {
+        return None;
+    }
+    if command.contains("tsc") || command.contains("biome") {
+        // Dependency trees and inherited configs can change outside the scanned
+        // source set. Until those inputs have their own revision service, run
+        // these checks rather than publishing an incomplete cache identity.
+        if snapshot
+            .root
+            .ancestors()
+            .any(|p| p.join("node_modules").exists())
+        {
+            return None;
+        }
+        for name in ["tsconfig.json", "biome.json", "biome.jsonc"] {
+            let path = snapshot.root.join(name);
+            if path.exists() {
+                let config: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+                if config.get("extends").is_some() || config.get("references").is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut inputs = Sha256::new();
+    environment.sort();
+    for (key, value) in environment {
+        inputs.update(key.as_encoded_bytes());
+        inputs.update([0]);
+        inputs.update(value.as_encoded_bytes());
+        inputs.update([0]);
+    }
+    inputs.update(sandbox_mode.to_string().as_bytes());
+    inputs.update(crate::workspace_intelligence::git_revision(&snapshot.root).to_le_bytes());
+    inputs.update(compiler_augmented_path().as_bytes());
+    for program in ["cargo", "rustc", "bunx", "npx"] {
+        let path = resolve_bin(program);
+        inputs.update(path.as_os_str().as_encoded_bytes());
+        if let Ok(metadata) = std::fs::metadata(path) {
+            inputs.update(format!("{:?}:{}", metadata.modified().ok(), metadata.len()).as_bytes());
+        }
+    }
+    // Cargo reads ancestor and user configuration in addition to source files.
+    let mut configs = Vec::new();
+    for ancestor in snapshot.root.ancestors() {
+        configs.extend([
+            ancestor.join(".cargo/config"),
+            ancestor.join(".cargo/config.toml"),
+        ]);
+    }
+    if let Some(home) = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cargo")))
+    {
+        configs.extend([home.join("config"), home.join("config.toml")]);
+    }
+    for path in configs {
+        inputs.update(path.as_os_str().as_encoded_bytes());
+        if path.exists() {
+            inputs.update(std::fs::read(path).ok()?);
+        }
+        inputs.update([0]);
+    }
+    // Local manifests with paths outside the scanned root are deliberately
+    // uncached. That includes external lib/build paths and path dependencies.
+    for path in snapshot
+        .files
+        .keys()
+        .filter(|p| p.file_name().is_some_and(|n| n == "Cargo.toml"))
+    {
+        let manifest: toml::Value = std::fs::read_to_string(path).ok()?.parse().ok()?;
+        if has_external_path(&manifest, path.parent()?, &snapshot.root) {
+            return None;
+        }
+    }
+    Some(VerificationIdentity {
+        root: snapshot.root,
+        generation: snapshot.generation,
+        command: command.to_string(),
+        inputs: inputs.finalize().into(),
+        sandbox: sandbox_mode.to_string(),
+        checker_environment: false,
+    })
+}
+
+fn has_external_path(value: &toml::Value, cwd: &Path, root: &Path) -> bool {
+    match value {
+        toml::Value::Table(table) => table.iter().any(|(key, value)| {
+            if key == "path"
+                && let Some(path) = value.as_str()
+            {
+                let path = cwd.join(path);
+                return !path.canonicalize().is_ok_and(|p| {
+                    p.strip_prefix(root).is_ok_and(|relative| {
+                        !relative.components().any(|component| {
+                            matches!(
+                                component.as_os_str().to_str(),
+                                Some("target" | "node_modules" | ".git" | ".rustcode")
+                            )
+                        })
+                    })
+                });
+            }
+            has_external_path(value, cwd, root)
+        }),
+        toml::Value::Array(values) => values
+            .iter()
+            .any(|value| has_external_path(value, cwd, root)),
+        _ => false,
+    }
+}
+
+pub(crate) fn cached_verification(identity: &VerificationIdentity) -> Option<String> {
+    let cache = VERIFIED.lock().unwrap_or_else(|e| e.into_inner());
+    let output = cache.get(identity)?;
+    crate::logger::operational_event(
+        "verification.cache",
+        serde_json::json!({
+            "generation": identity.generation, "command": identity.command, "reused": true
+        }),
+    );
+    Some(format!(
+        "[CACHED VERIFICATION]\n{}: successful verification for workspace generation {}\n{}",
+        identity.command, identity.generation, output
+    ))
+}
+
+/// Call only after complete, uncancelled success, using an identity captured
+/// before execution. Revalidate afterwards so edits during the check cannot
+/// produce completion evidence for a different generation.
+pub(crate) fn record_verification(identity: VerificationIdentity, output: String) {
+    let mode = match identity.sandbox.as_str() {
+        "trusted" => crate::config::SandboxMode::Trusted,
+        "read_only" => crate::config::SandboxMode::ReadOnly,
+        "workspace_write" => crate::config::SandboxMode::WorkspaceWrite,
+        "workspace_write_network" => crate::config::SandboxMode::WorkspaceWriteNetwork,
+        _ => return,
+    };
+    let current = if identity.checker_environment {
+        compiler_verification_identity(&identity.root, &identity.command, mode)
+    } else {
+        verification_identity(&identity.root, &identity.command, mode)
+    };
+    if current.as_ref() != Some(&identity) {
+        return;
+    }
+    let mut cache = VERIFIED.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.insert(identity, output);
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompilerCheckOutcome {
@@ -105,6 +354,13 @@ pub(super) async fn run_compiler_command_outcome(
     if cancel_token.is_cancelled() {
         return record_unverified_event(unverified("was cancelled".to_string()), command);
     }
+    let identity = compiler_verification_identity(cwd, command, sandbox_mode);
+    if let Some(identity) = &identity
+        && cached_verification(identity).is_some()
+        && !cancel_token.is_cancelled()
+    {
+        return CompilerCheckOutcome::Passed;
+    }
     let (scratch_container, scratch_path) = match create_compiler_scratch(cwd) {
         Ok(scratch) => scratch,
         Err(error) => {
@@ -182,6 +438,13 @@ pub(super) async fn run_compiler_command_outcome(
         Ok(Err(error)) => unverified(error.to_string()),
         Err(error) => unverified(format!("could not complete ({error})")),
     };
+    if outcome == CompilerCheckOutcome::Passed
+        && !cancel_token.is_cancelled()
+        && let Some(identity) = identity
+        && compiler_verification_identity(cwd, command, sandbox_mode).as_ref() == Some(&identity)
+    {
+        record_verification(identity, String::new());
+    }
     record_unverified_event(outcome, command)
 }
 
@@ -470,19 +733,38 @@ pub(crate) async fn cached_compiler_check(
     cancel_token: &CancellationToken,
     sandbox_mode: crate::config::SandboxMode,
 ) -> Option<String> {
-    if !cancel_token.is_cancelled()
-        && !*dirty
-        && let Some((cached_root, cached_result)) = cache.as_ref()
-        && cached_root == root
-    {
-        dbg_log!("Compiler check: reusing cached result (tree unchanged since last check)");
-        return cached_result.clone();
+    // The turn-local tuple remains a compatibility projection. Validity is
+    // checked at execution using workspace/config/environment identity.
+    if !cancel_token.is_cancelled() {
+        let command = if root.join("Cargo.toml").exists() {
+            Some("cargo check --message-format=json")
+        } else if root.join("biome.json").exists() || root.join("biome.jsonc").exists() {
+            Some(if resolve_bin("bunx").exists() {
+                "bunx biome check ."
+            } else {
+                "npx @biomejs/biome check ."
+            })
+        } else if root.join("tsconfig.json").exists() {
+            Some(if resolve_bin("bunx").exists() {
+                "bunx tsc --noEmit"
+            } else {
+                "npx tsc --noEmit"
+            })
+        } else {
+            None
+        };
+        if let Some(identity) =
+            command.and_then(|command| compiler_verification_identity(root, command, sandbox_mode))
+            && let Some(receipt) = cached_verification(&identity)
+            && !cancel_token.is_cancelled()
+        {
+            *dirty = false;
+            *cache = Some((root.to_path_buf(), None));
+            return Some(receipt);
+        }
     }
     let result = run_compiler_check(root, cancel_token, sandbox_mode).await;
-    if result
-        .as_deref()
-        .is_some_and(|text| text.starts_with("__BUILD_UNVERIFIED__"))
-    {
+    if result.is_some() || cancel_token.is_cancelled() {
         *dirty = true;
         *cache = None;
         return result;
@@ -493,7 +775,9 @@ pub(crate) async fn cached_compiler_check(
 }
 
 pub(crate) fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
-    if diagnostics.starts_with("__BUILD_UNVERIFIED__") {
+    if diagnostics.starts_with("__BUILD_UNVERIFIED__")
+        || diagnostics.starts_with("[CACHED VERIFICATION]")
+    {
         result.content.push_str("\n\n");
         result.content.push_str(diagnostics);
         return;
@@ -919,6 +1203,171 @@ mod compiler_execution_tests {
         ));
     }
 
+    #[test]
+    fn verification_identity_invalidates_generation_root_command_environment_and_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("lib.rs");
+        std::fs::write(&source, "pub fn first() {}\n").unwrap();
+        let mode = crate::config::SandboxMode::Trusted;
+        let command = "cargo check";
+        let initial = verification_identity(dir.path(), command, mode).unwrap();
+        record_verification(initial.clone(), "successful output".into());
+        assert!(
+            cached_verification(&initial)
+                .unwrap()
+                .contains("[CACHED VERIFICATION]")
+        );
+        assert_ne!(
+            Some(initial.clone()),
+            verification_identity(dir.path(), "cargo test", mode)
+        );
+        assert_ne!(
+            Some(initial.clone()),
+            verification_identity(
+                dir.path(),
+                command,
+                crate::config::SandboxMode::WorkspaceWrite
+            )
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert_ne!(
+            Some(initial.clone()),
+            verification_identity(other.path(), command, mode)
+        );
+        let environment = verification_identity_with_environment(
+            dir.path(),
+            command,
+            mode,
+            vec![("RUSTFLAGS".into(), "-Dwarnings".into())],
+        )
+        .unwrap();
+        assert_ne!(initial, environment);
+        std::fs::create_dir(dir.path().join(".cargo")).unwrap();
+        std::fs::write(
+            dir.path().join(".cargo/config.toml"),
+            "[build]\nrustflags = []\n",
+        )
+        .unwrap();
+        let configured = verification_identity(dir.path(), command, mode).unwrap();
+        assert_ne!(initial, configured);
+        assert!(cached_verification(&configured).is_none());
+        std::fs::write(&source, "pub fn other() {}\n").unwrap();
+        assert!(
+            cached_verification(&verification_identity(dir.path(), command, mode).unwrap())
+                .is_none()
+        );
+        // Publishing a receipt after a concurrent edit must be rejected.
+        record_verification(configured.clone(), "stale output".into());
+        assert!(cached_verification(&configured).is_none());
+    }
+
+    #[test]
+    fn automatic_checker_and_shell_environment_receipts_are_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = crate::config::SandboxMode::Trusted;
+        let command = "cargo check --message-format=json";
+        let shell = verification_identity(dir.path(), command, mode).unwrap();
+        let checker = compiler_verification_identity(dir.path(), command, mode).unwrap();
+        assert_ne!(shell, checker);
+        record_verification(shell.clone(), "shell output".into());
+        assert!(cached_verification(&shell).is_some());
+        assert!(cached_verification(&checker).is_none());
+    }
+
+    #[test]
+    fn verification_identity_rejects_shell_composition_and_external_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = crate::config::SandboxMode::Trusted;
+        for command in [
+            "cargo check && touch marker",
+            "cargo test; echo success",
+            "cargo check --manifest-path ../Cargo.toml",
+            "cargo check --config x.toml",
+            "echo success",
+        ] {
+            assert!(
+                verification_identity(dir.path(), command, mode).is_none(),
+                "{command}"
+            );
+        }
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[dependencies]\nexternal = { path = \"../external\" }\n",
+        )
+        .unwrap();
+        assert!(verification_identity(dir.path(), "cargo check", mode).is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_does_not_reuse_success_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = crate::config::SandboxMode::Trusted;
+        let command = "cargo check";
+        let identity = compiler_verification_identity(dir.path(), command, mode).unwrap();
+        record_verification(identity, String::new());
+        let token = CancellationToken::new();
+        token.cancel();
+        let outcome = run_compiler_command_outcome(
+            dir.path(),
+            command,
+            true,
+            Duration::from_secs(2),
+            &token,
+            mode,
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            CompilerCheckOutcome::UnverifiedInfrastructure { .. }
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "manual repeated-verification benchmark"]
+    async fn benchmark_repeated_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"verification_benchmark\"\nversion = \"0.1.0\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n").unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "pub fn example() {}\n").unwrap();
+        let token = CancellationToken::new();
+        let command = "cargo check --message-format=json";
+        let cold = std::time::Instant::now();
+        assert_eq!(
+            run_compiler_command_outcome(
+                dir.path(),
+                command,
+                true,
+                Duration::from_secs(120),
+                &token,
+                crate::config::SandboxMode::Trusted
+            )
+            .await,
+            CompilerCheckOutcome::Passed
+        );
+        eprintln!(
+            "verification benchmark cold_ms={}",
+            cold.elapsed().as_millis()
+        );
+        let repeat = std::time::Instant::now();
+        for _ in 0..20 {
+            assert_eq!(
+                run_compiler_command_outcome(
+                    dir.path(),
+                    command,
+                    true,
+                    Duration::from_secs(120),
+                    &token,
+                    crate::config::SandboxMode::Trusted
+                )
+                .await,
+                CompilerCheckOutcome::Passed
+            );
+        }
+        eprintln!(
+            "verification benchmark repeated_20_ms={}",
+            repeat.elapsed().as_millis()
+        );
+    }
+
     #[tokio::test]
     async fn manifest_parse_failure_is_unverified_and_not_cached_as_passed() {
         if !crate::tools::exec::sandbox::runtime_tests_available() {
@@ -945,6 +1394,30 @@ mod compiler_execution_tests {
         assert!(result.starts_with("__BUILD_UNVERIFIED__"), "{result}");
         assert!(result.contains("status 101"), "{result}");
         assert!(result.contains("not-a-version"), "{result}");
+        assert!(dirty);
+        assert!(cache.is_none());
+    }
+
+    #[tokio::test]
+    async fn source_failures_are_never_cached_as_verification() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("Cargo.toml"), "[package]\nname = \"invalid_source_fixture\"\nversion = \"0.1.0\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n").unwrap();
+        std::fs::write(
+            project.path().join("lib.rs"),
+            "pub fn invalid() { missing(); }\n",
+        )
+        .unwrap();
+        let mut dirty = true;
+        let mut cache = None;
+        let result = cached_compiler_check(
+            project.path(),
+            &mut dirty,
+            &mut cache,
+            &CancellationToken::new(),
+            crate::config::SandboxMode::Trusted,
+        )
+        .await;
+        assert!(result.is_some());
         assert!(dirty);
         assert!(cache.is_none());
     }

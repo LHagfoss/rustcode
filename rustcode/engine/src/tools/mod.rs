@@ -1351,6 +1351,10 @@ pub const TOOLS: &[Tool] = &[
     misc::SET_SESSION_TITLE,
     misc::LIST_MCP_TOOLS,
     misc::WAIT_AGENT,
+    misc::SEND_MESSAGE,
+    misc::FOLLOWUP_TASK,
+    misc::LIST_AGENTS,
+    misc::INSPECT_AGENT,
     misc::CANCEL_AGENT,
     #[cfg(unix)]
     misc::MANAGE_SCHEDULED_JOBS,
@@ -1393,7 +1397,16 @@ pub const TOOLS: &[Tool] = &[
 pub fn is_agent_tool(name: &str) -> bool {
     matches!(
         name,
-        "spawn_agent" | "send_agent" | "wait_agent" | "cancel_agent" | "set_goal" | "todo_write"
+        "spawn_agent"
+            | "send_agent"
+            | "send_message"
+            | "followup_task"
+            | "list_agents"
+            | "inspect_agent"
+            | "wait_agent"
+            | "cancel_agent"
+            | "set_goal"
+            | "todo_write"
     )
 }
 

@@ -110,8 +110,14 @@ pub enum Commands {
         fix: bool,
     },
 
-    /// Score a headless turn from raw stats (rounds/calls/recoveries/completion)
+    /// Inspect or compare structured turn telemetry (legacy scoring supported)
     Bench {
+        /// Read a session performance.json report
+        #[arg(long)]
+        report: Option<std::path::PathBuf>,
+        /// Compare the report with a baseline performance.json
+        #[arg(long, requires = "report")]
+        baseline: Option<std::path::PathBuf>,
         /// Tool rounds used
         #[arg(long, default_value_t = 0)]
         rounds: usize,
@@ -483,7 +489,8 @@ mod tests {
                 rounds: 4,
                 calls: 6,
                 recoveries: 1,
-                completed: true
+                completed: true,
+                ..
             })
         ));
     }

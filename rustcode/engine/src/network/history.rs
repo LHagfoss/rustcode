@@ -12,11 +12,16 @@ const MAX_TOOL_CONTINUITY_CHARS: usize = 512;
 pub(crate) struct RequestInstructions<'a> {
     pub(crate) base: &'a str,
     pub(crate) developer: Option<&'a str>,
+    pub(crate) generation: Option<u64>,
 }
 
 impl<'a> RequestInstructions<'a> {
     pub(crate) const fn new(base: &'a str, developer: Option<&'a str>) -> Self {
-        Self { base, developer }
+        Self {
+            base,
+            developer,
+            generation: None,
+        }
     }
 }
 
@@ -521,11 +526,36 @@ fn to_messages_with_scope(
                 None => true,
             }
         });
-        let projected_message = rendered_calls.get(&index).map(|calls| {
-            let mut projected = message.clone();
-            projected.tool_calls = calls.clone();
-            projected
-        });
+        let evidence_projection = (scope == RequestHistoryScope::RecentTurns)
+            .then(|| {
+                crate::evidence::project(
+                    message,
+                    instructions.generation,
+                    index
+                        >= history
+                            .len()
+                            .saturating_sub(super::compaction::KEEP_RECENT_TURNS),
+                )
+            })
+            .flatten();
+        let projected_message =
+            if rendered_calls.contains_key(&index) || evidence_projection.is_some() {
+                let mut projected = message.clone();
+                if let Some(calls) = rendered_calls.get(&index) {
+                    projected.tool_calls = calls.clone();
+                }
+                if let Some(content) = evidence_projection {
+                    let name = projected
+                        .tool_result
+                        .as_ref()
+                        .map(|r| r.tool_name.as_str())
+                        .unwrap_or("tool");
+                    projected.content = format!("{name}: {content}");
+                }
+                Some(projected)
+            } else {
+                None
+            };
         let message_for_render = projected_message.as_ref().unwrap_or(message);
         if let Some(structured) = (!orphan_result)
             .then(|| structured_message(message_for_render))
@@ -1586,6 +1616,9 @@ mod tests {
     #[test]
     fn preserves_structured_tool_metadata_in_provider_context() {
         let message = ChatMessage::new("tool", "grep: found").with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "grep".to_string(),
             arguments_hash: "abc".to_string(),
             success: true,
@@ -2068,6 +2101,9 @@ mod tests {
         )
         .answering(Some("call_cancelled".into()))
         .with_tool_result(crate::app::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".into(),
             success: false,
             error_kind: Some("Cancelled".into()),
@@ -2126,6 +2162,9 @@ mod tests {
         let executed = ChatMessage::new("tool", "grep: found 3 matches")
             .answering(Some("call_first".into()))
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "grep".into(),
                 success: true,
                 ..Default::default()
@@ -2133,6 +2172,9 @@ mod tests {
         let cancelled = ChatMessage::new("tool", "run_command: error: interrupted by the user")
             .answering(Some("call_second".into()))
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".into(),
                 success: false,
                 error_kind: Some("Cancelled".into()),
@@ -2186,6 +2228,9 @@ mod tests {
                 "run_command: error: tool call cancelled before execution",
             )
             .with_tool_result(crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".into(),
                 success: false,
                 error_kind: Some("Cancelled".into()),
@@ -2200,5 +2245,56 @@ mod tests {
         assert!(rendered.contains(UNRUN_CALL_RESULT));
         assert!(!rendered.contains("cancelled before execution"));
         assert!(!rendered.contains("error_kind"));
+    }
+}
+
+#[cfg(test)]
+mod evidence_projection_tests {
+    use super::*;
+    #[test]
+    fn pressure_reclaims_stale_evidence_without_breaking_native_pairs_or_pins() {
+        let history = vec![
+            ChatMessage::new("user", "Preserve cancellation safety"),
+            ChatMessage::new("assistant", "").with_tool_calls(vec![crate::app::ToolCallRef {
+                id: "read".into(),
+                name: "view_file".into(),
+                arguments: "{}".into(),
+            }]),
+            ChatMessage::new("tool", format!("view_file: {}", "old source".repeat(5000)))
+                .answering(Some("read".into()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "view_file".into(),
+                    success: true,
+                    workspace_generation: Some(1),
+                    workspace_epoch: None,
+                    evidence_hash: Some("hash".into()),
+                    ..Default::default()
+                }),
+        ];
+        let mut instructions = RequestInstructions::new("Project instructions", None);
+        instructions.generation = Some(2);
+        let before = serde_json::to_vec(&history).unwrap();
+        let full = to_messages_for_request(&history, instructions);
+        let reduced = to_messages_for_request_with_scope(
+            &history,
+            instructions,
+            RequestHistoryScope::RecentTurns,
+        );
+        validate_native_tool_messages(&reduced).unwrap();
+        assert!(reduced.iter().any(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("Preserve cancellation safety"))
+        }));
+        assert!(reduced.iter().any(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("Recoverable evidence"))
+        }));
+        assert!(
+            serde_json::to_vec(&reduced).unwrap().len() * 10
+                < serde_json::to_vec(&full).unwrap().len()
+        );
+        assert_eq!(serde_json::to_vec(&history).unwrap(), before);
     }
 }

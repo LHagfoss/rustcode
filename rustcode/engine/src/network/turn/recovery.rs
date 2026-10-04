@@ -626,11 +626,17 @@ mod tests {
                 "Check the weather, find a matching beverage, and email the recommendation to Pat.",
             ),
             ChatMessage::new("tool", "weather evidence").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "search_web".into(),
                 success: true,
                 ..ToolResultRecord::default()
             }),
             ChatMessage::new("tool", "catalog evidence").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "sql".into(),
                 success: true,
                 ..ToolResultRecord::default()
@@ -655,6 +661,9 @@ mod tests {
         let completed = vec![
             ChatMessage::new("user", "Email Pat the recommendation."),
             ChatMessage::new("tool", "sent").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "send_email".into(),
                 success: true,
                 ..ToolResultRecord::default()
@@ -677,6 +686,9 @@ mod tests {
         let read_email = vec![
             ChatMessage::new("user", "Read my email and summarize anything urgent."),
             ChatMessage::new("tool", "inbox").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "read_email".into(),
                 success: true,
                 ..ToolResultRecord::default()
@@ -690,6 +702,9 @@ mod tests {
         let completed_reply = vec![
             ChatMessage::new("user", "Reply to Aleks."),
             ChatMessage::new("tool", "sent").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "reply_to_chat_message".into(),
                 success: true,
                 ..ToolResultRecord::default()

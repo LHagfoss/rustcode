@@ -1,3 +1,4 @@
+pub mod evidence;
 #[macro_use]
 pub mod logger;
 pub mod acp;
@@ -26,6 +27,7 @@ pub mod skills;
 mod symbols;
 pub mod tools;
 pub mod update;
+mod workspace_intelligence;
 
 pub(crate) fn background_task_history_message(
     task_id: &str,

@@ -352,10 +352,83 @@ fn async_agent_tool(_args: &Value) -> Result<String, String> {
     Err("agent lifecycle tools require the asynchronous session executor".to_owned())
 }
 
+fn wait_agent_schema() -> Value {
+    let mut schema = subagent_id_schema();
+    schema["properties"]["timeout_ms"] =
+        serde_json::json!({"type":"integer", "minimum":1, "maximum":300000, "default":60000});
+    schema
+}
+
 pub const WAIT_AGENT: Tool = Tool {
     name: "wait_agent",
     description: "Wait for a subagent to reach one terminal state and return its bounded completion result. This waits for lifecycle activity instead of polling.",
     arguments: r#"{"id": "subagent id"}"#,
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: wait_agent_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+
+fn agent_message_schema() -> Value {
+    let mut schema = subagent_id_schema();
+    schema["properties"]["id"] = serde_json::json!({"oneOf":[{"type":"integer","minimum":0},{"type":"string"}], "description":"Agent ID; children may send_message to main using 0"});
+    schema["properties"]["message"] =
+        serde_json::json!({"type":"string", "minLength":1, "maxLength":8192});
+    schema["required"] = serde_json::json!(["id", "message"]);
+    schema
+}
+
+fn list_agents_schema() -> Value {
+    serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false})
+}
+
+pub const SEND_MESSAGE: Tool = Tool {
+    name: "send_message",
+    description: "Queue a bounded message for an agent. Delivery occurs at a safe request boundary; an idle agent remains idle until a follow-up.",
+    arguments: r#"{"id":"subagent id","message":"new evidence"}"#,
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: agent_message_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+pub const FOLLOWUP_TASK: Tool = Tool {
+    name: "followup_task",
+    description: "Start a follow-up on an idle/completed/interrupted child, or queue instructions for an active child.",
+    arguments: r#"{"id":"subagent id","message":"next task"}"#,
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: agent_message_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+pub const LIST_AGENTS: Tool = Tool {
+    name: "list_agents",
+    description: "List stable session agent IDs, parent relationships, status, model, context strategy and elapsed time without reading transcripts.",
+    arguments: "{}",
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: list_agents_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+pub const INSPECT_AGENT: Tool = Tool {
+    name: "inspect_agent",
+    description: "Inspect an agent and a bounded tail of its separate transcript. Full transcript remains available in the agent TUI.",
+    arguments: r#"{"id":"subagent id"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
     schema: subagent_id_schema,

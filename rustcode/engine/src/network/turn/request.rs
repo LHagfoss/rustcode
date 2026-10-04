@@ -446,6 +446,15 @@ pub(super) async fn collect_round(
     {
         let mut s = state.lock().await;
         prepare_request_steerability(&mut s, ctx, turn_session_id);
+        let messages = s.subagent_supervisor.take_root_messages();
+        if !messages.is_empty() {
+            for message in messages {
+                s.history.push(message);
+            }
+            crate::config::save_session_history(turn_session_id, &s.history);
+            crate::config::flush_history();
+            crate::app::subagent_persistence::save(&s);
+        }
     }
 
     let unprobed = {
@@ -466,6 +475,7 @@ pub(super) async fn collect_round(
         );
     }
 
+    let context_started = std::time::Instant::now();
     let checkpoint = ctx.context_checkpoint();
     let msgs = match prepare_turn_request_with_checkpoint_and_prefix_cache(
         client,
@@ -509,6 +519,12 @@ pub(super) async fn collect_round(
             return Err(RoundCollectionError::Stop);
         }
     };
+
+    ctx.performance.context_us += crate::benchmark::elapsed_us(context_started);
+    ctx.performance.context_bytes = ctx
+        .performance
+        .context_bytes
+        .max(msgs.iter().map(|msg| msg.to_string().len()).sum());
 
     {
         let mut s = state.lock().await;
@@ -625,6 +641,10 @@ pub(super) async fn collect_round(
         let attempt_model = model_name.clone();
         let attempt_msgs = Arc::clone(&request_msgs);
         let attempt_session_id = request_session_id.clone();
+        let attempt_performance = Arc::new(std::sync::Mutex::new(
+            crate::benchmark::TurnPerformance::default(),
+        ));
+        let capture_performance = Arc::clone(&attempt_performance);
         let attempt = runner::collect_response(continuation_policy.clone(), move |request| {
             let request_client = attempt_client.clone();
             let request_state = Arc::clone(&attempt_state);
@@ -634,6 +654,7 @@ pub(super) async fn collect_round(
             let request_model = attempt_model.clone();
             let request_msgs = Arc::clone(&attempt_msgs);
             let request_session_id = attempt_session_id.clone();
+            let captured_performance = Arc::clone(&capture_performance);
             async move {
                 request_buffer.lock().await.reset();
                 let current_msgs =
@@ -665,6 +686,7 @@ pub(super) async fn collect_round(
                     &request_session_id,
                 )
                 .await;
+                let model_started = std::time::Instant::now();
                 let stream_result = stream_request(
                     &request_client,
                     Arc::clone(&request_state),
@@ -681,6 +703,21 @@ pub(super) async fn collect_round(
                     request.output_token_limit,
                 )
                 .await;
+                let request_perf = request_buffer.lock().await.performance.clone();
+                {
+                    let mut perf = captured_performance
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    perf.requests += 1;
+                    perf.model_us += crate::benchmark::elapsed_us(model_started)
+                        .saturating_sub(request_perf.schema_us)
+                        .saturating_sub(request_perf.serialization_us);
+                    perf.schema_us += request_perf.schema_us;
+                    perf.serialization_us += request_perf.serialization_us;
+                    if perf.ttft_us.is_none() {
+                        perf.ttft_us = request_perf.ttft_us;
+                    }
+                }
                 let finish_reason = match stream_result {
                     Ok(finish_reason) => finish_reason,
                     Err(error) => {
@@ -720,6 +757,18 @@ pub(super) async fn collect_round(
             }
         })
         .await;
+        {
+            let perf = attempt_performance
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ctx.performance.requests += perf.requests;
+            ctx.performance.model_us += perf.model_us;
+            ctx.performance.schema_us += perf.schema_us;
+            ctx.performance.serialization_us += perf.serialization_us;
+            if ctx.performance.ttft_us.is_none() {
+                ctx.performance.ttft_us = perf.ttft_us;
+            }
+        }
         match attempt {
             Err(error)
                 if should_retry_stream_transport(&error, transport_retry_attempts)

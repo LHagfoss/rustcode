@@ -584,6 +584,9 @@ mod detail_tests {
                 ChatMessage::new("tool", "contents")
                     .answering(Some(id.into()))
                     .with_tool_result(ToolResultRecord {
+                        workspace_generation: None,
+                        workspace_epoch: None,
+                        evidence_hash: None,
                         tool_name: "view_file".into(),
                         success: true,
                         ..Default::default()
@@ -605,6 +608,9 @@ mod detail_tests {
         let mut state = AppState::new();
         state.history.push(
             ChatMessage::new("tool", "output").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".into(),
                 command: Some("cargo check\n--tests".into()),
                 success: true,
@@ -613,6 +619,9 @@ mod detail_tests {
         );
         state.history.push(
             ChatMessage::new("tool", "private file contents").with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "view_file".into(),
                 success: true,
                 ..Default::default()

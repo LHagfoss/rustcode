@@ -793,10 +793,10 @@ pub(super) fn tool_call_arguments(
             .unwrap_or(serde_json::Value::Null);
     }
 
-    for (assistant_index, assistant) in history[..message_index].iter().enumerate().rev() {
-        if assistant.role != "assistant" {
-            continue;
-        }
+    let candidates = state.tool_call_candidate_indices();
+    let before_result = candidates.partition_point(|index| *index < message_index);
+    for &assistant_index in candidates[..before_result].iter().rev() {
+        let assistant = &history[assistant_index];
         let calls =
             rustcode_tool_protocol::resolve_tool_calls(assistant, state.active_tool_protocol());
         if !calls.iter().any(|call| call.name == tool_name) {
@@ -1989,6 +1989,42 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn legacy_arguments_skip_prose_without_losing_supported_call_encodings() {
+        use rustcode::controller::{ChatMessage, ToolProtocol};
+        for protocol in [
+            ToolProtocol::Native,
+            ToolProtocol::Json,
+            ToolProtocol::ApiNative,
+        ] {
+            for content in [
+                r#"{"name":"run_command","arguments":{"command":"cargo test"}}"#,
+                "```tool\n{\"name\":\"run_command\",\"arguments\":{\"command\":\"cargo test\"}}\n```",
+                "[TOOL_CALLS]run_command {\"command\":\"cargo test\"}",
+            ] {
+                let mut state = RenderState::new();
+                state.active_tool_protocol = protocol;
+                let call = ChatMessage::new("assistant", content);
+                let expected = rustcode_tool_protocol::resolve_tool_calls(&call, protocol);
+                assert_eq!(expected.len(), 1, "fixture {content}");
+                state.history.push(call);
+                for _ in 0..100 {
+                    state
+                        .history
+                        .push(ChatMessage::new("assistant", "Ordinary prose 日本語"));
+                }
+                state
+                    .history
+                    .push(ChatMessage::new("tool", "run_command: done"));
+                let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
+                assert_eq!(
+                    super::tool_call_arguments(&snapshot, 101, "run_command"),
+                    expected[0].arguments
+                );
+            }
+        }
+    }
+
+    #[test]
     fn inline_diff_reuses_cached_rows_and_keys_file_language_and_width() {
         let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
             .lock()
@@ -2065,6 +2101,9 @@ mod tests {
     #[test]
     fn pending_background_launch_renders_running_not_failed() {
         let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: false,
             pending: true,
@@ -2079,6 +2118,9 @@ mod tests {
     #[test]
     fn cancelled_background_task_renders_cancelled_not_failed() {
         let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "background_task".to_owned(),
             success: false,
             error_kind: Some("Cancelled".to_owned()),
@@ -2093,6 +2135,9 @@ mod tests {
     #[test]
     fn completed_exit_zero_still_renders_exit_status() {
         let message = tool_message_with_record(rustcode::controller::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),

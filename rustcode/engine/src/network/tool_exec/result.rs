@@ -1,4 +1,5 @@
 use crate::app::ChatMessage;
+use sha2::Digest;
 
 use super::super::events::{ToolResult, ToolResultMetadata};
 use super::super::output::{
@@ -483,6 +484,8 @@ pub(crate) fn tool_result_from_execution(
         diff,
         file_preview: get_file_preview(tool_name, args),
         metadata: ToolResultMetadata {
+            execution_us: 0,
+            workspace_generation: None,
             call_id: None,
             arguments_hash: stable_arguments_hash(args),
             success: execution.success,
@@ -631,6 +634,9 @@ pub(crate) fn tool_result_history_message_with_prefix(
         .with_diff(diff)
         .with_file_preview(file_preview)
         .with_tool_result(crate::app::ToolResultRecord {
+            workspace_generation: metadata.workspace_generation,
+            workspace_epoch: Some(crate::workspace_intelligence::epoch().to_owned()),
+            evidence_hash: Some(format!("{:x}", sha2::Sha256::digest(content.as_bytes()))),
             tool_name,
             arguments_hash: metadata.arguments_hash,
             success: envelope.success,
@@ -677,6 +683,36 @@ pub(crate) fn subagent_tool_history_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_preserves_evidence_epoch_generation_and_hash_after_resume() {
+        let content = "source contents";
+        let result = ToolResult {
+            tool_name: "view_file".into(),
+            content: content.into(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                workspace_generation: Some(7),
+                ..Default::default()
+            },
+        };
+        let message =
+            tool_result_history_message_with_prefix(result, "view_file: ", Some("call".into()));
+        let restored: ChatMessage =
+            serde_json::from_slice(&serde_json::to_vec(&message).unwrap()).unwrap();
+        let record = restored.tool_result.unwrap();
+        assert_eq!(record.workspace_generation, Some(7));
+        assert_eq!(
+            record.workspace_epoch.as_deref(),
+            Some(crate::workspace_intelligence::epoch())
+        );
+        assert_eq!(
+            record.evidence_hash,
+            Some(format!("{:x}", sha2::Sha256::digest(content.as_bytes())))
+        );
+    }
 
     #[test]
     fn shell_redirection_targets_cover_heredoc_and_append() {

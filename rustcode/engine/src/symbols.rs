@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{LazyLock, Mutex};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
@@ -161,67 +162,98 @@ impl SupportedLanguage {
     }
 }
 
+#[derive(Default)]
+struct IndexState {
+    generation: u64,
+    discovery: u64,
+    git_revision: u64,
+    files: BTreeMap<PathBuf, crate::workspace_intelligence::Stamp>,
+}
+static INDEXES: LazyLock<Mutex<HashMap<PathBuf, IndexState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 pub fn update_index(root_dir: &Path) -> Result<(), String> {
-    let conn = init_db()?;
-    let root_str = root_dir.to_string_lossy().to_string();
-
-    // 1. Gather all supported source files and track mtimes
-    let mut files = Vec::new();
-    let walker = ignore::WalkBuilder::new(root_dir)
-        .standard_filters(true)
-        .build();
-
-    for entry in walker {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let path = entry.path();
-        if path.is_file()
-            && let Some(ext) = path.extension().and_then(|e| e.to_str())
-            && let Some(lang) = SupportedLanguage::for_extension(ext)
+    let snapshot = crate::workspace_intelligence::snapshot(root_dir)?;
+    let mut indexes = INDEXES.lock().unwrap_or_else(|e| e.into_inner());
+    let state = indexes.entry(snapshot.root.clone()).or_default();
+    let git_revision = crate::workspace_intelligence::git_revision(&snapshot.root);
+    if state.generation == snapshot.generation && state.git_revision == git_revision {
+        return Ok(());
+    }
+    let root_dir = snapshot.root.as_path();
+    let root_str = root_dir
+        .canonicalize()
+        .unwrap_or_else(|_| root_dir.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    let mut conn = init_db()?;
+    let conn = conn.transaction().map_err(|e| e.to_string())?;
+    let mut current_files = BTreeMap::new();
+    if state.discovery != snapshot.discovery || state.git_revision != git_revision {
+        // Only directory topology changes require discovery. Preserve the
+        // existing ignore policy; source edits require no project walk.
+        for entry in ignore::WalkBuilder::new(root_dir)
+            .standard_filters(true)
+            .build()
         {
-            let relative_path = path
-                .strip_prefix(root_dir)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
-
-            let mtime = std::fs::metadata(path)
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let mtime_secs = mtime
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-
-            files.push((path.to_path_buf(), relative_path, mtime_secs, lang));
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .and_then(SupportedLanguage::for_extension)
+                    .is_some()
+                && let Some(stamp) = snapshot.files.get(path)
+            {
+                current_files.insert(path.to_path_buf(), stamp.clone());
+            }
+        }
+    } else {
+        for path in state.files.keys() {
+            if let Some(stamp) = snapshot.files.get(path) {
+                current_files.insert(path.clone(), stamp.clone());
+            }
         }
     }
-
-    // 2. Clear out any indexed files that no longer exist
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT path FROM symbols WHERE project_root = ?")
-        .map_err(|e| e.to_string())?;
-
-    let existing_paths: Vec<String> = stmt
-        .query_map([&root_str], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let new_paths_set: std::collections::HashSet<&str> =
-        files.iter().map(|(_, rel, _, _)| rel.as_str()).collect();
-
+    // On first use also remove rows left by earlier processes. Files without
+    // symbols are represented in IndexState, so they are not reparsed forever.
+    let existing_paths: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT path FROM symbols WHERE project_root = ?")
+            .map_err(|e| e.to_string())?;
+        stmt.query_map([&root_str], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
     for old_path in existing_paths {
-        if !new_paths_set.contains(old_path.as_str()) {
-            let _ = conn.execute(
+        if !current_files.contains_key(&root_dir.join(&old_path)) {
+            conn.execute(
                 "DELETE FROM symbols WHERE project_root = ? AND path = ?",
                 params![&root_str, &old_path],
-            );
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
+    let files = current_files
+        .iter()
+        .filter_map(|(path, stamp)| {
+            if state.files.get(path) == Some(stamp) {
+                return None;
+            }
+            let lang = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(SupportedLanguage::for_extension)?;
+            let relative = path
+                .strip_prefix(root_dir)
+                .ok()?
+                .to_string_lossy()
+                .to_string();
+            Some((path.clone(), relative, snapshot.generation as i64, lang))
+        })
+        .collect::<Vec<_>>();
 
     // 3. Incrementally parse and update changed files
     let mut parser = Parser::new();
@@ -231,19 +263,6 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
     let mut cursor = QueryCursor::new();
 
     for (abs_path, rel_path, mtime_secs, lang) in files {
-        // Check if we already indexed this version
-        let already_indexed: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM symbols WHERE project_root = ? AND path = ? AND last_modified = ?)",
-                params![&root_str, &rel_path, mtime_secs],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
-
-        if already_indexed {
-            continue;
-        }
-
         let ts_lang = lang.tree_sitter_language();
         if current_lang != Some(lang) {
             if parser.set_language(&ts_lang).is_err() {
@@ -275,7 +294,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         // Parse and extract symbols
         let content = match std::fs::read_to_string(&abs_path) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => return Err(format!("cannot index {}: {e}", abs_path.display())),
         };
 
         let tree = match parser.parse(&content, None) {
@@ -284,10 +303,11 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         };
 
         // Clear existing entries for this file before re-indexing
-        let _ = conn.execute(
+        conn.execute(
             "DELETE FROM symbols WHERE project_root = ? AND path = ?",
             params![&root_str, &rel_path],
-        );
+        )
+        .map_err(|e| e.to_string())?;
 
         let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
@@ -328,8 +348,8 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
                 let node_text = node.utf8_text(content.as_bytes()).unwrap_or("");
                 let signature = extract_signature(node_text);
 
-                let _ = conn.execute(
-                    "INSERT INTO symbols (project_root, path, name, kind, start_line, end_line, signature, last_modified)
+                conn.execute(
+                    "INSERT OR IGNORE INTO symbols (project_root, path, name, kind, start_line, end_line, signature, last_modified)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         &root_str,
@@ -341,24 +361,33 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
                         &signature,
                         mtime_secs
                     ],
-                );
+                ).map_err(|e| e.to_string())?;
             }
         }
     }
 
+    conn.commit().map_err(|e| e.to_string())?;
+    state.generation = snapshot.generation;
+    state.discovery = snapshot.discovery;
+    state.git_revision = git_revision;
+    state.files = current_files;
     Ok(())
 }
 
 pub fn find_symbol(root_dir: &Path, query: &str) -> Result<Vec<SymbolInfo>, String> {
     let conn = init_db()?;
-    let root_str = root_dir.to_string_lossy().to_string();
+    let root_str = root_dir
+        .canonicalize()
+        .unwrap_or_else(|_| root_dir.to_path_buf())
+        .to_string_lossy()
+        .to_string();
 
     let mut stmt = conn
         .prepare(
             "SELECT path, name, kind, start_line, end_line, signature
              FROM symbols
              WHERE project_root = ? AND name LIKE ?
-             ORDER BY name ASC
+             ORDER BY name ASC, path ASC, start_line ASC
              LIMIT 50",
         )
         .map_err(|e| e.to_string())?;
@@ -419,7 +448,11 @@ pub fn fuzzy_filter_symbols(symbols: &[SymbolInfo], query: &str, limit: usize) -
 
 pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
     let conn = init_db()?;
-    let root_str = root_dir.to_string_lossy().to_string();
+    let root_str = root_dir
+        .canonicalize()
+        .unwrap_or_else(|_| root_dir.to_path_buf())
+        .to_string_lossy()
+        .to_string();
 
     let mut stmt = conn
         .prepare(
@@ -459,7 +492,7 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
         out.push_str(&format!("\n{}:\n", path));
         for (name, kind, signature) in symbols {
             let compressed = if signature.len() > 120 {
-                format!("{}...", &signature[..117])
+                format!("{}...", signature.chars().take(117).collect::<String>())
             } else {
                 signature
             };
@@ -473,6 +506,65 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "manual repeated-symbol benchmark"]
+    fn benchmark_repeated_symbol_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..1000 {
+            std::fs::write(
+                dir.path().join(format!("module_{n}.rs")),
+                format!("pub fn symbol_{n}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let cold = std::time::Instant::now();
+        update_index(dir.path()).unwrap();
+        eprintln!("symbol benchmark cold_ms={}", cold.elapsed().as_millis());
+        let repeated = std::time::Instant::now();
+        for _ in 0..20 {
+            update_index(dir.path()).unwrap();
+            assert!(!find_symbol(dir.path(), "symbol_42").unwrap().is_empty());
+        }
+        eprintln!(
+            "symbol benchmark repeated_20_ms={}",
+            repeated.elapsed().as_millis()
+        );
+    }
+
+    #[test]
+    fn quick_external_symbol_edit_is_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "pub fn first() {}\n").unwrap();
+        update_index(dir.path()).unwrap();
+        std::fs::write(&file, "pub fn other() {}\n").unwrap();
+        update_index(dir.path()).unwrap();
+        assert!(find_symbol(dir.path(), "first").unwrap().is_empty());
+        assert_eq!(find_symbol(dir.path(), "other").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn incremental_symbols_detect_create_delete_and_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty.rs");
+        std::fs::write(&empty, "// no symbols").unwrap();
+        update_index(dir.path()).unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let before = INDEXES.lock().unwrap().get(&root).unwrap().generation;
+        update_index(dir.path()).unwrap();
+        assert_eq!(
+            before,
+            INDEXES.lock().unwrap().get(&root).unwrap().generation
+        );
+        let file = dir.path().join("new.rs");
+        std::fs::write(&file, "pub fn added() {}\n").unwrap();
+        update_index(dir.path()).unwrap();
+        assert_eq!(find_symbol(dir.path(), "added").unwrap().len(), 1);
+        std::fs::remove_file(file).unwrap();
+        update_index(dir.path()).unwrap();
+        assert!(find_symbol(dir.path(), "added").unwrap().is_empty());
+    }
 
     #[test]
     fn test_symbols_indexer_and_search_polyglot() {

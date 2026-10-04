@@ -31,6 +31,7 @@ pub struct NativeToolCallCheckpoint {
 
 pub struct StreamBuffer {
     pub content: String,
+    pub performance: crate::benchmark::TurnPerformance,
     /// Classification of a successful stream termination. Failures are
     /// carried by `StreamFailure` and classified by the turn layer.
     pub termination: Option<crate::network::lifecycle::StreamTermination>,
@@ -68,6 +69,7 @@ impl StreamBuffer {
     pub fn new() -> Self {
         Self {
             content: String::new(),
+            performance: Default::default(),
             termination: None,
             final_answer_boundary: FinalAnswerBoundary::None,
             provider_final_answer_state: ProviderFinalAnswerState::None,
@@ -85,6 +87,7 @@ impl StreamBuffer {
     /// Drops everything carried over from a previous request.
     pub fn reset(&mut self) {
         self.content.clear();
+        self.performance = Default::default();
         self.termination = None;
         self.final_answer_boundary = FinalAnswerBoundary::None;
         self.provider_final_answer_state = ProviderFinalAnswerState::None;

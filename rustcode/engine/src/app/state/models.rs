@@ -460,9 +460,12 @@ pub struct CachedReadOutput {
     pub(crate) inspection: Option<rustcode_core::InspectionResultMetadata>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SubAgentStatus {
+    Queued,
     Running,
+    Interrupted,
     Completed,
     Failed,
     Cancelled,
@@ -470,11 +473,13 @@ pub enum SubAgentStatus {
 
 /// A subagent spawned by the main agent via the spawn_agent tool. Keeps its
 /// own conversation history and explicit lifecycle state.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubAgent {
     pub id: u32,
     pub name: String,
     pub task: String,
     pub model: Option<String>,
+    #[serde(with = "crate::app::subagent_persistence::arc_history")]
     pub history: Arc<Vec<ChatMessage>>,
     pub status: SubAgentStatus,
     pub active_turn: bool,
@@ -484,6 +489,26 @@ pub struct SubAgent {
     pub verification_command: Option<String>,
     pub workspace_root: Option<std::path::PathBuf>,
     pub review_manifest: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub depth: u32,
+    #[serde(default)]
+    pub root_id: Option<u32>,
+    #[serde(default)]
+    pub context_inheritance: crate::app::subagent_context::ContextInheritance,
+    #[serde(default)]
+    pub mailbox: std::collections::VecDeque<String>,
+    #[serde(default)]
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub queued_at_ms: u64,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
+    #[serde(default)]
+    pub completion: Option<String>,
+    #[serde(default)]
+    pub performance: crate::benchmark::TurnPerformance,
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
