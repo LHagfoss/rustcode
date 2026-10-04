@@ -566,7 +566,10 @@ pub fn build_help_text() -> String {
             "Automation & Utilities:",
             &[
                 ("/goal", "Run a task in continuous autoloop mode"),
-                ("/delegate", "Allow subagents for next task only"),
+                (
+                    "/delegate",
+                    "Allow subagents for next task (on/off: session)",
+                ),
                 ("/yolo", "Show or set tool confirmation mode"),
                 ("/sandbox", "Show or set OS-enforced shell permissions"),
                 ("/skills", "Discover and list custom skills"),
