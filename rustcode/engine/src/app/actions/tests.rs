@@ -221,6 +221,9 @@ fn idle_recap_does_not_attach_an_older_answer_to_a_new_task() {
         crate::app::ChatMessage::new("assistant", "old task is complete"),
         crate::app::ChatMessage::new("tool", "run_command: old failure").with_tool_result(
             crate::app::ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".into(),
                 success: false,
                 ..Default::default()

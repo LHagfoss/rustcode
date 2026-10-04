@@ -416,16 +416,37 @@ pub(in crate::ui) fn render_subagent_picker_modal(
     for (index, agent) in state.subagents().iter().enumerate() {
         let is_selected = selected == index + 1;
         let status = match agent.status {
+            rustcode::controller::SubAgentStatus::Queued => "queued",
+            rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
             rustcode::controller::SubAgentStatus::Running => "running",
             rustcode::controller::SubAgentStatus::Completed => "completed",
             rustcode::controller::SubAgentStatus::Failed => "failed",
             rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
         };
         let task = agent.task.chars().take(32).collect::<String>();
+        let mut depth = 1usize;
+        let mut parent = agent.parent_id;
+        while let Some(id) = parent {
+            if depth >= 3 {
+                break;
+            }
+            depth += 1;
+            parent = state
+                .subagents()
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .and_then(|candidate| candidate.parent_id);
+        }
+        let tree_name = format!("{}└─ {}", "  ".repeat(depth - 1), agent.name);
         lines.push(agent_picker_line(
             is_selected,
-            &agent.name,
-            &format!("{status} · {task}"),
+            &tree_name,
+            &format!(
+                "{status} · {} · {:02}:{:02} · {task}",
+                agent.model.as_deref().unwrap_or("default"),
+                agent.elapsed_ms / 60000,
+                (agent.elapsed_ms / 1000) % 60
+            ),
             state.selected_subagent_id() == Some(agent.id),
             inner.width as usize,
         ));
@@ -452,6 +473,8 @@ pub(in crate::ui) fn render_subagent_picker_modal(
         "main · root context".to_owned()
     } else if let Some(agent) = state.subagents().get(selected - 1) {
         let status = match agent.status {
+            rustcode::controller::SubAgentStatus::Queued => "queued",
+            rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
             rustcode::controller::SubAgentStatus::Running => "running",
             rustcode::controller::SubAgentStatus::Completed => "completed",
             rustcode::controller::SubAgentStatus::Failed => "failed",
