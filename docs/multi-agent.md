@@ -1,6 +1,9 @@
 # Inspectable agent threads
 
-`/delegate` authorizes delegation for the next task. `spawn_agent` returns
+`/delegate` authorizes delegation for the next task, `/delegate on` for the
+rest of the session, and `/delegate off` revokes both. A prompt that explicitly
+asks for subagents ("use 2 subagents to ...", "spawn an agent ...") authorizes
+its own task. `spawn_agent` returns
 immediately with a stable session-local numeric ID. Children retain separate
 histories, model context budgets and loop detectors. The existing configurable
 `subagent_concurrency_limit` controls admitted execution; additional children

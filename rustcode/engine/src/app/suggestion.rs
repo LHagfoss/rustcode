@@ -126,7 +126,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/delegate",
-        desc: "Allow subagents for the next task only",
+        desc: "Allow subagents for the next task (on/off: whole session)",
     },
     CommandInfo {
         name: "/workspace",
