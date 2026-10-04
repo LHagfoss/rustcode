@@ -1,3 +1,10 @@
+## [v0.57.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.0) - 2026-10-04
+
+### Features
+- Press `←` on an empty prompt to open the agent contexts picker; `→` or `Enter` opens the highlighted context and `←` or `Esc` closes it ([#1716](https://github.com/LHagfoss/rustcode/pull/1716)).
+- Press `Alt+←` / `Alt+→` on an empty prompt to switch to the previous or next agent context, wrapping through main in spawn order ([#1716](https://github.com/LHagfoss/rustcode/pull/1716)).
+- Scroll the whole transcript of a selected agent; the view no longer stops at its last eight messages or goes blank when scrolled ([#1716](https://github.com/LHagfoss/rustcode/pull/1716)).
+- Opened with `←`, the agent contexts picker starts on the context currently on screen ([#1716](https://github.com/LHagfoss/rustcode/pull/1716)).
 ## [v0.56.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.17) - 2026-10-04
 
 ### Fixes
