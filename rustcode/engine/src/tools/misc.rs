@@ -339,8 +339,11 @@ fn subagent_id_schema() -> Value {
         "type": "object",
         "properties": {
             "id": {
-                "oneOf": [{"type": "integer", "minimum": 1}, {"type": "string"}],
-                "description": "Subagent id returned by spawn_agent"
+                "anyOf": [
+                    {"type": "integer", "minimum": 1},
+                    {"type": "string", "pattern": "^[0-9]*[1-9][0-9]*$"}
+                ],
+                "description": "Decimal subagent id returned by spawn_agent; pass an integer or numeric string"
             }
         },
         "required": ["id"],
@@ -373,9 +376,24 @@ pub const WAIT_AGENT: Tool = Tool {
     safety: ToolSafety::Delegation,
 };
 
-fn agent_message_schema() -> Value {
+fn agent_message_schema(minimum_id: u32) -> Value {
     let mut schema = subagent_id_schema();
-    schema["properties"]["id"] = serde_json::json!({"oneOf":[{"type":"integer","minimum":0},{"type":"string"}], "description":"Agent ID; children may send_message to main using 0"});
+    let string_id_pattern = if minimum_id == 0 {
+        "^[0-9]+$"
+    } else {
+        "^[0-9]*[1-9][0-9]*$"
+    };
+    schema["properties"]["id"] = serde_json::json!({
+        "anyOf": [
+            {"type":"integer", "minimum":minimum_id},
+            {"type":"string", "pattern":string_id_pattern}
+        ],
+        "description": if minimum_id == 0 {
+            "Decimal agent id; child agents may use 0 to send a message to main"
+        } else {
+            "Decimal subagent id returned by spawn_agent"
+        }
+    });
     schema["properties"]["message"] =
         serde_json::json!({"type":"string", "minLength":1, "maxLength":8192});
     schema["required"] = serde_json::json!(["id", "message"]);
@@ -392,7 +410,7 @@ pub const SEND_MESSAGE: Tool = Tool {
     arguments: r#"{"id":"subagent id","message":"new evidence"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
-    schema: agent_message_schema,
+    schema: || agent_message_schema(0),
     capabilities: &[
         ToolCapability::AgentDelegation,
         ToolCapability::SessionState,
@@ -405,7 +423,7 @@ pub const FOLLOWUP_TASK: Tool = Tool {
     arguments: r#"{"id":"subagent id","message":"next task"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
-    schema: agent_message_schema,
+    schema: || agent_message_schema(1),
     capabilities: &[
         ToolCapability::AgentDelegation,
         ToolCapability::SessionState,

@@ -279,7 +279,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 /// This deliberately recognizes only a standalone `&`; `&&`, redirections,
 /// and quoted/escaped ampersands are not background jobs.
 #[cfg(not(target_os = "windows"))]
-fn has_shell_background_operator(command: &str) -> bool {
+pub(crate) fn has_shell_background_operator(command: &str) -> bool {
     let bytes = command.as_bytes();
     let mut single_quote = false;
     let mut double_quote = false;
@@ -319,7 +319,7 @@ fn has_shell_background_operator(command: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn has_shell_background_operator(_command: &str) -> bool {
+pub(crate) fn has_shell_background_operator(_command: &str) -> bool {
     // `cmd.exe` uses `&` as a command separator rather than as a portable
     // background operator. Detached callers should use detached=true without
     // adding shell syntax.
@@ -2403,12 +2403,84 @@ mod tests {
         for command in [
             "gh issue list --repo lhagfoss/rustcode",
             "gh auth status",
+            "gh api repos/LHagfoss/rustcode/releases?per_page=100 --jq .[].tag_name",
+            "gh api 'repos/LHagfoss/rustcode/releases?per_page=100' --jq '[.[] | select(.draft == false)]'",
+            "gh api --method GET repos/LHagfoss/rustcode/releases --paginate -q .[].tag_name",
+            "gh api --method=GET --hostname github.com repos/LHagfoss/rustcode/releases --jq=.[].tag_name",
+            "gh api -XGET repos/LHagfoss/rustcode/releases --jq '[.[] | .tag_name]'",
+            "gh release list --limit 10",
+            "gh release view v0.56.16 --json tagName",
+            "printf '%s' \"$HOME\"",
             "rg -n AutoConfirm src/",
             "pwd",
         ] {
             assert!(
                 !command_requires_confirmation(&serde_json::json!({"command": command})),
                 "must not confirm: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn gh_api_write_forms_and_release_mutations_still_require_confirmation() {
+        for command in [
+            "gh api repos/LHagfoss/rustcode/releases -f tag_name=v0.57.0",
+            "gh api repos/LHagfoss/rustcode/releases -F tag_name=v0.57.0",
+            "gh api repos/LHagfoss/rustcode/releases --input release.json",
+            "gh api repos/LHagfoss/rustcode/releases --header 'X-HTTP-Method-Override: POST'",
+            "gh api --method POST repos/LHagfoss/rustcode/releases",
+            "gh api repos/LHagfoss/rustcode/releases -X PATCH",
+            "gh api repos/LHagfoss/rustcode/releases --method='GET -F tag_name=x'",
+            "gh api \"$HOME\" --jq .",
+            "gh api 'repos/LHagfoss/rustcode/releases --method POST'",
+            "gh api repos/LHagfoss/rustcode/releases --unknown-flag",
+            "gh api graphql -f query='mutation { deleteRelease }'",
+            "gh release create v0.57.0",
+            "gh release edit v0.56.16 --title latest",
+            "gh release delete v0.56.16",
+        ] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must confirm: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_qualified_inspection_names_require_confirmation() {
+        for command in [
+            "./gh api repos/LHagfoss/rustcode/releases",
+            "'/tmp/cat' README.md",
+            "echo data | ./cat",
+        ] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_gh_api_filters_stay_one_segment_and_shell_writes_do_not() {
+        for command in [
+            "gh api repos/LHagfoss/rustcode/releases --jq '[.[] | select(.draft == false)]'",
+            "gh api repos/LHagfoss/rustcode/releases --jq '[.[] | .tag_name]' && gh release list",
+        ] {
+            assert!(
+                !command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must not confirm: {command}"
+            );
+        }
+
+        for command in [
+            "gh api repos/LHagfoss/rustcode/releases --jq '[.[] | .tag_name]' && rm -rf /tmp/example",
+            "gh api repos/LHagfoss/rustcode/releases --jq \"$(rm -rf /tmp/example)\"",
+            "gh api repos/LHagfoss/rustcode/releases --jq '[.[] | .tag_name]'\\|rm -rf /tmp/example",
+            "gh api repos/LHagfoss/rustcode/releases --jq '[.[] | .tag_name]",
+        ] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must confirm: {command}"
             );
         }
     }
@@ -2437,6 +2509,9 @@ mod tests {
             "sed -i 's/old/new/' file.txt",
             "sed 'w output.txt' input.txt",
             "cat src/main.rs | tee /tmp/main.rs",
+            "cat \"$(rm -rf /tmp/example)\"",
+            "echo \"$(rm -rf /tmp/example)\"",
+            "cat \"`rm -rf /tmp/example`\"",
         ] {
             assert!(
                 command_requires_confirmation(&serde_json::json!({"command": command})),

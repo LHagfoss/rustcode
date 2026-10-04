@@ -755,12 +755,12 @@ pub(crate) async fn cached_compiler_check(
         };
         if let Some(identity) =
             command.and_then(|command| compiler_verification_identity(root, command, sandbox_mode))
-            && let Some(receipt) = cached_verification(&identity)
+            && cached_verification(&identity).is_some()
             && !cancel_token.is_cancelled()
         {
             *dirty = false;
             *cache = Some((root.to_path_buf(), None));
-            return Some(receipt);
+            return None;
         }
     }
     let result = run_compiler_check(root, cancel_token, sandbox_mode).await;
@@ -1446,6 +1446,31 @@ mod compiler_execution_tests {
         );
         assert!(!dirty);
         assert_eq!(cache, Some((project.path().to_owned(), None)));
+
+        // A shared-cache hit is still a successful check. The cache receipt is
+        // operational metadata, not a compiler diagnostic for callers.
+        let identity = compiler_verification_identity(
+            project.path(),
+            "cargo check --message-format=json",
+            crate::config::SandboxMode::default(),
+        )
+        .unwrap();
+        record_verification(identity, "cached compiler output".to_string());
+        let mut cached_dirty = true;
+        let mut cached_turn_cache = None;
+        assert!(
+            cached_compiler_check(
+                project.path(),
+                &mut cached_dirty,
+                &mut cached_turn_cache,
+                &token,
+                crate::config::SandboxMode::default()
+            )
+            .await
+            .is_none()
+        );
+        assert!(!cached_dirty);
+        assert_eq!(cached_turn_cache, Some((project.path().to_owned(), None)));
     }
 
     #[tokio::test]

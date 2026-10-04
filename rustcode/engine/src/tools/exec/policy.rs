@@ -23,13 +23,38 @@ const SUDO_LONG_OPTS_WITH_VALUE: &[&str] = &[
 ];
 
 /// Conservatively split shell text at boundaries that may introduce another
-/// command. This is intentionally not a complete shell parser: splitting too
-/// eagerly can only make the policy require confirmation, never bypass it.
+/// command. This is intentionally not a complete shell parser; quoted text is
+/// kept intact so operators inside read-only query arguments are not mistaken
+/// for shell syntax.
 fn split_command_segments(cmd: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
     for ch in cmd.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if quote.is_some() {
+            current.push(ch);
+            if quote == Some(ch) {
+                quote = None;
+            } else if ch == '\\' && quote == Some('"') {
+                escaped = true;
+            }
+            continue;
+        }
         match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '\\' => {
+                current.push(ch);
+                escaped = true;
+            }
             ';' | '\n' | '|' | '&' | '`' | '(' | ')' | '{' | '}' => {
                 segments.push(std::mem::take(&mut current));
             }
@@ -317,14 +342,158 @@ fn is_read_only_gh(tokens: &[&str]) -> bool {
             | ["issue", "view", ..]
             | ["pr", "list", ..]
             | ["pr", "view", ..]
-    )
+            | ["release", "list", ..]
+            | ["release", "view", ..]
+    ) || is_read_only_gh_api(tokens)
+}
+
+/// Parse only the non-mutating `gh api` forms. The CLI defaults to GET only
+/// when no request fields or body are supplied, so unknown flags and values
+/// fail closed instead of inheriting a possibly POST request.
+fn is_read_only_gh_api(tokens: &[&str]) -> bool {
+    if tokens.get(1) != Some(&"api") || tokens.len() < 3 {
+        return false;
+    }
+
+    let mut endpoint = None;
+    let mut index = 2;
+    while index < tokens.len() {
+        let token = tokens[index];
+        match token {
+            "-X" | "--method" => {
+                index += 1;
+                if !tokens
+                    .get(index)
+                    .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
+                {
+                    return false;
+                }
+            }
+            "-q" | "--jq" | "-t" | "--template" | "--hostname" | "--preview" | "-p" => {
+                index += 1;
+                if tokens.get(index).is_none() {
+                    return false;
+                }
+            }
+            "--paginate" | "--slurp" | "--silent" | "--include" | "--verbose" => {}
+            _ if token.starts_with("--method=") => {
+                if !token["--method=".len()..].eq_ignore_ascii_case("GET") {
+                    return false;
+                }
+            }
+            _ if token.starts_with("-X") => {
+                if !token["-X".len()..].eq_ignore_ascii_case("GET") {
+                    return false;
+                }
+            }
+            _ if token.starts_with("--jq=") || token.starts_with("--template=") => {}
+            _ if token.starts_with("-q=") || token.starts_with("-t=") => {}
+            _ if token.starts_with('-') => return false,
+            _ if endpoint.is_none() => {
+                if token == "graphql" || token.chars().any(char::is_whitespace) {
+                    return false;
+                }
+                endpoint = Some(token);
+            }
+            _ => return false,
+        }
+        index += 1;
+    }
+
+    endpoint.is_some()
+}
+
+/// Split one shell segment into words while honoring simple single and double
+/// quotes. Only the quoted `$HOME` expansion is accepted for ordinary
+/// inspection commands; other expansions and escapes stay unclassified.
+fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut has_environment_expansion = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            } else if active_quote == '"' && ch == '$' {
+                // `$HOME` is a common, harmless read-only shell argument. Keep
+                // its literal spelling for policy checks; other expansions
+                // stay unclassified because they can hide command options.
+                for expected in ['H', 'O', 'M', 'E'] {
+                    if chars.next() != Some(expected) {
+                        return None;
+                    }
+                }
+                if chars
+                    .peek()
+                    .is_some_and(|next| next.is_ascii_alphanumeric() || *next == '_')
+                {
+                    return None;
+                }
+                word.push_str("$HOME");
+                has_environment_expansion = true;
+            } else if active_quote == '"' && matches!(ch, '`' | '\\') {
+                return None;
+            } else {
+                word.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                started = true;
+            }
+            ch if ch.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            '$' | '`' | '\\' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '{' | '}' => {
+                return None;
+            }
+            _ => {
+                word.push(ch);
+                started = true;
+            }
+        }
+    }
+
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    Some((words, has_environment_expansion))
 }
 
 fn is_read_only_segment(segment: &str) -> bool {
-    let tokens = segment.split_whitespace().collect::<Vec<_>>();
+    let Some((words, has_environment_expansion)) = read_only_shell_words(segment) else {
+        return false;
+    };
+    let tokens = words.iter().map(String::as_str).collect::<Vec<_>>();
+    // An arbitrary executable named ./cat or /tmp/gh is not the inspection
+    // command advertised by its basename. Keep qualified paths unclassified.
+    if tokens
+        .first()
+        .is_some_and(|binary| binary.contains(['/', '\\']))
+    {
+        return false;
+    }
     let Some(binary) = tokens.first().map(|token| token.rsplit(['/', '\\']).next()) else {
         return true;
     };
+    // A dynamic argument could expand into a gh flag such as --method=POST.
+    // Keep the `$HOME` allowance for ordinary inspection commands only.
+    if binary == Some("gh") && has_environment_expansion {
+        return false;
+    }
     match binary {
         Some("git") => is_read_only_git(&tokens),
         Some("gh") => is_read_only_gh(&tokens),

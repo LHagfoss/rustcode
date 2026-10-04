@@ -1445,9 +1445,43 @@ fn request_schema_policy_isolates_subagents_from_parent_delegation() {
 
     assert!(root_names.contains(&"spawn_agent"));
     assert!(root_names.contains(&"wait_agent"));
+    assert!(child_names.contains(&"run_command"));
     assert!(!child_names.iter().any(|name| is_agent_tool(name)));
     assert!(!ToolSchemaPolicy::subagent().include_mcp_tools);
     assert!(ToolSchemaPolicy::root(true).include_mcp_tools);
+}
+
+#[test]
+fn read_only_subagent_shell_surface_matches_native_and_text_protocols() {
+    let policy = ToolSchemaPolicy::subagent_with_delegation();
+    let native = native_tools_schema_for_context(policy, &[]).0;
+    let names = native
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"run_command"));
+    assert!(names.contains(&"spawn_agent"));
+    assert!(!names.contains(&"write_to_file"));
+    assert!(!names.contains(&"set_goal"));
+    assert!(!names.contains(&"todo_write"));
+
+    let text = tool_system_prompt_for_policy(
+        policy,
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Build,
+    );
+    assert!(text.contains("- run_command |"));
+    assert!(text.contains("- spawn_agent |"));
+    assert!(!text.contains("- write_to_file |"));
+    assert!(!text.contains("- set_goal |"));
+    assert!(!text.contains("- todo_write |"));
+
+    let plan_text = tool_system_prompt_for_policy(
+        ToolSchemaPolicy::read_only_inspection(),
+        crate::config::ToolProtocol::Json,
+        crate::config::AgentMode::Plan,
+    );
+    assert!(!plan_text.contains("- run_command |"));
 }
 
 #[test]
@@ -1471,6 +1505,14 @@ fn read_only_inspection_profile_is_small_and_deterministic() {
             "view_file"
         ]
     );
+
+    let subagent = native_tools_schema_for_context(ToolSchemaPolicy::subagent(), &[]).0;
+    let subagent_names = subagent
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(subagent_names.contains(&"run_command"));
+    assert!(!subagent_names.iter().any(|name| is_agent_tool(name)));
 }
 
 #[test]
@@ -3074,6 +3116,50 @@ fn validation_enforces_one_of_branch_count_and_reports_invalid_values() {
             .expect_err("a non-integer must fail both constrained integer branches");
     assert!(error.contains("branch 1: $ must be integer"));
     assert!(error.contains("branch 2: $ must be integer"));
+}
+
+#[test]
+fn subagent_id_schemas_accept_numeric_strings_and_main_message_id() {
+    for tool_name in [
+        "wait_agent",
+        "cancel_agent",
+        "inspect_agent",
+        "send_message",
+        "followup_task",
+    ] {
+        let schema = super::registered_tool_schema(tool_name)
+            .unwrap_or_else(|| panic!("missing schema for {tool_name}"));
+        let message =
+            matches!(tool_name, "send_message" | "followup_task").then_some("new evidence");
+        for id in [serde_json::json!(1), serde_json::json!("1")] {
+            let mut arguments = serde_json::json!({"id": id});
+            if let Some(message) = message {
+                arguments["message"] = serde_json::json!(message);
+            }
+            validate_value_against_schema(&arguments, &schema, "$", true)
+                .unwrap_or_else(|error| panic!("{tool_name} rejected a supported id: {error}"));
+        }
+    }
+
+    let send_message = super::registered_tool_schema("send_message").unwrap();
+    assert!(
+        validate_value_against_schema(
+            &serde_json::json!({"id": 0, "message": "reply"}),
+            &send_message,
+            "$",
+            true,
+        )
+        .is_ok()
+    );
+
+    for tool_name in ["wait_agent", "cancel_agent", "inspect_agent"] {
+        let schema = super::registered_tool_schema(tool_name).unwrap();
+        assert!(
+            validate_value_against_schema(&serde_json::json!({"id": 0}), &schema, "$", true,)
+                .is_err(),
+            "{tool_name} must reject reserved root id 0"
+        );
+    }
 }
 
 #[test]

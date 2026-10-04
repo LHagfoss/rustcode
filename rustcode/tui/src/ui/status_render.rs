@@ -102,6 +102,66 @@ fn status_panel_content_width(content: &str, title: Option<&str>, available_widt
     available_width.saturating_sub(6).max(1).min(desired)
 }
 
+fn agent_activity_summary(content: &str) -> Option<String> {
+    let content = content.strip_prefix("agent-")?;
+    let (id, activity) = content.split_once(' ')?;
+    if id.is_empty() || !id.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let activity = activity.split_whitespace().collect::<Vec<_>>().join(" ");
+    let summary = if let Some(tool_activity) = activity.strip_prefix("→ ") {
+        let (tool_name, target) = tool_activity.split_once(' ').unwrap_or((tool_activity, ""));
+        let (action, _) = super::format_pi_tool_action(tool_name, &serde_json::Value::Null, None);
+        let home = std::env::var("HOME").ok();
+        let target = super::contract_home_path(target, home.as_deref());
+        if target.is_empty() {
+            format!("Agent {id} · {action}")
+        } else {
+            format!("Agent {id} · {action} {target}")
+        }
+    } else if let Some(follow_up) = activity.strip_prefix("← follow-up (") {
+        format!(
+            "Agent {id} · follow-up: {}",
+            follow_up.trim_end_matches(')')
+        )
+    } else if let Some(spawned) = activity.strip_prefix("spawned: ") {
+        let task = spawned
+            .split_once(" (write_access=")
+            .map_or(spawned, |(task, _)| task);
+        format!("Agent {id} spawned · {task}")
+    } else {
+        format!("Agent {id} {activity}")
+    };
+    Some(summary)
+}
+
+fn truncate_display_width(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_owned();
+    }
+    let budget = max_width.saturating_sub(1);
+    let mut output = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let width = UnicodeWidthChar::width(character).unwrap_or_default();
+        if used + width > budget {
+            break;
+        }
+        used += width;
+        output.push(character);
+    }
+    if max_width > 0 {
+        output.push('…');
+    }
+    output
+}
+
+fn is_compact_tool_batch_notice(content: &str) -> bool {
+    content.starts_with("Tool calls were queued by the scheduler")
+        || content.starts_with("Some tool calls were queued;")
+        || content.starts_with("Some tool calls were not run;")
+}
+
 pub(super) fn render_status_panel<'a>(
     content: &str,
     width: u16,
@@ -159,6 +219,28 @@ pub(super) fn render_status_panel<'a>(
             Span::styled(
                 summary.to_string(),
                 get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]));
+        return;
+    }
+
+    if let Some(summary) = agent_activity_summary(content)
+        .or_else(|| is_compact_tool_batch_notice(content).then(|| content.to_owned()))
+    {
+        if width == 0 {
+            return;
+        }
+        let prefix = if width > 1 { "  " } else { " " };
+        let summary =
+            truncate_display_width(&summary, (width as usize).saturating_sub(prefix.width()));
+        lines.push(Line::from(vec![
+            Span::styled(
+                prefix,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                summary,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
         ]));
         return;
