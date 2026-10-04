@@ -281,6 +281,9 @@ pub struct AppState {
     /// the root conversation active without changing its stored history.
     pub selected_subagent_id: Option<u32>,
     pub delegation_armed: bool,
+    /// Set by `/delegate on`: every task in this session may delegate until
+    /// `/delegate off` or a new session.
+    pub delegation_sticky: bool,
     pub delegation_active: bool,
     pub continuous_mode: bool,
     pub next_subagent_id: u32,
@@ -1236,6 +1239,7 @@ impl AppState {
             subagents: Vec::new(),
             selected_subagent_id: None,
             delegation_armed: false,
+            delegation_sticky: false,
             delegation_active: false,
             next_subagent_id: 1,
             todos: Vec::new(),

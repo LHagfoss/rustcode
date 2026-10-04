@@ -1934,6 +1934,15 @@ For live local app/device state without a matching tool or route hint, check `li
 - Before delegating, identify the critical path and keep blockers in the main agent. Delegate only bounded, self-contained side tasks with clear outputs and disjoint write scopes.\n\\
 - Review every subagent result and inspect its workspace changes before treating the task as complete.\n\\n",
         );
+    } else if policy.profile == ToolSchemaProfile::Coding
+        && agent_mode != crate::config::AgentMode::Plan
+    {
+        // Say why there is no agent tool instead of staying silent: with no
+        // hint the model spent rounds searching MCP for one. (#1710)
+        p.push_str(
+            "# Delegation\n\
+- No subagent tools this task; do not search. User enables via `/delegate`.\n\n",
+        );
     }
 
     p.push_str("# Tool Format\n");

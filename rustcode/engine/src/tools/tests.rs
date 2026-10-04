@@ -3420,6 +3420,20 @@ fn prompt_makes_delegation_explicitly_opt_in() {
     assert!(!prompt.contains("Do not spawn subagents unless the user explicitly requests"));
     assert!(!prompt.contains("Review every subagent result"));
     assert!(!prompt.contains("- spawn_agent | Args:"));
+    // It still has to say why, or the model searches MCP for a tool. (#1710)
+    assert!(prompt.contains("No subagent tools this task"));
+    assert!(prompt.contains("`/delegate`"));
+    for policy in [
+        ToolSchemaPolicy::subagent(),
+        ToolSchemaPolicy::read_only_inspection(),
+    ] {
+        let prompt = tool_system_prompt_for_policy(
+            policy,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        assert!(!prompt.contains("/delegate"));
+    }
 
     let delegated = tool_system_prompt(
         true,
@@ -3429,6 +3443,7 @@ fn prompt_makes_delegation_explicitly_opt_in() {
     assert!(delegated.contains("Do not spawn subagents unless the user explicitly requests"));
     assert!(delegated.contains("Review every subagent result"));
     assert!(delegated.contains("- spawn_agent | Args:"));
+    assert!(!delegated.contains("No subagent tools this task"));
 
     assert!(prompt.contains("Never run `cargo check` on a standalone `.rs` file"));
     assert!(prompt.contains("Prefer the smallest focused sequence"));

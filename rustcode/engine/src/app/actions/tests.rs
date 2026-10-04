@@ -1915,6 +1915,56 @@ fn submit_plain_prompt_ignores_empty_text_and_queues_in_order() {
 }
 
 #[test]
+fn explicit_subagent_request_enables_delegation_for_that_task() {
+    use super::submit::prompt_requests_delegation;
+
+    for prompt in [
+        // Originating session prompt (#1710), typo included.
+        "use 1 sub agent to check latet PRs or stuff done",
+        "Use two sub-agents to review the diff",
+        "spawn an agent to audit the scheduler",
+        "delegate this task to a subagent",
+        "check the PRs with 3 parallel subagents",
+        "have a subagent read the logs",
+    ] {
+        assert!(prompt_requests_delegation(prompt), "{prompt}");
+    }
+    for prompt in [
+        "fix the subagent picker",
+        "why does spawn_agent fail?",
+        "use agent mode for this",
+        "don't use subagents, just check the PRs",
+        "do this without using sub agents",
+        "check latest PRs",
+    ] {
+        assert!(!prompt_requests_delegation(prompt), "{prompt}");
+    }
+}
+
+#[test]
+fn delegation_is_scoped_by_prompt_arming_and_sticky_mode() {
+    use crate::app::AppState;
+
+    let mut state = AppState::new();
+    super::submit_plain_prompt(&mut state, "use 1 sub agent to check PRs".into());
+    assert!(state.delegation_active);
+    super::submit_plain_prompt(&mut state, "check PRs".into());
+    assert!(!state.delegation_active);
+
+    state.delegation_armed = true;
+    super::submit_plain_prompt(&mut state, "check PRs".into());
+    assert!(state.delegation_active);
+    assert!(!state.delegation_armed);
+    super::submit_plain_prompt(&mut state, "check PRs".into());
+    assert!(!state.delegation_active);
+
+    state.delegation_sticky = true;
+    super::submit_plain_prompt(&mut state, "check PRs".into());
+    super::submit_plain_prompt(&mut state, "check them again".into());
+    assert!(state.delegation_active);
+}
+
+#[test]
 fn submit_plain_prompt_steers_only_when_the_active_turn_accepts_steering() {
     use crate::app::{AppState, AppStatus, state::DraftSubmitMode};
 
