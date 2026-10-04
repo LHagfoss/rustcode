@@ -1,3 +1,11 @@
+## [v0.56.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.17) - 2026-10-04
+
+### Fixes
+- Batch safe GitHub inspection commands without unnecessary workspace-write deferrals.
+- Accept numeric subagent IDs and allow read-only children to run guarded inspection commands.
+- Keep scheduler and child activity notices to one clipped row, with readable labels and fewer synthetic failure rows.
+- Treat cached successful compiler checks as passed and avoid marking read-only child spawns as workspace edits.
+- Fixes: https://github.com/LHagfoss/rustcode/pull/1714
 ## [v0.56.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.16) - 2026-10-04
 
 ### Fixes
