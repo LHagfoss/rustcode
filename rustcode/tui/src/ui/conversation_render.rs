@@ -273,6 +273,24 @@ pub(crate) fn render_visible_conversation_with_transcript(
             .saturating_mul(2)
             .saturating_add(usize::from(state.recap_loading())),
     );
+    if let Some(agent) = state.selected_subagent() {
+        // An agent context has no reading anchor of its own, so it scrolls as
+        // a plain offset from the newest row of the agent's whole history.
+        let content_mark = (
+            agent.history().len() as u64,
+            usize::from(agent.active_turn()),
+        );
+        let content_changed = transcript.last_content() != Some(content_mark);
+        let capacity = height as usize;
+        let wanted_rows = capacity
+            .saturating_add(transcript.scroll_rows())
+            .saturating_add(1);
+        let lines = selected_subagent_lines(state, width, wanted_rows);
+        let scroll = transcript.clamp_scroll_rows(lines.len().saturating_sub(capacity));
+        transcript.note_projection(scroll == 0, content_changed, content_mark);
+        let end = lines.len() - scroll;
+        return lines[end.saturating_sub(capacity)..end].to_vec();
+    }
     let content_changed = transcript.last_content() != Some(content_mark);
     let display_start = state.history_display_start().min(history_len);
     let mut measured_tail = None;
@@ -300,7 +318,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
         height
     };
     let live = render_live_tail_mode(state, width, live_height, transcript, true);
-    if height == 0 || state.selected_subagent().is_some() {
+    if height == 0 {
         return live;
     }
 
@@ -594,49 +612,70 @@ pub(super) fn render_selected_subagent_context(
     width: u16,
     height: u16,
 ) -> Vec<Line<'static>> {
+    let mut lines = selected_subagent_lines(state, width, height as usize);
+    if lines.len() > height as usize {
+        lines = lines.split_off(lines.len() - height as usize);
+    }
+    lines
+}
+
+/// Project the selected agent's context newest-first until `wanted_rows` are
+/// covered, so a long agent transcript costs only the rows the viewport and
+/// its scroll offset can reach. The header is the first row of the context
+/// and appears once the projection reaches the top.
+fn selected_subagent_lines(
+    state: &RenderSnapshot,
+    width: u16,
+    wanted_rows: usize,
+) -> Vec<Line<'static>> {
     let Some(agent) = state.selected_subagent() else {
         return Vec::new();
     };
-    let status = match agent.status() {
-        rustcode::controller::SubAgentStatus::Queued => "queued",
-        rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
-        rustcode::controller::SubAgentStatus::Running => "running",
-        rustcode::controller::SubAgentStatus::Completed => "completed",
-        rustcode::controller::SubAgentStatus::Failed => "failed",
-        rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
-    };
-    let parent = agent
-        .parent_id()
-        .map(|id| format!("agent-{id}"))
-        .unwrap_or_else(|| "main".to_owned());
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            format!("↳ {}", agent.name()),
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
-        ),
-        Span::styled(
-            format!(" · {status} · parent {parent}"),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        ),
-    ])];
-    lines.push(Line::from(Span::styled(
-        "  agent context · use /agents to navigate · main history preserved",
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-    )));
-
-    let history = state.active_history();
-    let start = history.len().saturating_sub(8);
-    for index in start..history.len() {
-        lines.extend(render_committed_history_block_snapshot(state, index, width));
+    let mut blocks = Vec::new();
+    let mut rows = usize::from(agent.active_turn());
+    let mut index = state.active_history().len();
+    while index > 0 && rows < wanted_rows {
+        index -= 1;
+        let block = render_committed_history_block_snapshot(state, index, width);
+        rows += block.len();
+        blocks.push(block);
     }
+
+    let mut lines = Vec::new();
+    if index == 0 {
+        let status = match agent.status() {
+            rustcode::controller::SubAgentStatus::Queued => "queued",
+            rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
+            rustcode::controller::SubAgentStatus::Running => "running",
+            rustcode::controller::SubAgentStatus::Completed => "completed",
+            rustcode::controller::SubAgentStatus::Failed => "failed",
+            rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
+        };
+        let parent = agent
+            .parent_id()
+            .map(|id| format!("agent-{id}"))
+            .unwrap_or_else(|| "main".to_owned());
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("↳ {}", agent.name()),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+            ),
+            Span::styled(
+                format!(" · {status} · parent {parent}"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "  agent context · ← agents · alt+←/→ switch · main history preserved",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        )));
+    }
+    lines.extend(blocks.into_iter().rev().flatten());
     if agent.active_turn() {
         lines.push(Line::from(Span::styled(
             "• Working",
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
         )));
-    }
-    if lines.len() > height as usize {
-        lines = lines.split_off(lines.len() - height as usize);
     }
     lines.into_iter().map(|line| own_line(&line)).collect()
 }

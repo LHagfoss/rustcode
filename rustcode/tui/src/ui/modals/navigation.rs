@@ -396,7 +396,7 @@ pub(in crate::ui) fn render_subagent_picker_modal(
     );
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "Select a conversation context; parent history is preserved",
+            "→ open · ← close · alt+←/→ switch from the prompt · parent history preserved",
             Style::default().fg(COLOR_MUTED()),
         )))
         .style(Style::default().bg(COLOR_PANEL())),
