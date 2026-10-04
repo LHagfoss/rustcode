@@ -944,7 +944,7 @@ pub(super) async fn handle_app_event(
                 if s.show_subagent_picker {
                     let total = s.subagents.len() + 1;
                     match key.code {
-                        KeyCode::Esc => {
+                        KeyCode::Esc | KeyCode::Left => {
                             s.show_subagent_picker = false;
                         }
                         KeyCode::Up => {
@@ -961,7 +961,7 @@ pub(super) async fn handle_app_event(
                                 s.subagent_picker_index = (s.subagent_picker_index + 1) % total;
                             }
                         }
-                        KeyCode::Enter => {
+                        KeyCode::Enter | KeyCode::Right => {
                             let selected = s.subagent_picker_index.min(total.saturating_sub(1));
                             let id = if selected == 0 {
                                 0
@@ -1708,12 +1708,32 @@ pub(super) async fn handle_app_event(
                     }
                     KeyCode::Left => {
                         let mut s = app_state.lock().await;
+                        // An empty composer has no cursor to move, so Left opens
+                        // the agent contexts the way Codex opens its agents overview.
+                        if key.modifiers.is_empty()
+                            && s.input_buffer.is_empty()
+                            && !s.subagents.is_empty()
+                        {
+                            open_overlay(&mut s, rustcode::app::events::Overlay::Subagents);
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                            || key.modifiers.contains(event::KeyModifiers::META);
+                        // Word motion wins whenever there is a draft; only an
+                        // empty composer gives Alt+arrows to agent switching.
+                        if alt
+                            && !shift
+                            && s.input_buffer.is_empty()
+                            && let Some(id) = sessions::adjacent_context_id(&s, false)
+                        {
+                            drop(s);
+                            let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         if shift && s.composer_selection_anchor.is_none() {
                             s.composer_selection_anchor = Some(s.cursor_position);
                         }
-                        let alt = key.modifiers.contains(event::KeyModifiers::ALT)
-                            || key.modifiers.contains(event::KeyModifiers::META);
                         if alt {
                             s.move_cursor_word_left();
                         } else {
@@ -1728,11 +1748,22 @@ pub(super) async fn handle_app_event(
                     KeyCode::Right => {
                         let mut s = app_state.lock().await;
                         let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
+                        let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                            || key.modifiers.contains(event::KeyModifiers::META);
+                        // Word motion wins whenever there is a draft; only an
+                        // empty composer gives Alt+arrows to agent switching.
+                        if alt
+                            && !shift
+                            && s.input_buffer.is_empty()
+                            && let Some(id) = sessions::adjacent_context_id(&s, true)
+                        {
+                            drop(s);
+                            let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         if shift && s.composer_selection_anchor.is_none() {
                             s.composer_selection_anchor = Some(s.cursor_position);
                         }
-                        let alt = key.modifiers.contains(event::KeyModifiers::ALT)
-                            || key.modifiers.contains(event::KeyModifiers::META);
                         if alt {
                             s.move_cursor_word_right();
                         } else {
@@ -1862,8 +1893,24 @@ pub(super) async fn handle_app_event(
                                 s.reset_suggestion_cycle();
                             }
                         } else if (alt && c == 'b') || c == '∫' {
+                            // Terminals without enhanced key reporting send
+                            // Option+Left/Right as these word-motion keys.
+                            if s.input_buffer.is_empty()
+                                && let Some(id) = sessions::adjacent_context_id(&s, false)
+                            {
+                                drop(s);
+                                let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                                return Ok(InputFlow::ContinueIteration);
+                            }
                             s.move_cursor_word_left();
                         } else if (alt && c == 'f') || c == 'ƒ' {
+                            if s.input_buffer.is_empty()
+                                && let Some(id) = sessions::adjacent_context_id(&s, true)
+                            {
+                                drop(s);
+                                let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                                return Ok(InputFlow::ContinueIteration);
+                            }
                             s.move_cursor_word_right();
                         } else if (alt && c == 'd') || c == '∂' {
                             s.delete_word_forward();

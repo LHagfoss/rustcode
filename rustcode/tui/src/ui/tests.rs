@@ -8690,6 +8690,67 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
 }
 
 #[test]
+fn selected_subagent_transcript_scrolls_back_to_its_first_message() {
+    let mut state = RenderState::new();
+    let history = (0..40)
+        .map(|index| ChatMessage::new("assistant", format!("child step {index}")))
+        .collect();
+    let child = subagent_row(
+        "agent-1",
+        "child task",
+        history,
+        rustcode::controller::SubAgentStatus::Completed,
+        false,
+    );
+    state.subagents.push(child.clone());
+    state.selected_subagent = Some(child);
+    state.selected_subagent_id = Some(1);
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    let text = |lines: Vec<Line<'static>>| {
+        lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let tail = text(super::render_visible_conversation_with_transcript(
+        &snapshot,
+        80,
+        10,
+        &mut transcript,
+    ));
+    assert!(tail.contains("child step 39"));
+    assert!(!tail.contains("child step 0\n"));
+
+    transcript.scroll_up(4);
+    let scrolled = text(super::render_visible_conversation_with_transcript(
+        &snapshot,
+        80,
+        10,
+        &mut transcript,
+    ));
+    assert_eq!(transcript.scroll_rows(), 4);
+    assert_ne!(scrolled, tail, "scrolling must move the agent transcript");
+    assert!(!scrolled.trim().is_empty());
+
+    transcript.scroll_up(10_000);
+    let top = text(super::render_visible_conversation_with_transcript(
+        &snapshot,
+        80,
+        10,
+        &mut transcript,
+    ));
+    assert!(
+        top.contains("↳ agent-1"),
+        "the top shows the context header"
+    );
+    assert!(top.contains("child step 0"));
+    assert!(!top.contains("child step 39"));
+}
+
+#[test]
 fn selected_restored_child_correlates_legacy_tool_results_with_its_history() {
     let mut state = RenderState::new();
     for index in 0..9 {

@@ -59,9 +59,38 @@ pub(super) fn open_overlay(state: &mut AppState, overlay: rustcode::app::events:
         state.history_picker_truncated = truncated;
     }
     if matches!(overlay, rustcode::app::events::Overlay::Subagents) {
-        state.subagent_picker_index = 0;
+        state.subagent_picker_index = active_context_row(state);
     }
     state.overlays().open(overlay);
+}
+
+/// Picker row of the context on screen: row 0 is main, then the subagents in
+/// spawn order.
+fn active_context_row(state: &AppState) -> usize {
+    state
+        .selected_subagent_id
+        .and_then(|id| state.subagents.iter().position(|agent| agent.id == id))
+        .map_or(0, |index| index + 1)
+}
+
+/// The context one step before or after the one on screen, wrapping through
+/// main (id 0) in spawn order. `None` when there is no subagent to switch to.
+pub(super) fn adjacent_context_id(state: &AppState, forward: bool) -> Option<u32> {
+    if state.subagents.is_empty() {
+        return None;
+    }
+    let total = state.subagents.len() + 1;
+    let row = active_context_row(state);
+    let next = if forward {
+        (row + 1) % total
+    } else {
+        (row + total - 1) % total
+    };
+    Some(if next == 0 {
+        0
+    } else {
+        state.subagents[next - 1].id
+    })
 }
 
 pub(super) fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppError> {
@@ -75,4 +104,44 @@ pub(super) fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<
     state.show_subagent_picker = false;
     state.request_redraw();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{adjacent_context_id, open_overlay};
+    use rustcode::app::AppState;
+
+    fn spawn(state: &mut AppState, name: &str) -> u32 {
+        rustcode::app::SubagentController
+            .spawn(state, name, None, None, false, Vec::new(), None, None)
+            .raw()
+    }
+
+    #[test]
+    fn adjacent_context_wraps_through_main_in_spawn_order() {
+        let mut state = AppState::new();
+        assert_eq!(adjacent_context_id(&state, true), None);
+
+        let first = spawn(&mut state, "first");
+        let second = spawn(&mut state, "second");
+        assert_eq!(adjacent_context_id(&state, true), Some(first));
+        assert_eq!(adjacent_context_id(&state, false), Some(second));
+
+        state.selected_subagent_id = Some(second);
+        assert_eq!(adjacent_context_id(&state, true), Some(0));
+        assert_eq!(adjacent_context_id(&state, false), Some(first));
+    }
+
+    #[test]
+    fn agents_overlay_opens_on_the_context_on_screen() {
+        let mut state = AppState::new();
+        spawn(&mut state, "first");
+        let second = spawn(&mut state, "second");
+        state.selected_subagent_id = Some(second);
+
+        open_overlay(&mut state, rustcode::app::events::Overlay::Subagents);
+
+        assert!(state.show_subagent_picker);
+        assert_eq!(state.subagent_picker_index, 2);
+    }
 }
