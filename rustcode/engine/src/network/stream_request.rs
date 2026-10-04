@@ -3971,6 +3971,7 @@ async fn stream_request_with_timeouts(
     first_event_timeout: std::time::Duration,
     stream_idle_timeout: std::time::Duration,
 ) -> Result<Option<String>, StreamFailure> {
+    let request_started = std::time::Instant::now();
     let (profile, profile_error, active_session_id) = {
         let app = state.lock().await;
         let selected_name = app.config.default.big();
@@ -4343,6 +4344,8 @@ async fn stream_request_with_timeouts(
         crate::config::ToolProtocol::Native => "native",
         crate::config::ToolProtocol::ApiNative => "api_native",
     };
+    buffer.lock().await.performance.schema_us = crate::benchmark::elapsed_us(request_started);
+    let serialization_started = std::time::Instant::now();
     let payload_bytes = serde_json::to_vec(&payload).map_err(|error| StreamFailure {
         kind: StreamFailureKind::ProviderError,
         status: None,
@@ -4351,6 +4354,7 @@ async fn stream_request_with_timeouts(
         events_received: 0,
         partial_event_bytes: 0,
     })?;
+    buffer.lock().await.performance.serialization_us = crate::benchmark::elapsed_us(serialization_started);
     let payload_byte_count = payload_bytes.len();
     let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
     crate::dbg_log_for_session!(
@@ -4949,6 +4953,9 @@ async fn stream_request_with_timeouts(
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
+                                if stream_events_received == 1 {
+                                    buffer.lock().await.performance.ttft_us = Some(crate::benchmark::elapsed_us(request_started));
+                                }
                                 // Only meaningful events move the progress
                                 // markers: keep-alive blank/comment lines and
                                 // unparsable payloads must not extend the

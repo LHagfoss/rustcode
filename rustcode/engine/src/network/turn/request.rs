@@ -466,6 +466,7 @@ pub(super) async fn collect_round(
         );
     }
 
+    let context_started = std::time::Instant::now();
     let checkpoint = ctx.context_checkpoint();
     let msgs = match prepare_turn_request_with_checkpoint_and_prefix_cache(
         client,
@@ -509,6 +510,9 @@ pub(super) async fn collect_round(
             return Err(RoundCollectionError::Stop);
         }
     };
+
+    ctx.performance.context_us += crate::benchmark::elapsed_us(context_started);
+    ctx.performance.context_bytes = ctx.performance.context_bytes.max(msgs.iter().map(|msg| msg.to_string().len()).sum());
 
     {
         let mut s = state.lock().await;
@@ -965,6 +969,12 @@ pub(super) async fn collect_round(
             .map(|call| call.call_id.clone())
             .collect()
     };
+    ctx.performance.model_us += crate::benchmark::elapsed_us(turn_start_time);
+    let request_perf = stream_buffer.lock().await.performance.clone();
+    ctx.performance.schema_us += request_perf.schema_us;
+    ctx.performance.serialization_us += request_perf.serialization_us;
+    ctx.performance.requests += 1;
+    if ctx.performance.ttft_us.is_none() { ctx.performance.ttft_us = request_perf.ttft_us; }
     Ok(RoundResponse {
         content,
         final_answer_boundary: collected.final_answer_boundary,

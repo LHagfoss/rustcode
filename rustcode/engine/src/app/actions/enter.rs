@@ -731,6 +731,10 @@ async fn handle_enter_inner(
                     s.show_context_modal = true;
                 }
             }
+            "/perf" => {
+                let report = s.last_turn_performance.as_ref().map(|perf| perf.report()).unwrap_or_else(|| "No turn telemetry available yet.".into());
+                s.show_command_panel("Performance", report);
+            }
             "/status" => {
                 s.show_status_modal = true;
             }

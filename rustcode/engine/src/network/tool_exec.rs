@@ -1032,6 +1032,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
     dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
     let mut results = Vec::with_capacity(tool_calls.len());
     for call in tool_calls {
+        let execution_started = std::time::Instant::now();
         let name = &call.name;
         let args = &call.arguments;
         let replay = {
@@ -1352,6 +1353,7 @@ pub(crate) async fn execute_tool_batch_with_assessments(
         let final_diff = final_tool_diff(&execution.content, preview_fallback);
         let title_was_set = executed_name == "set_session_title" && execution.success;
         let mut result = tool_result_from_execution(&executed_name, args, execution, final_diff);
+        result.metadata.execution_us = crate::benchmark::elapsed_us(execution_started);
         result.metadata.full_output_artifact = replay_artifact;
         results.push(result);
         if title_was_set {
@@ -1883,5 +1885,31 @@ mod question_tests {
             assert!(!out.success, "cancel must fail: {}", out.content);
             assert!(out.content.contains("cancelled"));
         }
+    }
+}
+
+#[cfg(test)]
+mod performance_benchmarks {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "manual tool execution baseline"]
+    async fn inspection_batch_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = Some(root.path().to_path_buf());
+        let state = Arc::new(Mutex::new(state));
+        let calls = (0..16).map(|index| {
+            let path = root.path().join(format!("file-{index}.rs"));
+            std::fs::write(&path, "fn example() {}\n".repeat(4000)).unwrap();
+            crate::tools::ToolCall { name: "view_file".into(), arguments: serde_json::json!({"path":path,"start_line":1,"end_line":4000}),call_id:Some(format!("read-{index}")) }
+        }).collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let results = execute_tool_batch(&reqwest::Client::new(), &state,
+            &tokio_util::sync::CancellationToken::new(), &calls, true, &None,
+            &mut false, &mut None, &mut std::time::Duration::ZERO, None).await;
+        assert_eq!(results.len(), calls.len());
+        assert!(results.iter().all(|result| result.metadata.success));
+        println!("inspection batch: calls={} wall_us={} work_us={}", calls.len(), crate::benchmark::elapsed_us(started), results.iter().map(|r| r.metadata.execution_us).sum::<u64>());
     }
 }

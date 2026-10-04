@@ -161,6 +161,7 @@ fn history_tool_result_event(
         diff: message.diff.clone(),
         file_preview: message.file_preview.clone(),
         metadata: ToolResultMetadata {
+            execution_us: 0,
             pending: record.pending,
             command: record.command.clone(),
             call_id: Some(id.clone()),
@@ -947,6 +948,7 @@ mod tests {
             diff: None,
             file_preview: None,
             metadata: ToolResultMetadata {
+            execution_us: 0,
                 call_id: Some("call-1".to_owned()),
                 success: true,
                 ..ToolResultMetadata::default()

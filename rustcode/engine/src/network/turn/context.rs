@@ -13,6 +13,7 @@ pub struct TurnContext {
     pub compiler: CompilerState,
     pub response: ResponseState,
     pub metrics: MetricsState,
+    pub performance: crate::benchmark::TurnPerformance,
     pub lifecycle: LifecycleState,
     pub(crate) shell_assessments: crate::tools::ShellAssessmentCache,
     pub(crate) request_prefix_cache: RequestPrefixCache,
@@ -269,6 +270,7 @@ impl TurnContext {
                 final_content_persisted: false,
                 streamed_call_ids: Vec::new(),
             },
+            performance: Default::default(),
             metrics: MetricsState {
                 tool_calls: 0,
                 mutating_tool_calls: 0,
@@ -445,6 +447,7 @@ impl TurnContext {
 
     pub fn benchmark_summary(&self) -> serde_json::Value {
         serde_json::json!({
+            "performance": self.performance,
             "tool_rounds": self.budget.tool_rounds, "tool_calls": self.metrics.tool_calls,
             "segment_rounds": self.segment_rounds(),
             "segment_count": self.budget.segment_count,

@@ -483,6 +483,7 @@ pub(crate) fn tool_result_from_execution(
         diff,
         file_preview: get_file_preview(tool_name, args),
         metadata: ToolResultMetadata {
+            execution_us: 0,
             call_id: None,
             arguments_hash: stable_arguments_hash(args),
             success: execution.success,

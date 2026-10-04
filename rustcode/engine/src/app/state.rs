@@ -152,6 +152,7 @@ pub struct AppState {
 
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
     pub response_time: Option<std::time::Duration>,
+    pub last_turn_performance: Option<crate::benchmark::TurnPerformance>,
     pub history_index: Option<usize>,
     pub temp_input: String,
     /// Every input the user submitted this run, oldest first — both plain text
@@ -1158,6 +1159,7 @@ impl AppState {
             composer_selecting: false,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
+            last_turn_performance: None,
             history_index: None,
             temp_input: String::new(),
             input_history: Vec::new(),
