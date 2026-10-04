@@ -4354,7 +4354,8 @@ async fn stream_request_with_timeouts(
         events_received: 0,
         partial_event_bytes: 0,
     })?;
-    buffer.lock().await.performance.serialization_us = crate::benchmark::elapsed_us(serialization_started);
+    buffer.lock().await.performance.serialization_us =
+        crate::benchmark::elapsed_us(serialization_started);
     let payload_byte_count = payload_bytes.len();
     let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
     crate::dbg_log_for_session!(
@@ -4953,8 +4954,13 @@ async fn stream_request_with_timeouts(
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
-                                if stream_events_received == 1 {
-                                    buffer.lock().await.performance.ttft_us = Some(crate::benchmark::elapsed_us(request_started));
+                                let generated_delta = value.pointer("/choices/0/delta").is_some_and(|delta| {
+                                    ["content", "reasoning_content", "reasoning"].iter().any(|key| delta.get(key).and_then(serde_json::Value::as_str).is_some_and(|text| !text.is_empty()))
+                                        || delta.get("tool_calls").and_then(serde_json::Value::as_array).is_some_and(|calls| !calls.is_empty())
+                                }) || value.get("type").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.ends_with(".delta"))
+                                    && value.get("delta").is_some_and(|delta| delta.as_str().is_none_or(|text| !text.is_empty()));
+                                if generated_delta {
+                                    buffer.lock().await.performance.ttft_us.get_or_insert_with(|| crate::benchmark::elapsed_us(request_started));
                                 }
                                 // Only meaningful events move the progress
                                 // markers: keep-alive blank/comment lines and
@@ -5234,6 +5240,12 @@ async fn stream_request_with_timeouts(
                                             break;
                                         }
                                     }
+                                if let Some(usage) = val.get("usage") {
+                                    let mut stream = buffer.lock().await;
+                                    stream.performance.input_tokens = usage.get("prompt_tokens").and_then(serde_json::Value::as_u64);
+                                    stream.performance.output_tokens = usage.get("completion_tokens").and_then(serde_json::Value::as_u64);
+                                    stream.performance.cached_input_tokens = cache_usage_metrics(usage).0.map(u64::from);
+                                }
                                 if let Some(usage) = val.get("usage").filter(|_| !quiet)
                                     && let (Some(p), Some(c), Some(t)) = (
                                         usage.get("prompt_tokens").and_then(|v| v.as_u64()),

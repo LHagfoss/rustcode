@@ -732,7 +732,11 @@ async fn handle_enter_inner(
                 }
             }
             "/perf" => {
-                let report = s.last_turn_performance.as_ref().map(|perf| perf.report()).unwrap_or_else(|| "No turn telemetry available yet.".into());
+                let report = s
+                    .last_turn_performance
+                    .as_ref()
+                    .map(|perf| perf.report())
+                    .unwrap_or_else(|| "No turn telemetry available yet.".into());
                 s.show_command_panel("Performance", report);
             }
             "/status" => {
@@ -1157,39 +1161,33 @@ async fn handle_enter_inner(
             s.cursor_position = 0;
             return false;
         }
-        s.status = AppStatus::Streaming;
+        let already_active = s.subagent_supervisor.is_active(id);
         s.input_buffer.clear();
         s.cursor_position = 0;
+        crate::app::subagent_persistence::save(&s);
+        if already_active {
+            s.set_notice(format!("Queued message for agent-{selected_id}"));
+            return false;
+        }
         let owner_session_id = s.active_session_id.clone();
-        let client_clone = client.clone();
-        let state_clone = Arc::clone(state);
-        let token_clone = cancel_token.clone();
+        let supervisor = s.subagent_supervisor.clone();
         drop(s);
-        tokio::spawn(async move {
-            let result = crate::network::run_subagent(
-                &client_clone,
-                &state_clone,
-                &token_clone,
-                selected_id,
-                &owner_session_id,
-            )
-            .await;
-            let status = if token_clone.is_cancelled() {
-                crate::app::SubAgentStatus::Cancelled
-            } else if result.is_err() {
-                crate::app::SubAgentStatus::Failed
-            } else {
-                crate::app::SubAgentStatus::Completed
-            };
-            let mut state = state_clone.lock().await;
+        if let Err(error) = crate::network::subagents::launch_subagent_turn(
+            client,
+            state,
+            cancel_token,
+            &supervisor,
+            selected_id,
+            owner_session_id,
+        ) {
+            let mut s = state.lock().await;
             let _ = crate::app::SubagentController.set_status(
-                &mut state,
-                crate::app::SubagentId::from_raw(selected_id),
-                status,
+                &mut s,
+                id,
+                crate::app::SubAgentStatus::Failed,
             );
-            state.enter_idle();
-            state.request_redraw();
-        });
+            s.set_notice(error.to_string());
+        }
         return false;
     }
 

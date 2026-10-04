@@ -537,7 +537,11 @@ async fn run_native_slash(
         }
         NativeSlashCommand::Perf => {
             let mut state = session.state.lock().await;
-            let report = state.last_turn_performance.as_ref().map(|perf| perf.report()).unwrap_or_else(|| "No turn telemetry available yet.".into());
+            let report = state
+                .last_turn_performance
+                .as_ref()
+                .map(|perf| perf.report())
+                .unwrap_or_else(|| "No turn telemetry available yet.".into());
             state.set_notice(report);
             send_snapshot_locked(updates, session.generation, &state);
         }

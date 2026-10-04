@@ -131,7 +131,9 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     ctx.performance.rounds = ctx.budget.tool_rounds;
     ctx.performance.tool_calls = ctx.metrics.tool_calls;
     ctx.performance.completed = ctx.lifecycle.task_completed;
-    ctx.performance.recoveries = ctx.metrics.failure_replans + ctx.metrics.evidence_recoveries + ctx.recovery.reasoning_recovery_attempts as usize;
+    ctx.performance.recoveries = ctx.metrics.failure_replans
+        + ctx.metrics.evidence_recoveries
+        + ctx.recovery.reasoning_recovery_attempts as usize;
     if let Some(usage) = ctx.response.turn_token_usage.as_ref() {
         ctx.performance.input_tokens = Some(usage.prompt_tokens as u64);
         ctx.performance.output_tokens = Some(usage.completion_tokens as u64);
@@ -246,16 +248,29 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     let persistence_started = std::time::Instant::now();
     crate::config::save_session_history(&active_id, &s.history);
     ctx.performance.persistence_enqueue_us += crate::benchmark::elapsed_us(persistence_started);
+    ctx.performance.wall_us = crate::benchmark::elapsed_us(ctx.lifecycle.turn_started_at);
     s.last_turn_performance = Some(ctx.performance.clone());
     if let Some(dir) = crate::config::get_active_session_dir(&active_id) {
         if let Ok(bytes) = serde_json::to_vec_pretty(&ctx.performance) {
-            if let Err(error) = std::fs::write(dir.join("performance.json"), bytes) {
+            let path = dir.join("performance.json");
+            let saved = (|| -> std::io::Result<()> {
+                use std::io::Write;
+                let mut temporary = tempfile::NamedTempFile::new_in(&dir)?;
+                temporary.write_all(&bytes)?;
+                temporary.persist(path).map_err(|error| error.error)?;
+                Ok(())
+            })();
+            if let Err(error) = saved {
                 dbg_log!("Could not persist turn performance: {error}");
             }
         }
     }
 
     crate::config::flush_history_async();
+    crate::logger::operational_event(
+        "turn.performance",
+        serde_json::json!({"session_id": active_id, "performance": ctx.performance}),
+    );
     s.clear_current_response();
     s.clear_live_tool_calls();
     s.enter_idle();
