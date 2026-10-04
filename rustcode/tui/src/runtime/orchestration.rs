@@ -421,9 +421,10 @@ impl AppRuntime {
             }
         }
 
+        let supervisor = app_state.lock().await.subagent_supervisor.clone();
+        supervisor.shutdown_and_wait().await;
         let mut exit_summary = {
             let s = app_state.lock().await;
-            s.subagent_supervisor.shutdown();
             crate::run::ExitSummary::from_state(&s)
         };
         if update_exit {

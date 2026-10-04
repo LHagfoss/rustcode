@@ -1172,6 +1172,9 @@ mod preserved_user_request_tests {
         read.tool_call_id = Some("read-1".into());
         let mut write = ChatMessage::new("tool", "write_to_file: wrote it");
         write.tool_result = Some(crate::app::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".into(),
             success: true,
             changed_paths: vec!["src/lib.rs".into()],

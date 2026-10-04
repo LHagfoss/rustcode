@@ -9,6 +9,7 @@ pub(super) enum NativeSlashCommand {
     Model(Option<String>),
     ProviderAuth(String),
     Status,
+    Perf,
     Usage,
     ChangeTitle(Option<String>),
     Info,
@@ -35,6 +36,7 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
                 &input[name.len()..]
             ))
         }
+        "/perf" => NativeSlashCommand::Perf,
         "/status" => NativeSlashCommand::Status,
         "/usage" => NativeSlashCommand::Usage,
         "/model" => NativeSlashCommand::Model((!arguments.is_empty()).then(|| arguments.into())),

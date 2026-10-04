@@ -332,12 +332,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(crate::cli::Commands::Bench {
+        report,
+        baseline,
         rounds,
         calls,
         recoveries,
         completed,
     }) = cli_args.command.as_ref()
     {
+        if let Some(path) = report {
+            let measured: rustcode::benchmark::TurnPerformance =
+                serde_json::from_slice(&std::fs::read(path)?)?;
+            println!("{}", measured.report());
+            if let Some(path) = baseline {
+                let original = serde_json::from_slice(&std::fs::read(path)?)?;
+                println!(
+                    "{}",
+                    rustcode::benchmark::compare_reports(&original, &measured)
+                );
+            }
+            return Ok(());
+        }
         let stats = rustcode::benchmark::TurnStats {
             rounds: *rounds,
             tool_calls: *calls,

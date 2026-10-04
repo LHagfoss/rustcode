@@ -193,6 +193,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Stop all running background terminals",
     },
     CommandInfo {
+        name: "/perf",
+        desc: "Inspect latest turn performance telemetry",
+    },
+    CommandInfo {
         name: "/status",
         desc: "Show token usage and context statistics",
     },

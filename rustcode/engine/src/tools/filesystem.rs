@@ -6,6 +6,37 @@ fn context() -> rustcode_tools::ToolContext {
     super::current_tool_context()
 }
 
+/// Notify derived workspace state after native tools finish a successful write.
+fn workspace_mutation(
+    args: &Value,
+    paths: &[&str],
+    operation: fn(&Value, &rustcode_tools::ToolContext) -> Result<String, String>,
+) -> Result<String, String> {
+    let context = context();
+    let result = operation(args, &context);
+    if result.is_ok() {
+        let task = context
+            .task_working_directory
+            .as_ref()
+            .or(context.workspace_root.as_ref())
+            .cloned()
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(task) = task {
+            let workspace = context.workspace_root.as_ref().unwrap_or(&task);
+            for key in paths {
+                if let Some(path) = args.get(key).and_then(Value::as_str) {
+                    let path = rustcode_tools::resolve_tool_path_with_context(path, &context);
+                    crate::workspace_intelligence::invalidate_path(workspace, &path);
+                    if workspace != &task {
+                        crate::workspace_intelligence::invalidate_path(&task, &path);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 fn delete_file_schema() -> Value {
     rustcode_tools::filesystem::delete_file_schema()
 }
@@ -127,15 +158,27 @@ pub const WRITE_FILE_CHUNK: Tool = Tool {
 };
 
 pub fn delete_file(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::delete_file_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["path"],
+        rustcode_tools::filesystem::delete_file_with_context,
+    )
 }
 
 pub fn move_file(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::move_file_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["src", "dest"],
+        rustcode_tools::filesystem::move_file_with_context,
+    )
 }
 
 pub fn copy_file(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::copy_file_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["dest"],
+        rustcode_tools::filesystem::copy_file_with_context,
+    )
 }
 
 pub fn view_file_tool(args: &Value) -> Result<String, String> {
@@ -165,19 +208,35 @@ pub(crate) fn edit_target_and_replacement(args: &Value) -> (Option<String>, Opti
 }
 
 pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::replace_file_content_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["path"],
+        rustcode_tools::filesystem::replace_file_content_with_context,
+    )
 }
 
 pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::multi_replace_file_content_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["path"],
+        rustcode_tools::filesystem::multi_replace_file_content_with_context,
+    )
 }
 
 pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::write_to_file_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["path"],
+        rustcode_tools::filesystem::write_to_file_with_context,
+    )
 }
 
 pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
-    rustcode_tools::filesystem::write_file_chunk_with_context(args, &context())
+    workspace_mutation(
+        args,
+        &["path"],
+        rustcode_tools::filesystem::write_file_chunk_with_context,
+    )
 }
 
 #[allow(dead_code)]

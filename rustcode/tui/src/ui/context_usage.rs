@@ -111,6 +111,8 @@ mod tests {
             status: rustcode::controller::SubAgentStatus::Completed,
             active_turn: false,
             parent_id: None,
+            model: None,
+            elapsed_ms: 0,
         };
         state.subagents.push(child.clone());
         state.selected_subagent = Some(child);

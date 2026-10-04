@@ -13,6 +13,7 @@ pub struct TurnContext {
     pub compiler: CompilerState,
     pub response: ResponseState,
     pub metrics: MetricsState,
+    pub performance: crate::benchmark::TurnPerformance,
     pub lifecycle: LifecycleState,
     pub(crate) shell_assessments: crate::tools::ShellAssessmentCache,
     pub(crate) request_prefix_cache: RequestPrefixCache,
@@ -269,6 +270,7 @@ impl TurnContext {
                 final_content_persisted: false,
                 streamed_call_ids: Vec::new(),
             },
+            performance: Default::default(),
             metrics: MetricsState {
                 tool_calls: 0,
                 mutating_tool_calls: 0,
@@ -400,18 +402,18 @@ impl TurnContext {
             .completion_tokens
             .saturating_add(usage.completion_tokens);
         total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
-        total.cached_tokens = Some(
-            total
-                .cached_tokens
-                .unwrap_or_default()
-                .saturating_add(usage.cached_tokens.unwrap_or_default()),
-        );
-        total.cache_write_tokens = Some(
-            total
-                .cache_write_tokens
-                .unwrap_or_default()
-                .saturating_add(usage.cache_write_tokens.unwrap_or_default()),
-        );
+        total.cached_tokens = total
+            .cached_tokens
+            .zip(usage.cached_tokens)
+            .map(|(a, b)| a.saturating_add(b))
+            .or(total.cached_tokens)
+            .or(usage.cached_tokens);
+        total.cache_write_tokens = total
+            .cache_write_tokens
+            .zip(usage.cache_write_tokens)
+            .map(|(a, b)| a.saturating_add(b))
+            .or(total.cache_write_tokens)
+            .or(usage.cache_write_tokens);
         total.cache_discount = usage.cache_discount.or(total.cache_discount);
     }
 
@@ -445,6 +447,7 @@ impl TurnContext {
 
     pub fn benchmark_summary(&self) -> serde_json::Value {
         serde_json::json!({
+            "performance": self.performance,
             "tool_rounds": self.budget.tool_rounds, "tool_calls": self.metrics.tool_calls,
             "segment_rounds": self.segment_rounds(),
             "segment_count": self.budget.segment_count,

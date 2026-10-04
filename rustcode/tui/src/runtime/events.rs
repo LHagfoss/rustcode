@@ -34,8 +34,9 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::Exit => {
+                let supervisor = self.app_state.lock().await.subagent_supervisor.clone();
+                supervisor.shutdown_and_wait().await;
                 let state = self.app_state.lock().await;
-                state.subagent_supervisor.shutdown();
                 Ok(AppRunControl::Exit(crate::run::ExitSummary::from_state(
                     &state,
                 )))

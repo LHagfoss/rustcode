@@ -2778,6 +2778,134 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual persistent-terminal selection frame benchmark"]
+    fn bench_selection_frame_matrix() {
+        selection_frame_matrix(true);
+    }
+
+    #[test]
+    #[ignore = "manual legacy unpaired-tool selection frame benchmark"]
+    fn bench_selection_frame_matrix_legacy() {
+        selection_frame_matrix(false);
+    }
+
+    fn selection_frame_matrix(paired: bool) {
+        use crate::inline_terminal::InlineTerminal;
+        use ratatui::backend::TestBackend;
+
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        for entries in [5_000, 50_000] {
+            for width in [132, 240] {
+                let mut state = RenderState::new();
+                state.verbosity = rustcode::controller::Verbosity::High;
+                for index in 0..entries {
+                    let message = if index % 20 == 19 {
+                        ChatMessage::new("tool", format!("run_command: exit code: 0\nfixture output {index}\n日本語 👩‍💻 e\u{301}"))
+                            .answering(paired.then(|| format!("fixture-{}", index - 1)))
+                            .with_tool_result(rustcode::controller::ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None, evidence_hash: None,                                tool_name: "run_command".into(),
+                                command: Some("printf fixture".into()),
+                                success: true,
+                                exit_code: Some(0),
+                                ..Default::default()
+                            })
+                    } else if paired && index % 20 == 18 {
+                        ChatMessage::new("assistant", "").with_tool_calls(vec![
+                            rustcode::controller::ToolCallRef {
+                                id: format!("fixture-{index}"),
+                                name: "run_command".into(),
+                                arguments: r#"{"command":"printf fixture"}"#.into(),
+                            },
+                        ])
+                    } else {
+                        ChatMessage::new(
+                            if index % 2 == 0 { "user" } else { "assistant" },
+                            format!(
+                                "history {index:05}: Unicode 日本語 👩‍💻 e\u{301}; **read** this line"
+                            ),
+                        )
+                    };
+                    state.history.push(message);
+                }
+                let mut transcript = super::super::history_cell::TranscriptState::default();
+                let mut terminal = InlineTerminal::new(TestBackend::new(width, 48)).unwrap();
+                let paint =
+                    |state: &RenderState,
+                     transcript: &mut super::super::history_cell::TranscriptState,
+                     terminal: &mut InlineTerminal<TestBackend>| {
+                        let snapshot = super::super::render_snapshot::render_snapshot(state);
+                        terminal
+                            .draw(|frame| {
+                                super::super::render_with_transcript_snapshot(
+                                    frame, &snapshot, transcript,
+                                );
+                            })
+                            .unwrap();
+                    };
+                paint(&state, &mut transcript, &mut terminal);
+                transcript.scroll_up(2_000);
+                paint(&state, &mut transcript, &mut terminal);
+                let area = transcript.selection.area;
+                transcript.selection.begin_with_snapshot(
+                    mouse(
+                        MouseEventKind::Down(MouseButton::Left),
+                        area.x + 2,
+                        area.bottom() - 1,
+                    ),
+                    super::super::render_snapshot::render_snapshot(&state),
+                    transcript.scroll_rows(),
+                );
+                let mut frames = Vec::with_capacity(201);
+                let mut allocations = Vec::with_capacity(201);
+                let mut bytes = Vec::with_capacity(201);
+                for frame in 0..201 {
+                    // Canonical streaming advances while the selected revision stays pinned.
+                    super::super::render_snapshot::set_current_response(
+                        &mut state,
+                        format!("streaming revision {frame}: 日本語"),
+                    );
+                    let before = ALLOCATIONS.load(Ordering::Relaxed);
+                    let before_bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
+                    let started = Instant::now();
+                    transcript.selection.queue_scroll(-1, 3);
+                    assert!(transcript.step_selection_scroll());
+                    transcript.selection.mouse(mouse(
+                        MouseEventKind::Drag(MouseButton::Left),
+                        area.x + 2,
+                        area.y,
+                    ));
+                    paint(&state, &mut transcript, &mut terminal);
+                    frames.push(started.elapsed());
+                    allocations.push(ALLOCATIONS.load(Ordering::Relaxed) - before);
+                    bytes.push(ALLOCATED_BYTES.load(Ordering::Relaxed) - before_bytes);
+                }
+                assert!(transcript.selection.selected_text().is_some());
+                let cold = frames.remove(0);
+                allocations.remove(0);
+                bytes.remove(0);
+                frames.sort_unstable();
+                allocations.sort_unstable();
+                bytes.sort_unstable();
+                let p = |percent: usize| (frames.len() * percent).div_ceil(100) - 1;
+                eprintln!(
+                    "persistent selection: paired={paired} entries={entries} size={width}x48 cold={cold:?} warm_frames=200 p50/p95/p99={:?}/{:?}/{:?} allocations={}/{}/{} requested_bytes={}/{}/{} budget_p95_16.7ms={}",
+                    frames[p(50)],
+                    frames[p(95)],
+                    frames[p(99)],
+                    allocations[p(50)],
+                    allocations[p(95)],
+                    allocations[p(99)],
+                    bytes[p(50)],
+                    bytes[p(95)],
+                    bytes[p(99)],
+                    frames[p(95)] <= Duration::from_micros(16_700)
+                );
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "manual end-to-end deep selection scroll benchmark"]
     fn bench_deep_selection_scroll_many_history_entries() {
         let _theme_guard = crate::ui::tests::THEME_TEST_LOCK

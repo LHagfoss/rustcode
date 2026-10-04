@@ -14,6 +14,15 @@ pub(crate) enum ToolReplayPolicy {
 }
 
 pub(crate) fn tool_replay_policy(call: &ToolCall) -> ToolReplayPolicy {
+    if call.name == "run_command"
+        && call
+            .arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(crate::network::compiler::is_verification_command)
+    {
+        return ToolReplayPolicy::Repeatable;
+    }
     if crate::tools::is_read_only_call(call) {
         return ToolReplayPolicy::Repeatable;
     }
@@ -81,6 +90,9 @@ mod tests {
 
     fn successful_result(call: &ToolCall) -> ChatMessage {
         ChatMessage::new("tool", "sent").with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: call.name.clone(),
             arguments_hash: stable_arguments_hash(&call.arguments),
             success: true,
@@ -127,6 +139,9 @@ mod tests {
         let read = call("view_file", serde_json::json!({"path":"src/lib.rs"}));
         let send = call("send_email", serde_json::json!({"message":"hello"}));
         let failed = ChatMessage::new("tool", "failed").with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: send.name.clone(),
             arguments_hash: stable_arguments_hash(&send.arguments),
             success: false,

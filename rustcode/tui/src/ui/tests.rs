@@ -455,6 +455,8 @@ fn render_snapshot_preserves_existing_ui_output() {
         status: rustcode::controller::SubAgentStatus::Running,
         active_turn: true,
         parent_id: Some(3),
+        model: None,
+        elapsed_ms: 0,
     };
     selected_subagent.subagents.push(child.clone());
     selected_subagent.selected_subagent = Some(child);
@@ -812,6 +814,9 @@ fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
             ChatMessage::new("tool", format!("{name}: ok"))
                 .answering(Some(id.to_owned()))
                 .with_tool_result(ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: name.to_owned(),
                     success: true,
                     ..Default::default()
@@ -2758,6 +2763,9 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
         ChatMessage::new("tool", "run_command: exit code: 0\n504 passed")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -2805,6 +2813,9 @@ fn committed_tool_result_shows_failure_status() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             arguments_hash: String::new(),
             success: false,
@@ -2848,7 +2859,8 @@ fn ask_question_renders_prompt_and_answer_in_committed_history() {
         )
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
-                tool_name: "ask_question".to_owned(),
+            workspace_generation: None,
+            workspace_epoch: None, evidence_hash: None,                tool_name: "ask_question".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
                 exit_code: None,
@@ -2922,6 +2934,9 @@ fn ask_question_cancellation_renders_visibly() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "ask_question".to_owned(),
             arguments_hash: String::new(),
             success: false,
@@ -2963,6 +2978,9 @@ fn chained_ask_question_renders_count_and_every_answer() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "ask_question".to_owned(),
             arguments_hash: String::new(),
             success: true,
@@ -3021,6 +3039,9 @@ fn use_skill_renders_in_committed_history() {
         ChatMessage::new("tool", "use_skill: <skill_content>...</skill_content>")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "use_skill".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -3055,6 +3076,9 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
         ChatMessage::new("tool", "view_file: first read")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "view_file".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3067,6 +3091,9 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
         ChatMessage::new("tool", "view_file: second read")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "view_file".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3101,6 +3128,9 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
         ChatMessage::new("tool", "use_skill: loaded clockify")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "use_skill".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -3136,6 +3166,9 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3181,6 +3214,9 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
             )
             .answering(Some(id.to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -3229,6 +3265,9 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3238,6 +3277,9 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
         ChatMessage::new("tool", "run_command: exit code: 0")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -3264,6 +3306,9 @@ fn worked_separator_labels_all_known_work_durations() {
     state.history.push(ChatMessage::new("user", "fix it"));
     state.history.push(
         ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: true,
             ..Default::default()
@@ -3314,6 +3359,9 @@ fn work_separator_follows_tool_with_padding_gap() {
     state.history.push(ChatMessage::new("user", "explore"));
     state.history.push(
         ChatMessage::new("tool", "view_file: read main.rs").with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "view_file".to_owned(),
             success: true,
             ..Default::default()
@@ -3350,6 +3398,9 @@ fn high_verbosity_hides_generic_tool_details() {
         ChatMessage::new("tool", "mcp_custom_tool: completed\nline 1\nline 2")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "mcp_custom_tool".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -3394,6 +3445,9 @@ fn generic_tool_output_is_hidden_at_every_verbosity_without_mutating_history() {
         ChatMessage::new("tool", format!("mcp_custom_tool: completed\n{body}"))
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "mcp_custom_tool".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3441,6 +3495,9 @@ fn low_verbosity_generic_output_stays_hidden_when_expanded() {
         ChatMessage::new("tool", format!("mcp_custom_tool: {long_line}"))
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "mcp_custom_tool".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3525,6 +3582,9 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),
@@ -3660,6 +3720,9 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: false,
             exit_code: Some(1),
@@ -3722,6 +3785,9 @@ fn low_verbosity_long_generic_body_stays_hidden_when_expanded() {
         ChatMessage::new("tool", format!("mcp_custom_tool: completed\n{body}"))
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "mcp_custom_tool".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3774,6 +3840,9 @@ fn expanded_command_body_renders_full_not_window() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),
@@ -3784,6 +3853,9 @@ fn expanded_command_body_renders_full_not_window() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -3852,6 +3924,9 @@ fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             success: true,
             exit_code: Some(0),
@@ -3914,6 +3989,9 @@ fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".to_owned(),
             success: true,
             changed_paths: vec!["src/new.rs".to_owned()],
@@ -3982,6 +4060,9 @@ fn low_verbosity_frame_shows_only_bash_output_and_edit_diffs() {
     );
     for (id, name, _, result) in &calls {
         let mut record = ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: (*name).to_owned(),
             success: true,
             ..Default::default()
@@ -4056,6 +4137,9 @@ fn completed_edits_have_a_distinct_transcript_heading() {
         ChatMessage::new("tool", "replace_file_content: successfully edited")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "replace_file_content".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -4089,6 +4173,9 @@ fn committed_file_write_is_labeled_as_a_write() {
         ChatMessage::new("tool", "write_to_file: wrote src/new.rs")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "write_to_file".to_owned(),
                 success: true,
                 changed_paths: vec!["src/new.rs".to_owned()],
@@ -4125,6 +4212,9 @@ fn low_verbosity_write_shows_added_lines_preview() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".to_owned(),
             success: true,
             changed_paths: vec!["src/new.rs".to_owned()],
@@ -4175,7 +4265,8 @@ fn high_verbosity_keeps_actual_file_diff_visible() {
                 "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -20 +20 @@\n-let value = 1;\n+let value = 2;\n".to_owned(),
             ))
             .with_tool_result(ToolResultRecord {
-                tool_name: "write_to_file".to_owned(),
+            workspace_generation: None,
+            workspace_epoch: None, evidence_hash: None,                tool_name: "write_to_file".to_owned(),
                 success: true,
                 changed_paths: vec!["src/main.rs".to_owned()],
                 ..Default::default()
@@ -4238,6 +4329,9 @@ fn low_verbosity_write_expand_round_trip_changes_body_and_hint() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".to_owned(),
             success: true,
             changed_paths: vec!["src/big.rs".to_owned()],
@@ -4317,6 +4411,9 @@ fn write_noop_and_failure_keep_truthful_status_without_hint() {
             ChatMessage::new("tool", result)
                 .answering(Some("call-1".to_owned()))
                 .with_tool_result(ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: tool.to_owned(),
                     success,
                     ..Default::default()
@@ -4359,6 +4456,9 @@ fn low_verbosity_edit_diff_wraps_at_narrow_width() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".to_owned(),
             success: true,
             changed_paths: vec!["src/new.rs".to_owned()],
@@ -4413,6 +4513,9 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
         ChatMessage::new("tool", "replace_file_content: ok")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "replace_file_content".to_owned(),
                 success: true,
                 changed_paths: vec!["src/game/engine.ts".to_owned()],
@@ -4423,6 +4526,9 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
         ChatMessage::new("tool", "WriteFile: ok")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "WriteFile".to_owned(),
                 success: true,
                 changed_paths: vec!["src/App.tsx".to_owned()],
@@ -4473,6 +4579,9 @@ fn exploration_results_group_and_deduplicate_child_rows() {
             ChatMessage::new("tool", content)
                 .answering(Some(id.to_owned()))
                 .with_tool_result(ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: name.to_owned(),
                     arguments_hash: String::new(),
                     success: true,
@@ -4527,6 +4636,9 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
     for content in ["list_directory: ui/", "list_directory: fixtures/"] {
         state.history.push(
             ChatMessage::new("tool", content).with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "list_directory".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -4573,6 +4685,9 @@ fn command_preview_preserves_the_output_tail() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "run_command".to_owned(),
             arguments_hash: String::new(),
             success: false,
@@ -4634,6 +4749,9 @@ fn expanded_generic_tool_preserves_only_its_action_row() {
         ChatMessage::new("tool", "custom_lookup: first result\nsecond result")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "custom_lookup".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -4685,6 +4803,9 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         ChatMessage::new("tool", "run_command: exit code: 0\nstdout:\nM src/main.rs")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -4695,6 +4816,9 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -4776,6 +4900,9 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         ChatMessage::new("tool", "run_command: exit code: 0\nstdout:\nM src/main.rs")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -4786,6 +4913,9 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -4897,6 +5027,9 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
             ChatMessage::new("tool", output)
                 .answering(Some(id.to_owned()))
                 .with_tool_result(ToolResultRecord {
+                    workspace_generation: None,
+                    workspace_epoch: None,
+                    evidence_hash: None,
                     tool_name: "run_command".to_owned(),
                     success: true,
                     exit_code: Some(0),
@@ -4954,6 +5087,9 @@ fn later_command_only_group_is_independently_expandable_after_edit() {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "write_to_file".to_owned(),
             success: true,
             changed_paths: vec!["src/earlier.rs".to_owned()],
@@ -4972,6 +5108,9 @@ fn later_command_only_group_is_independently_expandable_after_edit() {
         ChatMessage::new("tool", "run_command: exit code: 0\nstdout:\nM src/main.rs")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -5028,6 +5167,9 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
         ChatMessage::new("tool", "run_command: exit code: 0\nstdout:\nM src/main.rs")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 success: true,
                 exit_code: Some(0),
@@ -5038,6 +5180,9 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
         ChatMessage::new("tool", "get_time: Thursday, 08:30")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: true,
                 ..Default::default()
@@ -8426,6 +8571,8 @@ fn subagent_row(
         status,
         active_turn,
         parent_id: None,
+        model: None,
+        elapsed_ms: 0,
     }
 }
 
@@ -8818,6 +8965,9 @@ fn command_child_lines_wrap_with_indentation() {
         ChatMessage::new("tool", "ok")
             .answering(Some("call-1".to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "run_command".to_owned(),
                 arguments_hash: String::new(),
                 success: true,
@@ -9194,6 +9344,8 @@ fn selected_subagent_context_usage_and_categories_use_child_history() {
         status: rustcode::controller::SubAgentStatus::Completed,
         active_turn: false,
         parent_id: None,
+        model: None,
+        elapsed_ms: 0,
     };
     state.selected_subagent = Some(child.clone());
     state.subagents.push(child);
@@ -9241,6 +9393,9 @@ fn state_with_a_scrollable_transcript() -> RenderState {
         )
         .answering(Some("call-1".to_owned()))
         .with_tool_result(ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: "get_time".to_owned(),
             success: true,
             ..Default::default()
@@ -9492,6 +9647,9 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
             }]),
         );
         let mut record = ToolResultRecord {
+            workspace_generation: None,
+            workspace_epoch: None,
+            evidence_hash: None,
             tool_name: (*name).to_owned(),
             success: true,
             ..Default::default()
@@ -10024,4 +10182,34 @@ fn streaming_timer_only_tick_keeps_frame_stable() {
         .unwrap();
     assert_eq!(before, *terminal.backend().buffer());
     assert_eq!(scroll_before, transcript.scroll_rows());
+}
+
+#[test]
+fn agent_picker_displays_nested_parent_status_model_and_elapsed_time() {
+    let mut state = RenderState::new();
+    let mut parent = subagent_row(
+        "parent",
+        "inspect",
+        Vec::new(),
+        rustcode::controller::SubAgentStatus::Running,
+        true,
+    );
+    parent.id = 1;
+    let mut child = subagent_row(
+        "nested",
+        "child task",
+        Vec::new(),
+        rustcode::controller::SubAgentStatus::Queued,
+        true,
+    );
+    child.id = 2;
+    child.parent_id = Some(1);
+    child.model = Some("local-small".into());
+    child.elapsed_ms = 62_000;
+    state.subagents = vec![parent, child];
+    state.show_subagent_picker = true;
+    let rendered = render_state_to_text(&mut state, 120, 30);
+    assert!(rendered.contains("└─ parent"));
+    assert!(rendered.contains("  └─ nested"));
+    assert!(rendered.contains("queued · local-small · 01:02"));
 }

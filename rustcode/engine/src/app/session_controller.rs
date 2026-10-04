@@ -111,6 +111,7 @@ impl SessionController {
         state.clear_current_response();
         state.current_token_usage = None;
         state.response_time = None;
+        state.last_turn_performance = None;
         state.image_analysis_cache = crate::config::load_session_image_cache(&new_session_id);
         state.session_title_cache = None;
         state.history.push(ChatMessage::new(
@@ -130,6 +131,7 @@ impl SessionController {
         state.clear_current_response();
         state.current_token_usage = None;
         state.response_time = None;
+        state.last_turn_performance = None;
         state.enter_idle();
         state.request_clear_screen();
         Ok(SessionTransition::Cleared {

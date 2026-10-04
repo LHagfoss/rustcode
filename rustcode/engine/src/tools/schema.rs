@@ -116,7 +116,7 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "send_agent",
-        "Start one follow-up turn for a completed subagent. Running subagents reject follow-ups.",
+        "Follow up an idle subagent or queue a message for an active child at its next safe boundary.",
         r#"{"id": "subagent id", "message": "message text"}"#,
     ),
     (
@@ -214,6 +214,13 @@ impl ToolSchemaPolicy {
             include_session_title_tool: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
+        }
+    }
+
+    pub(crate) const fn subagent_with_delegation() -> Self {
+        Self {
+            include_agent_tools: true,
+            ..Self::subagent()
         }
     }
 
@@ -603,9 +610,14 @@ const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 /// the `tools` block drift mid-session as `context_terms` grew. (#1589)
 fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
-        || (policy.compact_text_prompt && !TEXT_CODING_TOOLS.contains(&tool.name)))
+        || (policy.compact_text_prompt
+            && !TEXT_CODING_TOOLS.contains(&tool.name)
+            && !(policy.include_agent_tools
+                && tool.capabilities.contains(&ToolCapability::AgentDelegation))))
         && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
-            && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
+            && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name)
+            && !(policy.include_agent_tools
+                && tool.capabilities.contains(&ToolCapability::AgentDelegation)))
         && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
             && !policy.include_agent_tools)
 }
@@ -1709,12 +1721,21 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     } else {
         McpSchemaSelectionStats::default()
     };
-    tools.extend(agent_native_tools_schema(policy.include_agent_tools));
+    let mut agent_tools = agent_native_tools_schema(policy.include_agent_tools);
+    if policy.profile == ToolSchemaProfile::ReadOnlyInspection {
+        agent_tools.retain(|tool| {
+            !matches!(
+                tool["function"]["name"].as_str(),
+                Some("set_goal" | "todo_write")
+            )
+        });
+    }
+    let agent_selected = agent_tools.len();
+    tools.extend(agent_tools);
     let mut stats = stats;
     stats.phase = phase;
     stats.builtin_available = builtin_available;
-    stats.builtin_selected =
-        builtin_selected + usize::from(policy.include_agent_tools) * AGENT_TOOL_SPECS.len();
+    stats.builtin_selected = builtin_selected + agent_selected;
     stats.builtin_schema_bytes = builtin_schema_bytes;
     stats.withheld_builtin_names = withheld_builtin_names;
     (tools, stats)
@@ -1787,7 +1808,7 @@ pub(super) fn schema_for_tool(name: &str) -> Value {
 pub(super) fn schema_for_agent_tool(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
@@ -1998,12 +2019,12 @@ Call `list_mcp_tools` for the live MCP server and tool names instead of guessing
         }
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
-        p.push_str(
-            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent. Set workspace_mode=isolated with an explicit base_sha for a named branch/worktree.\n\
-            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
-            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
-            - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
-        );
+        p.push_str("- spawn_agent | Args: {\"task\":\"task description\",\"context_inheritance\":\"minimal|evidence|recent|fork\",\"evidence\":\"selected facts\"} | Start a fresh child; default minimal. Writes require explicit write_access, allowed_paths and verification.\n");
+        p.push_str("- send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Follow up an idle subagent or steer an active child at its next safe boundary.\n");
+        if policy.profile == ToolSchemaProfile::Coding {
+            p.push_str("- set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n");
+            p.push_str("- todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n");
+        }
     }
 
     if policy.compact_text_prompt {

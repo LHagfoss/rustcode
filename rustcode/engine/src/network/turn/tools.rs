@@ -1027,6 +1027,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // Phase 4: execute only the selected, complete calls and record
             // progress evidence. The other calls are closed below, never
             // silently dropped or described as if they ran.
+            let tools_started = std::time::Instant::now();
             let results = super::super::tool_exec::execute_tool_batch_with_assessments(
                 client,
                 state,
@@ -1041,6 +1042,22 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 &ctx.shell_assessments,
             )
             .await;
+            if executable_tool_calls.len() > 1
+                && executable_tool_calls
+                    .iter()
+                    .all(super::super::tool_exec::parallel_inspection)
+            {
+                ctx.performance.parallel_groups += 1;
+            }
+            ctx.performance.tool_wall_us += crate::benchmark::elapsed_us(tools_started);
+            ctx.performance.tool_work_us += results
+                .iter()
+                .map(|result| result.metadata.execution_us)
+                .sum::<u64>();
+            ctx.performance.replayed_reads += results
+                .iter()
+                .filter(|result| result.metadata.replayed)
+                .count();
             // The peeked prefix is answered one way or another — result,
             // denial, or cancellation — so retire it now. A cancellation may
             // have released the queue while the batch ran.
@@ -2516,6 +2533,9 @@ mod tests {
         ChatMessage::new("tool", format!("result for {call_id}"))
             .answering(Some(call_id.to_owned()))
             .with_tool_result(ToolResultRecord {
+                workspace_generation: None,
+                workspace_epoch: None,
+                evidence_hash: None,
                 tool_name: "get_time".to_owned(),
                 success: error_kind.is_none(),
                 error_kind: error_kind.map(str::to_owned),

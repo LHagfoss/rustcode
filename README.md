@@ -568,3 +568,33 @@ Made with [rust](https://www.rust-lang.org/) by goat (me) and models inside [rus
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
+
+## Performance and agent threads
+
+`/perf` displays the latest turn's measured context, schema/serialization,
+provider and tool time, request/round counts, context bytes and reported token
+usage. Each session writes `performance.json`; `rustcode bench --report PATH
+--baseline PATH` compares recorded measurements. Missing provider usage remains
+unavailable. Time to first token tracks generated deltas, not keep-alives.
+
+Safe built-in inspection calls run in bounded groups of four. Results keep
+announcement order; shell commands, mutations and unknown MCP tools remain
+serial barriers. Workspace generations drive incremental symbol queries,
+environment snapshots, read validity and conservative successful-verification
+reuse. Persisted evidence includes a process epoch so resume cannot mistake an
+old generation for current evidence. Pressure projection preserves durable
+history and native call/result pairing while making old inspection evidence
+recoverable by reading it again.
+
+Agent threads have isolated context snapshots, parent/child relationships,
+bounded mailboxes, explicit followups, waits, cancellation and session restore.
+Use `spawn_agent`, `list_agents`, `inspect_agent`, `send_message`, `send_agent`,
+`wait_agent` and `cancel_agent`; select a child in the TUI to inspect its history.
+See [performance and validity](docs/performance.md),
+[agent behavior](docs/multi-agent.md) and
+[architecture research](docs/codex-multi-agent-research.md).
+
+Description-based skill routing requires multiple matching intent terms and
+keeps coding requests from activating live-app workflows incidentally.
+[Selection benchmarks](docs/benchmarks/tui-selection.md) distinguish backend
+frame latency from live terminal input-to-paint latency.

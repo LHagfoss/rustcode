@@ -813,6 +813,41 @@ fn run_command_output_inner(
         });
     }
 
+    // Admission, cwd and sandbox validation above still apply to cache hits.
+    // Explicit environment/grant overrides and background jobs bypass reuse.
+    let verification_identity = if !run_in_bg
+        && env.is_none()
+        && !one_shot_network_access
+        && one_shot_writable_roots.is_empty()
+        && !cancel_token
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        resolved_cwd.as_deref().and_then(|root| {
+            crate::network::compiler::verification_identity(root, command_str, sandbox_mode)
+        })
+    } else {
+        None
+    };
+    if let Some(content) = verification_identity
+        .as_ref()
+        .and_then(crate::network::compiler::cached_verification)
+        && !cancel_token
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        let mut output = super::ToolExecutionOutput::success(content);
+        output.exit_code = Some(0);
+        output.replayed = true;
+        output.command = Some(command_str.to_owned());
+        output.command_status = Some(rustcode_core::CommandResultMetadata {
+            completed: true,
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        return Ok(output);
+    }
+    let verification_cancel = cancel_token.clone();
     let cancellation = cancel_token.map(|token| {
         std::sync::Arc::new(move || token.is_cancelled()) as rustcode_command::CancellationCallback
     });
@@ -872,6 +907,16 @@ fn run_command_output_inner(
             &roots,
         ));
         result.push('\n');
+    }
+    if !failed
+        && !truncated
+        && !verification_cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        if let Some(identity) = verification_identity {
+            crate::network::compiler::record_verification(identity, result.trim_end().to_string());
+        }
     }
     Ok(super::ToolExecutionOutput {
         content: result.trim_end().to_string(),
@@ -2555,5 +2600,48 @@ mod tests {
         .expect("head command should execute cleanly");
         assert!(result.contains("exit code: 0"));
         assert!(result.contains("[package]"));
+    }
+}
+
+#[cfg(test)]
+mod generation_verification_tests {
+    use super::*;
+    #[test]
+    fn completed_shell_verification_reuses_success_until_relevant_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("src")).unwrap();
+        std::fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname='verification_fixture'\nversion='0.1.0'\nedition='2021'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("src/lib.rs"),
+            "pub fn verified() {}\n",
+        )
+        .unwrap();
+        let args = serde_json::json!({"command":"cargo check --offline", "cwd":directory.path(), "timeout_ms":30000});
+        crate::tools::set_active_workspace_context(
+            Some(directory.path().to_path_buf()),
+            None,
+            false,
+            Some(crate::config::SandboxMode::Trusted),
+        );
+        let first = run_command_output(&args).unwrap();
+        assert!(first.success, "{}", first.content);
+        // The first check may create Cargo.lock, advancing its input generation.
+        let stabilized = run_command_output(&args).unwrap();
+        assert!(stabilized.success, "{}", stabilized.content);
+        let repeated = run_command_output(&args).unwrap();
+        assert!(
+            repeated.success && repeated.replayed,
+            "{}",
+            repeated.content
+        );
+        assert!(repeated.content.contains("CACHED VERIFICATION"));
+        std::fs::write(directory.path().join("src/lib.rs"), "pub fn broken( {\n").unwrap();
+        let changed = run_command_output(&args).unwrap();
+        assert!(!changed.success && !changed.replayed, "{}", changed.content);
+        crate::tools::set_active_workspace_context(None, None, false, None);
     }
 }
