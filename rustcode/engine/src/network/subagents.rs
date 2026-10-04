@@ -8,7 +8,7 @@ use super::runner;
 use super::stream_request::stream_request;
 use super::{
     StreamBuffer, compact_history_to_budget, confirm_and_execute, final_tool_diff,
-    is_read_only_tool, subagent_tool_history_message, tool_result_precludes_preview_fallback,
+    subagent_tool_history_message, tool_result_precludes_preview_fallback,
 };
 use rustcode_tool_protocol::text::{
     continuation_nudge_for_category, format_continuation_assistant_message, strip_leading_think,
@@ -565,7 +565,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     ))
                     .await;
                     (execution, None, std::time::Duration::ZERO)
-                } else if !write_access && !is_read_only_tool(name) {
+                } else if !write_access && !is_read_only_subagent_call(tool_call) {
                     (
                         crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
@@ -1541,6 +1541,36 @@ async fn handle_agent_tool_for_parent(
     }
 }
 
+fn is_read_only_subagent_call(call: &crate::tools::ToolCall) -> bool {
+    if call.name != "run_command" {
+        return super::is_read_only_tool(&call.name);
+    }
+    if call.name == "run_command" {
+        let explicit_enabled = |key: &str| {
+            call.arguments.get(key).is_some_and(|value| {
+                // Only a literal false is an unambiguous opt-out. Strings and
+                // other schema-coerced values must not weaken this boundary.
+                value != &serde_json::Value::Bool(false)
+            })
+        };
+        if call.arguments.get("env").is_some()
+            || ["background", "detached"]
+                .iter()
+                .any(|key| explicit_enabled(key))
+            || call.arguments.get("network_access").is_some()
+            || call.arguments.get("filesystem_write_path").is_some()
+            || call
+                .arguments
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(crate::tools::exec::has_shell_background_operator)
+        {
+            return false;
+        }
+    }
+    crate::tools::is_read_only_call(call)
+}
+
 fn bounded_completion_output(
     id: u32,
     status: &str,
@@ -1764,6 +1794,49 @@ mod tests {
         state.model_name = "subagent-test-model".to_owned();
         state.delegation_active = true;
         Arc::new(Mutex::new(state))
+    }
+
+    #[test]
+    fn subagent_id_parser_accepts_decimal_ids_and_rejects_agent_names() {
+        for (value, expected) in [
+            (serde_json::json!(1), Some(1)),
+            (serde_json::json!("1"), Some(1)),
+            (serde_json::json!(0), Some(0)),
+            (serde_json::json!("agent-1"), None),
+        ] {
+            assert_eq!(agent_id_arg(&serde_json::json!({"id": value})), expected);
+        }
+    }
+
+    #[test]
+    fn read_only_subagent_gate_allows_inspection_shells_and_rejects_mutation_controls() {
+        let call = |arguments| crate::tools::ToolCall {
+            name: "run_command".to_owned(),
+            arguments,
+            call_id: None,
+        };
+
+        assert!(is_read_only_subagent_call(&call(
+            serde_json::json!({"command":"gh pr list --limit 15 --state open"})
+        )));
+        for arguments in [
+            serde_json::json!({"command":"cargo test"}),
+            serde_json::json!({"command":"echo x > /tmp/out"}),
+            serde_json::json!({"command":"gh pr list", "env":{"BASH_ENV":"/tmp/hook"}}),
+            serde_json::json!({"command":"gh pr list", "background":true}),
+            serde_json::json!({"command":"gh pr list", "background":"true"}),
+            serde_json::json!({"command":"gh pr list", "detached":true}),
+            serde_json::json!({"command":"gh pr list", "detached":"true"}),
+            serde_json::json!({"command":"gh pr list", "network_access":true}),
+            serde_json::json!({"command":"gh pr list", "network_access":"false"}),
+            serde_json::json!({"command":"gh pr list", "filesystem_write_path":"/tmp"}),
+            serde_json::json!({"command":"tail -f file &"}),
+        ] {
+            assert!(
+                !is_read_only_subagent_call(&call(arguments.clone())),
+                "read-only agent must reject {arguments}"
+            );
+        }
     }
 
     #[test]

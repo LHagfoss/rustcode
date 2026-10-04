@@ -845,6 +845,71 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cached_successful_build_check_does_not_block_finish_gate() {
+        if !crate::tools::exec::sandbox::runtime_tests_available() {
+            return;
+        }
+
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"cached_finish_gate_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(project.path().join("lib.rs"), "pub fn valid() {}\n").unwrap();
+
+        // Prime the shared successful-verification receipt as an earlier
+        // inline check would. The finish gate must treat that hit as green.
+        let mut dirty = true;
+        let mut compiler_cache = None;
+        assert!(
+            crate::network::compiler::cached_compiler_check(
+                project.path(),
+                &mut dirty,
+                &mut compiler_cache,
+                &tokio_util::sync::CancellationToken::new(),
+                crate::config::SandboxMode::Trusted,
+            )
+            .await
+            .is_none()
+        );
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.workspace_root = Some(project.path().to_path_buf());
+            state.config.sandbox_mode = crate::config::SandboxMode::Trusted;
+        }
+        let policy = Arc::new(policy::InteractivePolicy);
+        let mut ctx = interactive_plain_context("The change is complete.");
+        ctx.progress.made_edits = true;
+        ctx.compiler.edit_root = Some(project.path().to_path_buf());
+
+        let outcome = handle_plain_response_finish(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+        )
+        .await;
+
+        assert_eq!(outcome, FinishGateOutcome::Stop);
+        assert_eq!(ctx.recovery.finish_gate_retries, 0);
+        assert!(!state.lock().await.history.iter().any(|message| {
+            message
+                .content
+                .contains("Finish blocked — the build does not compile")
+        }));
+    }
+
     fn interactive_plain_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();
         ctx.response.final_content = content.to_string();

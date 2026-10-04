@@ -166,6 +166,9 @@ pub(crate) enum ToolSchemaProfile {
     #[default]
     Coding,
     ReadOnlyInspection,
+    /// Read-only child agents can run commands that the shell policy classifies
+    /// as inspection, while Plan mode remains limited to direct read tools.
+    ReadOnlySubagent,
 }
 
 /// Request phase used to keep the initial tool menu small for new projects.
@@ -212,7 +215,7 @@ impl ToolSchemaPolicy {
             include_agent_tools: false,
             include_mcp_tools: false,
             include_session_title_tool: false,
-            profile: ToolSchemaProfile::ReadOnlyInspection,
+            profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
         }
     }
@@ -609,13 +612,19 @@ const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 /// the native path only, which hid tools the textual contract listed and made
 /// the `tools` block drift mid-session as `context_terms` grew. (#1589)
 fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
+    let readonly_profile_allows = match policy.profile {
+        ToolSchemaProfile::Coding => true,
+        ToolSchemaProfile::ReadOnlyInspection => READ_ONLY_INSPECTION_TOOLS.contains(&tool.name),
+        ToolSchemaProfile::ReadOnlySubagent => {
+            READ_ONLY_INSPECTION_TOOLS.contains(&tool.name) || tool.name == "run_command"
+        }
+    };
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
                 && tool.capabilities.contains(&ToolCapability::AgentDelegation))))
-        && !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
-            && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name)
+        && !(!readonly_profile_allows
             && !(policy.include_agent_tools
                 && tool.capabilities.contains(&ToolCapability::AgentDelegation)))
         && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
@@ -1722,7 +1731,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
         McpSchemaSelectionStats::default()
     };
     let mut agent_tools = agent_native_tools_schema(policy.include_agent_tools);
-    if policy.profile == ToolSchemaProfile::ReadOnlyInspection {
+    if policy.profile != ToolSchemaProfile::Coding {
         agent_tools.retain(|tool| {
             !matches!(
                 tool["function"]["name"].as_str(),

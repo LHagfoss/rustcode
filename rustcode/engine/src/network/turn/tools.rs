@@ -42,6 +42,16 @@ fn should_apply_loop_recovery(
     !completion_requested && (has_evidence_recovery || (output_abort && !round_had_meaningful))
 }
 
+fn tool_changes_workspace(name: &str, arguments: Option<&serde_json::Value>) -> bool {
+    if name == "spawn_agent" {
+        return arguments
+            .and_then(|arguments| arguments.get("write_access"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+    }
+    is_mutating_tool(name)
+}
+
 fn loop_signal_event(
     output_stagnation: Option<&loop_detect::LoopStatus>,
     round_had_meaningful: Option<bool>,
@@ -852,7 +862,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 loop_status = s;
                 loop_offender = Some(format!("{} ({category})", call.name));
             }
-            if is_mutating_tool(&call.name) {
+            if tool_changes_workspace(&call.name, Some(&call.arguments)) {
                 if let Some(root) = get_tool_project_root(&call.name, &call.arguments) {
                     ctx.compiler.edit_root = Some(root);
                     ctx.compiler.dirty = true;
@@ -1392,7 +1402,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                 }
                 let mut mutation_progress = false;
-                if is_mutating_tool(&name) {
+                if tool_changes_workspace(&name, call.map(|call| &call.arguments)) {
                     let made_progress = mutation_made_progress(metadata.success, &content);
                     let failed = !made_progress;
                     mutation_progress =
@@ -1636,7 +1646,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 // into the cross-turn reasoning detector instead of treating
                 // "no workspace diff" as "no progress".
                 cross_turn_made_progress |= assessment.meaningful;
-                cross_turn_had_edits |= is_mutating_tool(&name);
+                cross_turn_had_edits |=
+                    tool_changes_workspace(&name, call.map(|call| &call.arguments));
                 // A successful verification or other novel command result is
                 // authoritative evidence even when it leaves the workspace
                 // unchanged. Do not compare its reasoning with a stale plan
@@ -2437,7 +2448,7 @@ mod tests {
         content_bearing_inspection_status, grounded_artifact_recovery_message,
         incomplete_tool_result, loop_signal_event, mutation_batch_guidance, scheduled_tool_calls,
         selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
-        targeted_no_progress_guidance,
+        targeted_no_progress_guidance, tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -2448,6 +2459,23 @@ mod tests {
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn readonly_subagent_spawn_does_not_count_as_workspace_edit() {
+        assert!(!tool_changes_workspace(
+            "spawn_agent",
+            Some(&serde_json::json!({"write_access": false}))
+        ));
+        assert!(!tool_changes_workspace(
+            "spawn_agent",
+            Some(&serde_json::json!({}))
+        ));
+        assert!(tool_changes_workspace(
+            "spawn_agent",
+            Some(&serde_json::json!({"write_access": true}))
+        ));
+        assert!(tool_changes_workspace("write_to_file", None));
+    }
 
     struct CancelAfterApproval(tokio_util::sync::CancellationToken);
 
