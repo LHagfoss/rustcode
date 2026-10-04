@@ -1,3 +1,10 @@
+## [v0.56.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.14) - 2026-10-04
+
+### Features
+- Draw a bar per subscription limit window in `/usage`, showing the used share and reset time from the quota data a ChatGPT plan reports; the usage link stays until the provider has reported any ([#1697](https://github.com/LHagfoss/rustcode/pull/1697)).
+- Add `/refresh` to reload the provider account's model catalog, as the picker entry for `/account refresh` ([#1697](https://github.com/LHagfoss/rustcode/pull/1697)).
+- Type searchable picker queries into the composer row instead of the panel header, and blank the composer row for panels without typed input ([#1697](https://github.com/LHagfoss/rustcode/pull/1697)).
+- Record observed rate-limit response headers in the `provider.response_headers` event ([#1697](https://github.com/LHagfoss/rustcode/pull/1697)).
 ## [v0.56.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.13) - 2026-10-03
 
 ### Fixes
