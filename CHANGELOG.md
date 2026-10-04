@@ -1,3 +1,9 @@
+## [v0.56.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.16) - 2026-10-04
+
+### Fixes
+- Asking for subagents in the prompt ("use 1 sub agent to ...", "spawn an agent ...") now enables the subagent tools for that task without running `/delegate` first (#1711).
+- When subagents are disabled, the system prompt says so and names `/delegate`, so the model no longer searches MCP for a spawn tool (#1711).
+- `/delegate on` keeps subagents enabled for the whole session; `/delegate off` disables them (#1711).
 ## [v0.56.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.56.15) - 2026-10-04
 
 ### Features
