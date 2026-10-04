@@ -5775,6 +5775,71 @@ fn status_panels_render_minimal_inline() {
 }
 
 #[test]
+fn agent_activity_notice_is_clipped_to_one_display_line() {
+    let mut lines = Vec::new();
+    super::render_status_panel(
+        "agent-1 → grep /Users/lagos/code/rustcode/日本語/very_long_module_name.rs\nmore arguments",
+        32,
+        false,
+        &mut lines,
+    );
+
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].width() <= 32);
+    let text = lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.starts_with("  Agent 1 · Search "), "{text:?}");
+    assert!(text.ends_with('…'), "{text:?}");
+}
+
+#[test]
+fn agent_spawn_notice_omits_harness_configuration() {
+    let mut lines = Vec::new();
+    super::render_status_panel(
+        "agent-1 spawned: Check the latest\nPRs (write_access=false, workspace_mode=shared, verify=none)",
+        100,
+        false,
+        &mut lines,
+    );
+
+    let text = lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("Agent 1 spawned · Check the latest PRs"));
+    assert!(!text.contains("write_access"));
+    assert!(!text.contains("workspace_mode"));
+}
+
+#[test]
+fn queued_scheduler_notice_is_clipped_to_available_width() {
+    for notice in [
+        "Tool calls were queued by the scheduler and will run automatically.",
+        "Some tool calls were queued; review the other results above.",
+        "Some tool calls were not run; review results before retrying.",
+    ] {
+        let mut lines = Vec::new();
+        super::render_status_panel(notice, 30, false, &mut lines);
+        assert_eq!(lines.len(), 1, "{notice}");
+        assert!(lines[0].width() <= 30, "{notice}: {:?}", lines[0]);
+        assert!(lines[0].spans.last().unwrap().content.ends_with('…'));
+
+        let mut zero_width = Vec::new();
+        super::render_status_panel(notice, 0, false, &mut zero_width);
+        assert!(zero_width.is_empty());
+
+        let mut narrow = Vec::new();
+        super::render_status_panel(notice, 1, false, &mut narrow);
+        assert_eq!(narrow.len(), 1);
+        assert!(narrow[0].width() <= 1);
+    }
+}
+
+#[test]
 fn status_panel_help_box_lines_have_uniform_width() {
     use super::render_status_panel;
 
@@ -8622,6 +8687,84 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
     assert!(rendered.contains("agent-1"));
     assert!(rendered.contains("child result"));
     assert_eq!(state.history[0].content, "parent task");
+}
+
+#[test]
+fn selected_restored_child_correlates_legacy_tool_results_with_its_history() {
+    let mut state = RenderState::new();
+    for index in 0..9 {
+        state
+            .history
+            .push(ChatMessage::new("user", format!("parent user {index}")));
+        state.history.push(ChatMessage::new(
+            "assistant",
+            format!("parent answer {index}"),
+        ));
+    }
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            rustcode::controller::ToolCallRef {
+                id: "parent-call".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"printf parent-only"}"#.to_owned(),
+            },
+        ]));
+    state.history.push(
+        ChatMessage::new("tool", "run_command: parent result").with_tool_result(
+            rustcode::controller::ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert_eq!(state.history.len(), 20);
+
+    let mut child_history = (0..8)
+        .flat_map(|index| {
+            [
+                ChatMessage::new("user", format!("child user {index}")),
+                ChatMessage::new("assistant", format!("child answer {index}")),
+            ]
+        })
+        .collect::<Vec<_>>();
+    child_history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+        rustcode::controller::ToolCallRef {
+            id: "child-call".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"printf child-only"}"#.to_owned(),
+        },
+    ]));
+    // Older persisted messages can keep the result record without a call id;
+    // the renderer then correlates from the selected history's candidates.
+    child_history.push(
+        ChatMessage::new("tool", "run_command: child result").with_tool_result(
+            rustcode::controller::ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert_eq!(child_history.len(), 18);
+
+    let child = subagent_row(
+        "agent-1",
+        "inspect PRs",
+        child_history,
+        rustcode::controller::SubAgentStatus::Completed,
+        false,
+    );
+    state.subagents.push(child.clone());
+    state.selected_subagent = Some(child);
+    state.selected_subagent_id = Some(1);
+
+    let rendered = render_state_to_text(&mut state, 120, 30);
+
+    assert!(rendered.contains("child-only"), "{rendered}");
+    assert!(!rendered.contains("parent-only"), "{rendered}");
+    assert_eq!(state.history.len(), 20);
 }
 
 #[test]

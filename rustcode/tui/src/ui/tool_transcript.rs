@@ -841,8 +841,13 @@ pub(super) fn tool_transcript_entry(
         return None;
     }
     if message
-        .content
-        .contains("error: intentionally deferred by the scheduler")
+        .tool_result
+        .as_ref()
+        .and_then(|record| record.error_kind.as_deref())
+        .is_some_and(|kind| kind == "Deferred")
+        || message
+            .content
+            .contains("error: intentionally deferred by the scheduler")
     {
         return None;
     }
@@ -1922,6 +1927,10 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
 
 const COMPACT_TOOL_WARNING: &str = "[Warning, check debug for more info]";
 const DEFERRED_TOOL_NOTICE: &str = "Tool calls were deferred by the scheduler; they did not run.";
+const QUEUED_TOOL_NOTICE: &str =
+    "Tool calls were queued by the scheduler and will run automatically.";
+const MIXED_TOOL_NOTICE: &str = "Some tool calls were queued; review the other results above.";
+const UNSCHEDULED_TOOL_NOTICE: &str = "Some tool calls were not run; review the results above.";
 
 fn is_deferred_tool_batch_notice(content: &str) -> bool {
     let content = content.trim();
@@ -1929,6 +1938,28 @@ fn is_deferred_tool_batch_notice(content: &str) -> bool {
         && content.contains(" tool calls.")
         && content.contains("remaining calls (")
         && content.contains("were not executed or scheduled.")
+}
+
+fn is_current_tool_batch_notice(content: &str) -> bool {
+    let content = content.trim();
+    content.starts_with("[The model emitted ")
+        && content.contains(" tool calls.")
+        && content.contains("were executed this round.")
+}
+
+fn current_tool_batch_notice_for_display(content: &str) -> Option<&'static str> {
+    if !is_current_tool_batch_notice(content) {
+        return None;
+    }
+    let queued = content.contains("scheduler held ")
+        && content.contains("queued them for automatic execution");
+    let others =
+        content.contains("The harness did not schedule ") || content.contains("The remaining ");
+    Some(match (queued, others) {
+        (true, true) => MIXED_TOOL_NOTICE,
+        (true, false) => QUEUED_TOOL_NOTICE,
+        (false, _) => UNSCHEDULED_TOOL_NOTICE,
+    })
 }
 
 fn is_validation_rejection_notice(content: &str) -> bool {
@@ -1943,7 +1974,9 @@ fn is_validation_rejection_notice(content: &str) -> bool {
 /// implementation details such as validation schemas, deferred tool names, and
 /// call ids should not expand into a wide, noisy transcript row.
 pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
-    if is_deferred_tool_batch_notice(content) {
+    if let Some(notice) = current_tool_batch_notice_for_display(content) {
+        Some(notice)
+    } else if is_deferred_tool_batch_notice(content) {
         Some(DEFERRED_TOOL_NOTICE)
     } else if is_validation_rejection_notice(content) {
         Some(COMPACT_TOOL_WARNING)
@@ -2067,6 +2100,32 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_queued_notice_is_compact() {
+        assert_eq!(
+            super::system_notice_for_display(
+                "[The model emitted 2 tool calls. 1 were executed this round. The scheduler held 1 over the per-response workspace-change limit and queued them for automatic execution in a later round (run_command (call_123)); do not reissue them, their real results arrive without another request from you.]"
+            ),
+            Some("Tool calls were queued by the scheduler and will run automatically.")
+        );
+    }
+
+    #[test]
+    fn scheduler_mixed_and_unscheduled_notices_preserve_their_action() {
+        assert_eq!(
+            super::system_notice_for_display(
+                "[The model emitted 3 tool calls. 1 were executed this round. The scheduler held 1 over the per-response workspace-change limit and queued them for automatic execution in a later round (write_to_file (call_2)); do not reissue them. The harness did not schedule 1 call(s) (grep (call_3)); reissue them only after reviewing the real results. The remaining 2 call(s) were not executed: review the real results above.]"
+            ),
+            Some("Some tool calls were queued; review the other results above.")
+        );
+        assert_eq!(
+            super::system_notice_for_display(
+                "[The model emitted 2 tool calls. 1 were executed this round. The harness did not schedule 1 call(s) (grep (call_2)); reissue them only after reviewing the real results. The remaining 1 call(s) were not executed: review the real results above.]"
+            ),
+            Some("Some tool calls were not run; review the results above.")
+        );
+    }
+
+    #[test]
     fn deferred_tool_result_is_not_rendered_as_a_failed_call() {
         let mut state = RenderState::new();
         state.history.push(rustcode::controller::ChatMessage::new(
@@ -2075,6 +2134,35 @@ mod tests {
         ));
         let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
         assert!(super::tool_transcript_entry(&snapshot, 0, 80, false).is_none());
+    }
+
+    #[test]
+    fn queued_tool_result_hides_synthetic_error_but_keeps_canonical_detail() {
+        use rustcode::controller::ToolResultRecord;
+
+        let mut state = RenderState::new();
+        let mut message = rustcode::controller::ChatMessage::new(
+            "tool",
+            "run_command: error: held by the harness and queued for automatic execution in a later round; do not reissue it",
+        );
+        message.tool_result = Some(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: false,
+            error_kind: Some("Deferred".to_owned()),
+            ..ToolResultRecord::default()
+        });
+        state.history.push(message);
+
+        let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
+        assert!(
+            super::tool_transcript_entry(&snapshot, 0, 80, false).is_none(),
+            "synthetic queue acknowledgements should not look like command failures"
+        );
+        assert!(
+            snapshot.active_history()[0]
+                .content
+                .contains("do not reissue it")
+        );
     }
 
     #[test]
