@@ -1,3 +1,11 @@
+## [v0.57.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.2) - 2026-10-05
+
+### Fixes
+# v0.57.2
+
+- Merge the duplicated running indicators: a foreground command now shows one `• Running $ <command> · 12s · esc interrupt` row, and the row above the composer keeps only the state and turn token total.
+- Restore the inward side lines on tool groups: child rows carry `├`/`└` tree connectors beside their state markers, and command/tool output hangs under a continuous `│` spine across wrapped rows.
+- Keep narrow terminals clean: indicator and tool rows are composed and truncated to the viewport width, with a compact `esc` cancel hint when the full one does not fit.
 ## [v0.57.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.1) - 2026-10-05
 
 ### Features
