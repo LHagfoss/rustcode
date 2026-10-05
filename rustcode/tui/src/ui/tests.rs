@@ -3059,7 +3059,7 @@ fn use_skill_renders_in_committed_history() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered[0], "• Ran");
-    assert!(rendered.iter().any(|line| line == "  ✓ UseSkill clockify"));
+    assert!(rendered.iter().any(|line| line == "└ ✓ UseSkill clockify"));
 }
 
 #[test]
@@ -3147,7 +3147,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "  ✓ UseSkill clockify"]);
+    assert_eq!(rendered, ["• Ran", "└ ✓ UseSkill clockify"]);
 }
 
 #[test]
@@ -3180,7 +3180,7 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "  ✓ GetTime"]);
+    assert_eq!(rendered, ["• Ran", "└ ✓ GetTime"]);
 }
 
 #[test]
@@ -3234,8 +3234,8 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
         rendered,
         [
             "• Ran",
-            "  ✓ Bash git status --short",
-            "  ✓ Bash cargo check --tests"
+            "├ ✓ Bash git status --short",
+            "└ ✓ Bash cargo check --tests"
         ]
     );
     assert!(!rendered.iter().any(|line| line.contains("output")));
@@ -3294,7 +3294,7 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
 
     assert_eq!(
         rendered,
-        ["• Ran", "  ✓ GetTime", "  ✓ Bash git status --short"]
+        ["• Ran", "├ ✓ GetTime", "└ ✓ Bash git status --short"]
     );
 }
 
@@ -3417,7 +3417,8 @@ fn high_verbosity_hides_generic_tool_details() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.starts_with("  ✓ McpCustomTool"))
+            .any(|line| line.starts_with("├ ✓ McpCustomTool")
+                || line.starts_with("└ ✓ McpCustomTool"))
     );
     assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
     assert!(!rendered.iter().any(|line| line.contains("completed")));
@@ -4154,7 +4155,7 @@ fn completed_edits_have_a_distinct_transcript_heading() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered[0], "• Edited");
-    assert_eq!(rendered[1], "  ✓ src/main.rs");
+    assert_eq!(rendered[1], "└ ✓ src/main.rs");
 }
 
 #[test]
@@ -4188,7 +4189,7 @@ fn committed_file_write_is_labeled_as_a_write() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Wrote", "  ✓ src/new.rs"]);
+    assert_eq!(rendered, ["• Wrote", "└ ✓ src/new.rs"]);
 }
 
 #[test]
@@ -4542,8 +4543,8 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered[0], "• Edited");
-    assert_eq!(rendered[1], "  ✓ src/game/engine.ts");
-    assert_eq!(rendered[2], "  ✓ src/App.tsx");
+    assert_eq!(rendered[1], "├ ✓ src/game/engine.ts");
+    assert_eq!(rendered[2], "└ ✓ src/App.tsx");
 }
 
 #[test]
@@ -4603,14 +4604,14 @@ fn exploration_results_group_and_deduplicate_child_rows() {
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| *line == "  ✓ List src")
+            .filter(|line| *line == "├ ✓ List src")
             .count(),
         1
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line == "  ✓ Search renderer in src")
+            .any(|line| line == "└ ✓ Search renderer in src")
     );
 }
 
@@ -4656,8 +4657,8 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "  ✓ List src"));
-    assert!(rendered.iter().any(|line| line == "  ✓ List tests"));
+    assert!(rendered.iter().any(|line| line == "├ ✓ List src"));
+    assert!(rendered.iter().any(|line| line == "└ ✓ List tests"));
 }
 
 #[test]
@@ -4844,9 +4845,9 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         rendered,
         [
             "• Ran",
-            "  ✓ Bash git status --short",
-            "      │ M src/main.rs",
-            "  ✓ GetTime",
+            "├ ✓ Bash git status --short",
+            "│ M src/main.rs",
+            "└ ✓ GetTime",
         ],
         "each hint stays on the row of the entry it expands: {rendered:?}"
     );
@@ -5054,7 +5055,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| line.starts_with("  ✓ Bash"))
+            .filter(|line| line.starts_with("├ ✓ Bash") || line.starts_with("└ ✓ Bash"))
             .count(),
         2,
         "each homogeneous command keeps its own summary: {rendered:?}"
@@ -6569,7 +6570,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(rendered[0], "• Running");
+    assert_eq!(rendered[0], "• Running · esc interrupt");
     assert!(rendered.iter().any(|line| line.contains("local:1")));
     assert!(rendered.iter().any(|line| line.contains("local:2")));
     assert_eq!(
@@ -6748,9 +6749,9 @@ fn live_exploration_batch_uses_exploring_when_one_call_is_executing() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Exploring");
-    assert_eq!(rendered[1], "  ○ Grep src/**/*.rs · queued");
-    assert_eq!(rendered[2], "  ● Read src/main.rs · running 0s");
+    assert_eq!(rendered[0], "• Exploring · esc interrupt");
+    assert_eq!(rendered[1], "├ ○ Grep src/**/*.rs");
+    assert_eq!(rendered[2], "└ ● Read src/main.rs · 0s");
 }
 
 #[test]
@@ -6777,9 +6778,9 @@ fn mixed_live_exploration_and_action_batch_uses_running_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Running");
-    assert_eq!(rendered[1], "  ● Read src/main.rs · running 0s");
-    assert_eq!(rendered[3], "  ● Writing src/main.rs · running 0s");
+    assert_eq!(rendered[0], "• Running · esc interrupt");
+    assert_eq!(rendered[1], "├ ● Read src/main.rs · 0s");
+    assert_eq!(rendered[3], "└ ● Writing src/main.rs · 0s");
 }
 
 #[test]
@@ -6805,9 +6806,9 @@ fn live_mcp_calls_use_running_heading_when_one_call_is_executing() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Running");
-    assert_eq!(rendered[1], "  ○ ClockifyGetTime workspace · queued");
-    assert_eq!(rendered[2], "  ● ClockifyStartTimer task-42 · running 0s");
+    assert_eq!(rendered[0], "• Running · esc interrupt");
+    assert_eq!(rendered[1], "├ ○ ClockifyGetTime workspace");
+    assert_eq!(rendered[2], "└ ● ClockifyStartTimer task-42 · 0s");
 }
 
 #[test]
@@ -6827,9 +6828,9 @@ fn single_live_generic_tool_is_nested_under_running_heading() {
     assert_eq!(
         rendered,
         [
-            "• Running",
-            "  ● UseSkill release-automation · running 0s",
-            "    no output yet"
+            "• Running · esc interrupt",
+            "└ ● UseSkill release-automation · 0s",
+            "│ no output yet"
         ]
     );
 }
@@ -6862,8 +6863,8 @@ fn speculative_live_tools_are_nested_under_preparing_heading() {
         rendered,
         [
             "• Queued",
-            "  ○ UseSkill release-automation · queued",
-            "  ○ Bash $ cargo test · queued"
+            "├ ○ UseSkill release-automation",
+            "└ ○ Bash $ cargo test"
         ]
     );
 }
@@ -6884,7 +6885,7 @@ fn speculative_file_write_uses_preparing_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Queued", "  ○ Writing src/main.js · queued"]);
+    assert_eq!(rendered, ["• Queued", "└ ○ Writing src/main.js"]);
 }
 
 #[test]
@@ -6936,9 +6937,9 @@ fn live_editing_tool_cell_shows_action_and_target_child() {
     assert_eq!(
         rendered,
         [
-            "• Running",
-            "  ● Edit src/game/engine.ts · running 0s",
-            "    no output yet"
+            "• Running · esc interrupt",
+            "└ ● Edit src/game/engine.ts · 0s",
+            "│ no output yet"
         ]
     );
 }
@@ -6968,9 +6969,9 @@ fn live_audio_generation_cell_shows_running_heading_and_output_path() {
     assert_eq!(
         rendered,
         [
-            "• Running",
-            "  ● GenerateSoundEffect assets/audio/balloon-pop.wav · running 0s",
-            "    no output yet"
+            "• Running · esc interrupt",
+            "└ ● GenerateSoundEffect assets/audio/balloon-pop.wav · 0s",
+            "│ no output yet"
         ]
     );
 }
@@ -6995,11 +6996,8 @@ fn live_video_render_cell_shows_progress() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Running");
-    assert_eq!(
-        rendered[1],
-        "  ● RenderVideo video-project.json · running 0s"
-    );
+    assert_eq!(rendered[0], "• Running · esc interrupt");
+    assert_eq!(rendered[1], "└ ● RenderVideo video-project.json · 0s");
     assert!(rendered[2].contains("render progress: 42% (2.1s/5.0s)"));
 }
 
@@ -7029,11 +7027,11 @@ fn live_batched_edits_with_casing_aliases_include_actions() {
     assert_eq!(
         rendered,
         [
-            "• Running",
-            "  ● Edit src/game/engine.ts · running 0s",
-            "    no output yet",
-            "  ● Write src/App.tsx · running 0s",
-            "    no output yet"
+            "• Running · esc interrupt",
+            "├ ● Edit src/game/engine.ts · 0s",
+            "│ no output yet",
+            "└ ● Write src/App.tsx · 0s",
+            "│ no output yet"
         ]
     );
 }
@@ -7064,11 +7062,11 @@ fn live_multiple_generic_tools_show_running_heading() {
     assert_eq!(
         rendered,
         [
-            "• Running",
-            "  ● ClockifyTimer start · running 0s",
-            "    no output yet",
-            "  ● NotifyUser done · running 0s",
-            "    no output yet"
+            "• Running · esc interrupt",
+            "├ ● ClockifyTimer start · 0s",
+            "│ no output yet",
+            "└ ● NotifyUser done · 0s",
+            "│ no output yet"
         ]
     );
 }
@@ -7099,14 +7097,13 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Running · 0s · esc interrupt");
-    assert_eq!(rendered[1], "  ● Bash $ cargo test");
+    assert_eq!(rendered[0], "• Running $ cargo test · 0s · esc interrupt");
     assert!(rendered.iter().any(|line| line.contains("compiler error")));
     assert!(rendered.iter().any(|line| line.contains("lines")));
     assert!(rendered.iter().any(|line| line.contains("4K")));
     assert!(
-        rendered.len() <= 7,
-        "live output must fit a five-row body below its two-row header: {rendered:?}"
+        rendered.len() <= 6,
+        "live output must fit a five-row body below its one-row header: {rendered:?}"
     );
 }
 
@@ -7251,10 +7248,7 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
     .map(|line| line.to_string())
     .collect::<Vec<_>>();
 
-    assert_eq!(
-        rendered,
-        ["• Running · 0s · esc interrupt", "  ● Bash $ cargo test"]
-    );
+    assert_eq!(rendered, ["• Running $ cargo test · 0s · esc interrupt"]);
     assert!(
         !rendered
             .iter()
@@ -9235,17 +9229,18 @@ fn command_child_lines_wrap_with_indentation() {
         "long command should collapse to a bounded preview: {rendered:?}"
     );
     assert!(rendered[0].to_string().starts_with("• Ran"));
-    assert!(rendered[1].to_string().starts_with("  ✓ Bash"));
+    assert!(rendered[1].to_string().starts_with("└ ✓ Bash"));
     assert!(
         rendered.iter().any(|line| line.to_string().contains('…')),
         "collapsed preview should carry an ellipsis: {rendered:?}"
     );
-    // Continuation lines must have indentation ("    ")
+    // Continuation lines hang under the side spine ("│ ") or, for the last
+    // child's wrapped title, the matching blank indent ("    ").
     for line in &rendered[2..] {
         let text = line.to_string();
         assert!(
-            text.starts_with("    ") || text.is_empty(),
-            "wrapped line must be indented with 4 spaces: {text:?}"
+            text.starts_with("│ ") || text.starts_with("    ") || text.is_empty(),
+            "wrapped line must hang under the tree indent: {text:?}"
         );
     }
 }
@@ -10219,7 +10214,7 @@ fn reduced_motion_renders_the_chat_indicator_as_a_static_bullet() {
     state.token_usage_in_flight = true;
     let snapshot = render_snapshot(&state);
     let indicator =
-        super::live_running_indicator(&snapshot).expect("a running turn has an indicator");
+        super::live_running_indicator(&snapshot, 80).expect("a running turn has an indicator");
     let text = indicator
         .spans
         .iter()
@@ -10260,7 +10255,7 @@ fn running_indicator_adds_live_output_to_turn_total_and_marks_it_provisional() {
     state.stream_tracker.as_mut().unwrap().tokens_so_far = 450;
 
     let snapshot = render_snapshot(&state);
-    let text = super::live_running_indicator(&snapshot)
+    let text = super::live_running_indicator(&snapshot, 80)
         .expect("a running turn has an indicator")
         .spans
         .iter()
@@ -10292,7 +10287,7 @@ fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
     });
 
     let snapshot = render_snapshot(&state);
-    let text = super::live_running_indicator(&snapshot)
+    let text = super::live_running_indicator(&snapshot, 80)
         .expect("tool work has an indicator")
         .spans
         .iter()
@@ -10323,7 +10318,7 @@ fn running_indicator_updates_provisional_stream_estimates_across_continuations()
 
     let indicator_text = |state: &RenderState| {
         let snapshot = render_snapshot(state);
-        super::live_running_indicator(&snapshot)
+        super::live_running_indicator(&snapshot, 80)
             .expect("a running turn has an indicator")
             .spans
             .iter()
@@ -10371,7 +10366,7 @@ fn running_indicator_keeps_estimated_marker_while_waiting_for_tools() {
     state.current_turn_token_usage_is_estimated = true;
 
     let snapshot = render_snapshot(&state);
-    let text = super::live_running_indicator(&snapshot)
+    let text = super::live_running_indicator(&snapshot, 80)
         .expect("tool work has an indicator")
         .spans
         .iter()
@@ -10530,11 +10525,18 @@ fn mixed_live_work_has_status_markers_and_hanging_wrap() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("  ● Bash"), "{text}");
-        assert!(text.contains("  ○ mail.Search"), "{text}");
-        assert!(text.contains("queued"), "{text}");
-        assert!(text.contains("  ● SpawnAgent"), "{text}");
-        assert!(!text.contains(['└', '├', '│']), "{text}");
+        // One state word per row: the heading says Running once, children carry
+        // only the elapsed clock, and `○` alone marks the queued sibling.
+        assert!(text.contains("• Running"), "{text}");
+        assert!(!text.contains(" · running "), "{text}");
+        assert!(!text.contains("queued"), "{text}");
+        assert!(text.contains("├ ● Bash"), "{text}");
+        assert!(text.contains("├ ○ mail.Search"), "{text}");
+        assert!(text.contains("└ ● SpawnAgent"), "{text}");
+        // Tree connectors point at children; bodies hang under a spine.
+        assert!(text.contains('│'), "{text}");
+        // The cancel affordance stays reachable at every width.
+        assert!(text.contains("esc"), "{text}");
         assert!(
             rendered
                 .iter()
@@ -10574,11 +10576,27 @@ fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        for marker in ["  ✓ ", "  × ", "  − ", "  ● "] {
-            assert!(text.contains(marker), "{text}");
+        // Markers must be anchored to child rows, not matched anywhere in the
+        // text: each child starts with a tree connector followed by its marker.
+        let children = text
+            .lines()
+            .filter(|line| line.starts_with('├') || line.starts_with('└'))
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 4, "{text}");
+        for child in children {
+            assert!(
+                ["✓", "×", "−", "●"]
+                    .iter()
+                    .any(|marker| child.contains(marker)),
+                "child row needs its state marker: {child:?} in {text}"
+            );
         }
         assert!(text.contains("cancelled"), "{text}");
-        assert!(!text.contains(['└', '├']), "{text}");
+        // Tree connectors point at each child (High verbosity renders no
+        // bodies, so no side spine here; Low-verbosity spine coverage lives in
+        // tool_group_tree_connectors_and_continuous_spine_at_narrow_widths).
+        assert!(text.contains('├'), "{text}");
+        assert!(text.contains('└'), "{text}");
         assert!(
             lines.iter().all(|line| line.width() <= usize::from(width)),
             "{text}"
@@ -10659,7 +10677,9 @@ fn quiet_mcp_call_reports_no_output_then_latest_bounded_output() {
             .join("\n")
     };
     let quiet = render(call.clone());
-    assert!(quiet.contains("running 0s"));
+    // One state word on the heading; the child keeps only the elapsed clock.
+    assert!(quiet.contains("• Running · esc interrupt"), "{quiet}");
+    assert!(!quiet.contains("running 0s"), "{quiet}");
     assert!(quiet.contains("no output yet"), "{quiet}");
     call.output.push_back(LiveToolOutputChunk {
         stderr: false,
@@ -10707,11 +10727,11 @@ fn low_verbosity_command_batch_keeps_one_group_and_per_call_outcomes() {
         "{text}"
     );
     assert!(
-        text.contains("  ✓ Bash cargo test --package package-0"),
+        text.contains("├ ✓ Bash cargo test --package package-0"),
         "{text}"
     );
     assert!(
-        text.contains("  × Bash cargo test --package package-1 · exit 1"),
+        text.contains("└ × Bash cargo test --package package-1 · exit 1"),
         "{text}"
     );
 }
@@ -10735,10 +10755,35 @@ fn out_of_order_live_completion_preserves_remaining_sibling_marker_and_identity(
         .collect::<Vec<_>>()
     };
     let before = render(&[first.clone(), second.clone()]);
+    assert_eq!(
+        &before[..3],
+        &[
+            "• Running · esc interrupt".to_owned(),
+            "├ ● mail.Search query · 0s".to_owned(),
+            "│ no output yet".to_owned(),
+        ]
+    );
+    // Siblings that finish out of order leave the survivor in place; the
+    // survivor keeps its identity and output, only its tree connector closes
+    // from `├` to `└` now that it is the last child.
     let after = render(&[second]);
-    assert_eq!(&before[3..], &after[1..]);
+    assert_eq!(
+        &after,
+        &[
+            "• Running · esc interrupt".to_owned(),
+            "└ ● SpawnAgent inspect tests · 0s".to_owned(),
+            "│ no output yet".to_owned(),
+        ]
+    );
     let after_other_order = render(&[first]);
-    assert_eq!(&before[1..3], &after_other_order[1..]);
+    assert_eq!(
+        &after_other_order,
+        &[
+            "• Running · esc interrupt".to_owned(),
+            "└ ● mail.Search query · 0s".to_owned(),
+            "│ no output yet".to_owned(),
+        ]
+    );
     assert!(
         render(&[]).is_empty(),
         "completion removes the mutable running cell"
@@ -10792,8 +10837,424 @@ fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
         }
     }
     let snapshot = render_snapshot(&state);
-    let indicator = super::composer_render::active_work_indicator(&snapshot)
+    let indicator = super::composer_render::active_work_indicator(&snapshot, 80, None)
         .unwrap()
         .to_string();
     assert!(indicator.contains("Results ready"), "{indicator}");
+}
+
+#[test]
+fn single_running_command_folds_into_one_indicator_row() {
+    use rustcode::controller::{LiveToolCall, Verbosity};
+    // #1725: a running foreground command rendered its state twice (a
+    // `• Running` heading plus a `●` child row). The heading now carries the
+    // state word, command, elapsed clock and cancel hint in a single row.
+    let call = LiveToolCall::new(
+        "build",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace -- --nocapture",
+    );
+    let now = call.started_at + std::time::Duration::from_secs(12);
+    for width in [24u16, 40, 80] {
+        let rendered = super::history_cell::render_live_tool_cell_at(
+            &[call.clone()],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+        assert!(
+            rendered[0].starts_with("• Running $ cargo test"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|line| line.contains("12s")),
+            "{rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains('●')),
+            "no duplicate child indicator: {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains(" · running ")),
+            "state word appears once: {rendered:?}"
+        );
+        assert!(
+            rendered[1..]
+                .iter()
+                .all(|line| line.starts_with("│ ") || line.starts_with("  ")),
+            "output hangs under the spine: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .all(|line| line_width(line) <= usize::from(width)),
+            "{rendered:?}"
+        );
+    }
+}
+
+#[test]
+fn foreground_bottom_indicator_omits_repeated_identity_and_caps_width() {
+    use rustcode::controller::LiveToolCall;
+    // #1725: the bottom row repeated the transcript cell's identity and clock.
+    // With live calls it keeps only the state word; without a live projection
+    // it stays the sole indicator and truncates to its single row.
+    let mut state = RenderState::new();
+    state.live_tool_calls = std::sync::Arc::new(vec![LiveToolCall::new(
+        "build",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace -- --nocapture",
+    )]);
+    let snapshot = render_snapshot(&state);
+    let indicator = super::composer_render::active_work_indicator(&snapshot, 80, None)
+        .expect("foreground work");
+    assert!(
+        !indicator.to_string().contains("cargo test"),
+        "{indicator:?}"
+    );
+    assert!(indicator.to_string().contains("Running"), "{indicator:?}");
+
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.running_tools.push("run_command".to_owned());
+    state
+        .running_tools
+        .push(format!("tool-{}", "x".repeat(200)));
+    for width in [18u16, 24, 40, 80] {
+        let snapshot = render_snapshot(&state);
+        let indicator = super::composer_render::active_work_indicator(&snapshot, width, None)
+            .expect("tool work");
+        let text = indicator.to_string();
+        assert!(line_width(&text) <= usize::from(width), "{text:?}");
+        if width <= 40 {
+            assert!(text.contains('…'), "long tool lists truncate: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn tool_group_tree_connectors_and_continuous_spine_at_narrow_widths() {
+    use rustcode::controller::{ToolResultRecord, Verbosity};
+    // #1725: child rows lost their inward connectors and body rows showed a
+    // dangling gutter stub on the first wrapped row only. Every group row must
+    // stay within the viewport at narrow widths.
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "run_command: {\"data\": [1, 2, 3], \"board\": \"x\"}\nHTTP 201 Created",
+        )
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "ask_question: User selected: Ads - Wecall").with_tool_result(
+            ToolResultRecord {
+                tool_name: "ask_question".into(),
+                success: true,
+                ..Default::default()
+            },
+        ),
+    );
+    for width in [18u16, 24, 32, 40, 80] {
+        let lines = super::render_committed_tool_result_group(&state, &[0, 1], width, false);
+        let text = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains('├'), "{text}");
+        assert!(text.contains('└'), "{text}");
+        assert!(
+            lines.iter().all(|line| line.width() <= usize::from(width)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn live_running_indicator_never_exceeds_width() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        total_tokens: 800,
+        ..Default::default()
+    });
+    for width in [18u16, 24, 40, 80] {
+        let snapshot = render_snapshot(&state);
+        let indicator = super::live_running_indicator(&snapshot, width).expect("indicator");
+        assert!(
+            indicator.width() <= usize::from(width),
+            "width {width}: {indicator:?}"
+        );
+        assert!(
+            indicator.to_string().contains("tokens"),
+            "token accounting survives truncation: {indicator:?}"
+        );
+    }
+}
+
+fn line_width(line: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    line.width()
+}
+
+#[test]
+fn later_tool_rounds_keep_the_downward_connector_under_a_committed_heading() {
+    use rustcode::controller::{ChatMessage, ToolResultRecord, Verbosity};
+    // #1725: a later tool-only round renders under a heading an earlier frame
+    // already committed, and terminal scrollback cannot be revised. Every
+    // continuation child therefore keeps the downward connector instead of
+    // claiming to be the final sibling.
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        }),
+    );
+    let lines = super::render_committed_tool_result_continuation_snapshot(
+        &render_snapshot(&state),
+        &[0],
+        80,
+        false,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+    assert!(
+        lines.iter().all(|line| line.starts_with('├')),
+        "continuation children keep the downward connector: {lines:?}"
+    );
+}
+
+#[test]
+fn command_body_spine_survives_blank_lines_and_stderr() {
+    use rustcode::controller::Verbosity;
+    // #1725: blank payload rows and stderr lines must not punch holes in the
+    // side spine, and stderr keeps its own marker under the line.
+    let body = vec![
+        Line::from("stdout first"),
+        Line::from(""),
+        Line::from("  ! stderr failed loudly here"),
+    ];
+    let lines = super::indent_tool_result_body(body, "run_command", &Verbosity::Low, 24, true);
+    let text = lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rows = lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(rows[0], "│ stdout first", "{rows:?}");
+    assert!(
+        rows[1].trim_end() == "│",
+        "blank payload row keeps the spine: {rows:?}"
+    );
+    assert!(
+        rows[2].starts_with("│ ! stderr failed"),
+        "stderr keeps its marker under the spine: {rows:?}"
+    );
+    assert!(lines.iter().all(|line| line.width() <= 24), "{text}");
+}
+
+#[test]
+fn bottom_indicator_fits_wide_suffixes_for_every_work_state() {
+    use rustcode::controller::{BackgroundResultDisplay, LiveToolCall, TaskDisplay, TokenUsage};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    // #1725: head + detail + token suffix share one terminal row. A wide
+    // provisional total must shrink the state word's detail, never clip the
+    // accounting away.
+    let usage = TokenUsage {
+        prompt_tokens: 9000,
+        completion_tokens: 1200,
+        total_tokens: 10_200,
+        ..Default::default()
+    };
+    let mut states = Vec::new();
+
+    let mut foreground = RenderState::new();
+    foreground.status = AppStatus::Streaming;
+    foreground.current_turn_token_usage = Some(usage.clone());
+    foreground.token_usage_in_flight = true;
+    foreground.live_tool_calls = std::sync::Arc::new(vec![LiveToolCall::new(
+        "build",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace",
+    )]);
+    states.push(("foreground", foreground));
+
+    let mut background = RenderState::new();
+    background.current_turn_token_usage = Some(usage.clone());
+    background.background_tasks = vec![TaskDisplay {
+        id: "build".into(),
+        command: "cargo build --release --all-targets".into(),
+        started_at: std::time::Instant::now(),
+        child_pid: Some(4321),
+    }];
+    states.push(("background", background));
+
+    let mut ready = RenderState::new();
+    ready.current_turn_token_usage = Some(usage);
+    ready.pending_background_results = vec![BackgroundResultDisplay {
+        id: "build".into(),
+        success: true,
+        cancelled: false,
+    }];
+    states.push(("results-ready", ready));
+
+    for (name, state) in states {
+        for width in [18u16, 24, 32, 40, 80] {
+            let snapshot = render_snapshot(&state);
+            let indicator = super::live_running_indicator(&snapshot, width)
+                .unwrap_or_else(|| panic!("{name} keeps an indicator at width {width}"));
+            let text = indicator.to_string();
+            assert!(
+                indicator.width() <= usize::from(width),
+                "{name} width {width}: {text:?}"
+            );
+            assert!(text.contains("tokens"), "{name} width {width}: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
+    use rustcode::controller::{LiveToolCall, Verbosity};
+    // #1725: the folded row shares its width between the command, the elapsed
+    // clock and the cancel hint. A `1m 05s` clock next to the short `esc` form
+    // used to push the affordance onto a second row.
+    let call = LiveToolCall::new(
+        "build",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace",
+    );
+    let now = call.started_at + std::time::Duration::from_secs(65);
+    for width in [18u16, 24, 32, 40, 80] {
+        let rendered = super::history_cell::render_live_tool_cell_at(
+            &[call.clone()],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+        );
+        let text = rendered
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("1m"),
+            "width {width} keeps the clock: {text:?}"
+        );
+        // When a hint is emitted it shares a row with the clock or the command:
+        // it must never wrap onto a row of its own or overflow the clock's row.
+        for row in &rendered {
+            let text = row.to_string();
+            if text.contains("esc") {
+                assert!(
+                    text.contains("1m") || text.contains("cargo"),
+                    "width {width}: orphaned cancel hint: {text:?}"
+                );
+            }
+        }
+        // A short command leaves room for the compact hint from 32 columns up;
+        // below that the command and clock genuinely fill the row.
+        let short = LiveToolCall::new("b", None, "run_command", "Bash", "ls");
+        let short_render = super::history_cell::render_live_tool_cell_at(
+            &[short],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+        );
+        let short_text = short_render[0].to_string();
+        if width >= 32 {
+            assert!(
+                short_text.contains("esc"),
+                "width {width}: short command keeps the affordance: {short_text:?}"
+            );
+        }
+        assert!(
+            !short_text.contains("esc") || short_text.contains("esc interrupt") || width >= 32,
+            "width {width}: {short_text:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .all(|line| line.width() <= usize::from(width)),
+            "width {width}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn many_live_children_keep_connectors_when_the_list_is_truncated() {
+    use rustcode::controller::LiveToolCall;
+    // #1725: a capped child list still ends with a downward connector only when
+    // nothing follows, so the omission row never sits under a closing `└`.
+    let calls = (0..12)
+        .map(|index| {
+            LiveToolCall::new(
+                format!("call-{index}"),
+                None,
+                "mcp__mail__search",
+                "mail.Search",
+                format!("query {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let child_rows = rendered
+        .iter()
+        .filter(|line| line.starts_with('├') || line.starts_with('└'))
+        .count();
+    assert_eq!(child_rows, 8, "{rendered:?}");
+    assert!(
+        rendered
+            .iter()
+            .all(|line| !line.starts_with("└") || line.contains("call-7")),
+        "only the final shown child closes: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("more")),
+        "{rendered:?}"
+    );
 }

@@ -565,7 +565,11 @@ pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
 
 /// The persistent bottom row reports the work currently blocking progress.
 /// Actual tool start times and pending completion records drive this projection.
-pub(super) fn active_work_indicator(state: &RenderSnapshot) -> Option<Line<'static>> {
+pub(super) fn active_work_indicator(
+    state: &RenderSnapshot,
+    width: u16,
+    suffix: Option<Span<'static>>,
+) -> Option<Line<'static>> {
     let work = active_work_state(state);
     let detail = match work {
         ActiveWorkState::Approval => state
@@ -575,40 +579,24 @@ pub(super) fn active_work_indicator(state: &RenderSnapshot) -> Option<Line<'stat
             .unwrap_or_default(),
         ActiveWorkState::Input => " · answer question".to_owned(),
         ActiveWorkState::Foreground | ActiveWorkState::Queued => {
-            if let Some(call) = state
-                .live_tool_calls()
-                .iter()
-                .find(|call| call.execution_started)
-                .or_else(|| state.live_tool_calls().first())
-            {
-                let extra = state.live_tool_calls().len().saturating_sub(1);
-                let identity = if call.target.is_empty() || call.target == "?" {
-                    call.action.clone()
-                } else {
-                    format!("{} {}", call.action, call.target)
-                };
-                let elapsed = if call.execution_started {
-                    format!(
-                        " · {}",
-                        fmt_elapsed_compact(call.started_at.elapsed().as_secs())
-                    )
+            if !state.live_tool_calls().is_empty() {
+                // The transcript's live cell already carries the tool identity,
+                // elapsed clock and cancel hint: repeating them here rendered
+                // the same running state twice (#1725). The bottom row keeps
+                // only what the cell lacks.
+                if matches!(work, ActiveWorkState::Queued) {
+                    format!(" · {}", state.model_name())
                 } else {
                     String::new()
-                };
-                format!(
-                    "{elapsed} · {identity}{} · esc interrupt",
-                    if extra > 0 {
-                        format!(" · +{extra}")
-                    } else {
-                        String::new()
-                    }
-                )
+                }
             } else if matches!(work, ActiveWorkState::Queued) {
                 // Queued with nothing started yet: keep the model visible so
                 // the running row stays findable; there is nothing to
                 // interrupt, so no cancel hint.
                 format!(" · {}", state.model_name())
             } else {
+                // No live projection: the bottom row is the only indicator, so
+                // it keeps the running tool identity and cancel hint here.
                 format!(" · {} · esc interrupt", state.running_tools().join(", "))
             }
         }
@@ -624,16 +612,94 @@ pub(super) fn active_work_indicator(state: &RenderSnapshot) -> Option<Line<'stat
         ActiveWorkState::ResultsReady => '✓',
         _ => running_spinner_char(state),
     };
-    Some(Line::from(vec![
-        Span::styled(
-            format!("{marker} {}", work.label()),
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
-        ),
-        Span::styled(
-            detail,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        ),
-    ]))
+    let head = format!("{marker} {}", work.label());
+    // The row owns exactly one terminal row and the caller appends the token
+    // suffix afterwards, so head + detail + suffix must fit together. Shrink
+    // the droppable detail first, then the state word; a clipped row must never
+    // eat the cumulative token total (#1725).
+    let head_span = Span::styled(
+        head,
+        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+    );
+    let detail_span = Span::styled(
+        detail,
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+    );
+    Some(Line::from(fit_indicator_row(
+        vec![head_span, detail_span],
+        suffix,
+        usize::from(width),
+    )))
+}
+
+/// Compose the reserved indicator row within `width` display columns.
+///
+/// `spans` are the state word followed by increasingly droppable detail;
+/// `suffix` (token accounting) is reserved first and only truncated when even
+/// the state word does not fit beside it.
+pub(super) fn fit_indicator_row(
+    mut spans: Vec<Span<'static>>,
+    mut suffix: Option<Span<'static>>,
+    width: usize,
+) -> Vec<Span<'static>> {
+    let suffix_width = suffix.as_ref().map_or(0, |span| span.content.width());
+    let budget = width.saturating_sub(suffix_width);
+    // Shrink the least important span (the last detail) until the row fits.
+    for _ in 0..spans.len() + 1 {
+        let total: usize = spans.iter().map(|span| span.content.width()).sum();
+        if total <= budget {
+            break;
+        }
+        let Some(index) = spans.iter().rposition(|span| !span.content.is_empty()) else {
+            break;
+        };
+        let others: usize = spans
+            .iter()
+            .enumerate()
+            .filter(|(position, span)| *position != index && !span.content.is_empty())
+            .map(|(_, span)| span.content.width())
+            .sum();
+        let target = budget.saturating_sub(others);
+        spans[index].content = if target == 0 {
+            String::new().into()
+        } else {
+            truncate_to_display_width(&spans[index].content, target).into()
+        };
+    }
+    if let Some(span) = &mut suffix {
+        let total: usize = spans.iter().map(|part| part.content.width()).sum();
+        let available = width.saturating_sub(total);
+        if span.content.width() > available {
+            span.content = truncate_to_display_width(&span.content, available).into();
+        }
+    }
+    spans.extend(suffix);
+    spans
+}
+
+/// Width-aware truncation with an ellipsis that never exceeds `max_width`
+/// display columns (unlike char-count truncation, which overflows on wide
+/// glyphs and shreds at display wrap).
+pub(super) fn truncate_to_display_width(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let budget = max_width.saturating_sub(1);
+    let mut output = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > budget {
+            break;
+        }
+        used += ch_width;
+        output.push(ch);
+    }
+    output.push('…');
+    output
 }
 
 fn background_spinner_frame() -> char {

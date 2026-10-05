@@ -13,7 +13,7 @@ use rustcode::controller::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use super::{
     COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
@@ -563,30 +563,29 @@ fn is_exploration_tool(name: &str) -> bool {
     rustcode_core::activity::is_exploration_tool(name)
 }
 
+/// Cancel affordance for a running live cell, sized to the space the heading
+/// has already used. The full hint needs 16 display columns and the short form
+/// 6, so narrow terminals keep a compact `esc` instead of losing the
+/// affordance entirely (#1725).
+fn cancel_hint_suffix(width: u16, used: usize) -> &'static str {
+    let available = usize::from(width).saturating_sub(used);
+    if available >= " · esc interrupt".width() {
+        " · esc interrupt"
+    } else if available >= " · esc".width() {
+        " · esc"
+    } else {
+        ""
+    }
+}
+
 pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {
     call.execution_started || (!call.target.is_empty() && call.target != "?")
 }
 
+/// Width-aware truncation shared with the indicator row so wide glyphs never
+/// overflow a narrow terminal row.
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_owned();
-    }
-    let suffix = '…';
-    let budget = width.saturating_sub(1);
-    let mut output = String::new();
-    let mut used = 0;
-    for character in text.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if used + character_width > budget {
-            break;
-        }
-        used += character_width;
-        output.push(character);
-    }
-    if width > 0 {
-        output.push(suffix);
-    }
-    output
+    super::composer_render::truncate_to_display_width(text, width)
 }
 
 /// Render the single mutable live tool cell shown at the end of the transcript.
@@ -647,49 +646,57 @@ pub(super) fn render_live_tool_cell_at(
             .next()
             .map(|line| line.spans)
             .unwrap_or_default();
-        let header = vec![
+        // One indicator row: the heading carries the state word, the command
+        // and the elapsed clock together, mirroring the committed
+        // `• Ran $ <cmd> · <status>` summary (#1725). A separate `●` child row
+        // repeating the same running state was the duplicate indicator.
+        let mut header = vec![
             Span::styled("• ", title_style),
             Span::styled("Running", title_style),
-            Span::styled(
-                format!(
-                    " · {}{}",
-                    super::fmt_elapsed_compact(
-                        now.saturating_duration_since(call.started_at).as_secs()
-                    ),
-                    if width >= 34 { " · esc interrupt" } else { "" }
-                ),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
         ];
-        let mut invocation = vec![Span::styled(
-            "  ● ",
+        if command.is_empty() || command == "?" {
+            header.push(Span::styled(
+                " Bash",
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ));
+        } else {
+            header.push(Span::styled(
+                " $ ",
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+            header.extend(command_spans);
+        }
+        let used: usize = header.iter().map(|span| span.content.width()).sum();
+        let elapsed =
+            super::fmt_elapsed_compact(now.saturating_duration_since(call.started_at).as_secs());
+        // The elapsed clock shares the row, so reserve its columns too.
+        let elapsed_width = format!(" · {elapsed}").width();
+        header.push(Span::styled(
+            format!(
+                " · {elapsed}{}",
+                cancel_hint_suffix(width, used + elapsed_width)
+            ),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        )];
-        invocation.push(Span::styled(
-            call.action.clone(),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
-        invocation.push(Span::styled(
-            " $ ",
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        invocation.extend(command_spans);
-        let mut lines = vec![Line::from(header)];
+        let mut lines = Vec::new();
         push_wrapped_with_continuation(
             &mut lines,
-            invocation,
+            header,
             usize::from(width).max(1),
-            Some(Span::raw("    ")),
+            Some(Span::raw("  ")),
         );
         if let Some(cwd) = &call.cwd {
             push_wrapped_with_continuation(
                 &mut lines,
-                vec![Span::styled(
-                    format!("    cwd: {cwd}"),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                )],
+                vec![
+                    super::tool_transcript::tool_body_spine(show_picker),
+                    Span::styled(
+                        format!("cwd: {cwd}"),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                    ),
+                ],
                 usize::from(width).max(1),
-                Some(Span::raw("    ")),
+                Some(super::tool_transcript::tool_body_spine(show_picker)),
             );
         }
         // High verbosity never shows live output in this cell, so the quiet
@@ -701,12 +708,15 @@ pub(super) fn render_live_tool_cell_at(
         if call.output.iter().all(|chunk| chunk.text.trim().is_empty()) {
             push_wrapped_with_continuation(
                 &mut lines,
-                vec![Span::styled(
-                    "    no output yet",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                )],
+                vec![
+                    super::tool_transcript::tool_body_spine(show_picker),
+                    Span::styled(
+                        "no output yet",
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                    ),
+                ],
                 usize::from(width).max(1),
-                Some(Span::raw("    ")),
+                Some(super::tool_transcript::tool_body_spine(show_picker)),
             );
         }
 
@@ -722,10 +732,7 @@ pub(super) fn render_live_tool_cell_at(
         }
         let mut body = Vec::new();
         for (text, stderr) in output {
-            let mut spans = vec![Span::styled(
-                "    ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-            )];
+            let mut spans = vec![super::tool_transcript::tool_body_spine(show_picker)];
             spans.push(Span::styled(
                 text,
                 get_themed_style(
@@ -739,10 +746,7 @@ pub(super) fn render_live_tool_cell_at(
                     show_picker,
                 ),
             ));
-            let continuation = Span::styled(
-                "    ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-            );
+            let continuation = super::tool_transcript::tool_body_spine(show_picker);
             push_wrapped_with_continuation(
                 &mut body,
                 spans,
@@ -765,12 +769,9 @@ pub(super) fn render_live_tool_cell_at(
                 (false, Some(note)) => format!("… {note} omitted"),
                 (false, None) => String::new(),
             };
-            marker = truncate_to_width(&marker, (width as usize).saturating_sub(4).max(1));
+            marker = truncate_to_width(&marker, (width as usize).saturating_sub(2).max(1));
             let marker = Line::from(vec![
-                Span::styled(
-                    "    ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                ),
+                super::tool_transcript::tool_body_spine(show_picker),
                 Span::styled(
                     marker,
                     get_themed_style(
@@ -803,17 +804,29 @@ pub(super) fn render_live_tool_cell_at(
     };
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let detail_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
+    let heading_used = 2 + label.width();
+    let has_started = calls.iter().any(|call| call.execution_started);
+    let hint = if has_started {
+        cancel_hint_suffix(width, heading_used)
+    } else {
+        ""
+    };
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", title_style),
         Span::styled(label, title_style),
+        Span::styled(hint.to_owned(), detail_style),
     ])];
-    for call in calls.iter().take(MAX_LIVE_CHILDREN) {
+    let shown_children = calls.len().min(MAX_LIVE_CHILDREN);
+    let show_all = calls.len() <= MAX_LIVE_CHILDREN;
+    for (child_index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
+        let is_last = show_all && child_index + 1 == shown_children;
         let mut spans = vec![
+            super::tool_transcript::tool_tree_prefix(is_last, show_picker),
             Span::styled(
                 if call.execution_started {
-                    "  ● "
+                    "● "
                 } else {
-                    "  ○ "
+                    "○ "
                 },
                 detail_style,
             ),
@@ -837,24 +850,25 @@ pub(super) fn render_live_tool_cell_at(
         {
             spans.push(Span::styled(format!(" · {}", call.key), detail_style));
         }
-        spans.push(Span::styled(
-            if call.execution_started {
+        if call.execution_started {
+            spans.push(Span::styled(
                 format!(
-                    " · running {}",
+                    " · {}",
                     super::fmt_elapsed_compact(
                         now.saturating_duration_since(call.started_at).as_secs()
                     )
-                )
-            } else {
-                " · queued".to_owned()
-            },
-            detail_style,
-        ));
+                ),
+                detail_style,
+            ));
+        }
         push_wrapped_with_continuation(
             &mut lines,
             spans,
             usize::from(width).max(1),
-            Some(Span::raw("    ")),
+            Some(Span::styled(
+                if is_last { "    " } else { "│   " },
+                detail_style,
+            )),
         );
         if call.execution_started {
             let latest = call
@@ -870,23 +884,26 @@ pub(super) fn render_live_tool_cell_at(
                     .map(rustcode_tool_protocol::text::strip_ansi_escapes)
                     .unwrap_or_else(|| "no output yet".to_owned())
             };
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    truncate_to_width(&text, usize::from(width).saturating_sub(4))
+            lines.push(Line::from(vec![
+                super::tool_transcript::tool_body_spine(show_picker),
+                Span::styled(
+                    truncate_to_width(&text, usize::from(width).saturating_sub(2).max(1)),
+                    detail_style,
                 ),
-                detail_style,
-            )));
+            ]));
         }
     }
     if calls.len() > MAX_LIVE_CHILDREN {
-        lines.push(Line::from(Span::styled(
-            truncate_to_width(
-                &format!("    … +{} more", calls.len() - MAX_LIVE_CHILDREN),
-                usize::from(width),
+        lines.push(Line::from(vec![
+            super::tool_transcript::tool_body_spine(show_picker),
+            Span::styled(
+                truncate_to_width(
+                    &format!("… +{} more", calls.len() - MAX_LIVE_CHILDREN),
+                    usize::from(width).saturating_sub(2).max(1),
+                ),
+                detail_style,
             ),
-            detail_style,
-        )));
+        ]));
     }
 
     lines
@@ -950,9 +967,9 @@ mod tests {
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(rendered.len(), 4, "{rendered:?}");
-        assert!(rendered[2].contains("visible output"), "{rendered:?}");
-        assert!(rendered[3].contains("1B omitted"), "{rendered:?}");
+        assert_eq!(rendered.len(), 3, "{rendered:?}");
+        assert!(rendered[1].contains("visible output"), "{rendered:?}");
+        assert!(rendered[2].contains("1B omitted"), "{rendered:?}");
     }
 
     /// #1595: follow is a two-input state, not one flag. A reading offset or a

@@ -267,8 +267,13 @@ no sandbox attribution.
 
 The TUI shows active foreground tools with elapsed time and a bounded output
 preview, including `no output yet` for quiet work. `Esc` interrupts foreground
-work. Tool groups use `●` for running, `○` for queued, `✓` for completed, `×` for
-failed, and `−` for cancelled work, with indented continuation rows. Background
+work. A running command gets one indicator row — `• Running $ <command> · 12s ·
+esc interrupt` — instead of repeating its state per line; the row above the
+composer keeps only the current state and turn token total. Tool groups use `●`
+for running, `○` for queued, `✓` for completed, `×` for failed, and `−` for
+cancelled work. Each child row carries a tree connector (`├` for a child with
+siblings below, `└` for the last one) and its output hangs under a continuous
+`│` side spine, so wrapped output keeps the same indentation. Background
 tasks keep their task IDs and process IDs visible; `/ps` lists them and `/stop`
 stops them. A completed background result withheld during a foreground turn is
 marked `result ready` until the turn consumes it. Approvals and questions have
