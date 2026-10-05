@@ -28,6 +28,14 @@ pub struct TaskDisplay {
     pub child_pid: Option<u32>,
 }
 
+/// A completion retained until the current foreground turn consumes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundResultDisplay {
+    pub id: String,
+    pub success: bool,
+    pub cancelled: bool,
+}
+
 impl TaskDisplay {
     /// Single-line label for the task's command, whitespace-collapsed and
     /// bounded to `max_chars` (ellipsis on overflow).

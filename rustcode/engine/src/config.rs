@@ -425,6 +425,7 @@ pub enum OutputTokenField {
 pub enum ApiProtocol {
     ChatCompletions,
     Responses,
+    AnthropicMessages,
 }
 
 impl Default for ApiProtocol {
@@ -614,6 +615,7 @@ impl ModelProfile {
         self.output_token_field
             .unwrap_or_else(|| match self.resolved_api_protocol() {
                 ApiProtocol::Responses => OutputTokenField::MaxOutputTokens,
+                ApiProtocol::AnthropicMessages => OutputTokenField::MaxTokens,
                 ApiProtocol::ChatCompletions => {
                     if self.is_google_native_endpoint() {
                         OutputTokenField::GoogleMaxOutputTokens
@@ -869,6 +871,15 @@ impl ModelProfile {
     pub fn endpoint_url(&self) -> String {
         let trimmed = self.url.trim_end_matches('/');
         match self.resolved_api_protocol() {
+            ApiProtocol::AnthropicMessages => {
+                if trimmed.ends_with("/messages") {
+                    trimmed.to_string()
+                } else if trimmed.ends_with("/v1") {
+                    format!("{trimmed}/messages")
+                } else {
+                    format!("{trimmed}/v1/messages")
+                }
+            }
             ApiProtocol::Responses => {
                 if trimmed.ends_with("/responses") {
                     trimmed.to_string()
@@ -1300,6 +1311,13 @@ fn default_provider_definitions() -> Vec<ProviderDefinition> {
                 crate::provider_auth::AuthMethod::ChatGpt,
             ],
             base_url: Some("https://api.openai.com/v1".to_string()),
+        },
+        ProviderDefinition {
+            id: "github-copilot".into(),
+            display_name: "GitHub Copilot".into(),
+            api_key_env: None,
+            auth_methods: vec![crate::provider_auth::AuthMethod::GitHubCopilot],
+            base_url: Some("https://api.githubcopilot.com".into()),
         },
         ProviderDefinition {
             id: "generic".to_string(),

@@ -627,14 +627,14 @@ pub(super) fn indent_tool_result_body(
     let visible = filtered;
     let max_w = (width as usize).max(10);
     let mut indented = Vec::new();
-    for (index, line) in visible.into_iter().enumerate() {
+    for line in visible {
         if line.spans.is_empty() {
             indented.push(line);
             continue;
         }
         let mut spans = Vec::with_capacity(line.spans.len() + 1);
         spans.push(Span::styled(
-            if index == 0 { "  └ " } else { "    " },
+            "    ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         ));
         spans.extend(line.spans);
@@ -1070,15 +1070,25 @@ fn append_expand_hint(lines: &mut [Line<'static>], width: u16, show_picker: bool
     }
 }
 
+/// Every sibling owns a status marker; wrapped body rows use hanging spaces.
+fn tool_status_marker(entry: &ToolTranscriptEntry) -> &'static str {
+    match entry.status.as_str() {
+        "running" => "  ● ",
+        "cancelled" => "  − ",
+        _ if entry.success => "  ✓ ",
+        _ => "  × ",
+    }
+}
+
 pub(super) fn tool_child_line(
     entry: &ToolTranscriptEntry,
-    first: bool,
+    _first: bool,
     show_hint: bool,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let mut spans = vec![Span::styled(
-        if first { "  └ " } else { "    " },
+        tool_status_marker(entry),
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     )];
     if entry.kind == ToolTranscriptKind::Edit {
@@ -1204,7 +1214,7 @@ fn truncate_wrapped_lines(mut lines: Vec<Line<'static>>, max_lines: usize) -> Ve
 
 pub(super) fn command_child_lines(
     entry: &ToolTranscriptEntry,
-    first: bool,
+    _first: bool,
     show_hint: bool,
     width: u16,
     show_picker: bool,
@@ -1231,13 +1241,11 @@ pub(super) fn command_child_lines(
     let mut lines = Vec::with_capacity(commands.len());
     let status_suffix =
         (!entry.success || entry.status == "running").then(|| format!(" · {}", entry.status));
-    let max_w = wrap_width(width, show_hint)
-        .saturating_sub(status_suffix.as_ref().map_or(0, |status| status.width()))
-        .max(10);
+    let max_w = wrap_width(width, show_hint);
     for (command_index, command) in commands.into_iter().enumerate() {
         let mut spans = vec![Span::styled(
-            if first && command_index == 0 {
-                "  └ "
+            if command_index == 0 {
+                tool_status_marker(entry)
             } else {
                 "    "
             },
@@ -1258,6 +1266,12 @@ pub(super) fn command_child_lines(
         if entry.target != "?" {
             spans.extend(command.spans);
         }
+        if let Some(suffix) = &status_suffix {
+            spans.push(Span::styled(
+                suffix.clone(),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
         let continuation = Span::styled(
             "    ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -1267,14 +1281,6 @@ pub(super) fn command_child_lines(
     let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
     if show_hint {
         append_expand_hint(&mut lines, width, show_picker);
-    }
-    if let Some(status_suffix) = status_suffix {
-        if let Some(line) = lines.last_mut() {
-            line.spans.push(Span::styled(
-                status_suffix,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
     }
     lines
 }
@@ -1490,14 +1496,7 @@ fn render_tool_result_group_snapshot(
         // edit tools. The child rows retain their kind-specific formatting.
         let whole_batch = &entries[index..];
         let homogeneous = whole_batch.iter().all(|entry| entry.kind == kind);
-        let group_end = if homogeneous
-            && kind == ToolTranscriptKind::Command
-            && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
-        {
-            index + 1
-        } else {
-            entries.len()
-        };
+        let group_end = entries.len();
         let group = &entries[index..group_end];
         let success = group.iter().all(|entry| entry.success);
 
@@ -1505,18 +1504,29 @@ fn render_tool_result_group_snapshot(
             lines.push(Line::from(""));
         }
         if include_header && homogeneous && kind == ToolTranscriptKind::Command {
-            if matches!(state.verbosity(), rustcode::controller::Verbosity::High) {
+            if group.len() > 1 || matches!(state.verbosity(), rustcode::controller::Verbosity::High)
+            {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
-                    // High verbosity renders the body inline, so these rows
-                    // never collapse and never carry the expand hint.
-                    lines.extend(command_child_lines(
+                    let title =
+                        command_child_lines(entry, child_index == 0, false, width, show_picker);
+                    let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
+                    let (body, show_hint) = command_preview_body(
+                        entry.body.clone(),
+                        &entry.tool_name,
+                        &state.verbosity(),
+                        width,
+                        is_expanded,
+                    );
+                    append_tool_preview(
+                        &mut lines,
+                        title,
+                        body,
                         entry,
-                        child_index == 0,
-                        false,
+                        show_hint,
                         width,
                         show_picker,
-                    ));
+                    );
                 }
             } else {
                 let entry = &group[0];

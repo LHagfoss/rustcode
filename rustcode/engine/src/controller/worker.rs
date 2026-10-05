@@ -272,6 +272,7 @@ async fn controller_worker(
                 send_snapshot(&updates, session.generation, &session.state).await;
             }
             Command::Cancel => {
+                crate::provider_auth::github_copilot::cancel_login();
                 if let Some(session) = active.as_mut() {
                     cancel_active_turn(session, &updates).await;
                 } else {
@@ -487,6 +488,7 @@ async fn run_native_slash(
 
     match command {
         NativeSlashCommand::New | NativeSlashCommand::Clear => {
+            crate::provider_auth::github_copilot::cancel_login();
             if session.turn_task.is_some() {
                 cancel_active_turn_inner(session, updates, false).await;
             }
@@ -506,6 +508,7 @@ async fn run_native_slash(
             send_snapshot_locked(updates, session.generation, &state);
         }
         NativeSlashCommand::Cancel => {
+            crate::provider_auth::github_copilot::cancel_login();
             if session.turn_task.is_some() {
                 cancel_active_turn(session, updates).await;
             } else {
@@ -566,8 +569,29 @@ async fn run_native_slash(
             };
             let auth_generation = session.generation;
             let sender = provider_auth_sender.clone();
+            let auth_state = session.state.clone();
+            let auth_updates = updates.clone();
+            let cancel = session.cancel_token.clone();
             tokio::spawn(async move {
-                let result = crate::provider_auth::execute_command(&input, &config).await;
+                let (progress_sender, mut progress) = tokio::sync::mpsc::channel(8);
+                let future = crate::provider_auth::execute_command_with_progress(
+                    &input,
+                    &config,
+                    &cancel,
+                    Some(progress_sender),
+                );
+                tokio::pin!(future);
+                let result = loop {
+                    tokio::select! {
+                        result = &mut future => break result,
+                        Some(message) = progress.recv() => {
+                            let mut state = auth_state.lock().await;
+                            if state.active_session_id != session_id { cancel.cancel(); continue; }
+                            state.set_notice(message);
+                            send_snapshot_locked(&auth_updates, auth_generation, &state);
+                        }
+                    }
+                };
                 let _ = sender.send((auth_generation, session_id, result));
             });
         }
@@ -844,6 +868,7 @@ async fn retire_session(
     mut session: ActiveSession,
     updates: &mpsc::UnboundedSender<ControllerEvent>,
 ) {
+    crate::provider_auth::github_copilot::cancel_login();
     if session.turn_task.is_some() {
         cancel_active_turn_inner(&mut session, updates, false).await;
     } else {

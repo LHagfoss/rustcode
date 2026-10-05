@@ -314,7 +314,8 @@ pub(crate) fn render_with_transcript_snapshot(
     // the composer does not jump when the popup opens or closes.
     let footer_height = 1;
     let (top_padding, _) = live_surface_padding(state);
-    let mut activity_lines = background_command_lines(state);
+    let mut activity_lines =
+        super::composer_render::background_command_lines_with_width(state, chat_width);
     // Reserve a stable row above the composer for return-to-latest. Panels,
     // confirmations, questions, and completions suppress the control there.
     let control_row_suppressed =

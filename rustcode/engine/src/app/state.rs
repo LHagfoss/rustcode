@@ -804,6 +804,10 @@ impl AppState {
         arguments: &serde_json::Value,
     ) -> String {
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+        let cwd = arguments
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .map(|cwd| rustcode_core::activity::sanitize_tool_parameter(cwd, 160));
         if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
             .iter_mut()
             .find(|call| {
@@ -821,6 +825,7 @@ impl AppState {
             call.tool_name = tool_name.to_owned();
             call.action = action;
             call.target = target;
+            call.cwd = cwd;
             call.execution_started = true;
             call.started_at = std::time::Instant::now();
             let key = call.key.clone();
@@ -834,13 +839,15 @@ impl AppState {
             Some(call_id) => format!("provider:{call_id}:{sequence}"),
             None => format!("local:{sequence}"),
         };
-        Arc::make_mut(&mut self.live_tool_calls).push(LiveToolCall::new(
+        let mut call = LiveToolCall::new(
             key.clone(),
             provider_call_id.map(str::to_owned),
             tool_name,
             action,
             target,
-        ));
+        );
+        call.cwd = cwd;
+        Arc::make_mut(&mut self.live_tool_calls).push(call);
         self.request_redraw();
         key
     }

@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(test)]
 use crate::ui::render_snapshot::render_snapshot;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub(super) fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
@@ -98,7 +99,12 @@ fn render_live_tail_mode(
         model_live_text = "";
     }
 
-    transcript.clear_tools();
+    if visible_live_tool_calls.is_empty() {
+        transcript.clear_tools();
+    } else {
+        transcript.set_tools_with_verbosity(&visible_live_tool_calls, state.verbosity());
+        has_visible_active_cell = true;
+    }
     if model_live_text.is_empty() {
         transcript.clear_assistant();
     } else {
@@ -145,7 +151,8 @@ fn render_live_tail_mode(
         lines.extend(transcript.display_lines(width));
     }
 
-    let background_lines = background_command_lines(state);
+    let background_lines =
+        super::composer_render::background_command_lines_with_width(state, width);
     if !background_lines.is_empty() && !full_viewport {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
@@ -161,10 +168,9 @@ fn render_live_tail_mode(
         ));
     }
 
-    if height == 0 && full_viewport {
-        return Vec::new();
-    }
-    if height > 0 && lines.len() > height as usize {
+    // Full viewport callers slice the combined committed + live projection.
+    // Clipping the live cell here would make its older rows unreachable.
+    if !full_viewport && height > 0 && lines.len() > height as usize {
         let visible_start = lines.len() - height as usize;
         lines = lines.split_off(visible_start);
     }
@@ -179,6 +185,58 @@ fn render_live_tail_mode(
 /// the transcript. A turn waiting on the provider or a tool still shows that
 /// work is happening instead of an empty chat.
 pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'static>> {
+    if matches!(
+        state.status(),
+        AppStatus::AwaitingToolConfirmation | AppStatus::AwaitingQuestion
+    ) {
+        return None;
+    }
+    // Output only (thinking + answer) for this turn. Prompt tokens are
+    // re-sent with every request, so adding them made the figure track
+    // the whole conversation instead of the work done this turn.
+    let usage_tokens = |usage: Option<&rustcode::controller::TokenUsage>| {
+        usage.map_or(0, |usage| u64::from(usage.completion_tokens))
+    };
+    let completed = usage_tokens(state.current_turn_token_usage());
+    let completed_continuations = usage_tokens(state.current_round_token_usage())
+        .saturating_add(u64::from(state.current_round_estimated_output_tokens()));
+    let active_request = if state.provider_request_in_flight() {
+        if let Some(usage) = state.current_token_usage() {
+            usage_tokens(Some(usage))
+        } else {
+            state
+                .stream_tracker()
+                .map(|tracker| u64::from(tracker.snapshot().1))
+                .unwrap_or_default()
+        }
+    } else {
+        0
+    };
+    let tokens = completed
+        .saturating_add(completed_continuations)
+        .saturating_add(active_request);
+    let provisional = state.token_usage_in_flight()
+        || state.current_turn_token_usage_is_estimated()
+        || state.current_round_estimated_output_tokens() > 0;
+    let token_suffix = (provisional || state.current_turn_token_usage().is_some()).then(|| {
+        Span::styled(
+            format!(
+                " · ↓ {}{} tokens",
+                if provisional { "~" } else { "" },
+                super::composer_render::format_token_count(tokens.min(u64::from(u32::MAX)) as u32)
+            ),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        )
+    });
+    if let Some(mut indicator) = super::composer_render::active_work_indicator(state) {
+        // Foreground/queued work must not swallow the cumulative turn total:
+        // the transcript cell carries identity and elapsed time, while this
+        // row keeps the token accounting.
+        if let Some(suffix) = token_suffix {
+            indicator.spans.push(suffix);
+        }
+        return Some(indicator);
+    }
     let activity = rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(
         rustcode::controller::classify_activity(&state.status(), &state.running_tools()),
     );
@@ -188,54 +246,18 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'sta
         rustcode::controller::ActivityKind::Ready
         | rustcode::controller::ActivityKind::ActionRequired => None,
         _ => {
-            // Output only (thinking + answer) for this turn. Prompt tokens are
-            // re-sent with every request, so adding them made the figure track
-            // the whole conversation instead of the work done this turn.
-            let usage_tokens = |usage: Option<&rustcode::controller::TokenUsage>| {
-                usage.map_or(0, |usage| u64::from(usage.completion_tokens))
-            };
-            let completed = usage_tokens(state.current_turn_token_usage());
-            let completed_continuations = usage_tokens(state.current_round_token_usage())
-                .saturating_add(u64::from(state.current_round_estimated_output_tokens()));
-            let active_request = if state.provider_request_in_flight() {
-                if let Some(usage) = state.current_token_usage() {
-                    usage_tokens(Some(usage))
-                } else {
-                    state
-                        .stream_tracker()
-                        .map(|tracker| u64::from(tracker.snapshot().1))
-                        .unwrap_or_default()
-                }
-            } else {
-                0
-            };
-            let tokens = completed
-                .saturating_add(completed_continuations)
-                .saturating_add(active_request);
-            let provisional = state.token_usage_in_flight()
-                || state.current_turn_token_usage_is_estimated()
-                || state.current_round_estimated_output_tokens() > 0;
             let mut spans = vec![
                 Span::styled(
                     format!("{} ", super::composer_render::running_spinner_char(state)),
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
                 ),
                 Span::styled(
-                    state.model_name().to_string(),
+                    format!("Generating · {}", state.model_name()),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
                 ),
             ];
-            if provisional || state.current_turn_token_usage().is_some() {
-                spans.push(Span::styled(
-                    format!(
-                        " · ↓ {}{} tokens",
-                        if provisional { "~" } else { "" },
-                        super::composer_render::format_token_count(
-                            tokens.min(u64::from(u32::MAX)) as u32
-                        )
-                    ),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-                ));
+            if let Some(suffix) = token_suffix {
+                spans.push(suffix);
             }
             Some(Line::from(spans))
         }
@@ -265,14 +287,23 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let history_revision = state.history().revision();
     // Anything that can add rows below the reader: committed history and the
     // live stream both land at the tail of the same projection.
-    let content_mark = (
-        history_revision,
-        state
-            .current_response()
-            .len()
-            .saturating_mul(2)
-            .saturating_add(usize::from(state.recap_loading())),
-    );
+    let mut live_content = std::collections::hash_map::DefaultHasher::new();
+    state.current_response().len().hash(&mut live_content);
+    state.recap_loading().hash(&mut live_content);
+    for call in state
+        .live_tool_calls()
+        .iter()
+        .filter(|call| is_live_tool_call_visible(call))
+    {
+        call.key.hash(&mut live_content);
+        call.execution_started.hash(&mut live_content);
+        call.omitted_output_bytes.hash(&mut live_content);
+        for chunk in &call.output {
+            chunk.stderr.hash(&mut live_content);
+            chunk.text.hash(&mut live_content);
+        }
+    }
+    let content_mark = (history_revision, live_content.finish() as usize);
     if let Some(agent) = state.selected_subagent() {
         // An agent context has no reading anchor of its own, so it scrolls as
         // a plain offset from the newest row of the agent's whole history.
@@ -293,9 +324,19 @@ pub(crate) fn render_visible_conversation_with_transcript(
     }
     let content_changed = transcript.last_content() != Some(content_mark);
     let display_start = state.history_display_start().min(history_len);
+    if height == 0 {
+        return Vec::new();
+    }
+    let live = render_live_tail_mode(state, width, height, transcript, true);
+    // The welcome banner moves to the committed prefix after the first turn;
+    // it is not mutable tail growth and must not be subtracted on that handoff.
+    let live_rows = if welcome_is_live(state) {
+        0
+    } else {
+        live.len()
+    };
     let mut measured_tail = None;
-    if height > 0
-        && transcript.scroll_rows() > 0
+    if transcript.scroll_rows() > 0
         && let Some(anchor) = transcript.reading_anchor
         && anchor.width == width
         && anchor.display_start == display_start
@@ -308,18 +349,10 @@ pub(crate) fn render_visible_conversation_with_transcript(
             committed_suffix_rows(state, width, transcript, anchor.tail_start)
         };
         measured_tail = Some((anchor.tail_start, tail_rows));
-        let added_rows = tail_rows as isize - anchor.tail_rows as isize;
+        let added_rows = tail_rows.saturating_add(live_rows) as isize
+            - anchor.tail_rows.saturating_add(anchor.live_rows) as isize;
         let height_change = anchor.height as isize - height as isize;
         transcript.shift_reading_offset(added_rows.saturating_add(height_change));
-    }
-    let live_height = if transcript.scroll_rows() > 0 && !state.history().is_empty() {
-        0
-    } else {
-        height
-    };
-    let live = render_live_tail_mode(state, width, live_height, transcript, true);
-    if height == 0 {
-        return live;
     }
 
     if transcript.selection.is_active() {
@@ -389,6 +422,11 @@ pub(crate) fn render_visible_conversation_with_transcript(
             history_len,
             tail_start,
             tail_rows,
+            live_rows: if welcome_is_live(state) {
+                0
+            } else {
+                live.len()
+            },
         });
     }
     // Tail visibility is a fact about the offset this frame clamped to, so it
@@ -537,6 +575,11 @@ fn render_selected_history_projection(
             history_len: history.len(),
             tail_start,
             tail_rows,
+            live_rows: if welcome_is_live(state) {
+                0
+            } else {
+                live.len()
+            },
         });
     }
 
@@ -1122,6 +1165,265 @@ mod projection_tests {
     use crate::ui::render_snapshot::set_current_response;
     use rustcode::controller::ChatMessage;
 
+    fn streaming_state() -> RenderState {
+        let mut state = RenderState::new();
+        state
+            .history
+            .push(ChatMessage::new("user", "older request"));
+        set_current_response(&mut state, &streamed_rows(0..30));
+        state
+    }
+
+    fn streamed_rows(rows: std::ops::Range<usize>) -> String {
+        rows.map(|row| format!("live row {row:02} 界 é"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn visible_text(
+        state: &RenderState,
+        transcript: &mut TranscriptState,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
+        render_visible_conversation_with_transcript(
+            &render_snapshot(state),
+            width,
+            height,
+            transcript,
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn scrolling_can_inspect_the_middle_of_a_long_live_response() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let state = streaming_state();
+        let mut transcript = TranscriptState::default();
+        let bottom = visible_text(&state, &mut transcript, 40, 8).join("\n");
+        assert!(bottom.contains("live row 29"), "{bottom}");
+        transcript.scroll_up(12);
+        let middle = visible_text(&state, &mut transcript, 40, 8).join("\n");
+        assert!(middle.contains("live row 23"), "{middle}");
+        assert!(!middle.contains("live row 29"), "{middle}");
+        assert!(!transcript.is_following());
+        transcript.scroll_up(1000);
+        let oldest = visible_text(&state, &mut transcript, 40, 8).join("\n");
+        assert!(!oldest.contains("live row 29"), "{oldest}");
+        transcript.scroll_down(transcript.scroll_rows().saturating_sub(12));
+        assert_eq!(
+            visible_text(&state, &mut transcript, 40, 8).join("\n"),
+            middle
+        );
+        transcript.jump_to_latest();
+        assert!(
+            visible_text(&state, &mut transcript, 40, 8)
+                .join("\n")
+                .contains("live row 29")
+        );
+        assert!(transcript.is_following());
+    }
+
+    #[test]
+    fn live_growth_holds_manual_reading_rows_and_jump_resumes_following() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut state = streaming_state();
+        let mut transcript = TranscriptState::default();
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        transcript.scroll_up(12);
+        let before = visible_text(&state, &mut transcript, 40, 8);
+        assert!(before.join("\n").contains("live row 23"));
+        set_current_response(&mut state, &streamed_rows(0..45));
+        assert_eq!(visible_text(&state, &mut transcript, 40, 8), before);
+        assert!(transcript.unseen_activity());
+        transcript.jump_to_latest();
+        assert!(
+            visible_text(&state, &mut transcript, 40, 8)
+                .join("\n")
+                .contains("live row 44")
+        );
+        set_current_response(&mut state, &streamed_rows(0..50));
+        assert!(
+            visible_text(&state, &mut transcript, 40, 8)
+                .join("\n")
+                .contains("live row 49")
+        );
+        assert!(transcript.is_following());
+        assert!(!transcript.unseen_activity());
+    }
+
+    #[test]
+    fn live_reading_survives_completion_cancellation_and_height_resize() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        for cancelled in [false, true] {
+            let mut state = streaming_state();
+            let mut transcript = TranscriptState::default();
+            let _ = visible_text(&state, &mut transcript, 16, 8);
+            transcript.scroll_up(20);
+            let before = visible_text(&state, &mut transcript, 16, 8);
+            assert!(before.join("\n").contains("live row"));
+            let shorter = visible_text(&state, &mut transcript, 16, 6);
+            assert_eq!(shorter, before[..6]);
+            state.history.push(ChatMessage::new(
+                "assistant",
+                state.current_response.to_string(),
+            ));
+            set_current_response(&mut state, "");
+            state.status = AppStatus::Idle;
+            if cancelled {
+                state
+                    .history
+                    .push(ChatMessage::new("system", "Turn interrupted by user"));
+            }
+            assert_eq!(visible_text(&state, &mut transcript, 16, 6), shorter);
+            transcript.jump_to_latest();
+            assert!(
+                visible_text(&state, &mut transcript, 16, 8)
+                    .join("\n")
+                    .contains("live row 29")
+            );
+        }
+    }
+
+    #[test]
+    fn tool_output_announces_unseen_activity_without_timer_only_updates() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut state = streaming_state();
+        let mut call = rustcode::controller::LiveToolCall::new(
+            "call-1",
+            None,
+            "run_command",
+            "Bash",
+            "sleep 10",
+        );
+        call.execution_started = true;
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+        let mut transcript = TranscriptState::default();
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        transcript.scroll_up(12);
+        let before = visible_text(&state, &mut transcript, 40, 8);
+        assert!(!transcript.unseen_activity());
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        assert!(!transcript.unseen_activity());
+        std::sync::Arc::make_mut(&mut state.live_tool_calls)[0]
+            .output
+            .push_back(rustcode::controller::LiveToolOutputChunk {
+                stderr: false,
+                text: "new output".to_owned(),
+            });
+        assert_eq!(visible_text(&state, &mut transcript, 40, 8), before);
+        assert!(transcript.unseen_activity());
+        transcript.jump_to_latest();
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        assert!(!transcript.unseen_activity());
+    }
+
+    #[test]
+    fn growing_foreground_output_stays_reachable_with_a_bounded_preview() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        for width in [24, 80] {
+            let mut state = RenderState::new();
+            state.verbosity = rustcode::controller::Verbosity::Low;
+            state.status = AppStatus::Streaming;
+            state
+                .history
+                .push(ChatMessage::new("assistant", streamed_rows(0..30)));
+            let mut call = rustcode::controller::LiveToolCall::new(
+                "foreground-1",
+                None,
+                "run_command",
+                "Bash",
+                "echo rows",
+            );
+            call.execution_started = true;
+            call.output
+                .push_back(rustcode::controller::LiveToolOutputChunk {
+                    stderr: false,
+                    text: "command row 00 界\ncommand row 01 界".to_owned(),
+                });
+            std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+            let mut transcript = TranscriptState::default();
+            let initial = visible_text(&state, &mut transcript, width, 8).join("\n");
+            assert!(
+                initial.contains("command row 01 界"),
+                "width={width}: {initial}"
+            );
+
+            transcript.scroll_up(12);
+            let reading = visible_text(&state, &mut transcript, width, 8);
+            assert!(reading.join("\n").contains("live row"), "{reading:?}");
+            assert!(!transcript.is_following());
+            std::sync::Arc::make_mut(&mut state.live_tool_calls)[0]
+                .output
+                .push_back(rustcode::controller::LiveToolOutputChunk {
+                    stderr: false,
+                    text: (2..10)
+                        .map(|row| format!("command row {row:02} 界"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                });
+            assert_eq!(
+                visible_text(&state, &mut transcript, width, 8),
+                reading,
+                "foreground body growth must preserve history reading at width={width}"
+            );
+            assert!(transcript.unseen_activity());
+
+            transcript.scroll_down(transcript.scroll_rows().saturating_sub(1));
+            let near_live = visible_text(&state, &mut transcript, width, 8).join("\n");
+            assert!(
+                near_live.contains("command row 08 界"),
+                "width={width}: {near_live}"
+            );
+            assert!(!transcript.is_following());
+            transcript.jump_to_latest();
+            let latest = visible_text(&state, &mut transcript, width, 8);
+            let latest_text = latest.join("\n");
+            assert!(
+                latest_text.contains("command row 09 界"),
+                "width={width}: {latest_text}"
+            );
+            assert!(latest_text.contains("… +6 lines"), "{latest_text}");
+            assert_eq!(
+                latest
+                    .iter()
+                    .filter(|row| row.contains("command row"))
+                    .count(),
+                4,
+                "the five-row body keeps two head rows, the omission marker, and two tail rows"
+            );
+            assert!(!latest_text.contains("command row 02"), "{latest_text}");
+            assert!(
+                latest.iter().all(|row| row.width() <= usize::from(width)),
+                "{latest:?}"
+            );
+            assert!(transcript.is_following());
+            assert!(!transcript.unseen_activity());
+        }
+    }
+
+    #[test]
+    fn width_resize_rewraps_unicode_live_rows_and_preserves_subsequent_reading() {
+        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut state = streaming_state();
+        let mut transcript = TranscriptState::default();
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        transcript.scroll_up(20);
+        let _ = visible_text(&state, &mut transcript, 40, 8);
+        let narrow = visible_text(&state, &mut transcript, 12, 8);
+        assert_eq!(narrow.len(), 8);
+        assert!(narrow.iter().all(|line| line.width() <= 12), "{narrow:?}");
+        assert!(narrow.join("\n").contains("界"), "{narrow:?}");
+        assert_eq!(visible_text(&state, &mut transcript, 12, 8), narrow);
+        set_current_response(&mut state, &streamed_rows(0..45));
+        assert_eq!(visible_text(&state, &mut transcript, 12, 8), narrow);
+        transcript.jump_to_latest();
+        let bottom = visible_text(&state, &mut transcript, 12, 8).join("\n");
+        assert!(bottom.contains("44"), "{bottom}");
+    }
+
     #[test]
     fn visible_slice_matches_full_projection_across_blocks_welcome_and_live_tail() {
         // Both projections are rendered with the ambient theme, so a test that
@@ -1163,7 +1465,7 @@ mod projection_tests {
 
             let mut reference_transcript = TranscriptState::default();
             reference_transcript.scroll_up(requested_scroll);
-            let live_height = if requested_scroll > 0 { 0 } else { height };
+            let live_height = u16::MAX;
             let live = render_live_tail_mode(
                 &snapshot,
                 width,

@@ -40,6 +40,9 @@ pub(crate) fn context_preflight_checkpoint_notice(
 #[path = "network/context/mod.rs"]
 pub mod compaction;
 
+#[path = "network/anthropic_messages.rs"]
+pub(crate) mod anthropic_messages;
+
 #[path = "network/retry.rs"]
 pub(crate) mod retry;
 
@@ -964,6 +967,13 @@ pub async fn probe_function_calling(
             resolved_url
         );
         return false;
+    }
+    if profile
+        .as_ref()
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_copilot)
+    {
+        return true;
     }
     let api_key = if let Some(profile) = profile.as_ref() {
         if profile.credential.is_some() {

@@ -64,8 +64,9 @@ pub use snapshot::{
     QuestionPrompt, SessionChoice, ToolConfirmation, TranscriptItem, UiRect,
 };
 pub use tasks::{
-    SubagentController, TaskDisplay, TurnContext, background_command_label,
-    background_task_snapshots, has_background_tasks, spawn_background_task, stop_background_tasks,
+    BackgroundResultDisplay, SubagentController, TaskDisplay, TurnContext,
+    background_command_label, background_task_snapshots, has_background_tasks,
+    spawn_background_task, stop_background_tasks,
 };
 pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, CommandPanel, ExpandOutcome, History, LiveToolCall,

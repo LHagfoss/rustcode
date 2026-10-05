@@ -437,7 +437,15 @@ pub(in crate::ui) fn render_subagent_picker_modal(
                 .find(|candidate| candidate.id == id)
                 .and_then(|candidate| candidate.parent_id);
         }
-        let tree_name = format!("{}└─ {}", "  ".repeat(depth - 1), agent.name);
+        let marker = match agent.status {
+            rustcode::controller::SubAgentStatus::Queued => '○',
+            rustcode::controller::SubAgentStatus::Running => '●',
+            rustcode::controller::SubAgentStatus::Completed => '✓',
+            rustcode::controller::SubAgentStatus::Failed => '×',
+            rustcode::controller::SubAgentStatus::Interrupted
+            | rustcode::controller::SubAgentStatus::Cancelled => '−',
+        };
+        let tree_name = format!("{}{marker} {}", "  ".repeat(depth - 1), agent.name);
         lines.push(agent_picker_line(
             is_selected,
             &tree_name,
@@ -502,9 +510,9 @@ pub(super) fn agent_picker_line(
     width: usize,
 ) -> Line<'static> {
     let marker = if selected { "› " } else { "  " };
-    let active_marker = if active { "●" } else { "○" };
-    let text = format!("{marker}{active_marker} {name} · {detail}");
-    let text = text.chars().take(width).collect::<String>();
+    let active_marker = if active { "● " } else { "  " };
+    let text = format!("{marker}{active_marker}{name} · {detail}");
+    let text = crate::ui::composer_render::truncate_queue_prompt(&text, width);
     let style = if selected {
         Style::default()
             .fg(COLOR_BG())
@@ -1061,4 +1069,51 @@ pub(in crate::ui) fn tool_confirmation_height(state: &RenderSnapshot, available:
         9u16.saturating_add(preview).saturating_add(reusable_rows)
     };
     content.saturating_add(2).min(available.max(3))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_picker_line;
+
+    fn picker_text(selected: bool, active: bool, width: usize) -> String {
+        agent_picker_line(
+            selected,
+            "worker",
+            "running · test-model · 01:02 · a very long task description that overflows narrow pickers",
+            active,
+            width,
+        )
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+    }
+
+    #[test]
+    fn active_context_marker_survives_truncation_at_narrow_and_roomy_widths() {
+        for width in [24, 80] {
+            let active = picker_text(false, true, width);
+            let inactive = picker_text(false, false, width);
+            assert!(
+                active.starts_with("  ● "),
+                "active marker must lead the row at width {width}: {active:?}"
+            );
+            assert!(
+                !inactive.contains('●'),
+                "inactive rows carry no marker at width {width}: {inactive:?}"
+            );
+            // Selection highlight and active context are independent: the
+            // highlighted entry differs from the active entry here.
+            let highlighted = picker_text(true, false, width);
+            assert!(
+                highlighted.starts_with("›   "),
+                "highlight without activity at width {width}: {highlighted:?}"
+            );
+            let highlighted_active = picker_text(true, true, width);
+            assert!(
+                highlighted_active.starts_with("› ● "),
+                "highlighted active row at width {width}: {highlighted_active:?}"
+            );
+        }
+    }
 }
