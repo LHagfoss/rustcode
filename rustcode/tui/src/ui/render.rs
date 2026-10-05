@@ -405,7 +405,7 @@ pub(crate) fn render_with_transcript_snapshot(
     // instead of being painted over.
     let modal_height = open_modal_max_height(state).min(max_chat_height);
     let chat_surface_height = max_chat_height.saturating_sub(modal_height);
-    let indicator = live_running_indicator(state);
+    let indicator = live_running_indicator(state, chat_width);
     // Own the gap and indicator rows so even a full transcript keeps activity
     // visible. Leave at least one transcript row on short terminals.
     let indicator_height = if indicator.is_some() {

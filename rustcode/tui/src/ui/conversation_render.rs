@@ -184,7 +184,7 @@ fn render_live_tail_mode(
 /// Deliberately plain — status words, elapsed clocks and token rates belong in
 /// the transcript. A turn waiting on the provider or a tool still shows that
 /// work is happening instead of an empty chat.
-pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'static>> {
+pub(super) fn live_running_indicator(state: &RenderSnapshot, width: u16) -> Option<Line<'static>> {
     if matches!(
         state.status(),
         AppStatus::AwaitingToolConfirmation | AppStatus::AwaitingQuestion
@@ -228,13 +228,13 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'sta
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     });
-    if let Some(mut indicator) = super::composer_render::active_work_indicator(state) {
-        // Foreground/queued work must not swallow the cumulative turn total:
-        // the transcript cell carries identity and elapsed time, while this
-        // row keeps the token accounting.
-        if let Some(suffix) = token_suffix {
-            indicator.spans.push(suffix);
-        }
+    // Foreground/queued work must not swallow the cumulative turn total: the
+    // transcript cell carries identity and elapsed time, while this row keeps
+    // the token accounting. Both are composed into the single reserved row so
+    // head, detail and total can never overflow together (#1725).
+    if let Some(indicator) =
+        super::composer_render::active_work_indicator(state, width, token_suffix.clone())
+    {
         return Some(indicator);
     }
     let activity = rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(
@@ -256,10 +256,12 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot) -> Option<Line<'sta
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
                 ),
             ];
-            if let Some(suffix) = token_suffix {
-                spans.push(suffix);
-            }
-            Some(Line::from(spans))
+            // Long model names truncate; token accounting is reserved first.
+            Some(Line::from(super::composer_render::fit_indicator_row(
+                spans,
+                token_suffix,
+                usize::from(width),
+            )))
         }
     }
 }
