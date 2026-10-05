@@ -7153,6 +7153,7 @@ fn live_tool_output_shows_latest_at_low_verbosity() {
             80,
             &Verbosity::Low,
             true,
+            None,
         )
         .into_iter()
         .map(|line| line.to_string())
@@ -7169,6 +7170,7 @@ fn live_tool_output_shows_latest_at_low_verbosity() {
             80,
             &Verbosity::High,
             true,
+            None,
         )
         .into_iter()
         .map(|line| line.to_string())
@@ -7243,6 +7245,7 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
         80,
         &rustcode::controller::Verbosity::High,
         false,
+        None,
     )
     .into_iter()
     .map(|line| line.to_string())
@@ -10476,7 +10479,7 @@ fn quiet_foreground_command_refreshes_elapsed_without_output_or_row_churn() {
     let now = call.started_at + std::time::Duration::from_secs(12);
     let calls = [call];
     let render = |now| {
-        super::history_cell::render_live_tool_cell_at(&calls, 80, &Verbosity::Low, false, now)
+        super::history_cell::render_live_tool_cell_at(&calls, 80, &Verbosity::Low, false, now, None)
             .iter()
             .map(Line::to_string)
             .collect::<Vec<_>>()
@@ -10749,6 +10752,7 @@ fn out_of_order_live_completion_preserves_remaining_sibling_marker_and_identity(
             &rustcode::controller::Verbosity::Low,
             false,
             now,
+            None,
         )
         .iter()
         .map(Line::to_string)
@@ -10824,16 +10828,30 @@ fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
+        // Background rows share the tool-list vocabulary: connector, marker,
+        // identity, clock and command. The heading owns the state word, so the
+        // rows no longer repeat "running".
         for token in [
-            "  ● build",
-            "pid 4321",
-            "  × mcp",
+            "├ ● build",
+            "pid",
+            "4321",
+            "├ × mcp",
             "failed",
-            "  − child",
+            "└ − child",
             "cancelled",
             "ready",
+            "│ ",
         ] {
             assert!(text.contains(token), "{text}");
+        }
+        assert!(!text.contains("running "), "{text}");
+        // A row wide enough for both keeps the pid beside its label; narrower
+        // rows may legitimately split them across a wrap.
+        if width >= 40 {
+            assert!(
+                text.contains("pid 4321"),
+                "wide rows keep the pid beside its label: {text}"
+            );
         }
     }
     let snapshot = render_snapshot(&state);
@@ -10864,6 +10882,7 @@ fn single_running_command_folds_into_one_indicator_row() {
             &Verbosity::Low,
             false,
             now,
+            None,
         )
         .into_iter()
         .map(|line| line.to_string())
@@ -11171,6 +11190,7 @@ fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
             &Verbosity::Low,
             false,
             now,
+            None,
         );
         let text = rendered
             .iter()
@@ -11201,6 +11221,7 @@ fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
             &Verbosity::Low,
             false,
             now,
+            None,
         );
         let short_text = short_render[0].to_string();
         if width >= 32 {
@@ -11257,4 +11278,259 @@ fn many_live_children_keep_connectors_when_the_list_is_truncated() {
         rendered.iter().any(|line| line.contains("more")),
         "{rendered:?}"
     );
+}
+
+#[test]
+fn edit_diff_bands_span_the_row_and_keep_syntax_colors() {
+    // #1728: the write/edit preview painted its added band only behind the
+    // text, so short lines left the trailing columns unpainted, and `.ts`
+    // sources lost syntax colors because the highlighter only matched tokens.
+    let diff = concat!(
+        "@@ -0,0 +1,4 @@\n",
+        "+import { Database } from \"bun:sqlite\";\n",
+        "+\n",
+        "+const PORT: number = 3000;\n",
+        "+const db = openDatabase(DB_PATH);\n",
+    );
+    for (path, expect_color) in [
+        ("src/index.ts", true),
+        ("src/app.tsx", true),
+        ("src/mod.mts", true),
+        ("src/mod.cts", true),
+        ("src/view.jsx", true),
+        ("notes.txt", false),
+    ] {
+        for width in [24usize, 40, 80] {
+            let lines =
+                super::tool_result::render_file_edit_diff_for_path(diff, path, width, false);
+            assert!(lines.len() >= 4, "{path}: {lines:?}");
+            for line in &lines {
+                assert_eq!(
+                    line.width(),
+                    width,
+                    "{path} width {width}: band must span the row: {line:?}"
+                );
+                // The padding is the trailing run of spaces; it must carry a
+                // background so the band reaches the right edge.
+                let padding_background = line
+                    .spans
+                    .iter()
+                    .rev()
+                    .find(|span| !span.content.is_empty() && span.content.trim().is_empty())
+                    .and_then(|span| span.style.bg);
+                // Rows whose content already fills the width need no padding;
+                // the ones that do must carry the band color into it.
+                assert!(
+                    padding_background.is_none()
+                        || matches!(
+                            padding_background,
+                            Some(color) if color != ratatui::style::Color::Reset
+                        ),
+                    "{path} width {width}: padding must carry a background: {line:?}"
+                );
+            }
+            // Judge the code spans only: the line number and the +/- sign are
+            // always colored, so they cannot stand in for syntax highlighting.
+            // Checked at a width where the fixture rows do not wrap, so the
+            // first two spans really are the gutter.
+            if width == 80 {
+                let code_colors = lines
+                    .iter()
+                    .flat_map(|line| {
+                        line.spans
+                            .iter()
+                            .skip(2)
+                            .filter(|span| !span.content.trim().is_empty())
+                            .map(|span| format!("{:?}", span.style.fg))
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(
+                    code_colors.len() >= 2,
+                    expect_color,
+                    "{path}: expected syntax colors={expect_color}, got {code_colors:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn queued_live_children_stay_on_one_row_with_contracted_paths() {
+    use rustcode::controller::LiveToolCall;
+    // #1728: a queued projection repeated absolute paths across several wrapped
+    // rows. Paths contract to `~` and keep their tail so the call is one row.
+    let mut call = LiveToolCall::new(
+        "call-1",
+        None,
+        "write_to_file",
+        "Writing",
+        "/Users/lagos/code/kompansamal/benchmark/omlx-qwen/benchmark-2/src/db.ts",
+    );
+    call.execution_started = false;
+    for width in [40u16, 80] {
+        let rendered = super::history_cell::render_live_tool_cell_with_verbosity(
+            &[call.clone()],
+            width,
+            &rustcode::controller::Verbosity::Low,
+            false,
+            Some("/Users/lagos"),
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+        assert_eq!(rendered[0], "• Queued", "{rendered:?}");
+        let child = &rendered[1];
+        assert_eq!(child.matches('\n').count(), 0, "{rendered:?}");
+        if width >= 80 {
+            assert!(
+                child.starts_with("└ ○ Writing ~/code/"),
+                "queued child contracts the home directory: {child:?}"
+            );
+        } else {
+            // The budget cannot hold the contracted path, so it is truncated.
+            // What must never reappear is the raw absolute prefix.
+            assert!(!child.contains("/Users/"), "{child:?}");
+        }
+        assert!(
+            child.ends_with("src/db.ts"),
+            "queued child keeps its informative tail: {child:?}"
+        );
+        if width <= 40 {
+            // Too narrow for the whole path: the row must truncate rather than
+            // wrap, and must never show the raw absolute prefix.
+            assert!(child.contains('…'), "{child:?}");
+            assert!(!child.contains("/Users/lagos"), "{child:?}");
+        }
+        assert!(
+            child.width() <= usize::from(width),
+            "queued child fits the row: {child:?}"
+        );
+    }
+}
+
+#[test]
+fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
+    use rustcode::controller::{LiveToolCall, RenderState, TaskDisplay};
+    // #1728: the reserved row repeated `Queued` and the model while the
+    // transcript cell already named the state.
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    let mut call = LiveToolCall::new("c1", None, "write_to_file", "Write", "src/db.ts");
+    call.execution_started = false;
+    state.live_tool_calls = std::sync::Arc::new(vec![call]);
+    let snapshot = render_snapshot(&state);
+    let text = super::composer_render::active_work_indicator(&snapshot, 80, None)
+        .expect("queued work keeps an indicator")
+        .to_string();
+    assert_eq!(text.trim(), "⠋ Queued", "{text:?}");
+    let row = super::live_running_indicator(&snapshot, 80)
+        .expect("queued work keeps the reserved row")
+        .to_string();
+    assert_eq!(row.matches("Queued").count(), 1, "{row:?}");
+
+    // Without a live projection the bottom row stays the only indicator and
+    // keeps the model, so queued work is never unreported.
+    let mut state = RenderState::new();
+    state.background_tasks = vec![TaskDisplay {
+        id: "build".into(),
+        command: "cargo build".into(),
+        started_at: std::time::Instant::now(),
+        child_pid: None,
+    }];
+    state.pending_background_results = vec![rustcode::controller::BackgroundResultDisplay {
+        id: "build".into(),
+        success: true,
+        cancelled: false,
+    }];
+    let snapshot = render_snapshot(&state);
+    let text = super::composer_render::active_work_indicator(&snapshot, 80, None)
+        .expect("background work keeps an indicator")
+        .to_string();
+    assert!(text.contains("Results ready"), "{text:?}");
+}
+
+#[test]
+fn background_list_closes_the_tree_when_one_list_hits_the_cap() {
+    use rustcode::controller::{BackgroundResultDisplay, TaskDisplay};
+    // #1728: each background list is capped independently, so the closing `└`
+    // must follow the number of rows actually drawn, not the total. With one
+    // list at the cap and the other non-empty, every row used to be a `├`.
+    let mut state = RenderState::new();
+    for index in 0..3 {
+        state.background_tasks.push(TaskDisplay {
+            id: format!("build-{index}"),
+            command: format!("cargo build step {index}"),
+            started_at: std::time::Instant::now(),
+            child_pid: Some(1000 + index),
+        });
+    }
+    state
+        .pending_background_results
+        .push(BackgroundResultDisplay {
+            id: "mcp".into(),
+            success: true,
+            cancelled: false,
+        });
+    let snapshot = render_snapshot(&state);
+    let text = super::composer_render::background_command_lines_with_width(&snapshot, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("├ ● build-0"), "{text}");
+    assert!(text.contains("├ ● build-1"), "{text}");
+    assert!(text.contains("├ ● build-2"), "{text}");
+    assert!(
+        text.contains("└ ✓ mcp · completed · result ready"),
+        "the last drawn row closes the tree: {text}"
+    );
+    assert_eq!(text.matches('└').count(), 1, "{text}");
+}
+
+#[test]
+fn tail_truncation_keeps_one_contiguous_tail_and_respects_its_budget() {
+    // #1728: the queued-row truncation originally skipped graphemes that did
+    // not fit, which spliced unrelated characters together.
+    for (text, budget) in [
+        ("a日本語", 4),
+        ("/Users/lagos/code/src/main.rs", 12),
+        ("plain", 5),
+    ] {
+        let tail = super::history_cell::tail_to_width(text, budget);
+        assert!(tail.width() <= budget, "{text:?} -> {tail:?}");
+        assert!(tail.starts_with('…') || text.width() <= budget, "{tail:?}");
+        let suffix = tail.trim_start_matches('…');
+        assert!(
+            text.ends_with(suffix),
+            "{text:?} -> {tail:?} must keep the real tail"
+        );
+    }
+    assert_eq!(super::history_cell::tail_to_width("abc", 0), "");
+    assert_eq!(super::history_cell::tail_to_width("abc", 1), "…");
+}
+
+#[test]
+fn disjoint_hunk_separator_is_padded_like_every_diff_row() {
+    // #1728: the `⋮` separator between hunks was emitted unpadded, leaving a
+    // 1-column stub inside an otherwise fully banded block.
+    let diff = concat!(
+        "@@ -1,2 +1,2 @@\n",
+        " keep\n",
+        "-old\n",
+        "@@ -40,2 +40,2 @@\n",
+        "+new\n",
+        " tail\n",
+    );
+    for width in [20usize, 40] {
+        for line in
+            super::tool_result::render_file_edit_diff_for_path(diff, "src/a.ts", width, false)
+        {
+            assert_eq!(
+                line.width(),
+                width,
+                "width {width}: every diff row is padded: {line:?}"
+            );
+        }
+    }
 }
