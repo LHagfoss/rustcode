@@ -207,6 +207,8 @@ fn render_file_edit_diff_with_language<'a>(
     show_picker: bool,
 ) -> Vec<Line<'a>> {
     let line_number_width = diff_max_line_number(diff).to_string().len();
+    // Resolve the syntax once: a diff renders one line per source row.
+    let syntax = super::highlight::syntax_for_language(language);
     let mut old_line = 1usize;
     let mut new_line = 1usize;
     let mut inside_hunk = false;
@@ -215,10 +217,16 @@ fn render_file_edit_diff_with_language<'a>(
     for raw in diff.lines() {
         if let Some((old, new)) = parse_edit_hunk_header(raw) {
             if inside_hunk {
-                rendered.push(Line::from(Span::styled(
+                let separator_width = width.max(1);
+                let mut separator = vec![Span::styled(
                     format!("{:>line_number_width$}", "⋮"),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                )));
+                )];
+                separator.push(Span::styled(
+                    " ".repeat(separator_width.saturating_sub(line_number_width)),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
+                rendered.push(Line::from(separator));
             }
             old_line = old;
             new_line = new;
@@ -266,25 +274,40 @@ fn render_file_edit_diff_with_language<'a>(
             get_themed_style(color, diff_bg(sign), Modifier::BOLD, show_picker),
         ));
         let code = code.replace('\t', "    ");
-        let code_spans: Vec<_> = highlight_code_line(&code, language, show_picker)
-            .into_iter()
-            .map(|mut span| {
-                let foreground = span.style.fg.unwrap_or(color);
-                span.style = span.style.fg(foreground).bg(diff_bg(sign));
-                span
-            })
-            .collect();
+        let code_spans: Vec<_> =
+            super::highlight::highlight_code_line_with_syntax(&code, syntax, show_picker)
+                .into_iter()
+                .map(|mut span| {
+                    let foreground = span.style.fg.unwrap_or(color);
+                    span.style = span.style.fg(foreground).bg(diff_bg(sign));
+                    span
+                })
+                .collect();
         spans.extend(code_spans);
         let continuation = Span::styled(
             format!("{:line_number_width$}  ", ""),
             get_themed_style(COLOR_MUTED(), diff_bg(sign), Modifier::empty(), show_picker),
         );
+        let first_new_row = rendered.len();
         super::push_wrapped_with_continuation(
             &mut rendered,
             spans,
             width.max(1),
             Some(continuation),
         );
+        // The added/removed band must span the whole row. Without padding, a
+        // short line left the trailing columns unpainted, so the diff read as a
+        // green block that stopped mid-row instead of a full-width band.
+        let background = diff_bg(sign);
+        for row in &mut rendered[first_new_row..] {
+            let used = row.width();
+            if used < width {
+                row.spans.push(Span::styled(
+                    " ".repeat(width - used),
+                    get_themed_style(COLOR_MUTED(), background, Modifier::empty(), show_picker),
+                ));
+            }
+        }
     }
     cap_transcript_lines(rendered, show_picker)
 }

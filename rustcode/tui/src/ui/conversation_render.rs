@@ -102,7 +102,11 @@ fn render_live_tail_mode(
     if visible_live_tool_calls.is_empty() {
         transcript.clear_tools();
     } else {
-        transcript.set_tools_with_verbosity(&visible_live_tool_calls, state.verbosity());
+        transcript.set_tools_with_verbosity(
+            &visible_live_tool_calls,
+            state.verbosity(),
+            state.home_path(),
+        );
         has_visible_active_cell = true;
     }
     if model_live_text.is_empty() {
