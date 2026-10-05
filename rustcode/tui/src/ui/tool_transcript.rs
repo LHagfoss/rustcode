@@ -601,6 +601,46 @@ pub(super) fn tool_result_status(
     }
 }
 
+/// Hang a body row under the group's side spine, stripping the payload's own
+/// baked gutter (`  │ ` stdout, `  ! ` stderr) so wrapped rows keep one
+/// continuous line instead of a dangling stub (#1725). Returns the prefixed
+/// spans plus the matching wrap continuation.
+fn spine_body_spans(line: Line<'static>, show_picker: bool) -> (Vec<Span<'static>>, Span<'static>) {
+    let mut spans_iter = line.spans.into_iter();
+    let mut first = spans_iter.next().expect("non-empty line");
+    let stderr = if let Some(rest) = first.content.strip_prefix("  ! ") {
+        first.content = rest.to_owned().into();
+        true
+    } else {
+        if let Some(rest) = first.content.strip_prefix("  │ ") {
+            first.content = rest.to_owned().into();
+        } else if first.content == "  │" {
+            // Blank-run gutter marker: the spine prefix below replaces it.
+            first.content = "".into();
+        }
+        false
+    };
+    let mut spans = Vec::with_capacity(spans_iter.len() + 2);
+    spans.push(tool_body_spine(show_picker));
+    if stderr {
+        spans.push(Span::styled(
+            "! ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+    spans.push(first);
+    spans.extend(spans_iter);
+    let continuation = if stderr {
+        Span::styled(
+            "│   ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+        )
+    } else {
+        tool_body_spine(show_picker)
+    };
+    (spans, continuation)
+}
+
 pub(super) fn indent_tool_result_body(
     lines: Vec<Line<'static>>,
     tool_name: &str,
@@ -629,19 +669,15 @@ pub(super) fn indent_tool_result_body(
     let mut indented = Vec::new();
     for line in visible {
         if line.spans.is_empty() {
-            indented.push(line);
+            // A blank payload line still belongs to the body, so it keeps the
+            // spine instead of breaking the vertical line (#1725).
+            indented.push(Line::from(tool_body_spine(false)));
             continue;
         }
-        let mut spans = Vec::with_capacity(line.spans.len() + 1);
-        spans.push(Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        ));
-        spans.extend(line.spans);
-        let continuation = Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        );
+        // Command payloads arrive with their own baked gutter (`  │ ` stdout,
+        // `  ! ` stderr). Strip it and re-hang the row under the group's side
+        // spine so wrapped rows keep the line instead of dropping to spaces.
+        let (spans, continuation) = spine_body_spans(line, false);
         push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
     }
     if expanded {
@@ -893,7 +929,8 @@ pub(super) fn tool_transcript_entry(
         cached_file_edit_diff(
             diff,
             &target,
-            usize::from(width).saturating_sub(4),
+            // Reserve the 2-column side spine, not the old 4-space gutter.
+            usize::from(width).saturating_sub(2),
             show_picker,
         )
     } else if kind == ToolTranscriptKind::Command || tool_name == "ask_question" {
@@ -1029,15 +1066,18 @@ fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> 
     let tail = lines.split_off(tail_start);
     lines.truncate(window.head_rows);
     preview.extend(lines);
-    preview.push(Line::from(Span::styled(
-        format!("    … +{} lines", window.omitted_rows),
-        get_themed_style(
-            COLOR_MUTED(),
-            COLOR_BG(),
-            Modifier::ITALIC | Modifier::DIM,
-            show_picker,
+    preview.push(Line::from(vec![
+        tool_body_spine(show_picker),
+        Span::styled(
+            format!("… +{} lines", window.omitted_rows),
+            get_themed_style(
+                COLOR_MUTED(),
+                COLOR_BG(),
+                Modifier::ITALIC | Modifier::DIM,
+                show_picker,
+            ),
         ),
-    )));
+    ]));
     preview.extend(tail);
     preview
 }
@@ -1071,26 +1111,62 @@ fn append_expand_hint(lines: &mut [Line<'static>], width: u16, show_picker: bool
 }
 
 /// Every sibling owns a status marker; wrapped body rows use hanging spaces.
-fn tool_status_marker(entry: &ToolTranscriptEntry) -> &'static str {
+/// The tree connector (`├`/`└`) restores the inward side lines that point at
+/// each child, while the marker keeps the execution state (#1725). Both are
+/// 4 columns wide combined, matching the previous flat indent.
+fn tool_status_glyph(entry: &ToolTranscriptEntry) -> char {
     match entry.status.as_str() {
-        "running" => "  ● ",
-        "cancelled" => "  − ",
-        _ if entry.success => "  ✓ ",
-        _ => "  × ",
+        "running" => '●',
+        "cancelled" => '−',
+        _ if entry.success => '✓',
+        _ => '×',
     }
+}
+
+pub(super) fn tool_tree_prefix(is_last: bool, show_picker: bool) -> Span<'static> {
+    Span::styled(
+        if is_last { "└ " } else { "├ " },
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    )
+}
+
+fn tool_title_continuation(is_last: bool, show_picker: bool) -> Span<'static> {
+    Span::styled(
+        if is_last { "    " } else { "│   " },
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    )
+}
+
+/// Continuous side spine for tool body rows. Bodies used to indent with plain
+/// spaces (and command payloads carried their own gutter), so a wrapped body
+/// showed a dangling `│` stub on its first row and nothing below it (#1725).
+/// Every body row — first, wrapped continuation, omission marker — hangs under
+/// the same spine instead.
+pub(super) fn tool_body_spine(show_picker: bool) -> Span<'static> {
+    Span::styled(
+        "│ ",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+    )
+}
+
+fn tool_status_marker(entry: &ToolTranscriptEntry) -> String {
+    format!("{} ", tool_status_glyph(entry))
 }
 
 pub(super) fn tool_child_line(
     entry: &ToolTranscriptEntry,
-    _first: bool,
+    is_last: bool,
     show_hint: bool,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let mut spans = vec![Span::styled(
-        tool_status_marker(entry),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    )];
+    let mut spans = vec![
+        tool_tree_prefix(is_last, show_picker),
+        Span::styled(
+            tool_status_marker(entry),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ];
     if entry.kind == ToolTranscriptKind::Edit {
         if !entry.target.is_empty() && entry.target != "?" {
             spans.push(Span::styled(
@@ -1129,10 +1205,7 @@ pub(super) fn tool_child_line(
         ));
     }
     let mut lines = Vec::new();
-    let continuation = Span::styled(
-        "    ",
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    );
+    let continuation = tool_title_continuation(is_last, show_picker);
     push_wrapped_with_continuation(
         &mut lines,
         spans,
@@ -1214,7 +1287,7 @@ fn truncate_wrapped_lines(mut lines: Vec<Line<'static>>, max_lines: usize) -> Ve
 
 pub(super) fn command_child_lines(
     entry: &ToolTranscriptEntry,
-    _first: bool,
+    is_last: bool,
     show_hint: bool,
     width: u16,
     show_picker: bool,
@@ -1243,14 +1316,25 @@ pub(super) fn command_child_lines(
         (!entry.success || entry.status == "running").then(|| format!(" · {}", entry.status));
     let max_w = wrap_width(width, show_hint);
     for (command_index, command) in commands.into_iter().enumerate() {
-        let mut spans = vec![Span::styled(
-            if command_index == 0 {
-                tool_status_marker(entry)
-            } else {
-                "    "
-            },
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        )];
+        let mut spans = vec![if command_index == 0 {
+            tool_tree_prefix(is_last, show_picker)
+        } else {
+            Span::styled(
+                if is_last { "  " } else { "│ " },
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            )
+        }];
+        if command_index == 0 {
+            spans.push(Span::styled(
+                tool_status_marker(entry),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "  ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
         if command_index == 0 {
             spans.push(Span::styled(
                 entry.action.clone(),
@@ -1272,10 +1356,7 @@ pub(super) fn command_child_lines(
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
-        let continuation = Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        );
+        let continuation = tool_title_continuation(is_last, show_picker);
         push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
     let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
@@ -1357,19 +1438,12 @@ pub(super) fn indent_generic_tool_body(
     let mut indented = Vec::new();
     for line in lines {
         if line.spans.is_empty() {
-            indented.push(line);
+            // A blank payload line still belongs to the body, so it keeps the
+            // spine instead of breaking the vertical line (#1725).
+            indented.push(Line::from(tool_body_spine(show_picker)));
             continue;
         }
-        let mut spans = Vec::with_capacity(line.spans.len() + 1);
-        spans.push(Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        spans.extend(line.spans);
-        let continuation = Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        );
+        let (spans, continuation) = spine_body_spans(line, show_picker);
         push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
     }
     cap_collapsed_tool_body(indented, show_picker)
@@ -1390,19 +1464,12 @@ pub(super) fn indent_full_tool_body(
     let mut indented = Vec::new();
     for line in lines {
         if line.spans.is_empty() {
-            indented.push(line);
+            // A blank payload line still belongs to the body, so it keeps the
+            // spine instead of breaking the vertical line (#1725).
+            indented.push(Line::from(tool_body_spine(show_picker)));
             continue;
         }
-        let mut spans = Vec::with_capacity(line.spans.len() + 1);
-        spans.push(Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        spans.extend(line.spans);
-        let continuation = Span::styled(
-            "    ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        );
+        let (spans, continuation) = spine_body_spans(line, show_picker);
         push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
     }
     indented
@@ -1444,11 +1511,12 @@ fn append_tool_preview(
     lines.extend(body);
     if show_hint && !inline {
         let mut hint_lines = Vec::new();
+        let spine = tool_body_spine(show_picker);
         push_wrapped_with_continuation(
             &mut hint_lines,
-            vec![Span::raw("    "), hint],
+            vec![spine.clone(), hint],
             (width as usize).max(1),
-            Some(Span::raw("    ")),
+            Some(spine),
         );
         lines.extend(hint_lines);
     }
@@ -1508,8 +1576,13 @@ fn render_tool_result_group_snapshot(
             {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
-                    let title =
-                        command_child_lines(entry, child_index == 0, false, width, show_picker);
+                    let title = command_child_lines(
+                        entry,
+                        child_index + 1 == group.len(),
+                        false,
+                        width,
+                        show_picker,
+                    );
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     let (body, show_hint) = command_preview_body(
                         entry.body.clone(),
@@ -1569,10 +1642,17 @@ fn render_tool_result_group_snapshot(
                 lines.push(tool_group_header(title, success, show_picker));
             }
             let mut seen = std::collections::HashSet::new();
-            let mut first_child = true;
-            for entry in group {
-                let identity = format!("{}\0{}", entry.action, entry.target);
-                if entry.kind != ToolTranscriptKind::Explored || seen.insert(identity) {
+            // Pre-filter duplicate exploration rows so the last *rendered*
+            // child gets the closing `└` connector (#1725).
+            let visible: Vec<&ToolTranscriptEntry> = group
+                .iter()
+                .filter(|entry| {
+                    entry.kind != ToolTranscriptKind::Explored
+                        || seen.insert(format!("{}\0{}", entry.action, entry.target))
+                })
+                .collect();
+            for (child_index, entry) in visible.iter().enumerate() {
+                {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     // Command, generic Tool, and Edit-with-diff entries collapse
                     // their bodies with the same expand affordance; Explored
@@ -1601,13 +1681,18 @@ fn render_tool_result_group_snapshot(
                         && full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
                         && !is_expanded
                         && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
+                    // A continuation batch renders under a heading an earlier
+                    // frame already committed, so scrollback can never be
+                    // revised: only `include_header` batches know their last
+                    // child is final. Continuations keep the downward connector
+                    // instead of every sibling claiming `└` (#1725).
+                    let is_last = include_header && child_index + 1 == visible.len();
                     let title = if entry.kind == ToolTranscriptKind::Command {
-                        command_child_lines(entry, first_child, false, width, show_picker)
+                        command_child_lines(entry, is_last, false, width, show_picker)
                     } else {
-                        tool_child_line(entry, first_child, false, width, show_picker)
+                        tool_child_line(entry, is_last, false, width, show_picker)
                     };
                     let mut body = Vec::new();
-                    first_child = false;
                     let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
                         if is_expanded || !low {
@@ -2424,10 +2509,7 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        assert_eq!(
-            capped,
-            ["row 0", "row 1", "    … +5 lines", "row 7", "row 8"]
-        );
+        assert_eq!(capped, ["row 0", "row 1", "│ … +5 lines", "row 7", "row 8"]);
 
         let forced_marker = super::tool_preview_window(4, true).expect("byte marker");
         assert_eq!(
