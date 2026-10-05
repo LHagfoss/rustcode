@@ -1,3 +1,12 @@
+## [v0.57.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.1) - 2026-10-05
+
+### Features
+# v0.57.1
+
+- Add native GitHub Copilot login and model selection (`/login github-copilot` via GitHub CLI credential or own `RUSTCODE_COPILOT_CLIENT_ID` app) with Chat/Responses/Messages transports.
+- Keep streaming transcript output reachable while scrolled with anchored growth and jump-to-live behavior.
+- Show active foreground commands with elapsed time and bounded output preview, including quiet-work state.
+- Replace multi-tool branch glyphs with aligned status markers and stable grouped lists.
 ## [v0.57.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.0) - 2026-10-04
 
 ### Features
