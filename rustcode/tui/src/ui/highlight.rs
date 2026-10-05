@@ -300,6 +300,28 @@ pub(super) fn highlight_shell_command(
     lines
 }
 
+/// Resolve a syntax from a language identifier.
+///
+/// Callers pass either a fenced-block token (`rs`, `python`) or a bare file
+/// extension (`ts`, `tsx`), and `find_syntax_by_token` alone misses the
+/// extension-only spellings, which silently downgraded real source to plain
+/// text. Try the extension first, then the token, then fall back to plain text.
+pub(super) fn syntax_for_language(language: &str) -> &'static SyntaxReference {
+    let normalized = language.trim().trim_start_matches('.').to_ascii_lowercase();
+    let set = syntax_set();
+    set.find_syntax_by_extension(normalized.as_str())
+        .or_else(|| set.find_syntax_by_token(normalized.as_str()))
+        // The bundled syntax set ships no TypeScript definition, so `.ts`
+        // sources fell back to plain text. TypeScript is a superset of
+        // JavaScript, so the bundled JavaScript syntax colors keywords,
+        // strings, comments and literals correctly instead.
+        .or_else(|| match normalized.as_str() {
+            "ts" | "tsx" | "mts" | "cts" | "jsx" => set.find_syntax_by_extension("js"),
+            _ => None,
+        })
+        .unwrap_or_else(|| set.find_syntax_plain_text())
+}
+
 /// Highlight one code line using the fenced block's language identifier.
 /// Unknown languages deliberately fall back to plain code styling instead of
 /// guessing Rust, which was the source of misleading colors in other blocks.
@@ -308,9 +330,16 @@ pub(super) fn highlight_code_line<'a>(
     language: &str,
     show_picker: bool,
 ) -> Vec<Span<'a>> {
-    let syntax: &SyntaxReference = syntax_set()
-        .find_syntax_by_token(language)
-        .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
+    highlight_code_line_with_syntax(line, syntax_for_language(language), show_picker)
+}
+
+/// Highlight one line against an already resolved syntax, so per-line renderers
+/// pay the lookup once instead of once per row.
+pub(super) fn highlight_code_line_with_syntax<'a>(
+    line: &str,
+    syntax: &SyntaxReference,
+    show_picker: bool,
+) -> Vec<Span<'a>> {
     let theme = syntax_theme();
     let mut highlighter = HighlightLines::new(syntax, &theme);
     match highlighter.highlight_line(line, syntax_set()) {
@@ -332,9 +361,7 @@ pub(super) fn highlight_code_block(
     language: &str,
     show_picker: bool,
 ) -> Vec<Vec<Span<'static>>> {
-    let syntax: &SyntaxReference = syntax_set()
-        .find_syntax_by_token(language)
-        .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
+    let syntax: &SyntaxReference = syntax_for_language(language);
     let theme = syntax_theme();
     let mut highlighter = HighlightLines::new(syntax, &theme);
     code.lines()

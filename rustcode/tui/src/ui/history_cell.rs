@@ -13,6 +13,7 @@ use rustcode::controller::{History, LiveToolCall, Verbosity};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
@@ -385,6 +386,7 @@ impl TranscriptState {
             self.tools = Some(LiveToolCell {
                 calls: calls.to_vec(),
                 verbosity: Verbosity::Low,
+                home_path: None,
             });
         }
     }
@@ -393,16 +395,20 @@ impl TranscriptState {
         &mut self,
         calls: &[LiveToolCall],
         verbosity: &Verbosity,
+        home_path: Option<&str>,
     ) {
-        let changed = self
-            .tools
-            .as_ref()
-            .is_none_or(|cell| cell.calls != calls || cell.verbosity != *verbosity);
+        // Compare before allocating so an unchanged frame allocates nothing.
+        let changed = self.tools.as_ref().is_none_or(|cell| {
+            cell.calls != calls
+                || cell.verbosity != *verbosity
+                || cell.home_path.as_deref() != home_path
+        });
         if changed {
             self.revision = self.revision.saturating_add(1);
             self.tools = Some(LiveToolCell {
                 calls: calls.to_vec(),
                 verbosity: verbosity.clone(),
+                home_path: home_path.map(str::to_owned),
             });
         }
     }
@@ -462,11 +468,20 @@ pub(super) struct AssistantMarkdownCell {
 struct LiveToolCell {
     calls: Vec<LiveToolCall>,
     verbosity: Verbosity,
+    /// Home directory used to contract absolute paths, matching the committed
+    /// transcript projection.
+    home_path: Option<String>,
 }
 
 impl HistoryCell for LiveToolCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        render_live_tool_cell_with_verbosity(&self.calls, width, &self.verbosity, false)
+        render_live_tool_cell_with_verbosity(
+            &self.calls,
+            width,
+            &self.verbosity,
+            false,
+            self.home_path.as_deref(),
+        )
     }
 }
 
@@ -563,6 +578,37 @@ fn is_exploration_tool(name: &str) -> bool {
     rustcode_core::activity::is_exploration_tool(name)
 }
 
+/// Keep the tail of an over-long target so the informative part (the file name
+/// and its parents) survives on a single row instead of the head, which says
+/// little about *which* item is queued or running.
+pub(super) fn tail_to_width(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let suffix = '…';
+    let budget = max_width.saturating_sub(1);
+    // Walk backwards so the kept graphemes stay one contiguous tail; skipping
+    // over-wide graphemes instead would splice unrelated characters together.
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0;
+    for (index, grapheme) in text.grapheme_indices(true).rev() {
+        let grapheme_width = grapheme.width();
+        if used + grapheme_width > budget {
+            break;
+        }
+        used += grapheme_width;
+        kept.push(&text[index..index + grapheme.len()]);
+    }
+    let mut tail = String::from(suffix);
+    for grapheme in kept.into_iter().rev() {
+        tail.push_str(grapheme);
+    }
+    tail
+}
+
 /// Cancel affordance for a running live cell, sized to the space the heading
 /// has already used. The full hint needs 16 display columns and the short form
 /// 6, so narrow terminals keep a compact `esc` instead of losing the
@@ -599,7 +645,7 @@ pub(super) fn render_live_tool_cell(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    render_live_tool_cell_with_verbosity(calls, width, &Verbosity::Low, show_picker)
+    render_live_tool_cell_with_verbosity(calls, width, &Verbosity::Low, show_picker, None)
 }
 
 pub(super) fn render_live_tool_cell_with_verbosity(
@@ -607,6 +653,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     width: u16,
     verbosity: &Verbosity,
     show_picker: bool,
+    home_path: Option<&str>,
 ) -> Vec<Line<'static>> {
     render_live_tool_cell_at(
         calls,
@@ -614,6 +661,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         verbosity,
         show_picker,
         std::time::Instant::now(),
+        home_path,
     )
 }
 
@@ -623,6 +671,7 @@ pub(super) fn render_live_tool_cell_at(
     verbosity: &Verbosity,
     show_picker: bool,
     now: std::time::Instant,
+    home_path: Option<&str>,
 ) -> Vec<Line<'static>> {
     let calls = calls
         .iter()
@@ -835,31 +884,42 @@ pub(super) fn render_live_tool_cell_at(
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
         ];
-        if !call.target.is_empty() && call.target != "?" {
-            spans.push(Span::raw(if call.action == "Bash" { " $ " } else { " " }));
-            spans.push(Span::styled(
-                call.target.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        if calls
+        // Budget the row before rendering it: the key disambiguator and the
+        // elapsed clock are appended after the target, so the target's share
+        // must be computed from the same values that are actually rendered.
+        let key_suffix = calls
             .iter()
             .filter(|other| other.tool_name == call.tool_name && other.target == call.target)
             .count()
-            > 1
-        {
+            > 1;
+        let elapsed = if call.execution_started {
+            format!(
+                " · {}",
+                super::fmt_elapsed_compact(
+                    now.saturating_duration_since(call.started_at).as_secs()
+                )
+            )
+        } else {
+            String::new()
+        };
+        if !call.target.is_empty() && call.target != "?" {
+            spans.push(Span::raw(if call.action == "Bash" { " $ " } else { " " }));
+            // Contract `~` and keep the tail so a long absolute path stays on
+            // one row: a queued call is a projection, not a scrollback log.
+            let target = super::tool_transcript::contract_home_path(&call.target, home_path);
+            let fixed = spans.iter().map(|span| span.content.width()).sum::<usize>()
+                + usize::from(key_suffix) * (3 + call.key.width())
+                + elapsed.width();
+            spans.push(Span::styled(
+                tail_to_width(&target, usize::from(width).saturating_sub(fixed).max(8)),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
+        if key_suffix {
             spans.push(Span::styled(format!(" · {}", call.key), detail_style));
         }
-        if call.execution_started {
-            spans.push(Span::styled(
-                format!(
-                    " · {}",
-                    super::fmt_elapsed_compact(
-                        now.saturating_duration_since(call.started_at).as_secs()
-                    )
-                ),
-                detail_style,
-            ));
+        if !elapsed.is_empty() {
+            spans.push(Span::styled(elapsed, detail_style));
         }
         push_wrapped_with_continuation(
             &mut lines,

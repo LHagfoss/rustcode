@@ -25,7 +25,8 @@ pub(super) fn contract_home_path(path: &str, home_path: Option<&str>) -> String 
     if path.is_empty() {
         return String::new();
     }
-    if let Some(home) = home_path {
+    // An empty `HOME` would otherwise turn every path into `~/…`.
+    if let Some(home) = home_path.filter(|home| !home.is_empty()) {
         if path.starts_with(&home) {
             return format!("~{}", &path[home.len()..]);
         }

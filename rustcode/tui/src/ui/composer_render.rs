@@ -579,16 +579,16 @@ pub(super) fn active_work_indicator(
             .unwrap_or_default(),
         ActiveWorkState::Input => " · answer question".to_owned(),
         ActiveWorkState::Foreground | ActiveWorkState::Queued => {
-            if !state.live_tool_calls().is_empty() {
-                // The transcript's live cell already carries the tool identity,
-                // elapsed clock and cancel hint: repeating them here rendered
-                // the same running state twice (#1725). The bottom row keeps
-                // only what the cell lacks.
-                if matches!(work, ActiveWorkState::Queued) {
-                    format!(" · {}", state.model_name())
-                } else {
-                    String::new()
-                }
+            if state
+                .live_tool_calls()
+                .iter()
+                .any(super::history_cell::is_live_tool_call_visible)
+            {
+                // The transcript's live cell already names the state, the tools
+                // and their identity: repeating either here rendered the same
+                // information twice. The bottom row keeps only what the cell
+                // lacks (#1725, #1726).
+                String::new()
             } else if matches!(work, ActiveWorkState::Queued) {
                 // Queued with nothing started yet: keep the model visible so
                 // the running row stays findable; there is nothing to
@@ -771,26 +771,48 @@ pub(super) fn background_command_lines_with_width(
         return Vec::new();
     }
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let mut lines = vec![Line::from(Span::styled("• Background", style))];
+    let heading_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("• ", heading_style),
+        Span::styled("Background", heading_style),
+    ])];
+    // Each list is capped independently, so the rendered row count is the sum of
+    // the two caps, not the total: comparing against the total left every row
+    // with a downward connector and no closing `└` (#1728).
+    let shown = state.background_tasks().len().min(MAX_VISIBLE_COMMANDS)
+        + state
+            .pending_background_results()
+            .len()
+            .min(MAX_VISIBLE_COMMANDS);
+    let show_all = state.background_tasks().len() <= MAX_VISIBLE_COMMANDS
+        && state.pending_background_results().len() <= MAX_VISIBLE_COMMANDS;
+    let mut row_index = 0;
     for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
+        let is_last = show_all && row_index + 1 == shown;
         let command = rustcode::controller::background_command_label(&task.command, 240);
         let pid = task
             .child_pid
             .map(|pid| format!(" · pid {pid}"))
             .unwrap_or_default();
+        let identity = format!(
+            "{} · {}{pid}",
+            task.id,
+            fmt_elapsed_compact(task.started_at.elapsed().as_secs())
+        );
+        // The heading already says Background, so the row carries identity,
+        // clock and command only — no repeated state word.
         push_wrapped_with_continuation(
             &mut lines,
-            vec![Span::styled(
-                format!(
-                    "  ● {} · running {}{pid} · {command}",
-                    task.id,
-                    fmt_elapsed_compact(task.started_at.elapsed().as_secs())
-                ),
-                style,
-            )],
+            vec![
+                super::tool_transcript::tool_tree_prefix(is_last, false),
+                Span::styled("● ", style),
+                Span::styled(identity, style),
+                Span::styled(format!(" · {command}"), style),
+            ],
             usize::from(width).max(1),
-            Some(Span::raw("    ")),
+            Some(Span::styled(if is_last { "    " } else { "│   " }, style)),
         );
+        row_index += 1;
     }
     for result in state
         .pending_background_results()
@@ -804,15 +826,20 @@ pub(super) fn background_command_lines_with_width(
         } else {
             ('×', "failed")
         };
+        let is_last = show_all && row_index + 1 == shown;
         push_wrapped_with_continuation(
             &mut lines,
-            vec![Span::styled(
-                format!("  {marker} {} · {status} · result ready", result.id),
-                style,
-            )],
+            vec![
+                super::tool_transcript::tool_tree_prefix(is_last, false),
+                Span::styled(
+                    format!("{marker} {} · {status} · result ready", result.id),
+                    style,
+                ),
+            ],
             usize::from(width).max(1),
-            Some(Span::raw("    ")),
+            Some(Span::styled(if is_last { "    " } else { "│   " }, style)),
         );
+        row_index += 1;
     }
     let omitted = state
         .background_tasks()
@@ -825,12 +852,12 @@ pub(super) fn background_command_lines_with_width(
     if omitted > 0 {
         push_wrapped_with_continuation(
             &mut lines,
-            vec![Span::styled(
-                format!("    … {omitted} more (/ps to view)"),
-                style,
-            )],
+            vec![
+                Span::styled("│ ", style),
+                Span::styled(format!("… {omitted} more (/ps to view)"), style),
+            ],
             usize::from(width).max(1),
-            Some(Span::raw("    ")),
+            Some(Span::styled("│ ", style)),
         );
     }
     lines
