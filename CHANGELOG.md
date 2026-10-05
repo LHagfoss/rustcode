@@ -1,3 +1,12 @@
+## [v0.57.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.3) - 2026-10-05
+
+### Fixes
+# v0.57.3
+
+- Syntax highlight edit previews again: `.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` now resolve to the bundled JavaScript syntax instead of falling back to plain text, because the default syntax set ships no TypeScript definition.
+- Paint write/edit diff bands across the full row width, including the `⋮` hunk separator, so short lines no longer leave unpainted columns on the right.
+- Keep queued and live tool rows on one line: absolute paths contract to `~/…` and over-long targets keep their informative tail with an ellipsis.
+- Stop repeating state in the row above the composer, and give background task rows the same connector, marker and spine vocabulary as every other tool list.
 ## [v0.57.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.2) - 2026-10-05
 
 ### Fixes
