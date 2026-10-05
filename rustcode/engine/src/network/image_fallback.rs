@@ -171,6 +171,11 @@ pub(crate) async fn request_vision_analysis(
     } else {
         "application/octet-stream"
     };
+    if profile.resolved_api_protocol() == crate::config::ApiProtocol::AnthropicMessages
+        && mime == "application/octet-stream"
+    {
+        return Err("Messages image input requires PNG, JPEG, GIF, or WebP".into());
+    }
     let data_url = format!(
         "data:{mime};base64,{}",
         general_purpose::STANDARD.encode(bytes)
@@ -184,7 +189,31 @@ pub(crate) async fn request_vision_analysis(
         profile.resolved_output_token_field().wire_name(),
         data_url,
     );
-    let mut request = client.post(profile.endpoint_url()).json(&payload);
+    let copilot = profile
+        .credential
+        .as_ref()
+        .is_some_and(crate::provider_auth::CredentialRef::is_copilot);
+    let protected_client = if copilot {
+        Some(
+            crate::provider_auth::github_copilot::http_client()
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
+    let mut request = protected_client
+        .as_ref()
+        .unwrap_or(client)
+        .post(profile.endpoint_url())
+        .json(&payload);
+    if copilot {
+        request = request.headers(crate::provider_auth::github_copilot::request_headers(
+            &payload, None,
+        ));
+    }
+    if profile.resolved_api_protocol() == crate::config::ApiProtocol::AnthropicMessages {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
     let credential = tokio::select! {
         _ = cancel_token.cancelled() => return Err("cancelled".to_string()),
         result = tokio::time::timeout(
@@ -229,6 +258,7 @@ fn vision_request_payload(
     data_url: String,
 ) -> serde_json::Value {
     match protocol {
+        crate::config::ApiProtocol::AnthropicMessages => crate::network::anthropic_messages::request_payload(model, &[serde_json::json!({"role":"user","content":[{"type":"text","text":VISION_PROMPT},{"type":"image_url","image_url":{"url":data_url}}]})], &[], 2048, false).expect("vision input is a supported image data URL"),
         crate::config::ApiProtocol::Responses => {
             let mut map = serde_json::Map::new();
             map.insert(
@@ -271,6 +301,10 @@ fn vision_response_text(
     protocol: crate::config::ApiProtocol,
     body: &serde_json::Value,
 ) -> Result<String, String> {
+    if protocol == crate::config::ApiProtocol::AnthropicMessages {
+        return crate::network::anthropic_messages::response_text(body)
+            .ok_or_else(|| "vision provider returned no text content".to_owned());
+    }
     if matches!(protocol, crate::config::ApiProtocol::Responses) {
         let mut texts = Vec::new();
         if let Some(items) = body.get("output").and_then(|o| o.as_array()) {

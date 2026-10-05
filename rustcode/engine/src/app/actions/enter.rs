@@ -80,7 +80,7 @@ async fn handle_enter_inner(
             let session_id = s.active_session_id.clone();
             s.show_command_panel("Provider authentication", "Working…");
             drop(s);
-            start_provider_auth(state, raw_input, session_id, config);
+            start_provider_auth(state, raw_input, session_id, config, cancel_token.clone());
             return false;
         }
 
@@ -1285,11 +1285,16 @@ pub(super) fn is_safe_provider_auth_recall(input: &str, config: &crate::config::
             provider(provider_name) && provider_is_configured(provider_name)
         }
         ("/login", [provider_name, new])
-            if provider_name.eq_ignore_ascii_case("openai") && new.eq_ignore_ascii_case("new") =>
+            if (provider_name.eq_ignore_ascii_case("openai")
+                || provider_name.eq_ignore_ascii_case("github-copilot"))
+                && new.eq_ignore_ascii_case("new") =>
         {
             provider_is_configured(provider_name)
         }
-        ("/login", [provider_name, account_id]) if provider_name.eq_ignore_ascii_case("openai") => {
+        ("/login", [provider_name, account_id])
+            if provider_name.eq_ignore_ascii_case("openai")
+                || provider_name.eq_ignore_ascii_case("github-copilot") =>
+        {
             account(account_id)
                 && provider_is_configured(provider_name)
                 && known_account(provider_name, account_id)
@@ -1351,11 +1356,29 @@ fn start_provider_auth(
     input: String,
     expected_session_id: String,
     config: crate::config::AppConfig,
+    cancel: tokio_util::sync::CancellationToken,
 ) {
     let state = Arc::clone(state);
     tokio::spawn(async move {
         let command = normalize_provider_auth_command(&input);
-        let result = crate::provider_auth::execute_command(&command, &config).await;
+        let (sender, mut progress) = tokio::sync::mpsc::channel(8);
+        let future = crate::provider_auth::execute_command_with_progress(
+            &command,
+            &config,
+            &cancel,
+            Some(sender),
+        );
+        tokio::pin!(future);
+        let result = loop {
+            tokio::select! {
+                result = &mut future => break result,
+                Some(message) = progress.recv() => {
+                    let mut state = state.lock().await;
+                    if state.active_session_id != expected_session_id { cancel.cancel(); continue; }
+                    state.show_command_panel("Provider authentication", message);
+                }
+            }
+        };
         let mut state = state.lock().await;
         if state.active_session_id != expected_session_id {
             return;

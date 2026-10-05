@@ -239,3 +239,57 @@ fn deferred_speculative_projections_are_dropped_while_running_calls_remain() {
         Some("call-a")
     );
 }
+
+#[test]
+fn live_command_keeps_supplied_cwd_when_adopting_speculative_call() {
+    let mut state = AppState::new();
+    state.update_speculative_live_tool_call(
+        Some("build"),
+        "run_command",
+        &serde_json::json!({"command": "cargo build"}),
+    );
+    state.begin_live_tool_call(
+        Some("build"),
+        "run_command",
+        &serde_json::json!({"command": "cargo build", "cwd": "/tmp/project"}),
+    );
+    assert_eq!(state.live_tool_calls.len(), 1);
+    assert_eq!(
+        state.live_tool_calls[0].cwd.as_deref(),
+        Some("/tmp/project")
+    );
+    assert!(
+        state.history.is_empty(),
+        "presentation metadata stays outside canonical history"
+    );
+}
+
+#[test]
+fn render_projection_marks_withheld_background_outcomes_until_consumed() {
+    let mut state = AppState::new();
+    state
+        .pending_background_outputs
+        .push(crate::PendingBackgroundOutput {
+            task_id: "build".into(),
+            output: crate::tools::ToolExecutionOutput::success("completed".into()),
+        });
+    let mut cancelled = crate::tools::ToolExecutionOutput::failure("cancelled".into());
+    cancelled.error_kind = Some(rustcode_core::ToolErrorKind::Cancelled);
+    state
+        .pending_background_outputs
+        .push(crate::PendingBackgroundOutput {
+            task_id: "child".into(),
+            output: cancelled,
+        });
+    let view = crate::controller::render_state(&state);
+    assert_eq!(view.pending_background_results.len(), 2);
+    assert!(view.pending_background_results[0].success);
+    assert!(view.pending_background_results[1].cancelled);
+    assert!(state.history.is_empty());
+    state.pending_background_outputs.clear();
+    assert!(
+        crate::controller::render_state(&state)
+            .pending_background_results
+            .is_empty()
+    );
+}

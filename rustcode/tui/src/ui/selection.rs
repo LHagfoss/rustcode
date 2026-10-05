@@ -2067,6 +2067,60 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_live_selection_keeps_unicode_copy_through_growth_and_completion() {
+        let _guard = super::super::tests::THEME_TEST_LOCK.lock().unwrap();
+        let mut state = RenderState::new();
+        state
+            .history
+            .push(ChatMessage::new("user", "older request"));
+        let text = (0..40)
+            .map(|row| format!("live row {row:02} 界 é"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        super::super::render_snapshot::set_current_response(&mut state, &text);
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let _ = rendered_transcript(&state, &mut transcript);
+        transcript.scroll_up(10);
+        let _ = rendered_transcript(&state, &mut transcript);
+        let area = transcript.selection.area;
+        transcript.selection.begin_with_snapshot(
+            mouse(MouseEventKind::Down(MouseButton::Left), area.x, area.y),
+            super::super::render_snapshot::render_snapshot(&state),
+            transcript.scroll_rows(),
+        );
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.right() - 1,
+            area.bottom() - 1,
+        ));
+        transcript.selection.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            area.right() - 1,
+            area.bottom() - 1,
+        ));
+        let selected = transcript.selection.selected_text().unwrap();
+        assert!(selected.contains("live row"), "{selected}");
+        assert!(selected.contains("界 é"), "{selected}");
+        super::super::render_snapshot::set_current_response(
+            &mut state,
+            &format!("{text}\n\nnew live row"),
+        );
+        let _ = rendered_transcript(&state, &mut transcript);
+        assert_eq!(
+            transcript.selection.selected_text().as_deref(),
+            Some(selected.as_str())
+        );
+        state.history.push(ChatMessage::new("assistant", text));
+        super::super::render_snapshot::set_current_response(&mut state, "");
+        let _ = rendered_transcript_size(&state, &mut transcript, 20, 12);
+        assert_eq!(
+            transcript.selection.selected_text().as_deref(),
+            Some(selected.as_str())
+        );
+        assert!(!transcript.is_following());
+    }
+
+    #[test]
     fn resize_clips_pinned_layout_without_changing_selected_copy() {
         let state = long_conversation();
         let mut transcript = super::super::history_cell::TranscriptState::default();

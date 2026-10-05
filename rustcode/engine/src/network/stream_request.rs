@@ -1587,6 +1587,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn messages_sse_pairs_fragmented_native_calls_and_requires_message_stop() {
+        use serde_json::json;
+        use tokio::io::AsyncWriteExt;
+        for complete in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+            let mut events = vec![
+                json!({"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_read","name":"read_file","input":{}}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"a.rs\"}"}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}),
+            ];
+            if complete {
+                events.push(json!({"type":"message_stop"}));
+            }
+            let body = events
+                .iter()
+                .map(|event| format!("data: {event}\n\n"))
+                .collect::<String>()
+                .into_bytes();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_http_request(&mut socket).await;
+                write_sse_response(&mut socket, "200 OK", &body).await;
+                socket.shutdown().await.unwrap();
+                request
+            });
+            let (state, session) = stream_test_state(&endpoint).await;
+            {
+                let mut state = state.lock().await;
+                let profile = &mut state.config.models[0];
+                profile.api_protocol = Some(crate::config::ApiProtocol::AnthropicMessages);
+                profile.tool_protocol = Some(crate::config::ToolProtocol::ApiNative);
+            }
+            let buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+            let result = stream_request(&reqwest::Client::new(), state.clone(), tokio_util::sync::CancellationToken::new(), &endpoint, "stream-test", vec![json!({"role":"system","content":"Helpful"}),json!({"role":"user","content":"Context notice"}),json!({"role":"user","content":[{"type":"text","text":"Inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]})], buffer.clone(), false, false, ThinkingMode::Normal,crate::tools::ToolSchemaPolicy::read_only_inspection(),Some(&session),None).await;
+            if complete {
+                assert_eq!(result.unwrap().as_deref(), Some("tool_calls"));
+                let buffer = buffer.lock().await;
+                assert_eq!(buffer.tool_call_ids, vec!["call_read"]);
+                assert_eq!(buffer.native_tool_calls.len(), 1);
+                assert_eq!(buffer.native_tool_calls[0].arguments["path"], "a.rs");
+                assert_eq!(
+                    state
+                        .lock()
+                        .await
+                        .current_token_usage
+                        .as_ref()
+                        .unwrap()
+                        .total_tokens,
+                    21
+                );
+            } else {
+                assert_eq!(result.unwrap_err().kind, StreamFailureKind::PrematureEof);
+                assert!(buffer.lock().await.native_tool_calls.is_empty());
+            }
+            let request = String::from_utf8_lossy(&server.await.unwrap()).into_owned();
+            assert!(request.contains("anthropic-version: 2023-06-01"));
+            assert!(request.contains("\"system\""));
+            let body = request.split_once("\r\n\r\n").unwrap().1;
+            let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(
+                payload["messages"][0]["content"][0]["text"],
+                "Context notice"
+            );
+            assert_eq!(payload["messages"][0]["content"][1]["text"], "Inspect");
+            assert_eq!(payload["messages"][0]["content"][2]["type"], "image");
+        }
+    }
+
+    #[tokio::test]
     async fn responses_done_without_completed_is_a_premature_stream_failure() {
         use tokio::io::AsyncWriteExt;
         use tokio::net::TcpListener;
@@ -1633,7 +1706,7 @@ mod tests {
             error
                 .detail
                 .as_deref()
-                .is_some_and(|detail| detail.contains("before response.completed"))
+                .is_some_and(|detail| detail.contains("before its completion event"))
         );
         assert_eq!(buffer.lock().await.content, "partial");
         server.await.unwrap();
@@ -4015,6 +4088,11 @@ async fn stream_request_with_timeouts(
                 .unwrap_or_default()
         });
     let responses_api = matches!(api_protocol, crate::config::ApiProtocol::Responses);
+    let messages_api = matches!(api_protocol, crate::config::ApiProtocol::AnthropicMessages);
+    let copilot = profile
+        .as_ref()
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_copilot);
     let chatgpt_plan = is_chatgpt_credential(profile.as_ref());
     if chatgpt_plan && !profile.as_ref().is_some_and(chatgpt_endpoint_is_supported) {
         return Err(StreamFailure {
@@ -4028,7 +4106,11 @@ async fn stream_request_with_timeouts(
             partial_event_bytes: 0,
         });
     }
-    let aligned_messages = align_alternating_messages(messages);
+    let aligned_messages = if messages_api {
+        messages
+    } else {
+        align_alternating_messages(messages)
+    };
     let message_count = aligned_messages.len();
     let (tool_protocol, agent_mode, workspace_root) = {
         let s = state.lock().await;
@@ -4236,6 +4318,22 @@ async fn stream_request_with_timeouts(
             profile.as_ref(),
             thinking_mode,
         )
+    } else if messages_api {
+        crate::network::anthropic_messages::request_payload(
+            model,
+            &aligned_messages,
+            &native_tool_schemas,
+            output_token_limit.unwrap_or(max_tokens),
+            true,
+        )
+        .map_err(|error| StreamFailure {
+            kind: StreamFailureKind::ProviderError,
+            status: None,
+            detail: Some(format!("Messages history could not be serialized: {error}")),
+            bytes_received: 0,
+            events_received: 0,
+            partial_event_bytes: 0,
+        })?
     } else if responses_api {
         let mut payload = serde_json::json!({
             "model": model,
@@ -4290,7 +4388,7 @@ async fn stream_request_with_timeouts(
         // read-only task. Keep tools available, but do not require a tool call
         // after the recovery prompt explicitly asks for prose when no action
         // remains.
-        if !responses_api {
+        if !responses_api && !messages_api {
             apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
         }
         request_event!(
@@ -4394,6 +4492,9 @@ async fn stream_request_with_timeouts(
             serde_json::to_vec(&fallback_payload).ok()
         })
         .flatten();
+    let copilot_headers = copilot.then(|| {
+        crate::provider_auth::github_copilot::request_headers(&payload, expected_session_id)
+    });
     let request_start_time = std::time::Instant::now();
     drop(payload);
     let tool_schema_tokens = tool_schema_tokens_for_protocol(
@@ -4580,7 +4681,7 @@ async fn stream_request_with_timeouts(
     } else {
         None
     };
-    let chatgpt_client = if chatgpt_plan {
+    let chatgpt_client = if chatgpt_plan || copilot {
         Some(
             reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -4631,11 +4732,19 @@ async fn stream_request_with_timeouts(
             .post(&resolved_url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(request_payload_bytes.clone());
+        if let Some(headers) = &copilot_headers {
+            req = req.headers(headers.clone());
+        }
+        if messages_api {
+            req = req.header("anthropic-version", "2023-06-01");
+        }
         if let Some(ref key) = api_key {
             req = apply_api_key_headers(
                 req,
                 key,
-                !chatgpt_plan && profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
+                !chatgpt_plan
+                    && !copilot
+                    && profile.as_ref().is_some_and(|p| p.send_x_api_key_header()),
             );
         }
         let send_result = retry::race_cancellable(
@@ -4754,7 +4863,11 @@ async fn stream_request_with_timeouts(
                 return Err(StreamFailure {
                     kind: StreamFailureKind::ProviderError,
                     status: Some(code),
-                    detail: Some(err_body),
+                    detail: Some(if copilot {
+                        match code { 401 => "Copilot rejected the GitHub credential; reconnect with /login github-copilot new (refresh gh auth login first for CLI credentials).".into(), 403 => "Copilot access or this model is disabled; check your plan and organization policy, then /refresh github-copilot.".into(), 404 => "Copilot no longer offers this model endpoint; /refresh github-copilot and select an available model.".into(), _ => err_body }
+                    } else {
+                        err_body
+                    }),
                     bytes_received: 0,
                     events_received: 0,
                     partial_event_bytes: 0,
@@ -4821,6 +4934,7 @@ async fn stream_request_with_timeouts(
     let mut accumulators = ToolAccumulatorSet::default();
     let mut response_call_ids = HashMap::new();
     let mut response_argument_deltas = HashSet::new();
+    let mut messages_stream = crate::network::anthropic_messages::MessagesStream::default();
     let mut tool_argument_limit_reached = false;
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
 
@@ -4933,12 +5047,12 @@ async fn stream_request_with_timeouts(
                         stream_bytes_received += line_buf.len();
                         let trimmed = line_buf.trim();
                         if trimmed == "data: [DONE]" {
-                            if responses_api && !responses_completed {
+                            if (responses_api && !responses_completed) || (messages_api && !messages_stream.completed) {
                                 return Err(StreamFailure {
                                     kind: StreamFailureKind::PrematureEof,
                                     status: None,
                                     detail: Some(
-                                        "Responses SSE stream ended with [DONE] before response.completed"
+                                        "Provider SSE stream ended with [DONE] before its completion event"
                                             .to_owned(),
                                     ),
                                     bytes_received: stream_bytes_received,
@@ -4994,6 +5108,8 @@ async fn stream_request_with_timeouts(
                                         &mut response_argument_deltas,
                                     )
                                     .unwrap_or_else(|| serde_json::json!({}))
+                                } else if messages_api {
+                                    messages_stream.normalize(&value).unwrap_or_else(|| serde_json::json!({}))
                                 } else {
                                     value
                                 };

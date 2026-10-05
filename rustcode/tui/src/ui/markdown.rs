@@ -267,7 +267,13 @@ pub(super) fn push_wrapped_with_continuation(
         let text = span.content.into_owned();
         for word in text.split_inclusive(|c: char| c.is_whitespace()) {
             let word_width = word.width();
-            if word_width > width {
+            if word_width
+                > width.saturating_sub(
+                    continuation
+                        .as_ref()
+                        .map_or(0, |prefix| prefix.content.width()),
+                )
+            {
                 // Break long unspaced tokens (like path lists app/foo.rsapp/bar.rs) at '/' or '.' boundary if available
                 let mut chunk = String::new();
                 let mut chunk_w = 0;

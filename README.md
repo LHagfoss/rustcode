@@ -26,13 +26,14 @@
 `rustcode` is a lightweight Terminal User Interface (TUI) agent harness.
 Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
-Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/logout`; see the authentication guide for ChatGPT plan sign-in and API-key provider setup.
+Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/logout`; see the authentication guide for ChatGPT plan sign-in and API-key provider setup. GitHub Copilot connects with `/login github-copilot` (GitHub CLI credential or your own `RUSTCODE_COPILOT_CLIENT_ID` app); see the [Copilot setup guide](docs/github-copilot.md).
 
 ## Documentation
 
 - [Background tasks and cancellation](docs/background-tasks.md)
 - [ACP server integration](docs/acp.md)
 - [Provider authentication](docs/provider-auth.md)
+- [GitHub Copilot setup](docs/github-copilot.md)
 - [Provider stream traces](docs/provider-stream-traces.md)
 - [Per-request thinking routing](docs/thinking-router.md)
 - [Runtime and workspace architecture](docs/architecture.md)
@@ -263,6 +264,15 @@ filesystem permissions, credentials, SSH keys, and certificates are not treated
 as proven sandbox denials. Enabled network access is never blamed as a network
 restriction. Trusted execution and platforms without a native OS backend receive
 no sandbox attribution.
+
+The TUI shows active foreground tools with elapsed time and a bounded output
+preview, including `no output yet` for quiet work. `Esc` interrupts foreground
+work. Tool groups use `●` for running, `○` for queued, `✓` for completed, `×` for
+failed, and `−` for cancelled work, with indented continuation rows. Background
+tasks keep their task IDs and process IDs visible; `/ps` lists them and `/stop`
+stops them. A completed background result withheld during a foreground turn is
+marked `result ready` until the turn consumes it. Approvals and questions have
+separate waiting states.
 
 ## Background commands
 

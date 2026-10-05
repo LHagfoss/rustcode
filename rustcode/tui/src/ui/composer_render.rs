@@ -491,27 +491,149 @@ pub(super) fn format_token_count(tokens: u32) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ActiveWorkState {
+    Idle,
+    Generating,
+    Thinking,
+    Queued,
+    Foreground,
+    Approval,
+    Input,
+    Background,
+    ResultsReady,
+}
+
+impl ActiveWorkState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Generating => "Generating",
+            Self::Thinking => "Thinking",
+            Self::Queued => "Queued",
+            Self::Foreground => "Running",
+            Self::Approval => "Awaiting approval",
+            Self::Input => "Awaiting input",
+            Self::Background => "Background running",
+            Self::ResultsReady => "Results ready",
+        }
+    }
+}
+
+fn active_work_state(state: &RenderSnapshot) -> ActiveWorkState {
+    match state.status() {
+        AppStatus::AwaitingToolConfirmation => return ActiveWorkState::Approval,
+        AppStatus::AwaitingQuestion => return ActiveWorkState::Input,
+        _ => {}
+    }
+    if !state.live_tool_calls().is_empty() {
+        return if state
+            .live_tool_calls()
+            .iter()
+            .any(|call| call.execution_started)
+        {
+            ActiveWorkState::Foreground
+        } else {
+            ActiveWorkState::Queued
+        };
+    }
+    if !state.running_tools().is_empty() {
+        return ActiveWorkState::Foreground;
+    }
+    if *state.status() == AppStatus::Streaming {
+        return if state.current_thought_started_at().is_some() {
+            ActiveWorkState::Thinking
+        } else {
+            ActiveWorkState::Generating
+        };
+    }
+    if !state.pending_background_results().is_empty() {
+        return ActiveWorkState::ResultsReady;
+    }
+    if !state.background_tasks().is_empty() {
+        return ActiveWorkState::Background;
+    }
+    if *state.status() == AppStatus::Queued {
+        return ActiveWorkState::Queued;
+    }
+    ActiveWorkState::Idle
+}
+
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
-    let base_activity =
-        rustcode::controller::classify_activity(&state.status(), &state.running_tools());
-    let activity = if base_activity.kind == rustcode::controller::ActivityKind::ActionRequired {
-        base_activity
-    } else {
-        rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
+    active_work_state(state).label().to_owned()
+}
+
+/// The persistent bottom row reports the work currently blocking progress.
+/// Actual tool start times and pending completion records drive this projection.
+pub(super) fn active_work_indicator(state: &RenderSnapshot) -> Option<Line<'static>> {
+    let work = active_work_state(state);
+    let detail = match work {
+        ActiveWorkState::Approval => state
+            .pending_tool_confirmation()
+            .and_then(|items| items.first())
+            .map(|item| format!(" · {}", item.tool_name))
+            .unwrap_or_default(),
+        ActiveWorkState::Input => " · answer question".to_owned(),
+        ActiveWorkState::Foreground | ActiveWorkState::Queued => {
+            if let Some(call) = state
+                .live_tool_calls()
+                .iter()
+                .find(|call| call.execution_started)
+                .or_else(|| state.live_tool_calls().first())
+            {
+                let extra = state.live_tool_calls().len().saturating_sub(1);
+                let identity = if call.target.is_empty() || call.target == "?" {
+                    call.action.clone()
+                } else {
+                    format!("{} {}", call.action, call.target)
+                };
+                let elapsed = if call.execution_started {
+                    format!(
+                        " · {}",
+                        fmt_elapsed_compact(call.started_at.elapsed().as_secs())
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{elapsed} · {identity}{} · esc interrupt",
+                    if extra > 0 {
+                        format!(" · +{extra}")
+                    } else {
+                        String::new()
+                    }
+                )
+            } else if matches!(work, ActiveWorkState::Queued) {
+                // Queued with nothing started yet: keep the model visible so
+                // the running row stays findable; there is nothing to
+                // interrupt, so no cancel hint.
+                format!(" · {}", state.model_name())
+            } else {
+                format!(" · {} · esc interrupt", state.running_tools().join(", "))
+            }
+        }
+        ActiveWorkState::Background => format!(" · {}", background_terminal_summary(state)),
+        ActiveWorkState::ResultsReady => format!(
+            " · {} waiting for consumption",
+            state.pending_background_results().len()
+        ),
+        _ => return None,
     };
-    if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
-        return "Action Required".to_string();
-    }
-    if activity.kind == rustcode::controller::ActivityKind::Queued {
-        return "Queued".to_string();
-    }
-    if activity.kind == rustcode::controller::ActivityKind::Ready {
-        return "Idle".to_string();
-    }
-    if state.current_thought_started_at().is_some() {
-        return "Thinking".to_string();
-    }
-    "Working".to_string()
+    let marker = match work {
+        ActiveWorkState::Approval | ActiveWorkState::Input => '!',
+        ActiveWorkState::ResultsReady => '✓',
+        _ => running_spinner_char(state),
+    };
+    Some(Line::from(vec![
+        Span::styled(
+            format!("{marker} {}", work.label()),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        ),
+        Span::styled(
+            detail,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        ),
+    ]))
 }
 
 fn background_spinner_frame() -> char {
@@ -571,26 +693,79 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
 }
 
 pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
+    background_command_lines_with_width(state, u16::MAX)
+}
+
+pub(super) fn background_command_lines_with_width(
+    state: &RenderSnapshot,
+    width: u16,
+) -> Vec<Line<'static>> {
     const MAX_VISIBLE_COMMANDS: usize = 3;
+    if state.background_tasks().is_empty() && state.pending_background_results().is_empty() {
+        return Vec::new();
+    }
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let mut lines = state
-        .background_tasks()
+    let mut lines = vec![Line::from(Span::styled("• Background", style))];
+    for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
+        let command = rustcode::controller::background_command_label(&task.command, 240);
+        let pid = task
+            .child_pid
+            .map(|pid| format!(" · pid {pid}"))
+            .unwrap_or_default();
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![Span::styled(
+                format!(
+                    "  ● {} · running {}{pid} · {command}",
+                    task.id,
+                    fmt_elapsed_compact(task.started_at.elapsed().as_secs())
+                ),
+                style,
+            )],
+            usize::from(width).max(1),
+            Some(Span::raw("    ")),
+        );
+    }
+    for result in state
+        .pending_background_results()
         .iter()
         .take(MAX_VISIBLE_COMMANDS)
-        .map(|task| {
-            let command = rustcode::controller::background_command_label(&task.command, 240);
-            Line::from(Span::styled(format!("  └ {command}"), style))
-        })
-        .collect::<Vec<_>>();
+    {
+        let (marker, status) = if result.cancelled {
+            ('−', "cancelled")
+        } else if result.success {
+            ('✓', "completed")
+        } else {
+            ('×', "failed")
+        };
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![Span::styled(
+                format!("  {marker} {} · {status} · result ready", result.id),
+                style,
+            )],
+            usize::from(width).max(1),
+            Some(Span::raw("    ")),
+        );
+    }
     let omitted = state
         .background_tasks()
         .len()
-        .saturating_sub(MAX_VISIBLE_COMMANDS);
+        .saturating_sub(MAX_VISIBLE_COMMANDS)
+        + state
+            .pending_background_results()
+            .len()
+            .saturating_sub(MAX_VISIBLE_COMMANDS);
     if omitted > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  └ … {omitted} more (/ps to view)"),
-            style,
-        )));
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![Span::styled(
+                format!("    … {omitted} more (/ps to view)"),
+                style,
+            )],
+            usize::from(width).max(1),
+            Some(Span::raw("    ")),
+        );
     }
     lines
 }
