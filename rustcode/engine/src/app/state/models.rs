@@ -887,6 +887,8 @@ pub struct LiveToolCall {
     pub tool_name: String,
     pub action: String,
     pub target: String,
+    /// Command working directory supplied to execution, if available.
+    pub cwd: Option<String>,
     pub execution_started: bool,
     pub output: std::collections::VecDeque<LiveToolOutputChunk>,
     pub omitted_output_bytes: usize,
@@ -1001,6 +1003,7 @@ impl LiveToolCall {
             tool_name: tool_name.into(),
             action: action.into(),
             target: target.into(),
+            cwd: None,
             execution_started: true,
             output: std::collections::VecDeque::new(),
             omitted_output_bytes: 0,

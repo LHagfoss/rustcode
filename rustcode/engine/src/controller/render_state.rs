@@ -160,6 +160,7 @@ pub struct RenderState {
 
     // --- background tasks -------------------------------------------------
     pub background_tasks: Vec<TaskDisplay>,
+    pub pending_background_results: Vec<super::BackgroundResultDisplay>,
     /// True while a turn is waiting on a background task to reach a terminal
     /// state.
     pub waiting_for_background_terminal: bool,
@@ -357,6 +358,18 @@ pub fn render_state(state: &AppState) -> RenderState {
         active_tool_protocol: state.active_tool_protocol(),
 
         background_tasks: super::background_task_snapshots(&state.active_session_id),
+        pending_background_results: state
+            .pending_background_outputs
+            .iter()
+            .map(|pending| super::BackgroundResultDisplay {
+                id: pending.task_id.clone(),
+                success: pending.output.success,
+                cancelled: matches!(
+                    pending.output.error_kind,
+                    Some(rustcode_core::ToolErrorKind::Cancelled)
+                ),
+            })
+            .collect(),
         waiting_for_background_terminal: state.background_turn_context.is_some(),
 
         subagents: capture_subagents

@@ -54,7 +54,7 @@ pub(crate) struct TranscriptState {
     /// Cleared as soon as the tail is visible again, so the affordance cannot
     /// claim unseen activity the user has already seen.
     unseen_activity: bool,
-    /// `(history revision, live stream length)` the last projection consumed,
+    /// `(history revision, live content fingerprint)` the last projection consumed,
     /// so the next one can tell that new output arrived below the reader.
     last_content: Option<(u64, usize)>,
     /// The row the affordance is painted into, owned by the render layer.
@@ -100,7 +100,7 @@ impl Default for TranscriptState {
     }
 }
 
-/// The committed tail at the last painted reading viewport. A fixed offset
+/// The committed and live tail at the last painted reading viewport. A fixed offset
 /// from the bottom would move the reader when new rows arrive below them.
 #[derive(Clone, Copy)]
 pub(super) struct ReadingAnchor {
@@ -111,6 +111,7 @@ pub(super) struct ReadingAnchor {
     pub(super) history_len: usize,
     pub(super) tail_start: usize,
     pub(super) tail_rows: usize,
+    pub(super) live_rows: usize,
 }
 
 /// Rows the mouse wheel moves per tick.
@@ -223,7 +224,7 @@ impl TranscriptState {
         }
     }
 
-    /// `(history revision, live stream length)` the last projection consumed.
+    /// `(history revision, live content fingerprint)` the last projection consumed.
     pub(super) fn last_content(&self) -> Option<(u64, usize)> {
         self.last_content
     }
@@ -562,10 +563,6 @@ fn is_exploration_tool(name: &str) -> bool {
     rustcode_core::activity::is_exploration_tool(name)
 }
 
-fn is_editing_tool(name: &str) -> bool {
-    rustcode_core::activity::is_editing_tool(name)
-}
-
 pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {
     call.execution_started || (!call.target.is_empty() && call.target != "?")
 }
@@ -612,6 +609,22 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     verbosity: &Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
+    render_live_tool_cell_at(
+        calls,
+        width,
+        verbosity,
+        show_picker,
+        std::time::Instant::now(),
+    )
+}
+
+pub(super) fn render_live_tool_cell_at(
+    calls: &[LiveToolCall],
+    width: u16,
+    verbosity: &Verbosity,
+    show_picker: bool,
+    now: std::time::Instant,
+) -> Vec<Line<'static>> {
     let calls = calls
         .iter()
         .filter(|call| is_live_tool_call_visible(call))
@@ -628,7 +641,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         let call = &calls[0];
         let title_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
-        let command = truncate_to_width(&call.target, (width as usize).saturating_sub(11).max(1));
+        let command = call.target.clone();
         let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
             .into_iter()
             .next()
@@ -637,9 +650,19 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         let header = vec![
             Span::styled("• ", title_style),
             Span::styled("Running", title_style),
+            Span::styled(
+                format!(
+                    " · {}{}",
+                    super::fmt_elapsed_compact(
+                        now.saturating_duration_since(call.started_at).as_secs()
+                    ),
+                    if width >= 34 { " · esc interrupt" } else { "" }
+                ),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
         ];
         let mut invocation = vec![Span::styled(
-            "  └ ",
+            "  ● ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         )];
         invocation.push(Span::styled(
@@ -651,10 +674,40 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         invocation.extend(command_spans);
-        let mut lines = vec![Line::from(header), Line::from(invocation)];
-
+        let mut lines = vec![Line::from(header)];
+        push_wrapped_with_continuation(
+            &mut lines,
+            invocation,
+            usize::from(width).max(1),
+            Some(Span::raw("    ")),
+        );
+        if let Some(cwd) = &call.cwd {
+            push_wrapped_with_continuation(
+                &mut lines,
+                vec![Span::styled(
+                    format!("    cwd: {cwd}"),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                )],
+                usize::from(width).max(1),
+                Some(Span::raw("    ")),
+            );
+        }
+        // High verbosity never shows live output in this cell, so the quiet
+        // placeholder is omitted there too: output arriving mid-turn must not
+        // change the cell height while the reader is anchored above it.
         if matches!(verbosity, Verbosity::High) {
             return lines;
+        }
+        if call.output.iter().all(|chunk| chunk.text.trim().is_empty()) {
+            push_wrapped_with_continuation(
+                &mut lines,
+                vec![Span::styled(
+                    "    no output yet",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                )],
+                usize::from(width).max(1),
+                Some(Span::raw("    ")),
+            );
         }
 
         let mut output = Vec::<(String, bool)>::new();
@@ -738,67 +791,10 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         return lines;
     }
 
-    if !has_speculative && calls.len() == 1 && calls[0].tool_name == "render_video" {
-        let call = &calls[0];
-        let title_style =
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
-        let child_width = (width as usize).saturating_sub(6).max(1);
-        let child = if call.target.is_empty() || call.target == "?" {
-            call.action.clone()
-        } else {
-            truncate_to_width(&call.target, child_width)
-        };
-        let title = if call.execution_started {
-            "Running"
-        } else {
-            "Queued"
-        };
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("• ", title_style),
-                Span::styled(title, title_style),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "  └ ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    child,
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]),
-        ];
-        if !matches!(verbosity, Verbosity::High)
-            && let Some(progress) = call
-                .output
-                .iter()
-                .flat_map(|chunk| chunk.text.lines())
-                .filter(|line| !line.trim().is_empty())
-                .next_back()
-        {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "    ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    truncate_to_width(progress.trim(), (width as usize).saturating_sub(4)),
-                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
-        }
-        return lines;
-    }
-
     let all_exploration = calls
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));
-    let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
-    // Queued projections have visible targets but no execution yet; show
-    // Running/Exploring only after at least one call starts (#1495).
-    let all_speculative = calls.iter().all(|call| !call.execution_started);
-    let label = if all_speculative {
+    let label = if calls.iter().all(|call| !call.execution_started) {
         "Queued"
     } else if all_exploration {
         "Exploring"
@@ -806,69 +802,90 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         "Running"
     };
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let detail_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", title_style),
         Span::styled(label, title_style),
     ])];
-
-    let child_width = (width as usize).saturating_sub(6).max(1);
-    for (index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
-        let prefix = if index == 0 { "  └ " } else { "    " };
-        let mut spans = vec![Span::styled(
-            prefix,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        )];
-        if all_editing {
-            spans.push(Span::styled(
-                call.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-            if !call.target.is_empty() && call.target != "?" {
-                spans.push(Span::styled(
-                    " ",
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-                spans.push(Span::styled(
-                    truncate_to_width(
-                        &call.target,
-                        child_width.saturating_sub(call.action.chars().count() + 1),
-                    ),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
-        } else {
-            spans.push(Span::styled(
-                call.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-            if !call.target.is_empty() && call.target != "?" {
-                if call.action == "Bash" {
-                    spans.push(Span::styled(
-                        " $ ",
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ));
-                    let command = truncate_to_width(&call.target, child_width.saturating_sub(2));
-                    if let Some(command_line) =
-                        highlight_shell_command(&command, COLOR_BG(), show_picker)
-                            .into_iter()
-                            .next()
-                    {
-                        spans.extend(command_line.spans);
-                    }
+    for call in calls.iter().take(MAX_LIVE_CHILDREN) {
+        let mut spans = vec![
+            Span::styled(
+                if call.execution_started {
+                    "  ● "
                 } else {
-                    spans.push(Span::styled(
-                        format!(" {}", truncate_to_width(&call.target, child_width)),
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ));
-                }
-            }
+                    "  ○ "
+                },
+                detail_style,
+            ),
+            Span::styled(
+                call.action.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ),
+        ];
+        if !call.target.is_empty() && call.target != "?" {
+            spans.push(Span::raw(if call.action == "Bash" { " $ " } else { " " }));
+            spans.push(Span::styled(
+                call.target.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
         }
-        lines.push(Line::from(spans));
+        if calls
+            .iter()
+            .filter(|other| other.tool_name == call.tool_name && other.target == call.target)
+            .count()
+            > 1
+        {
+            spans.push(Span::styled(format!(" · {}", call.key), detail_style));
+        }
+        spans.push(Span::styled(
+            if call.execution_started {
+                format!(
+                    " · running {}",
+                    super::fmt_elapsed_compact(
+                        now.saturating_duration_since(call.started_at).as_secs()
+                    )
+                )
+            } else {
+                " · queued".to_owned()
+            },
+            detail_style,
+        ));
+        push_wrapped_with_continuation(
+            &mut lines,
+            spans,
+            usize::from(width).max(1),
+            Some(Span::raw("    ")),
+        );
+        if call.execution_started {
+            let latest = call
+                .output
+                .iter()
+                .flat_map(|chunk| chunk.text.lines())
+                .filter(|line| !line.trim().is_empty())
+                .next_back();
+            let text = if matches!(verbosity, Verbosity::High) && latest.is_some() {
+                "output received".to_owned()
+            } else {
+                latest
+                    .map(rustcode_tool_protocol::text::strip_ansi_escapes)
+                    .unwrap_or_else(|| "no output yet".to_owned())
+            };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "    {}",
+                    truncate_to_width(&text, usize::from(width).saturating_sub(4))
+                ),
+                detail_style,
+            )));
+        }
     }
     if calls.len() > MAX_LIVE_CHILDREN {
         lines.push(Line::from(Span::styled(
-            format!("    … +{} more", calls.len() - MAX_LIVE_CHILDREN),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+            truncate_to_width(
+                &format!("    … +{} more", calls.len() - MAX_LIVE_CHILDREN),
+                usize::from(width),
+            ),
+            detail_style,
         )));
     }
 

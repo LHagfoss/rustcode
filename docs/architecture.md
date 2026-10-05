@@ -87,6 +87,25 @@ Interactive, headless, and ACP consumers have separate adapters:
   prune a subscription while its terminal event is still in flight.
 - Slow task subscribers are disconnected rather than allowed to block workers.
 
+## TUI transcript scrolling
+
+The viewport projects committed history and the current live assistant/tool
+cell into one sequence of wrapped rows. The live cell is measured before the
+combined viewport is sliced, so its older rows remain reachable while output
+grows. Only the history suffix needed for the viewport and scroll offset is
+rendered; committed blocks and the live assistant cell reuse their presentation
+caches.
+
+A zero scroll offset follows the newest row. Manual scrolling records the
+committed tail and live row counts at the current width; subsequent frames
+adjust the offset by rows added below the reader, including the handoff from
+live output to completed or cancelled history. Height changes preserve the top
+reading row. Width changes rewrap the semantic cells and establish a new
+reading anchor. The existing return-to-bottom control resumes following and
+clears unseen activity. Mouse selections continue to project their immutable
+snapshot, including live text, so streaming cannot change selected or copied
+rows.
+
 ## Build and CI boundaries
 
 Changes under `rustcode/` and CI helper scripts trigger the required Linux test

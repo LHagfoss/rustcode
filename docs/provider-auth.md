@@ -46,6 +46,10 @@ Use the exact account ID printed by `/auth status` in `account`; the example mod
 
 See [OpenAI's Sign in with ChatGPT overview](https://developers.openai.com/siwc/token-sharing-open-source), [registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), and [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) for current scope, token, and request requirements.
 
+## GitHub Copilot
+
+`/login github-copilot` connects with the installed GitHub CLI credential or, when `RUSTCODE_COPILOT_CLIENT_ID` names your own OAuth app, that app's device flow. It installs `copilot/<id>` profiles from the authenticated model catalog; `/refresh github-copilot` re-fetches them. See [GitHub Copilot setup](github-copilot.md) for prerequisites, commands, model rules, and limitations.
+
 ## Add an API-key provider
 
 Provider definitions can be added to the configuration without changing existing model profiles:

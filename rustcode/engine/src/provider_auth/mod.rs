@@ -1,6 +1,7 @@
 //! Provider credentials live in the OS credential store. This module keeps
 //! only non-secret account bindings in RustCode's owner-only config folder.
 
+pub(crate) mod github_copilot;
 mod openai;
 mod rate_limits;
 mod store;
@@ -20,6 +21,8 @@ pub use store::{CredentialStore, NativeCredentialStore};
 pub enum AuthMethod {
     ApiKey,
     ChatGpt,
+    #[serde(rename = "github_copilot")]
+    GitHubCopilot,
 }
 
 impl AuthMethod {
@@ -33,6 +36,7 @@ impl fmt::Debug for AuthMethod {
         f.write_str(match self {
             Self::ApiKey => "ApiKey",
             Self::ChatGpt => "ChatGpt",
+            Self::GitHubCopilot => "GitHubCopilot",
         })
     }
 }
@@ -47,6 +51,10 @@ pub struct CredentialRef {
 impl CredentialRef {
     pub fn is_chatgpt(&self) -> bool {
         self.method.is_chatgpt()
+    }
+
+    pub fn is_copilot(&self) -> bool {
+        self.provider == "github-copilot" && self.method == AuthMethod::GitHubCopilot
     }
 }
 
@@ -124,6 +132,9 @@ pub async fn resolve_profile_credential(profile: &ModelProfile) -> Result<Option
         AuthMethod::ChatGpt => openai::resolve_access_token(binding, account)
             .await
             .map(Some),
+        AuthMethod::GitHubCopilot => github_copilot::resolve_access_token(profile, account)
+            .await
+            .map(Some),
     }
 }
 
@@ -137,6 +148,21 @@ pub fn has_saved_account(provider: &str, account: &str) -> bool {
 }
 
 pub async fn execute_command(input: &str, config: &AppConfig) -> Result<AuthCommandResult> {
+    execute_command_with_progress(
+        input,
+        config,
+        &tokio_util::sync::CancellationToken::new(),
+        None,
+    )
+    .await
+}
+
+pub async fn execute_command_with_progress(
+    input: &str,
+    config: &AppConfig,
+    cancel: &tokio_util::sync::CancellationToken,
+    progress: Option<tokio::sync::mpsc::Sender<String>>,
+) -> Result<AuthCommandResult> {
     let mut words = input
         .split_whitespace()
         .map(str::to_owned)
@@ -166,6 +192,38 @@ pub async fn execute_command(input: &str, config: &AppConfig) -> Result<AuthComm
             profile: None,
             profiles: Vec::new(),
         }),
+        ["login", provider] if provider.eq_ignore_ascii_case("github-copilot") => {
+            github_copilot::login(config, None, cancel, progress).await
+        }
+        ["login", provider, account] if provider.eq_ignore_ascii_case("github-copilot") => {
+            github_copilot::login(config, Some(account), cancel, progress).await
+        }
+        ["account", "refresh"] | ["refresh"]
+            if config
+                .models
+                .iter()
+                .find(|profile| profile.name == config.default.big())
+                .and_then(|profile| profile.credential.as_ref())
+                .is_some_and(CredentialRef::is_copilot) =>
+        {
+            github_copilot::refresh_catalog(config, None)
+                .await?
+                .ok_or_else(|| anyhow!("select an active Copilot account"))
+        }
+        ["account", "refresh", provider] | ["refresh", provider]
+            if provider.eq_ignore_ascii_case("github-copilot") =>
+        {
+            github_copilot::refresh_catalog(config, None)
+                .await?
+                .ok_or_else(|| anyhow!("select an active Copilot account"))
+        }
+        ["account", "refresh", provider, account] | ["refresh", provider, account]
+            if provider.eq_ignore_ascii_case("github-copilot") =>
+        {
+            github_copilot::refresh_catalog(config, Some(account))
+                .await?
+                .ok_or_else(|| anyhow!("no active Copilot account has that account ID"))
+        }
         ["account", "refresh"] | ["refresh"] => openai::refresh_catalog(config, None)
             .await?
             .ok_or_else(|| anyhow!("select an active ChatGPT profile or provide its account ID")),
@@ -335,6 +393,12 @@ async fn store_api_key(
 }
 
 async fn logout(provider: &str, account: Option<&str>) -> Result<AuthCommandResult> {
+    let _copilot_lock = if provider.eq_ignore_ascii_case("github-copilot") {
+        github_copilot::cancel_login();
+        Some(github_copilot::account_lock().await)
+    } else {
+        None
+    };
     let rows = load_accounts()?;
     let matches = rows
         .into_iter()
@@ -372,6 +436,7 @@ async fn logout(provider: &str, account: Option<&str>) -> Result<AuthCommandResu
             "access-token",
             "refresh-token",
             "id-token",
+            "copilot-token",
         ] {
             if secret_store()
                 .delete(&row.provider, &row.account, kind)
@@ -420,6 +485,7 @@ fn status_message_for(config: &AppConfig, rows: &[AccountStatus]) -> String {
                     .map(|method| match method {
                         AuthMethod::ApiKey => "api-key",
                         AuthMethod::ChatGpt => "ChatGPT",
+                        AuthMethod::GitHubCopilot => "GitHub Copilot",
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -508,7 +574,12 @@ fn account_panel_message(config: &AppConfig) -> String {
         .iter()
         .find(|p| p.name == config.default.big())
         .and_then(|profile| profile.credential.as_ref())
-        .is_some_and(|binding| binding.method == AuthMethod::ChatGpt);
+        .is_some_and(|binding| {
+            matches!(
+                binding.method,
+                AuthMethod::ChatGpt | AuthMethod::GitHubCopilot
+            )
+        });
     if refreshable {
         format!("{summary}\n\nRefresh the model catalog: /refresh")
     } else {
@@ -530,6 +601,12 @@ pub fn provider_usage_summary(config: &AppConfig) -> String {
         })
         .or_else(|| active.and_then(|profile| profile.engine.as_deref()))
         .unwrap_or("selected provider");
+    if active
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(CredentialRef::is_copilot)
+    {
+        return "GitHub Copilot subscription usage, AI credits, and model access are managed by GitHub. Local token totals do not measure remaining Copilot quota; check your GitHub Copilot usage settings.".into();
+    }
     if active
         .and_then(|profile| profile.credential.as_ref())
         .is_some_and(CredentialRef::is_chatgpt)
@@ -627,6 +704,12 @@ pub fn apply_auth_result(
     if merged.is_empty() {
         return None;
     }
+    if binding.is_copilot() {
+        config.models.retain(|candidate| {
+            candidate.credential.as_ref() != Some(binding)
+                || merged.iter().any(|model| model.model == candidate.model)
+        });
+    }
 
     let preferred_model = config
         .models
@@ -683,6 +766,12 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     let credential = profile.credential.clone();
     let engine = profile.engine.clone();
     let tool_protocol = profile.tool_protocol.clone();
+    let api_protocol = profile.api_protocol;
+    let provider_context_window = profile.provider_context_window;
+    let supports_reasoning_effort = profile.supports_reasoning_effort;
+    let max_output_tokens = profile.max_output_tokens;
+    let supports_thinking_budget = profile.supports_thinking_budget;
+    let hard_effective_limit = profile.hard_effective_limit;
     let supports_vision = profile.supports_vision;
     let context_window = profile.context_window;
     *profile = existing.clone();
@@ -693,9 +782,28 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     profile.api_key = None;
     profile.env_key = None;
     profile.engine = existing.engine.clone().or(engine);
-    profile.api_protocol = Some(ApiProtocol::Responses);
+    profile.api_protocol = api_protocol;
+    profile.provider_context_window = provider_context_window;
+    profile.supports_reasoning_effort = supports_reasoning_effort;
+    profile.supports_thinking_budget = supports_thinking_budget;
+    profile.hard_effective_limit = existing
+        .hard_effective_limit
+        .or(hard_effective_limit)
+        .map(|limit| hard_effective_limit.map_or(limit, |max| limit.min(max)));
+    profile.max_output_tokens = existing
+        .max_output_tokens
+        .or(max_output_tokens)
+        .map(|limit| max_output_tokens.map_or(limit, |max| limit.min(max)));
     profile.tool_protocol = existing.tool_protocol.clone().or(tool_protocol);
-    profile.supports_vision = existing.supports_vision.or(supports_vision);
+    profile.supports_vision = if profile
+        .credential
+        .as_ref()
+        .is_some_and(CredentialRef::is_copilot)
+    {
+        supports_vision
+    } else {
+        existing.supports_vision.or(supports_vision)
+    };
     profile.context_window = existing.context_window.or(context_window);
 }
 
@@ -752,7 +860,12 @@ fn unique_account_scoped_name(
         .filter(char::is_ascii_alphanumeric)
         .take(8)
         .collect::<String>();
-    let base = format!("chatgpt/{slug}-{account_suffix}");
+    let prefix = if binding.is_copilot() {
+        "copilot"
+    } else {
+        "chatgpt"
+    };
+    let base = format!("{prefix}/{slug}-{account_suffix}");
     let mut name = base.clone();
     let mut suffix = 2;
     while name_is_taken_by_other_account(config, &name, model, binding) {
@@ -791,6 +904,7 @@ fn auth_method_label(method: AuthMethod) -> &'static str {
     match method {
         AuthMethod::ApiKey => "api-key",
         AuthMethod::ChatGpt => "ChatGPT",
+        AuthMethod::GitHubCopilot => "GitHub Copilot",
     }
 }
 
@@ -836,6 +950,18 @@ fn validate_profile_endpoint(profile: &ModelProfile, account: &AccountStatus) ->
         || profile_url.fragment().is_some()
     {
         bail!("credential-bound profile URLs cannot contain userinfo, query, or fragment data");
+    }
+    if account.method == AuthMethod::GitHubCopilot {
+        if account.provider != "github-copilot" {
+            bail!("Copilot credentials require the github-copilot provider");
+        }
+        github_copilot::validate_endpoint(&account.endpoint)?;
+        let allowed = ["/chat/completions", "/responses", "/v1/messages"];
+        if !allowed.contains(&profile_url.path())
+            || !allowed.contains(&url::Url::parse(&profile.endpoint_url())?.path())
+        {
+            bail!("Copilot credentials require a supported model endpoint");
+        }
     }
     if account.method == AuthMethod::ChatGpt && !is_canonical_chatgpt_responses_url(&profile.url) {
         bail!("ChatGPT credentials may only be used with https://api.openai.com/v1/responses");
@@ -976,7 +1102,7 @@ mod tests {
     use std::sync::Mutex;
 
     #[derive(Default)]
-    struct MemoryStore(Mutex<HashMap<(String, String, String), String>>);
+    pub(super) struct MemoryStore(Mutex<HashMap<(String, String, String), String>>);
 
     impl CredentialStore for MemoryStore {
         fn get_secret(&self, provider: &str, account: &str, kind: &str) -> Result<String> {
@@ -1001,6 +1127,41 @@ mod tests {
                 .remove(&(provider.into(), account.into(), kind.into()));
             Ok(())
         }
+    }
+
+    #[test]
+    fn catalog_refresh_preserves_advertised_chat_protocol_and_provider_limits() {
+        let mut config = AppConfig::default();
+        let mut profile = ModelProfile {
+            name: "copilot/chat".into(),
+            model: "chat-model".into(),
+            url: "https://api.githubcopilot.com/chat/completions".into(),
+            api_protocol: Some(ApiProtocol::ChatCompletions),
+            credential: Some(CredentialRef {
+                provider: "github-copilot".into(),
+                account: "github-1".into(),
+                method: AuthMethod::ApiKey,
+            }),
+            provider_context_window: Some(32000),
+            ..Default::default()
+        };
+        config.models.push(profile.clone());
+        profile.provider_context_window = Some(64000);
+        apply_auth_result(
+            &mut config,
+            &AuthCommandResult {
+                message: String::new(),
+                profile: Some(profile.clone()),
+                profiles: vec![profile],
+            },
+        );
+        let refreshed = config
+            .models
+            .iter()
+            .find(|p| p.model == "chat-model")
+            .unwrap();
+        assert_eq!(refreshed.api_protocol, Some(ApiProtocol::ChatCompletions));
+        assert_eq!(refreshed.provider_context_window, Some(64000));
     }
 
     #[test]

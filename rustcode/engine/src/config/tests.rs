@@ -1922,3 +1922,20 @@ env_key = "SECRET"
     apply_project_toml_config(&mut config, file);
     assert!(config.models.iter().all(|m| m.thinking_router.is_none()));
 }
+
+#[test]
+fn anthropic_messages_profile_selects_its_native_endpoint_and_output_field() {
+    let profile: super::ModelProfile = serde_json::from_value(serde_json::json!({
+        "name": "copilot/claude", "model": "claude", "url": "https://api.githubcopilot.com",
+        "api_protocol": "anthropic_messages"
+    }))
+    .unwrap();
+    assert_eq!(
+        profile.endpoint_url(),
+        "https://api.githubcopilot.com/v1/messages"
+    );
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        super::OutputTokenField::MaxTokens
+    );
+}
