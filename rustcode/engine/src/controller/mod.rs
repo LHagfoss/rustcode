@@ -35,7 +35,7 @@ pub use crate::provider_auth::{
 };
 pub use apply::{
     apply_approval_decision, apply_approval_decision_for_batch, apply_background_task_event,
-    apply_question_answer, spawn_observed_orchestrator,
+    apply_question_answer, refresh_workspace_location_async, spawn_observed_orchestrator,
 };
 pub use attachments::save_image_attachment;
 pub use config::{

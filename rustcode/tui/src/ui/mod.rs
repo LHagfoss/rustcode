@@ -83,11 +83,7 @@ use ratatui::{
 use render_snapshot::RenderSnapshot;
 use rustcode::controller::{AppStatus, ChatMessage, RenderState};
 use std::hash::{Hash, Hasher};
-#[cfg(not(test))]
-use std::sync::OnceLock;
 use std::time::Duration;
-#[cfg(not(test))]
-use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn safe_byte_index(s: &str, byte_pos: usize) -> usize {

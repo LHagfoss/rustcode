@@ -20,6 +20,215 @@ pub(super) struct InputContext<'a> {
     pub(super) composer: &'a ui::Composer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickerSearchTarget {
+    Model,
+    Command,
+}
+
+/// Bound list movement at the visible endpoints so repeated arrow presses can
+/// reach every row without unexpectedly jumping back to the top.
+fn move_picker_selection(selected: usize, len: usize, next: bool) -> usize {
+    if len == 0 {
+        0
+    } else if next {
+        selected.min(len - 1).saturating_add(1).min(len - 1)
+    } else {
+        selected.min(len - 1).saturating_sub(1)
+    }
+}
+
+fn picker_selection_for_key(selected: usize, len: usize, key: KeyCode) -> Option<usize> {
+    match key {
+        KeyCode::Up => Some(move_picker_selection(selected, len, false)),
+        KeyCode::Down => Some(move_picker_selection(selected, len, true)),
+        _ => None,
+    }
+}
+
+fn filtered_command_picker_items(search: &str) -> Vec<&'static crate::ui::PaletteItem> {
+    let search = search.to_lowercase();
+    crate::ui::PALETTE_ITEMS
+        .iter()
+        .filter(|item| {
+            rustcode::controller::fuzzy_matches(&item.name, &search)
+                || rustcode::controller::fuzzy_matches(&item.group, &search)
+                || rustcode::controller::fuzzy_matches(&item.shortcut, &search)
+        })
+        .collect()
+}
+
+/// Route a key from a picker search field through the same editing actions as
+/// the chat composer. Cursor positions are byte offsets and stay on UTF-8
+/// boundaries, while Up/Down remain reserved for list navigation.
+fn handle_picker_search_key(
+    state: &mut AppState,
+    target: PickerSearchTarget,
+    key: crossterm::event::KeyEvent,
+) -> bool {
+    let (query, cursor, selected) = match target {
+        PickerSearchTarget::Model => (
+            &mut state.model_picker_search,
+            &mut state.model_picker_search_cursor,
+            &mut state.model_picker_index,
+        ),
+        PickerSearchTarget::Command => (
+            &mut state.command_picker_search,
+            &mut state.command_picker_search_cursor,
+            &mut state.command_picker_index,
+        ),
+    };
+    let before = query.clone();
+    let handled = edit_picker_search(query, cursor, key);
+    if *query != before {
+        *selected = 0;
+    }
+    handled
+}
+
+fn edit_picker_search(
+    query: &mut String,
+    cursor: &mut usize,
+    key: crossterm::event::KeyEvent,
+) -> bool {
+    use crate::ui::keymap::KeyAction;
+
+    *cursor = picker_cursor_boundary(query, *cursor);
+    let action = crate::ui::keymap::KeyMap::from_environment().resolve(key);
+    match action {
+        KeyAction::Insert(character) => {
+            query.insert(*cursor, character);
+            *cursor += character.len_utf8();
+        }
+        KeyAction::MoveLeft => *cursor = previous_char_boundary(query, *cursor),
+        KeyAction::MoveRight => *cursor = next_char_boundary(query, *cursor),
+        KeyAction::MoveWordLeft => *cursor = picker_word_left(query, *cursor),
+        KeyAction::MoveWordRight => *cursor = picker_word_right(query, *cursor),
+        KeyAction::MoveStart => *cursor = query[..*cursor].rfind('\n').map_or(0, |i| i + 1),
+        KeyAction::MoveEnd => {
+            *cursor = query[*cursor..]
+                .find('\n')
+                .map_or(query.len(), |i| *cursor + i)
+        }
+        KeyAction::DeleteBackward => {
+            let start = previous_char_boundary(query, *cursor);
+            query.replace_range(start..*cursor, "");
+            *cursor = start;
+        }
+        KeyAction::DeleteForward => {
+            let end = next_char_boundary(query, *cursor);
+            query.replace_range(*cursor..end, "");
+        }
+        KeyAction::DeleteWordBackward => {
+            let start = picker_word_left(query, *cursor);
+            query.replace_range(start..*cursor, "");
+            *cursor = start;
+        }
+        KeyAction::DeleteWordForward => {
+            let end = picker_word_right(query, *cursor);
+            query.replace_range(*cursor..end, "");
+        }
+        KeyAction::KillLineStart => {
+            let end = *cursor;
+            let start = query[..end].rfind('\n').map_or(0, |i| i + 1);
+            query.replace_range(start..end, "");
+            *cursor = start;
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn insert_picker_search_text(state: &mut AppState, target: PickerSearchTarget, text: &str) {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    match target {
+        PickerSearchTarget::Model => {
+            let cursor = picker_cursor_boundary(
+                &state.model_picker_search,
+                state.model_picker_search_cursor,
+            );
+            state.model_picker_search.insert_str(cursor, &normalized);
+            state.model_picker_search_cursor = cursor + normalized.len();
+            state.model_picker_index = 0;
+        }
+        PickerSearchTarget::Command => {
+            let cursor = picker_cursor_boundary(
+                &state.command_picker_search,
+                state.command_picker_search_cursor,
+            );
+            state.command_picker_search.insert_str(cursor, &normalized);
+            state.command_picker_search_cursor = cursor + normalized.len();
+            state.command_picker_index = 0;
+        }
+    }
+}
+
+fn insert_mcp_edit_paste(edit_state: &mut rustcode::app::McpEditState, text: &str) {
+    let (buffer, cursor) = edit_state.active_buf_and_pos_mut();
+    *cursor = picker_cursor_boundary(buffer, *cursor);
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for character in normalized.chars().filter(|character| *character != '\n') {
+        buffer.insert(*cursor, character);
+        *cursor += character.len_utf8();
+    }
+}
+
+fn picker_cursor_boundary(text: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(text.len());
+    while !text.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn previous_char_boundary(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .char_indices()
+        .next_back()
+        .map_or(0, |(index, _)| index)
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> usize {
+    text[cursor..]
+        .chars()
+        .next()
+        .map_or(cursor, |character| cursor + character.len_utf8())
+}
+
+fn picker_word_left(text: &str, cursor: usize) -> usize {
+    let mut position = cursor;
+    while let Some(character) = text[..position].chars().next_back() {
+        if !character.is_whitespace() {
+            break;
+        }
+        position -= character.len_utf8();
+    }
+    while let Some(character) = text[..position].chars().next_back() {
+        if character.is_whitespace() {
+            break;
+        }
+        position -= character.len_utf8();
+    }
+    position
+}
+
+fn picker_word_right(text: &str, cursor: usize) -> usize {
+    let mut position = cursor;
+    while let Some(character) = text[position..].chars().next() {
+        if !character.is_whitespace() {
+            break;
+        }
+        position += character.len_utf8();
+    }
+    while let Some(character) = text[position..].chars().next() {
+        if character.is_whitespace() {
+            break;
+        }
+        position += character.len_utf8();
+    }
+    position
+}
+
 fn is_shift_tab(key: crossterm::event::KeyEvent) -> bool {
     matches!(key.code, KeyCode::BackTab)
         || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
@@ -948,18 +1157,14 @@ pub(super) async fn handle_app_event(
                             s.show_subagent_picker = false;
                         }
                         KeyCode::Up => {
-                            if total > 0 {
-                                s.subagent_picker_index = if s.subagent_picker_index == 0 {
-                                    total - 1
-                                } else {
-                                    s.subagent_picker_index - 1
-                                };
-                            }
+                            s.subagent_picker_index =
+                                picker_selection_for_key(s.subagent_picker_index, total, key.code)
+                                    .unwrap_or(s.subagent_picker_index);
                         }
                         KeyCode::Down => {
-                            if total > 0 {
-                                s.subagent_picker_index = (s.subagent_picker_index + 1) % total;
-                            }
+                            s.subagent_picker_index =
+                                picker_selection_for_key(s.subagent_picker_index, total, key.code)
+                                    .unwrap_or(s.subagent_picker_index);
                         }
                         KeyCode::Enter | KeyCode::Right => {
                             let selected = s.subagent_picker_index.min(total.saturating_sub(1));
@@ -1084,23 +1289,15 @@ pub(super) async fn handle_app_event(
                         }
                         KeyCode::Up => {
                             let len = s.history_picker_sessions.len();
-                            if len > 0 {
-                                s.history_picker_index = if s.history_picker_index == 0 {
-                                    len - 1
-                                } else {
-                                    s.history_picker_index - 1
-                                };
-                            }
+                            s.history_picker_index =
+                                picker_selection_for_key(s.history_picker_index, len, key.code)
+                                    .unwrap_or(s.history_picker_index);
                         }
                         KeyCode::Down => {
                             let len = s.history_picker_sessions.len();
-                            if len > 0 {
-                                s.history_picker_index = if s.history_picker_index + 1 >= len {
-                                    0
-                                } else {
-                                    s.history_picker_index + 1
-                                };
-                            }
+                            s.history_picker_index =
+                                picker_selection_for_key(s.history_picker_index, len, key.code)
+                                    .unwrap_or(s.history_picker_index);
                         }
                         KeyCode::Enter => {
                             let idx = s
@@ -1131,6 +1328,16 @@ pub(super) async fn handle_app_event(
                         .map(|server| (server.always_include, server.client_id.clone()))
                         .unwrap_or_default();
                     if let Some(ref mut edit_state) = s.mcp_edit_state {
+                        if crate::ui::keymap::KeyMap::from_environment().resolve(key)
+                            == crate::ui::keymap::KeyAction::Paste
+                        {
+                            if let Some(payload) = clipboard_paste_payload() {
+                                insert_mcp_edit_paste(edit_state, &payload);
+                            }
+                            drop(s);
+                            *needs_redraw = true;
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                         let alt = key.modifiers.contains(KeyModifiers::ALT);
                         let super_key = key.modifiers.contains(KeyModifiers::SUPER);
@@ -1253,23 +1460,15 @@ pub(super) async fn handle_app_event(
                             }
                             KeyCode::Up => {
                                 let len = s.config.mcp_servers.len();
-                                if len > 0 {
-                                    s.mcp_picker_index = if s.mcp_picker_index == 0 {
-                                        len - 1
-                                    } else {
-                                        s.mcp_picker_index - 1
-                                    };
-                                }
+                                s.mcp_picker_index =
+                                    picker_selection_for_key(s.mcp_picker_index, len, key.code)
+                                        .unwrap_or(s.mcp_picker_index);
                             }
                             KeyCode::Down => {
                                 let len = s.config.mcp_servers.len();
-                                if len > 0 {
-                                    s.mcp_picker_index = if s.mcp_picker_index + 1 >= len {
-                                        0
-                                    } else {
-                                        s.mcp_picker_index + 1
-                                    };
-                                }
+                                s.mcp_picker_index =
+                                    picker_selection_for_key(s.mcp_picker_index, len, key.code)
+                                        .unwrap_or(s.mcp_picker_index);
                             }
                             KeyCode::Char('a') | KeyCode::Char('A') => {
                                 s.mcp_edit_state = Some(rustcode::app::McpEditState {
@@ -1342,29 +1541,30 @@ pub(super) async fn handle_app_event(
                 }
 
                 if s.show_model_picker {
+                    if crate::ui::keymap::KeyMap::from_environment().resolve(key)
+                        == crate::ui::keymap::KeyAction::Paste
+                    {
+                        if let Some(payload) = clipboard_paste_payload() {
+                            insert_picker_search_text(&mut s, PickerSearchTarget::Model, &payload);
+                        }
+                        drop(s);
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     match key.code {
                         KeyCode::Esc => {
                             s.show_model_picker = false;
                         }
                         KeyCode::Up => {
                             let len = rustcode::app::get_picker_items_count(&s);
-                            if len > 0 {
-                                s.model_picker_index = if s.model_picker_index == 0 {
-                                    len - 1
-                                } else {
-                                    s.model_picker_index - 1
-                                };
-                            }
+                            s.model_picker_index =
+                                picker_selection_for_key(s.model_picker_index, len, key.code)
+                                    .unwrap_or(s.model_picker_index);
                         }
                         KeyCode::Down => {
                             let len = rustcode::app::get_picker_items_count(&s);
-                            if len > 0 {
-                                s.model_picker_index = if s.model_picker_index + 1 >= len {
-                                    0
-                                } else {
-                                    s.model_picker_index + 1
-                                };
-                            }
+                            s.model_picker_index =
+                                picker_selection_for_key(s.model_picker_index, len, key.code)
+                                    .unwrap_or(s.model_picker_index);
                         }
                         KeyCode::Enter => {
                             rustcode::app::select_picker_model(&mut s);
@@ -1374,18 +1574,9 @@ pub(super) async fn handle_app_event(
                                 client.clone(),
                             );
                         }
-                        KeyCode::Backspace => {
-                            s.model_picker_search.pop();
-                            s.model_picker_index = 0;
+                        _ => {
+                            handle_picker_search_key(&mut s, PickerSearchTarget::Model, key);
                         }
-                        KeyCode::Char(c)
-                            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-                        {
-                            s.model_picker_search.push(c);
-                            s.model_picker_index = 0;
-                        }
-                        _ => {}
                     }
                     drop(s);
                     return Ok(InputFlow::ContinueIteration);
@@ -1400,22 +1591,16 @@ pub(super) async fn handle_app_event(
                             s.show_theme_picker = false;
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
+                            s.theme_picker_index =
+                                move_picker_selection(s.theme_picker_index, len, false);
                             if len > 0 {
-                                s.theme_picker_index = if s.theme_picker_index == 0 {
-                                    len - 1
-                                } else {
-                                    s.theme_picker_index - 1
-                                };
                                 s.config.theme = themes[s.theme_picker_index].name.clone();
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
+                            s.theme_picker_index =
+                                move_picker_selection(s.theme_picker_index, len, true);
                             if len > 0 {
-                                s.theme_picker_index = if s.theme_picker_index + 1 >= len {
-                                    0
-                                } else {
-                                    s.theme_picker_index + 1
-                                };
                                 s.config.theme = themes[s.theme_picker_index].name.clone();
                             }
                         }
@@ -1435,15 +1620,21 @@ pub(super) async fn handle_app_event(
                 }
 
                 if s.show_command_picker {
-                    let search = s.command_picker_search.to_lowercase();
-                    let filtered_items: Vec<&crate::ui::PaletteItem> = crate::ui::PALETTE_ITEMS
-                        .iter()
-                        .filter(|item| {
-                            item.name.to_lowercase().contains(&search)
-                                || item.group.to_lowercase().contains(&search)
-                                || item.shortcut.to_lowercase().contains(&search)
-                        })
-                        .collect();
+                    let filtered_items = filtered_command_picker_items(&s.command_picker_search);
+
+                    if crate::ui::keymap::KeyMap::from_environment().resolve(key)
+                        == crate::ui::keymap::KeyAction::Paste
+                    {
+                        if let Some(payload) = clipboard_paste_payload() {
+                            insert_picker_search_text(
+                                &mut s,
+                                PickerSearchTarget::Command,
+                                &payload,
+                            );
+                        }
+                        drop(s);
+                        return Ok(InputFlow::ContinueIteration);
+                    }
 
                     let mut exit_flag = false;
                     match key.code {
@@ -1452,23 +1643,15 @@ pub(super) async fn handle_app_event(
                         }
                         KeyCode::Up => {
                             let len = filtered_items.len();
-                            if len > 0 {
-                                s.command_picker_index = if s.command_picker_index == 0 {
-                                    len - 1
-                                } else {
-                                    s.command_picker_index - 1
-                                };
-                            }
+                            s.command_picker_index =
+                                picker_selection_for_key(s.command_picker_index, len, key.code)
+                                    .unwrap_or(s.command_picker_index);
                         }
                         KeyCode::Down => {
                             let len = filtered_items.len();
-                            if len > 0 {
-                                s.command_picker_index = if s.command_picker_index + 1 >= len {
-                                    0
-                                } else {
-                                    s.command_picker_index + 1
-                                };
-                            }
+                            s.command_picker_index =
+                                picker_selection_for_key(s.command_picker_index, len, key.code)
+                                    .unwrap_or(s.command_picker_index);
                         }
                         KeyCode::Enter => {
                             let idx = s
@@ -1509,18 +1692,9 @@ pub(super) async fn handle_app_event(
                                 s.show_command_picker = false;
                             }
                         }
-                        KeyCode::Backspace => {
-                            s.command_picker_search.pop();
-                            s.command_picker_index = 0;
+                        _ => {
+                            handle_picker_search_key(&mut s, PickerSearchTarget::Command, key);
                         }
-                        KeyCode::Char(c)
-                            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-                        {
-                            s.command_picker_search.push(c);
-                            s.command_picker_index = 0;
-                        }
-                        _ => {}
                     }
                     drop(s);
                     if exit_flag {
@@ -2199,6 +2373,16 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
                 let mut s = app_state.lock().await;
+                if s.show_model_picker {
+                    insert_picker_search_text(&mut s, PickerSearchTarget::Model, &text);
+                    *needs_redraw = true;
+                    return Ok(InputFlow::ContinueIteration);
+                }
+                if s.show_command_picker {
+                    insert_picker_search_text(&mut s, PickerSearchTarget::Command, &text);
+                    *needs_redraw = true;
+                    return Ok(InputFlow::ContinueIteration);
+                }
                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                 // Route the paste into whichever text field is focused: the
                 // ask_question custom-answer slot, the MCP editor, else chat.
@@ -2210,11 +2394,7 @@ pub(super) async fn handle_app_event(
                     }
                 } else if s.show_mcp_config {
                     if let Some(ref mut edit_state) = s.mcp_edit_state {
-                        for c in normalized.chars() {
-                            if c != '\n' && c != '\r' {
-                                edit_state.insert_char(c);
-                            }
-                        }
+                        insert_mcp_edit_paste(edit_state, &normalized);
                     }
                 } else {
                     composer.handle_paste(&mut s, &normalized);
@@ -2234,11 +2414,12 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        InputFlow, clear_selection_for_composer_key, handle_cmd_copy_chord,
-        handle_cmd_copy_chord_with, handle_copy_or_exit_chord, insert_clipboard_paste,
-        is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
-        is_transcript_navigation, report_selection_copy, return_to_latest_for_key,
-        scroll_panel_selection, selection_owns_key,
+        InputFlow, PickerSearchTarget, clear_selection_for_composer_key,
+        filtered_command_picker_items, handle_cmd_copy_chord, handle_cmd_copy_chord_with,
+        handle_copy_or_exit_chord, handle_picker_search_key, insert_clipboard_paste,
+        insert_mcp_edit_paste, is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key,
+        is_shift_tab, is_transcript_navigation, picker_selection_for_key, report_selection_copy,
+        return_to_latest_for_key, scroll_panel_selection, selection_owns_key,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2249,6 +2430,138 @@ mod tests {
     use rustcode::clipboard::ClipboardCopyStatus;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn picker_navigation_stops_at_both_ends_and_reaches_long_list_tail() {
+        let last = 127;
+        let mut selected = 0;
+        assert_eq!(
+            picker_selection_for_key(selected, last + 1, KeyCode::Up),
+            Some(0)
+        );
+        for _ in 0..last {
+            selected = picker_selection_for_key(selected, last + 1, KeyCode::Down).unwrap();
+        }
+        assert_eq!(selected, last);
+        assert_eq!(
+            picker_selection_for_key(selected, last + 1, KeyCode::Down),
+            Some(last)
+        );
+        assert_eq!(
+            picker_selection_for_key(selected, last + 1, KeyCode::Up),
+            Some(last - 1)
+        );
+        assert_eq!(picker_selection_for_key(0, 0, KeyCode::Down), Some(0));
+    }
+
+    #[test]
+    fn command_picker_filter_includes_visible_fuzzy_group_matches() {
+        let expected = crate::ui::PALETTE_ITEMS
+            .iter()
+            .find(|item| item.group == "System")
+            .expect("palette has a System group");
+        assert!(
+            filtered_command_picker_items("system")
+                .iter()
+                .any(|item| item.name == expected.name)
+        );
+    }
+
+    #[test]
+    fn picker_search_supports_composer_cursor_editing_without_splitting_unicode() {
+        let mut state = AppState::new();
+        state.command_picker_search = "café tools".to_owned();
+        state.command_picker_search_cursor = state.command_picker_search.len();
+        state.command_picker_index = 7;
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Left, KeyModifiers::NONE)
+        ));
+        assert_eq!(
+            state.command_picker_index, 7,
+            "cursor motion keeps selection"
+        );
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Left, KeyModifiers::ALT)
+        ));
+        assert_eq!(
+            &state.command_picker_search[..state.command_picker_search_cursor],
+            "café "
+        );
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Char('X'), KeyModifiers::NONE)
+        ));
+        assert_eq!(state.command_picker_search, "café Xtools");
+        assert_eq!(
+            state.command_picker_index, 0,
+            "query changes reset selection"
+        );
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Left, KeyModifiers::NONE)
+        ));
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Delete, KeyModifiers::ALT)
+        ));
+        assert_eq!(state.command_picker_search, "café ");
+        assert_eq!(state.command_picker_search_cursor, "café ".len());
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Home, KeyModifiers::NONE)
+        ));
+        assert!(handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Char('a'), KeyModifiers::CONTROL)
+        ));
+        assert_eq!(state.command_picker_search_cursor, 0);
+        assert!(!handle_picker_search_key(
+            &mut state,
+            PickerSearchTarget::Command,
+            key(KeyCode::Up, KeyModifiers::NONE)
+        ));
+    }
+
+    #[test]
+    fn mcp_editor_paste_uses_active_utf8_cursor_for_key_and_bracketed_paste() {
+        use crate::ui::keymap::{KeyAction, KeyMap};
+
+        let keymap = KeyMap::from_environment();
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::SUPER,
+            KeyModifiers::META,
+        ] {
+            assert_eq!(
+                keymap.resolve(KeyEvent::new(KeyCode::Char('v'), modifiers)),
+                KeyAction::Paste
+            );
+        }
+
+        let mut edit_state = rustcode::app::McpEditState {
+            is_add: true,
+            edit_index: None,
+            name_input: "café".to_owned(),
+            command_input: String::new(),
+            args_input: String::new(),
+            active_field: 0,
+            cursor_pos: "caf".len(),
+        };
+        insert_mcp_edit_paste(&mut edit_state, "X\r\nY");
+        assert_eq!(edit_state.name_input, "cafXYé");
+        assert_eq!(edit_state.cursor_pos, "cafXY".len());
+    }
 
     #[tokio::test]
     async fn selection_copy_feedback_reports_backend_result_without_chat_message() {

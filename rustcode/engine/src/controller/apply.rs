@@ -11,6 +11,77 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+/// Keep Git discovery off the TUI's event/render loop. The AppState cache
+/// deduplicates requests and rejects results after a session or cwd switch.
+pub async fn refresh_workspace_location_async(state: &Arc<Mutex<AppState>>) {
+    refresh_workspace_location_async_with(state, |cwd| {
+        crate::app::workspace::WorkspaceLocation::detect(cwd)
+    })
+    .await;
+}
+
+async fn refresh_workspace_location_async_with<F>(state: &Arc<Mutex<AppState>>, detect: F)
+where
+    F: FnOnce(&std::path::Path) -> crate::app::workspace::WorkspaceLocation + Send + 'static,
+{
+    let request = state
+        .lock()
+        .await
+        .claim_workspace_location_refresh(std::time::Instant::now());
+    let Some(request) = request else {
+        return;
+    };
+
+    let worker_state = Arc::clone(state);
+    tokio::spawn(async move {
+        let cwd = request.cwd.clone();
+        let location = tokio::task::spawn_blocking(move || detect(&cwd)).await.ok();
+        worker_state
+            .lock()
+            .await
+            .complete_workspace_location_refresh(request, location);
+    });
+}
+
+#[cfg(test)]
+mod workspace_refresh_tests {
+    use super::refresh_workspace_location_async_with;
+    use crate::app::AppState;
+    use crate::app::workspace::WorkspaceLocation;
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_git_lookup_does_not_hold_the_state_lock() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        // AppState starts with a debounce window; wait for it to become due.
+        tokio::time::sleep(Duration::from_millis(510)).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        refresh_workspace_location_async_with(&state, move |_| {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+            WorkspaceLocation {
+                path: "~/repo".to_owned(),
+                branch: "main".to_owned(),
+            }
+        })
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("blocking lookup started")
+            .expect("blocking lookup worker sent its start signal");
+        let guard = tokio::time::timeout(Duration::from_millis(100), state.lock())
+            .await
+            .expect("slow git lookup must not hold the app-state mutex");
+        drop(guard);
+        release_tx.send(()).expect("worker is still waiting");
+    }
+}
+
 pub async fn spawn_observed_orchestrator(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,

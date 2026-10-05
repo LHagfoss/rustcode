@@ -48,7 +48,9 @@ fn take_turn_context_for_queued_prompt(
     max_total_tool_rounds: usize,
 ) -> super::TurnContext {
     if is_promoted_steer {
-        super::TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds)
+        let mut context = super::TurnContext::new();
+        context.remove_round_limits();
+        context
     } else {
         take_turn_context_for_prompt_with_limits(
             state,
@@ -403,7 +405,8 @@ mod tests {
         );
         let resumed = take_turn_context_for_queued_prompt(&mut state, true, false, 11, 90);
         assert_eq!(resumed.budget.tool_rounds, 37);
-        assert_eq!(resumed.budget.max_tool_rounds, 11);
+        assert_eq!(resumed.budget.max_tool_rounds, usize::MAX);
+        assert_eq!(resumed.budget.max_total_tool_rounds, usize::MAX);
         assert_eq!(resumed.budget.segment_count, 5);
         assert!(!resumed.budget.continuation_pending);
         assert_eq!(state.pending_queue, ["first follow-up", "second follow-up"]);

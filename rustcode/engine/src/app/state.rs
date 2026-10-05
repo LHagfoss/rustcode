@@ -199,6 +199,7 @@ pub struct AppState {
     pub model_picker_index: usize,
     pub modal_picker_index: usize,
     pub model_picker_search: String,
+    pub model_picker_search_cursor: usize,
 
     pub show_theme_picker: bool,
     pub theme_picker_index: usize,
@@ -207,6 +208,7 @@ pub struct AppState {
     pub show_command_picker: bool,
     pub command_picker_index: usize,
     pub command_picker_search: String,
+    pub command_picker_search_cursor: usize,
 
     pub show_history_picker: bool,
     pub history_picker_index: usize,
@@ -632,18 +634,18 @@ impl AppState {
             Some(tracker) => now.saturating_duration_since(tracker.last_update) >= timeout,
         };
         if !self.pending_queue.is_empty() {
-            if self.orchestrator_running && generation_stale {
+            if self.orchestrator_running && generation_stale && stream_stale {
                 return Some(StallRecovery {
                     reset_orchestrator: true,
                     queue_preserved: true,
                 });
             }
-            if !self.orchestrator_running && generation_stale {
+            if !self.orchestrator_running && generation_stale && stream_stale {
                 // Orphaned queue: no loop owns the spawn slot, so nothing will
                 // ever drain these prompts. Reset the (already clear) flag and
                 // let the spawn loop restart them; never silently drop them.
-                // generation_stale (not merely stream silence) gates this so a
-                // freshly submitted prompt can never trip it.
+                // Both clocks must be stale: a recent stream update means an
+                // active long-running turn still owns the queue boundary.
                 return Some(StallRecovery {
                     reset_orchestrator: false,
                     queue_preserved: true,
@@ -759,12 +761,30 @@ impl AppState {
         self.request_redraw();
     }
 
-    /// Refresh the cached footer location when its debounce window expires.
-    /// Git discovery happens here, before rendering, so a frame only reads
-    /// the already-resolved display string.
-    pub fn refresh_workspace_location(&mut self, now: std::time::Instant) -> bool {
+    /// Claim a debounced footer refresh. The terminal frontend runs Git in a
+    /// blocking worker and sends the result back through
+    /// `complete_workspace_location_refresh`.
+    pub(crate) fn claim_workspace_location_refresh(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Option<crate::app::workspace::WorkspaceLocationRefresh> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        if self.workspace_location.refresh_if_due(&cwd, now) {
+        self.workspace_location
+            .claim_refresh(&cwd, &self.active_session_id, now)
+    }
+
+    pub(crate) fn complete_workspace_location_refresh(
+        &mut self,
+        request: crate::app::workspace::WorkspaceLocationRefresh,
+        location: Option<crate::app::workspace::WorkspaceLocation>,
+    ) -> bool {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if self.workspace_location.complete_refresh(
+            request,
+            &cwd,
+            &self.active_session_id,
+            location,
+        ) {
             self.cwd_and_branch = self.workspace_location.display();
             self.request_redraw();
             true
@@ -1195,6 +1215,7 @@ impl AppState {
             model_picker_index: 0,
             modal_picker_index: 0,
             model_picker_search: String::new(),
+            model_picker_search_cursor: 0,
             show_theme_picker: false,
             theme_picker_index: 0,
             theme_picker_initial: String::new(),
@@ -1204,6 +1225,7 @@ impl AppState {
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),
+            command_picker_search_cursor: 0,
             show_history_picker: false,
             history_picker_index: 0,
             history_picker_sessions: Vec::new(),

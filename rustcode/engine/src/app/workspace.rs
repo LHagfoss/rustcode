@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -52,6 +53,15 @@ impl WorkspaceLocation {
 pub(crate) struct WorkspaceLocationCache {
     location: WorkspaceLocation,
     next_refresh_at: Instant,
+    refresh_generation: u64,
+    refresh_in_flight: Option<WorkspaceLocationRefresh>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorkspaceLocationRefresh {
+    pub(crate) generation: u64,
+    pub(crate) cwd: PathBuf,
+    pub(crate) session_id: String,
 }
 
 impl WorkspaceLocationCache {
@@ -59,6 +69,8 @@ impl WorkspaceLocationCache {
         Self {
             location: WorkspaceLocation::detect(cwd),
             next_refresh_at: now + LOCATION_REFRESH_INTERVAL,
+            refresh_generation: 0,
+            refresh_in_flight: None,
         }
     }
 
@@ -66,16 +78,49 @@ impl WorkspaceLocationCache {
         self.location.display()
     }
 
-    /// Refresh at most once per interval, returning whether the footer value
-    /// changed. The next check is scheduled even when Git reports no change,
-    /// which bounds subprocess frequency while idle.
-    pub(crate) fn refresh_if_due(&mut self, cwd: &Path, now: Instant) -> bool {
-        if now < self.next_refresh_at {
-            return false;
+    /// Claim one refresh at a time. The caller runs Git off the event loop and
+    /// returns the result with the request token so stale session lookups can
+    /// be discarded safely.
+    pub(crate) fn claim_refresh(
+        &mut self,
+        cwd: &Path,
+        session_id: &str,
+        now: Instant,
+    ) -> Option<WorkspaceLocationRefresh> {
+        if self.refresh_in_flight.is_some() || now < self.next_refresh_at {
+            return None;
         }
 
         self.next_refresh_at = now + LOCATION_REFRESH_INTERVAL;
-        let location = WorkspaceLocation::detect(cwd);
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let request = WorkspaceLocationRefresh {
+            generation: self.refresh_generation,
+            cwd: cwd.to_path_buf(),
+            session_id: session_id.to_owned(),
+        };
+        self.refresh_in_flight = Some(request.clone());
+        Some(request)
+    }
+
+    /// Install a result only while its request still owns the refresh slot and
+    /// the active session and working directory still match its inputs.
+    pub(crate) fn complete_refresh(
+        &mut self,
+        request: WorkspaceLocationRefresh,
+        cwd: &Path,
+        session_id: &str,
+        location: Option<WorkspaceLocation>,
+    ) -> bool {
+        if self.refresh_in_flight.as_ref() != Some(&request) {
+            return false;
+        }
+        self.refresh_in_flight = None;
+        if request.cwd != cwd || request.session_id != session_id {
+            return false;
+        }
+        let Some(location) = location else {
+            return false;
+        };
         if location == self.location {
             return false;
         }
@@ -91,7 +136,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::process::Command;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     use tempfile::TempDir;
 
     fn git(cwd: &Path, args: &[&str]) {
@@ -118,21 +163,34 @@ mod tests {
     }
 
     #[test]
-    fn refresh_is_debounced_and_picks_up_an_external_branch_change() {
+    fn refresh_is_single_flight_and_discards_a_result_for_an_old_session() {
         let repo = repository();
         let now = Instant::now();
         let mut cache = WorkspaceLocationCache::new(repo.path(), now);
         let initial = cache.display();
 
-        git(repo.path(), &["checkout", "-qb", "footer-refresh"]);
-        assert_eq!(cache.display(), initial);
-        assert!(!cache.refresh_if_due(
-            repo.path(),
-            now + LOCATION_REFRESH_INTERVAL - Duration::from_millis(1)
-        ));
+        let due = now + LOCATION_REFRESH_INTERVAL;
+        let request = cache
+            .claim_refresh(repo.path(), "session-a", due)
+            .expect("refresh is due");
+        assert!(
+            cache
+                .claim_refresh(repo.path(), "session-a", due + LOCATION_REFRESH_INTERVAL)
+                .is_none()
+        );
 
-        assert!(cache.refresh_if_due(repo.path(), now + LOCATION_REFRESH_INTERVAL));
-        assert!(cache.display().ends_with(":footer-refresh"));
+        let stale = WorkspaceLocation {
+            path: initial.split(':').next().unwrap().to_owned(),
+            branch: "stale-result".to_owned(),
+        };
+        assert!(!cache.complete_refresh(request, repo.path(), "session-b", Some(stale),));
+        assert_eq!(cache.display(), initial);
+
+        assert!(
+            cache
+                .claim_refresh(repo.path(), "session-b", due + LOCATION_REFRESH_INTERVAL)
+                .is_some()
+        );
     }
 
     #[test]

@@ -21,7 +21,11 @@ pub struct TurnContext {
 
 pub struct BudgetState {
     pub tool_rounds: usize,
+    /// Serialized for compatibility and explicit low-level budget utilities;
+    /// the live turn runner normalizes it to `usize::MAX`.
     pub max_tool_rounds: usize,
+    /// Serialized for compatibility and explicit low-level budget utilities;
+    /// the live turn runner normalizes it to `usize::MAX`.
     pub max_total_tool_rounds: usize,
     /// Total rounds at which the current resumable segment began.
     pub segment_start_round: usize,
@@ -163,6 +167,10 @@ pub struct SegmentCheckpoint {
     pub segment_start_round: usize,
     pub segment_progress_checkpoint: usize,
     pub segment_count: usize,
+    /// Cumulative token safety budget used across resumed segments. Missing
+    /// from older sidecars, which predate persisted turn token accounting.
+    #[serde(default)]
+    pub tokens_used: u64,
     pub meaningful_events: usize,
     pub made_edits: bool,
     pub failed_mutations: usize,
@@ -295,6 +303,15 @@ impl TurnContext {
         }
     }
 
+    /// Remove both persisted round ceilings from a live logical turn. The
+    /// configuration fields remain readable for compatibility, but live
+    /// turns are bounded by cancellation, token safety, and loop guards.
+    pub(crate) fn remove_round_limits(&mut self) {
+        self.budget.max_tool_rounds = usize::MAX;
+        self.budget.max_total_tool_rounds = usize::MAX;
+        self.budget.round_budget_notice_sent = false;
+    }
+
     /// Apply the user's `[loop_guard]` budgets to a fresh turn context.
     /// Rebuilding the repetition detector is lossless here because no tool
     /// calls have been observed yet.
@@ -334,6 +351,7 @@ impl TurnContext {
             segment_start_round: self.budget.segment_start_round,
             segment_progress_checkpoint: self.budget.segment_progress_checkpoint,
             segment_count: self.budget.segment_count,
+            tokens_used: self.budget.tokens_used,
             meaningful_events: self.progress.meaningful_events,
             made_edits: self.progress.made_edits,
             failed_mutations: self.progress.failed_mutations,
@@ -366,6 +384,7 @@ impl TurnContext {
             .segment_progress_checkpoint
             .min(checkpoint.meaningful_events);
         self.budget.segment_count = checkpoint.segment_count.max(1);
+        self.budget.tokens_used = checkpoint.tokens_used;
         self.budget.continuation_pending = checkpoint.continuation_pending;
         self.progress.meaningful_events = checkpoint.meaningful_events;
         self.progress.made_edits = checkpoint.made_edits;
@@ -497,6 +516,7 @@ mod tests {
     fn segment_checkpoint_round_trips_budgets_and_rejects_foreign_sessions() {
         let mut ctx = TurnContext::with_budgets(40, 200);
         ctx.budget.tool_rounds = 40;
+        ctx.budget.tokens_used = 123_456;
         ctx.budget.segment_count = 2;
         ctx.progress.meaningful_events = 7;
         ctx.progress.made_edits = true;
@@ -519,6 +539,7 @@ mod tests {
         let mut restored = TurnContext::with_budgets(40, 200);
         assert!(restored.restore_segment(&reparsed, "session-1"));
         assert_eq!(restored.budget.tool_rounds, 40);
+        assert_eq!(restored.budget.tokens_used, 123_456);
         assert_eq!(restored.budget.segment_count, 2);
         assert!(restored.budget.continuation_pending);
         assert!(restored.has_progress_in_current_segment());
@@ -549,12 +570,15 @@ mod tests {
         json.as_object_mut()
             .unwrap()
             .remove("turn_token_usage_is_estimated");
+        json.as_object_mut().unwrap().remove("tokens_used");
 
         let reparsed: SegmentCheckpoint = serde_json::from_value(json).unwrap();
         assert!(!reparsed.turn_token_usage_is_estimated);
         assert_eq!(reparsed.turn_token_usage, ctx.response.turn_token_usage);
+        assert_eq!(reparsed.tokens_used, 0);
         let mut restored = TurnContext::new();
         assert!(restored.restore_segment(&reparsed, "session-1"));
+        assert_eq!(restored.budget.tokens_used, 0);
         assert_eq!(
             restored.response.turn_token_usage,
             ctx.response.turn_token_usage

@@ -176,10 +176,8 @@ impl AppRuntime {
                 if state.expire_ctrl_c_exit_arming(now) {
                     needs_redraw = true;
                 }
-                if state.refresh_workspace_location(now) {
-                    needs_redraw = true;
-                }
             }
+            rustcode::controller::refresh_workspace_location_async(&app_state).await;
 
             let update_version = {
                 let mut state = app_state.lock().await;
@@ -254,7 +252,7 @@ impl AppRuntime {
                 let background_active = rustcode::tools::has_background_tasks(&s.active_session_id);
                 s.clear_expired_transient_notice();
                 (
-                    s.status_state().is_active() || background_active,
+                    s.status_state().is_active() || s.orchestrator_running || background_active,
                     s.take_redraw_request(),
                 )
             };

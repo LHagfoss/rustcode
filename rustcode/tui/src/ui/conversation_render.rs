@@ -250,7 +250,7 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot, width: u16) -> Opti
         rustcode::controller::ActivityKind::Ready
         | rustcode::controller::ActivityKind::ActionRequired => None,
         _ => {
-            let mut spans = vec![
+            let spans = vec![
                 Span::styled(
                     format!("{} ", super::composer_render::running_spinner_char(state)),
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
@@ -693,39 +693,19 @@ fn selected_subagent_lines(
     let mut lines = Vec::new();
     if index == 0 {
         let status = match agent.status() {
-            rustcode::controller::SubAgentStatus::Queued => "queued",
-            rustcode::controller::SubAgentStatus::Interrupted => "interrupted",
-            rustcode::controller::SubAgentStatus::Running => "running",
-            rustcode::controller::SubAgentStatus::Completed => "completed",
-            rustcode::controller::SubAgentStatus::Failed => "failed",
-            rustcode::controller::SubAgentStatus::Cancelled => "cancelled",
+            rustcode::controller::SubAgentStatus::Queued => "Queued",
+            rustcode::controller::SubAgentStatus::Interrupted => "Interrupted",
+            rustcode::controller::SubAgentStatus::Running => "Running",
+            rustcode::controller::SubAgentStatus::Completed => "Completed",
+            rustcode::controller::SubAgentStatus::Failed => "Failed",
+            rustcode::controller::SubAgentStatus::Cancelled => "Cancelled",
         };
-        let parent = agent
-            .parent_id()
-            .map(|id| format!("agent-{id}"))
-            .unwrap_or_else(|| "main".to_owned());
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("↳ {}", agent.name()),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
-            ),
-            Span::styled(
-                format!(" · {status} · parent {parent}"),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-            ),
-        ]));
-        lines.push(Line::from(Span::styled(
-            "  agent context · ← agents · alt+←/→ switch · main history preserved",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        )));
+        lines.push(Line::from(vec![Span::styled(
+            format!("• {status} {}", agent.name()),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        )]));
     }
     lines.extend(blocks.into_iter().rev().flatten());
-    if agent.active_turn() {
-        lines.push(Line::from(Span::styled(
-            "• Working",
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
-        )));
-    }
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 

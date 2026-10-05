@@ -385,7 +385,7 @@ pub(crate) fn composer_byte_range_to_display(
 /// own field; every other panel leaves the row as plain panel background.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PanelComposer<'a> {
-    Search(&'a str),
+    Search { query: &'a str, cursor: usize },
     Hidden,
 }
 
@@ -393,9 +393,15 @@ pub(super) fn panel_composer(state: &RenderSnapshot) -> Option<PanelComposer<'_>
     if !state.modal_open() {
         None
     } else if state.show_model_picker() {
-        Some(PanelComposer::Search(state.model_picker_search()))
+        Some(PanelComposer::Search {
+            query: state.model_picker_search(),
+            cursor: state.model_picker_search_cursor(),
+        })
     } else if state.show_command_picker() {
-        Some(PanelComposer::Search(state.command_picker_search()))
+        Some(PanelComposer::Search {
+            query: state.command_picker_search(),
+            cursor: state.command_picker_search_cursor(),
+        })
     } else {
         Some(PanelComposer::Hidden)
     }
@@ -420,7 +426,7 @@ fn panel_search_styled_chars(query: &str) -> Vec<(char, Style)> {
 
 fn input_styled_chars(state: &RenderSnapshot, show_picker: bool) -> Vec<(char, Style)> {
     match panel_composer(state) {
-        Some(PanelComposer::Search(query)) => return panel_search_styled_chars(query),
+        Some(PanelComposer::Search { query, .. }) => return panel_search_styled_chars(query),
         Some(PanelComposer::Hidden) => return Vec::new(),
         None => {}
     }
@@ -612,7 +618,16 @@ pub(super) fn active_work_indicator(
         ActiveWorkState::ResultsReady => '✓',
         _ => running_spinner_char(state),
     };
-    let head = format!("{marker} {}", work.label());
+    let live_state_is_named = matches!(work, ActiveWorkState::Foreground | ActiveWorkState::Queued)
+        && state
+            .live_tool_calls()
+            .iter()
+            .any(super::history_cell::is_live_tool_call_visible);
+    let head = if live_state_is_named {
+        marker.to_string()
+    } else {
+        format!("{marker} {}", work.label())
+    };
     // The row owns exactly one terminal row and the caller appends the token
     // suffix afterwards, so head + detail + suffix must fit together. Shrink
     // the droppable detail first, then the state word; a clipped row must never
@@ -702,16 +717,6 @@ pub(super) fn truncate_to_display_width(text: &str, max_width: usize) -> String 
     output
 }
 
-fn background_spinner_frame() -> char {
-    const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    #[cfg(test)]
-    let elapsed = Duration::ZERO;
-    #[cfg(not(test))]
-    let elapsed = BACKGROUND_SPINNER_START.get_or_init(Instant::now).elapsed();
-    let frame = (elapsed.as_millis() / 120) as usize % FRAMES.len();
-    FRAMES[frame]
-}
-
 /// Spinner glyph for the live running indicator at the bottom of the chat.
 /// Honours reduced motion and shares the engine's frame cadence so the chat
 /// row and the terminal tab title advance in step.
@@ -729,9 +734,6 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
 }
 
 pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
-    const MAX_VISIBLE_COMMANDS: usize = 3;
-    const COMMAND_LABEL_CHARS: usize = 36;
-
     let mut tasks = state.background_tasks().iter().collect::<Vec<_>>();
     tasks.sort_by_key(|task| task.started_at);
     let count = tasks.len();
@@ -741,21 +743,12 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
         .next()
         .map(|started| fmt_elapsed_compact(started.elapsed().as_secs()))
         .unwrap_or_else(|| "0s".to_string());
-    let mut parts = vec![format!("{count} running ({elapsed})")];
-    parts.extend(tasks.iter().take(MAX_VISIBLE_COMMANDS).map(|task| {
-        let label =
-            rustcode::controller::background_command_label(&task.command, COMMAND_LABEL_CHARS);
-        if label.is_empty() {
-            format!("task {}", task.id)
-        } else {
-            label
-        }
-    }));
-    if count > MAX_VISIBLE_COMMANDS {
-        parts.push(format!("{} more", count - MAX_VISIBLE_COMMANDS));
-    }
-    parts.extend(["/ps".to_string(), "/stop".to_string()]);
-    format!("{} {}", background_spinner_frame(), parts.join(" · "))
+    let task_count = if count == 1 {
+        "1 task".to_owned()
+    } else {
+        format!("{count} tasks")
+    };
+    format!("{task_count} · {elapsed} · /ps · /stop")
 }
 
 pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
@@ -771,75 +764,44 @@ pub(super) fn background_command_lines_with_width(
         return Vec::new();
     }
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let heading_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
-    let mut lines = vec![Line::from(vec![
-        Span::styled("• ", heading_style),
-        Span::styled("Background", heading_style),
-    ])];
-    // Each list is capped independently, so the rendered row count is the sum of
-    // the two caps, not the total: comparing against the total left every row
-    // with a downward connector and no closing `└` (#1728).
-    let shown = state.background_tasks().len().min(MAX_VISIBLE_COMMANDS)
-        + state
-            .pending_background_results()
-            .len()
-            .min(MAX_VISIBLE_COMMANDS);
-    let show_all = state.background_tasks().len() <= MAX_VISIBLE_COMMANDS
-        && state.pending_background_results().len() <= MAX_VISIBLE_COMMANDS;
-    let mut row_index = 0;
+    let status_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
+    let mut lines = Vec::new();
     for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
-        let is_last = show_all && row_index + 1 == shown;
         let command = rustcode::controller::background_command_label(&task.command, 240);
-        let pid = task
-            .child_pid
-            .map(|pid| format!(" · pid {pid}"))
-            .unwrap_or_default();
-        let identity = format!(
-            "{} · {}{pid}",
-            task.id,
-            fmt_elapsed_compact(task.started_at.elapsed().as_secs())
-        );
-        // The heading already says Background, so the row carries identity,
-        // clock and command only — no repeated state word.
+        let elapsed = fmt_elapsed_compact(task.started_at.elapsed().as_secs());
         push_wrapped_with_continuation(
             &mut lines,
             vec![
-                super::tool_transcript::tool_tree_prefix(is_last, false),
-                Span::styled("● ", style),
-                Span::styled(identity, style),
-                Span::styled(format!(" · {command}"), style),
+                Span::styled("• ", status_style),
+                Span::styled("Running ", status_style),
+                Span::styled(command, style),
+                Span::styled(format!(" · {elapsed}"), style),
             ],
             usize::from(width).max(1),
-            Some(Span::styled(if is_last { "    " } else { "│   " }, style)),
+            Some(Span::raw("  ")),
         );
-        row_index += 1;
     }
     for result in state
         .pending_background_results()
         .iter()
         .take(MAX_VISIBLE_COMMANDS)
     {
-        let (marker, status) = if result.cancelled {
-            ('−', "cancelled")
+        let status = if result.cancelled {
+            "Cancelled"
         } else if result.success {
-            ('✓', "completed")
+            "Completed"
         } else {
-            ('×', "failed")
+            "Failed"
         };
-        let is_last = show_all && row_index + 1 == shown;
         push_wrapped_with_continuation(
             &mut lines,
             vec![
-                super::tool_transcript::tool_tree_prefix(is_last, false),
-                Span::styled(
-                    format!("{marker} {} · {status} · result ready", result.id),
-                    style,
-                ),
+                Span::styled("• ", status_style),
+                Span::styled(format!("{status} {}", result.id), status_style),
             ],
             usize::from(width).max(1),
-            Some(Span::styled(if is_last { "    " } else { "│   " }, style)),
+            Some(Span::raw("  ")),
         );
-        row_index += 1;
     }
     let omitted = state
         .background_tasks()
@@ -853,11 +815,11 @@ pub(super) fn background_command_lines_with_width(
         push_wrapped_with_continuation(
             &mut lines,
             vec![
-                Span::styled("│ ", style),
-                Span::styled(format!("… {omitted} more (/ps to view)"), style),
+                Span::styled("• ", status_style),
+                Span::styled(format!("{omitted} more · /ps"), style),
             ],
             usize::from(width).max(1),
-            Some(Span::styled("│ ", style)),
+            Some(Span::raw("  ")),
         );
     }
     lines
@@ -870,9 +832,6 @@ pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8,
     let b = (c1.2 as f32 * f + c2.2 as f32 * (1.0 - f)) as u8;
     (r, g, b)
 }
-
-#[cfg(not(test))]
-static BACKGROUND_SPINNER_START: OnceLock<Instant> = OnceLock::new();
 
 pub(super) fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
     match color {
@@ -1279,7 +1238,7 @@ pub(crate) fn render_input(
         return input_margin;
     }
     let panel_search = match panel {
-        Some(PanelComposer::Search(query)) => Some(query),
+        Some(PanelComposer::Search { query, cursor }) => Some((query, cursor)),
         _ => None,
     };
     let show_picker = show_picker && panel_search.is_none();
@@ -1289,12 +1248,14 @@ pub(crate) fn render_input(
     let mut cursor_dx = 0u16;
     let mut cursor_dy = 0u16;
 
-    if let Some(query) = panel_search.filter(|_| inner_width > 0) {
+    if let Some((query, cursor_byte)) = panel_search.filter(|_| inner_width > 0) {
+        let cursor_byte = safe_byte_index(query, cursor_byte);
+        let cursor_char = query[..cursor_byte].chars().count();
         let prompt_style = get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false);
         (lines, cursor_dx, cursor_dy) = wrap_input_chars(
             &panel_search_styled_chars(query),
             inner_width,
-            query.chars().count(),
+            cursor_char,
             prompt_style,
         );
     } else if inner_width > 0 {
