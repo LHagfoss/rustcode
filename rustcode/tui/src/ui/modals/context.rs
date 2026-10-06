@@ -740,8 +740,8 @@ pub(in crate::ui) fn render_context_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    // The stats column needs twelve content rows. Reserve one row above the
-    // header, then size the panel so the content reaches its bottom edge.
+    // The stats column fits twelve content rows in the existing modal height.
+    // On narrow panels, keep the usage source on a separate row beneath USED.
     let modal_area = input_anchor_rect(f, input_area, CONTEXT_MODAL_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
@@ -789,9 +789,9 @@ pub(in crate::ui) fn render_context_modal(
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(56), // Matrix grid
+                Constraint::Percentage(42), // Matrix grid
                 Constraint::Length(2),      // Spacer
-                Constraint::Percentage(42), // Stats breakdown
+                Constraint::Percentage(56), // Stats breakdown
             ])
             .split(modal_chunks[2]);
         (cols[0], cols[2])
@@ -909,36 +909,46 @@ pub(in crate::ui) fn render_context_modal(
     let mut stats_lines: Vec<Line<'static>> = Vec::new();
 
     // Report live provider usage or the saved-history estimate explicitly.
+    let usage_source = match breakdown.current_usage.source {
+        super::super::context_usage::ContextUsageSource::ProviderPrompt => {
+            "measured provider prompt"
+        }
+        super::super::context_usage::ContextUsageSource::HistoryEstimate => {
+            "saved history estimate"
+        }
+    };
     let summary_text = format!(
         "USED {}/{} · {:.0}%",
         format_token_count(breakdown.current_usage.used_tokens as usize),
         format_token_count(breakdown.context_window),
         current_usage_pct
     );
+    let show_source_inline =
+        format!("{summary_text} · {usage_source}").width() <= usize::from(stats_area.width);
     let summary_emphasis = if current_usage_pct >= HIGH_USAGE_PCT {
         PanelEmphasis::Strong
     } else {
         PanelEmphasis::Normal
     };
+    let displayed_summary = if show_source_inline {
+        format!("{summary_text} · {usage_source}")
+    } else {
+        summary_text
+    };
     let summary_spans = panel_value_spans(
-        &summary_text,
+        &displayed_summary,
         summary_emphasis,
         Style::default()
             .fg(COLOR_TEXT())
             .add_modifier(Modifier::BOLD),
     );
     stats_lines.push(Line::from(summary_spans));
-    stats_lines.push(Line::from(vec![Span::styled(
-        match breakdown.current_usage.source {
-            super::super::context_usage::ContextUsageSource::ProviderPrompt => {
-                "Source: measured provider prompt"
-            }
-            super::super::context_usage::ContextUsageSource::HistoryEstimate => {
-                "Source: saved history estimate"
-            }
-        },
-        Style::default().fg(COLOR_MUTED()),
-    )]));
+    if !show_source_inline {
+        stats_lines.push(Line::from(vec![Span::styled(
+            format!("Source: {usage_source}"),
+            Style::default().fg(COLOR_MUTED()),
+        )]));
+    }
     let remaining_text = format!(
         "REMAINING {} · {:.0}%",
         format_token_count(breakdown.remaining_tokens),
@@ -955,11 +965,6 @@ pub(in crate::ui) fn render_context_modal(
             .fg(COLOR_TEXT())
             .add_modifier(Modifier::BOLD),
     )));
-    stats_lines.push(Line::from(vec![Span::styled(
-        "Saved history categories · % of window",
-        Style::default().fg(COLOR_MUTED()),
-    )]));
-
     // Category breakdown lines. Every swatch uses the same ● glyph as the
     // grid; over-threshold categories (see OVER_THRESHOLD_PCT) get an
     // emphasized value through the shared panel markup helper.
@@ -1022,6 +1027,87 @@ pub(in crate::ui) fn render_context_modal(
         ),
     ];
 
+    if let Some(guards) = breakdown.configured_guards {
+        if stats_area.width >= 56 {
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Configured reserves: output {} incl. thinking {} · not usage",
+                    format_token_count(guards.output_tokens as usize),
+                    format_token_count(guards.thinking_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "tools {} · safety {} · provider overhead {}",
+                    format_token_count(guards.tool_tokens as usize),
+                    format_token_count(guards.safety_tokens as usize),
+                    format_token_count(guards.provider_framing_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+        } else if stats_area.width >= 40 {
+            stats_lines.push(Line::from(vec![Span::styled(
+                "Configured reserves (not usage)",
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Output {} · thinking {} within output",
+                    format_token_count(guards.output_tokens as usize),
+                    format_token_count(guards.thinking_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "tools {} · safety {} · provider overhead {}",
+                    format_token_count(guards.tool_tokens as usize),
+                    format_token_count(guards.safety_tokens as usize),
+                    format_token_count(guards.provider_framing_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+        } else {
+            stats_lines.push(Line::from(vec![Span::styled(
+                "Configured reserves (not usage)",
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            for line in [
+                format!(
+                    "Output {}",
+                    format_token_count(guards.output_tokens as usize)
+                ),
+                format!(
+                    "Thinking {} within output",
+                    format_token_count(guards.thinking_tokens as usize)
+                ),
+                format!("tools {}", format_token_count(guards.tool_tokens as usize)),
+                format!(
+                    "Safety {}",
+                    format_token_count(guards.safety_tokens as usize)
+                ),
+                format!(
+                    "Provider overhead {}",
+                    format_token_count(guards.provider_framing_tokens as usize)
+                ),
+            ] {
+                stats_lines.push(Line::from(vec![Span::styled(
+                    line,
+                    Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+                )]));
+            }
+        }
+    } else {
+        stats_lines.push(Line::from(vec![Span::styled(
+            "Configured guards unavailable for active model",
+            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+        )]));
+    }
+    stats_lines.push(Line::from(vec![Span::styled(
+        "Saved history categories · % of window",
+        Style::default().fg(COLOR_MUTED()),
+    )]));
     for (icon, color, label, count, percent, include_tokens_word) in categories {
         let count_str = if include_tokens_word {
             format!(": {} tokens ({:.1}%)", format_token_count(count), percent)
@@ -1042,41 +1128,6 @@ pub(in crate::ui) fn render_context_modal(
             Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
         ));
         stats_lines.push(Line::from(row_spans));
-    }
-
-    if let Some(guards) = breakdown.configured_guards {
-        stats_lines.push(Line::from(vec![Span::styled(
-            "Configured reserves (not usage)",
-            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-        )]));
-        stats_lines.push(Line::from(vec![Span::styled(
-            format!(
-                "Output {} · tools {} · safety {}",
-                format_token_count(guards.output_tokens as usize),
-                format_token_count(guards.tool_tokens as usize),
-                format_token_count(guards.safety_tokens as usize),
-            ),
-            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-        )]));
-        stats_lines.push(Line::from(vec![Span::styled(
-            format!(
-                "Provider overhead {}",
-                format_token_count(guards.provider_framing_tokens as usize),
-            ),
-            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-        )]));
-        stats_lines.push(Line::from(vec![Span::styled(
-            format!(
-                "Thinking {} within output",
-                format_token_count(guards.thinking_tokens as usize),
-            ),
-            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-        )]));
-    } else {
-        stats_lines.push(Line::from(vec![Span::styled(
-            "Configured guards unavailable for active model",
-            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
-        )]));
     }
     f.render_widget(
         Paragraph::new(stats_lines).style(Style::default().bg(COLOR_PANEL())),

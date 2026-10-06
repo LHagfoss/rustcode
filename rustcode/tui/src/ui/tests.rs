@@ -9462,7 +9462,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
     assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
     assert!(
-        rendered.contains("Source: saved history estimate"),
+        rendered.contains("saved history estimate"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
@@ -9485,10 +9485,6 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .iter()
         .position(|line| line.chars().take(60).collect::<String>().contains("● "))
         .expect("context grid should be rendered");
-    let category_header_row = lines
-        .iter()
-        .position(|line| line.contains("Saved history categories"))
-        .expect("category header should be rendered");
     let remaining_row = lines
         .iter()
         .position(|line| line.contains("REMAINING"))
@@ -9500,11 +9496,8 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     );
     assert_eq!(summary_row, header_row + 1);
     assert_eq!(first_grid_row, summary_row + 1);
-    assert_eq!(category_header_row, summary_row + 3);
-    assert!(
-        remaining_row < category_header_row,
-        "context stats should fit within the full-height view: {rendered:?}"
-    );
+    assert_eq!(remaining_row, summary_row + 1);
+    assert!(rendered.contains("Saved history categories · % of window"));
 }
 
 /// A `/context` state with one category well over `OVER_THRESHOLD_PCT` of the
@@ -9885,7 +9878,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
         "context summary must match provider prompt usage: {rendered:?}"
     );
     assert!(
-        rendered.contains("Source: measured provider prompt"),
+        rendered.contains("measured provider prompt"),
         "estimated saved history must be distinguished from active prompt usage: {rendered:?}"
     );
 
@@ -9926,7 +9919,7 @@ fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths(
             "used percentage must remain visible at {width}x{height}: {rendered:?}"
         );
         assert!(
-            rendered.contains("Source: measured provider prompt"),
+            rendered.contains("measured provider prompt"),
             "usage source must remain visible at {width}x{height}: {rendered:?}"
         );
         assert!(
@@ -9936,9 +9929,9 @@ fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths(
     }
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
-    assert!(rendered.contains("Configured reserves (not usage)"));
-    assert!(rendered.contains("Provider overhead"));
-    assert!(rendered.contains("Thinking") && rendered.contains("within output"));
+    assert!(rendered.contains("Configured reserves:") && rendered.contains("not usage"));
+    assert!(rendered.contains("provider overhead"), "{rendered:?}");
+    assert!(rendered.contains("thinking") && rendered.contains("incl."));
 }
 
 #[test]
