@@ -6470,6 +6470,53 @@ fn background_terminal_activity_shows_management_hints_and_command() {
 }
 
 #[test]
+fn background_indicator_keeps_short_management_hints_whole_at_narrow_widths() {
+    use rustcode::controller::TaskDisplay;
+
+    let mut state = RenderState::new();
+    state.background_tasks = vec![TaskDisplay {
+        id: "narrow-hint-task".into(),
+        command: "cargo build".into(),
+        started_at: std::time::Instant::now(),
+        child_pid: None,
+    }];
+    let snapshot = render_snapshot(&state);
+
+    for width in [24u16, 40, 80] {
+        let text = super::composer_render::active_work_indicator(&snapshot, width, None)
+            .expect("background work keeps an indicator")
+            .to_string();
+        assert!(line_width(&text) <= usize::from(width), "{width}: {text:?}");
+        assert!(
+            !text.contains("/p…"),
+            "partial command hint at {width}: {text:?}"
+        );
+        assert!(
+            !text.contains("/sto…"),
+            "partial command hint at {width}: {text:?}"
+        );
+        if width == 24 {
+            assert!(
+                text.contains("Background"),
+                "state label must remain: {text:?}"
+            );
+            assert!(text.contains("/ps"), "missing /ps at {width}: {text:?}");
+            assert!(text.contains("/stop"), "missing /stop at {width}: {text:?}");
+        }
+        if width >= 40 {
+            assert!(text.contains("/ps"), "missing /ps at {width}: {text:?}");
+            assert!(text.contains("/stop"), "missing /stop at {width}: {text:?}");
+        }
+        if width == 80 {
+            assert!(
+                text.contains("0s"),
+                "wide hint keeps elapsed time: {text:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn background_terminal_chip_compacts_more_than_three_tasks() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
