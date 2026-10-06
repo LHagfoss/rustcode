@@ -82,9 +82,15 @@ pub(crate) fn probe() -> TerminalCapabilities {
 /// key on (Windows Terminal and ConPTY leave it unset by default), so the host
 /// OS plus the Windows Terminal / console-host markers are the signal.
 fn windows_console() -> bool {
-    cfg!(target_os = "windows")
-        || std::env::var_os("WT_SESSION").is_some()
-        || std::env::var_os("WT_PROFILE_ID").is_some()
+    windows_console_from_signals(
+        cfg!(target_os = "windows"),
+        std::env::var_os("WT_SESSION").is_some(),
+        std::env::var_os("WT_PROFILE_ID").is_some(),
+    )
+}
+
+fn windows_console_from_signals(windows_host: bool, wt_session: bool, wt_profile_id: bool) -> bool {
+    windows_host || wt_session || wt_profile_id
 }
 
 fn infer(env: Environment<'_>) -> TerminalCapabilities {
@@ -235,11 +241,14 @@ mod tests {
     }
 
     /// The Windows console host is recognized via `WT_SESSION`/`WT_PROFILE_ID`
-    /// as well as the host OS, so a non-Windows process running inside Windows
-    /// Terminal (or the reverse) is classified the same way.
+    /// as well as the host OS. Exercise each signal directly so this test does
+    /// not depend on the machine running it.
     #[test]
     fn windows_terminal_markers_are_recognized_across_hosts() {
-        assert!(super::windows_console() || cfg!(not(target_os = "windows")));
+        assert!(super::windows_console_from_signals(true, false, false));
+        assert!(super::windows_console_from_signals(false, true, false));
+        assert!(super::windows_console_from_signals(false, false, true));
+        assert!(!super::windows_console_from_signals(false, false, false));
     }
 
     /// A genuine unsupported terminal — no tty, or `dumb`/`unknown`/`emacs` —
