@@ -934,6 +934,29 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
 }
 
 #[test]
+fn filtered_model_picker_highlights_the_selected_visible_profile() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.config.models = (1..=3)
+        .map(|number| rustcode::controller::ModelProfile {
+            name: format!("profile-{number}"),
+            url: format!("https://api.example.test/{number}"),
+            model: format!("deepseek-coder-{number}"),
+            ..Default::default()
+        })
+        .collect();
+    state.show_model_picker = true;
+    state.model_picker_search = "deepseek".to_owned();
+    state.model_picker_index = 2;
+
+    let rendered = render_state_to_text(&mut state, 100, 24);
+    assert!(
+        rendered.contains("› profile-3"),
+        "the third filtered row should carry the selection marker: {rendered:?}"
+    );
+}
+
+#[test]
 fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;

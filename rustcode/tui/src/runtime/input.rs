@@ -46,6 +46,37 @@ fn picker_selection_for_key(selected: usize, len: usize, key: KeyCode) -> Option
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubagentPickerAction {
+    Close,
+    MoveUp,
+    MoveDown,
+    Select,
+}
+
+fn subagent_picker_action(key: KeyCode) -> Option<SubagentPickerAction> {
+    match key {
+        KeyCode::Esc | KeyCode::Right => Some(SubagentPickerAction::Close),
+        KeyCode::Up => Some(SubagentPickerAction::MoveUp),
+        KeyCode::Down => Some(SubagentPickerAction::MoveDown),
+        KeyCode::Enter | KeyCode::Left => Some(SubagentPickerAction::Select),
+        _ => None,
+    }
+}
+
+fn agent_context_return_target(state: &AppState, key: KeyCode) -> Option<u32> {
+    if key != KeyCode::Right || !state.input_buffer.is_empty() {
+        return None;
+    }
+    state.selected_subagent_id.and_then(|selected_id| {
+        state
+            .subagents
+            .iter()
+            .find(|agent| agent.id == selected_id)
+            .map(|agent| agent.parent_id.unwrap_or(0))
+    })
+}
+
 fn filtered_command_picker_items(search: &str) -> Vec<&'static crate::ui::PaletteItem> {
     let search = search.to_lowercase();
     crate::ui::PALETTE_ITEMS
@@ -1152,21 +1183,27 @@ pub(super) async fn handle_app_event(
                 let mut s = app_state.lock().await;
                 if s.show_subagent_picker {
                     let total = s.subagents.len() + 1;
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Left => {
+                    match subagent_picker_action(key.code) {
+                        Some(SubagentPickerAction::Close) => {
                             s.show_subagent_picker = false;
                         }
-                        KeyCode::Up => {
-                            s.subagent_picker_index =
-                                picker_selection_for_key(s.subagent_picker_index, total, key.code)
-                                    .unwrap_or(s.subagent_picker_index);
+                        Some(SubagentPickerAction::MoveUp) => {
+                            s.subagent_picker_index = picker_selection_for_key(
+                                s.subagent_picker_index,
+                                total,
+                                KeyCode::Up,
+                            )
+                            .unwrap_or(s.subagent_picker_index);
                         }
-                        KeyCode::Down => {
-                            s.subagent_picker_index =
-                                picker_selection_for_key(s.subagent_picker_index, total, key.code)
-                                    .unwrap_or(s.subagent_picker_index);
+                        Some(SubagentPickerAction::MoveDown) => {
+                            s.subagent_picker_index = picker_selection_for_key(
+                                s.subagent_picker_index,
+                                total,
+                                KeyCode::Down,
+                            )
+                            .unwrap_or(s.subagent_picker_index);
                         }
-                        KeyCode::Enter | KeyCode::Right => {
+                        Some(SubagentPickerAction::Select) => {
                             let selected = s.subagent_picker_index.min(total.saturating_sub(1));
                             let id = if selected == 0 {
                                 0
@@ -1178,7 +1215,7 @@ pub(super) async fn handle_app_event(
                             let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
                             return Ok(InputFlow::ContinueIteration);
                         }
-                        _ => {}
+                        None => {}
                     }
                     drop(s);
                     return Ok(InputFlow::ContinueIteration);
@@ -1921,6 +1958,13 @@ pub(super) async fn handle_app_event(
                     }
                     KeyCode::Right => {
                         let mut s = app_state.lock().await;
+                        if key.modifiers.is_empty()
+                            && let Some(id) = agent_context_return_target(&s, key.code)
+                        {
+                            drop(s);
+                            let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                            return Ok(InputFlow::ContinueIteration);
+                        }
                         let shift = key.modifiers.contains(event::KeyModifiers::SHIFT);
                         let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                             || key.modifiers.contains(event::KeyModifiers::META);
@@ -2414,12 +2458,13 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        InputFlow, PickerSearchTarget, clear_selection_for_composer_key,
-        filtered_command_picker_items, handle_cmd_copy_chord, handle_cmd_copy_chord_with,
-        handle_copy_or_exit_chord, handle_picker_search_key, insert_clipboard_paste,
-        insert_mcp_edit_paste, is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key,
-        is_shift_tab, is_transcript_navigation, picker_selection_for_key, report_selection_copy,
-        return_to_latest_for_key, scroll_panel_selection, selection_owns_key,
+        InputFlow, PickerSearchTarget, SubagentPickerAction, agent_context_return_target,
+        clear_selection_for_composer_key, filtered_command_picker_items, handle_cmd_copy_chord,
+        handle_cmd_copy_chord_with, handle_copy_or_exit_chord, handle_picker_search_key,
+        insert_clipboard_paste, insert_mcp_edit_paste, is_cmd_copy_chord, is_copy_or_exit_chord,
+        is_keyboard_range_key, is_shift_tab, is_transcript_navigation, picker_selection_for_key,
+        report_selection_copy, return_to_latest_for_key, scroll_panel_selection,
+        selection_owns_key, subagent_picker_action,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2452,6 +2497,44 @@ mod tests {
             Some(last - 1)
         );
         assert_eq!(picker_selection_for_key(0, 0, KeyCode::Down), Some(0));
+    }
+
+    #[test]
+    fn subagent_picker_left_selects_and_right_returns() {
+        assert_eq!(
+            subagent_picker_action(KeyCode::Left),
+            Some(SubagentPickerAction::Select)
+        );
+        assert_eq!(
+            subagent_picker_action(KeyCode::Right),
+            Some(SubagentPickerAction::Close)
+        );
+        assert_eq!(
+            subagent_picker_action(KeyCode::Enter),
+            Some(SubagentPickerAction::Select)
+        );
+    }
+
+    #[test]
+    fn right_from_an_empty_child_composer_returns_to_its_parent() {
+        let mut state = AppState::new();
+        let child = rustcode::app::SubagentController
+            .spawn(
+                &mut state,
+                "child",
+                None,
+                None,
+                false,
+                Vec::new(),
+                None,
+                None,
+            )
+            .raw();
+        state.selected_subagent_id = Some(child);
+        assert_eq!(agent_context_return_target(&state, KeyCode::Right), Some(0));
+
+        state.input_buffer = "draft".to_owned();
+        assert_eq!(agent_context_return_target(&state, KeyCode::Right), None);
     }
 
     #[test]
