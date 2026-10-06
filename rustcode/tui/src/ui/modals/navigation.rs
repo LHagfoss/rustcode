@@ -394,9 +394,20 @@ pub(in crate::ui) fn render_subagent_picker_modal(
         .style(Style::default().bg(COLOR_PANEL())),
         chunks[0],
     );
+    let switch_hint = if inner.width >= 68 {
+        "alt+←/→ switch from the prompt"
+    } else {
+        "alt+←/→ switch"
+    };
+    let instruction = crate::ui::composer_render::fit_hint_clauses(
+        "",
+        &["→ open", "← close", switch_hint, "parent history preserved"],
+        inner.width as usize,
+    )
+    .unwrap_or_default();
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "→ open · ← close · alt+←/→ switch from the prompt · parent history preserved",
+            instruction,
             Style::default().fg(COLOR_MUTED()),
         )))
         .style(Style::default().bg(COLOR_PANEL())),
