@@ -1,3 +1,13 @@
+## [v0.57.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.8) - 2026-10-06
+
+### Fixes
+- Enable subagent delegation by default, with reliable session and configuration opt-outs.
+- Recover Responses API output-token exhaustion with preserved partial answers and one bounded continuation.
+- Recognize terminal prose-only review answers, track completed rereads, and report bounded completion diagnostics.
+- Wrap queued steering previews and show the first five diff lines with Ctrl+O expansion.
+- Show consistent text diffs for writes, edits, deletes, copies, and chunk writes within existing authorization boundaries.
+- Recognize Windows console hosts without TERM and verify Windows Terminal marker detection.
+- Use matching Conventional Commit titles for release commits and pull requests.
 ## [v0.57.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.7) - 2026-10-06
 
 ### Fixes
