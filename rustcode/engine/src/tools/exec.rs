@@ -135,7 +135,7 @@ pub(crate) fn task_event_to_tool_output(
             ..
         } => {
             let mut output = super::ToolExecutionOutput::failure_with_kind(
-                "background task cancelled".to_string(),
+                "Background task cancelled (termination succeeded; there is no process exit code). Use manage_task action 'logs' to inspect captured output.".to_string(),
                 super::ToolErrorKind::Cancelled,
                 false,
             );
@@ -165,6 +165,9 @@ fn command_output_to_tool_output(
     }
     if !output.success {
         full = format!("exit code {:?}\n{full}", output.exit_code);
+    }
+    if out_str.is_empty() && err_str.is_empty() {
+        full.push_str("\n[no stdout or stderr was produced]");
     }
     super::ToolExecutionOutput {
         content: full,
@@ -234,6 +237,7 @@ fn run_command_schema() -> Value {
             "timeout_ms": { "type": "integer", "minimum": 1 },
             "background": { "type": "boolean", "default": false },
             "detached": { "type": "boolean", "default": false },
+            "notify_on_complete": { "type": "boolean", "description": "Whether to start a turn when an asynchronous command completes; defaults to false for detached tasks and true for background tasks" },
             "network_access": { "type": "boolean", "default": false },
             "filesystem_write_path": { "type": "string", "description": "Request one-command write access to this existing absolute directory" },
             "env": { "type": "object", "additionalProperties": { "type": "string" } }
@@ -243,8 +247,8 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. A failed sandboxed command is annotated with its effective permissions and possible restriction (network, filesystem write, filesystem read), the writable roots in effect, and the smallest command that widens it, without treating generic credential or environment failures as proven sandbox denials. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both require confirmation when YOLO is off, and reusable command approvals cannot grant them. Trusted is the default; YOLO also overrides saved restrictions and approves these requests. In restricted modes filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until a task finishes. Interactive sudo requiring a password is disabled.",
-    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Linux bubblewrap and macOS Seatbelt enforce the configured OS sandbox mode; commands fail closed if setup is unavailable. Windows has no OS sandbox backend, so configured sandbox modes do not constrain shell commands there. A failed sandboxed command is annotated with its effective permissions and possible restriction (network, filesystem write, filesystem read), the writable roots in effect, and the smallest command that widens it, without treating generic credential or environment failures as proven sandbox denials. Set network_access=true to request network permission for this command only, or filesystem_write_path to request write access to one existing absolute directory; both require confirmation when YOLO is off, and reusable command approvals cannot grant them. Trusted is the default; YOLO also overrides saved restrictions and approves these requests. In restricted modes filesystem_write_path cannot overlap the active workspace. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification; set notify_on_complete=false to keep its result in history without resuming the model. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, captures output in a private session log available through manage_task logs, and keeps the process group tracked for manage_task kill and session cleanup. Detached tasks do not notify on completion by default; set notify_on_complete=true when a follow-up turn is useful. A command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. A compound start/verify/stop script that synchronizes its own background jobs (with wait, or $! paired with kill) is exempt and runs in the foreground under the normal timeout so its verification output is preserved. Do not add '&' when using detached=true. Branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills; if a generic recipe conflicts, follow `AGENTS.md`. Never run `git rebase`, `git reset --hard`, or a force-push in the active user checkout, and never discard the user's uncommitted work. By default create a task branch with `git switch -c` in the active checkout and do branch and merge work there. Use an isolated worktree under /tmp via `git worktree add` only when it is genuinely required: subagents or other concurrent work, or an active user checkout holding unrelated dirty work. Clean up any worktree you create with `git worktree remove` and `git worktree prune` once its branch is pushed and merged, deleting local task branches with `git branch -d`. When the task ends, return the active checkout to its original branch and sync it with `git pull --ff-only`. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available for advanced ripgrep flags, counts, or file-list modes. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll — use manage_task action 'wait' to block until completion. Interactive sudo requiring a password is disabled.",
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "notify_on_complete": "optional bool; defaults false for detached and true for background", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
     handler: run_command,
     requires_confirmation: true,
     schema: run_command_schema,
@@ -255,17 +259,20 @@ pub const RUN_COMMAND: Tool = Tool {
 fn manage_task_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
-            "action": { "type": "string", "enum": ["list", "status", "kill", "wait"] },
+            "action": { "type": "string", "enum": ["list", "status", "logs", "kill", "wait"] },
             "task_id": { "type": "string" },
-            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 }
+            "task_ids": { "type": "array", "items": { "type": "string" }, "description": "Wait for the first task in this set to complete" },
+            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+            "tail_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "full": { "type": "boolean", "description": "Return the full captured log instead of its tail" }
         }, "required": ["action"]
     })
 }
 
 pub const MANAGE_TASK: Tool = Tool {
     name: "manage_task",
-    description: "Manage background tasks spawned with run_command (action: 'list', 'status', 'kill', or 'wait'). Use action 'wait' to block until a task finishes instead of polling in a shell loop. Otherwise stop calling tools to wait for completion; completion notifications also arrive automatically.",
-    arguments: r#"{"action": "list, status, kill, or wait", "task_id": "required for status/kill/wait", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
+    description: "Manage run_command tasks (action: 'list', 'status', 'logs', 'kill', or 'wait'). Use 'wait' to wait for a task's result without polling; task_ids returns the first completion. Detached tasks are silent by default; wait for results or enable notify_on_complete for a model follow-up. Use 'logs' for captured output.",
+    arguments: r#"{"action": "list, status, logs, kill, or wait", "task_id": "required for status/kill/logs or single-task wait", "task_ids": "optional list of IDs for wait-any", "full": "optional true to retrieve the complete log", "tail_bytes": "optional log tail limit, max 65536", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
     handler: manage_task_tool,
     requires_confirmation: false,
     schema: manage_task_schema,
@@ -637,6 +644,10 @@ fn run_command_output_inner(
         || (has_background_operator && !command_manages_own_background_jobs(command_str));
     let run_in_bg = (background_requested || detached)
         && (detached || !is_short_discovery_command(command_str));
+    let notify_on_complete = args
+        .get("notify_on_complete")
+        .and_then(parse_json_bool)
+        .unwrap_or(!detached);
     let shell_command = if detached {
         detached_shell_command(command_str, has_background_operator)
     } else {
@@ -746,6 +757,8 @@ fn run_command_output_inner(
         // Keep the user-visible task identity useful even when the detached
         // request uses an internal shell wrapper for pipe/process safety.
         task_spec.command = cmd_str.clone();
+        task_spec.notify_on_complete = notify_on_complete;
+        task_spec.output_log = task_output_log_path(&session_id, &task_id)?;
         let task_spec = call_id
             .map(|call_id| task_spec.clone().with_call_id(call_id))
             .unwrap_or(task_spec);
@@ -773,7 +786,12 @@ fn run_command_output_inner(
         if detached {
             return Ok(super::ToolExecutionOutput {
                 content: format!(
-                    "Detached task started. Task ID: {task_id}. Status: Running. Command: {cmd_str}. Output is discarded; use manage_task kill to stop it."
+                    "Detached task started. Task ID: {task_id}. Status: Running. Command: {cmd_str}. Completion notification: {}. Captured output is available with manage_task action 'logs'.",
+                    if notify_on_complete {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 ),
                 success: true,
                 pending: false,
@@ -795,10 +813,15 @@ fn run_command_output_inner(
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop. You may continue other work meanwhile; use manage_task action 'wait' to block until it finishes."
+                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. Completion notification: {}. Use manage_task action 'wait' to block until it finishes; captured output is available with manage_task action 'logs'.",
+                if notify_on_complete {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
             ),
-            success: false,
-            pending: true,
+            success: !notify_on_complete,
+            pending: notify_on_complete,
             command: Some(cmd_str),
             exit_code: None,
             truncated: false,
@@ -1022,26 +1045,67 @@ fn wait_timeout(args: &Value) -> std::time::Duration {
     std::time::Duration::from_millis(ms.clamp(1_000, MAX_WAIT_TIMEOUT_MS))
 }
 
+fn task_output_log_path(
+    session_id: &str,
+    task_id: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(session_dir) = crate::config::get_active_session_dir(session_id) else {
+        return Ok(None);
+    };
+    let directory = session_dir.join("task-logs");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("failed to create private task log directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("failed to protect task log directory: {error}"))?;
+    }
+    Ok(Some(directory.join(format!("{task_id}.log"))))
+}
+
 /// Block until one background task reaches a terminal state, so agents wait
 /// with a single tool call instead of hand-rolled sleep/poll shell loops.
 /// Runs on a blocking worker thread; Esc still interrupts the wait through
 /// the normal tool-cancellation path.
-fn wait_for_background_task(
+fn wait_for_background_tasks(
     manager: &TaskManager,
     session_id: &str,
-    task_id: &str,
+    task_ids: &[String],
     timeout: std::time::Duration,
 ) -> String {
     // Subscribe before checking the roster: a task that finishes after this
     // point still delivers its terminal event to us, while one that finished
     // before is simply absent from the roster below.
     let subscription = manager.subscribe_session(session_id.to_owned());
-    if !manager
-        .list(session_id)
-        .iter()
-        .any(|info| info.id.as_str() == task_id)
+    if task_ids.is_empty() {
+        return "No task IDs were provided to wait for.".to_owned();
+    }
+    if let Some(completion) = manager
+        .completions(session_id)
+        .into_iter()
+        .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
     {
-        return format!("TaskId '{task_id}' is not running (finished or cancelled).");
+        return format_completion_result(&completion);
+    }
+    let running = manager.list(session_id);
+    let matched = task_ids
+        .iter()
+        .filter(|id| running.iter().any(|task| task.id.as_str() == id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        if let Some(completion) = manager
+            .completions(session_id)
+            .into_iter()
+            .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
+        {
+            return format_completion_result(&completion);
+        }
+        return format!(
+            "None of the requested tasks are running or retained: {}",
+            task_ids.join(", ")
+        );
     }
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -1049,8 +1113,15 @@ fn wait_for_background_task(
             break;
         };
         match subscription.recv_timeout(remaining) {
-            Ok(event) if event.task_id().as_str() == task_id && event.is_terminal() => {
-                return format_wait_result(task_id, event);
+            Ok(event)
+                if task_ids.iter().any(|id| id == event.task_id().as_str())
+                    && event.is_terminal() =>
+            {
+                if let Some(completion) = manager.completion(session_id, event.task_id()) {
+                    return format_completion_result(&completion);
+                }
+                let task_id = event.task_id().to_string();
+                return format_wait_result(&task_id, event);
             }
             Ok(_) => continue,
             Err(_) => break,
@@ -1059,20 +1130,183 @@ fn wait_for_background_task(
     // The wait expired. A task that finished in a way this fresh
     // subscription could not observe is already gone from the roster; its
     // result still arrives via the automatic completion notice.
-    if !manager
-        .list(session_id)
-        .iter()
-        .any(|info| info.id.as_str() == task_id)
+    if let Some(completion) = manager
+        .completions(session_id)
+        .into_iter()
+        .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
     {
-        format!(
-            "TaskId '{task_id}' finished while waiting; its result arrives via the automatic completion notice."
-        )
+        format_completion_result(&completion)
     } else {
-        format!(
-            "TaskId '{task_id}' is still running after {}s. Call 'wait' again to keep waiting, or continue other work meanwhile.",
-            timeout.as_secs()
-        )
+        let still_running = manager.list(session_id);
+        let running_ids = matched
+            .iter()
+            .filter(|id| {
+                still_running
+                    .iter()
+                    .any(|task| task.id.as_str() == id.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if running_ids.is_empty() {
+            format!(
+                "Requested tasks are no longer retained: {}",
+                task_ids.join(", ")
+            )
+        } else {
+            format!(
+                "Tasks {} are still running after {}s. Call 'wait' again to keep waiting, or continue other work meanwhile.",
+                running_ids.join(", "),
+                timeout.as_secs()
+            )
+        }
     }
+}
+
+fn format_completion_result(completion: &rustcode_tasks::TaskCompletion) -> String {
+    use rustcode_tasks::TaskTerminalReason;
+    let status = match &completion.reason {
+        TaskTerminalReason::Exited {
+            success: true,
+            code,
+        } => {
+            format!(
+                "exited successfully (code {})",
+                code.map_or("unknown".to_owned(), |c| c.to_string())
+            )
+        }
+        TaskTerminalReason::Exited {
+            success: false,
+            code,
+        } => {
+            format!(
+                "failed (exit code {})",
+                code.map_or("unknown".to_owned(), |c| c.to_string())
+            )
+        }
+        TaskTerminalReason::Signalled { signal } => {
+            format!("terminated by {} ({signal})", signal_name(*signal))
+        }
+        TaskTerminalReason::Cancelled => "cancelled".to_owned(),
+        TaskTerminalReason::SpawnFailed(error) => format!("spawn failed: {error}"),
+        TaskTerminalReason::Failed(error) => format!("failed: {error}"),
+    };
+    let output = completion
+        .output
+        .as_ref()
+        .map(|output| {
+            let stdout = rustcode_command::format_bounded_output(&output.stdout);
+            let stderr = rustcode_command::format_bounded_output(&output.stderr);
+            let mut text = String::new();
+            if !stdout.is_empty() {
+                text.push_str(&stdout);
+            }
+            if !stderr.is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("stderr:\n");
+                text.push_str(&stderr);
+            }
+            if text.is_empty() {
+                "[no stdout or stderr was produced]".to_owned()
+            } else {
+                text
+            }
+        })
+        .or_else(|| completion.error.clone())
+        .unwrap_or_else(|| {
+            if completion.output_log.is_some() {
+                "[no in-memory output retained; inspect the captured log]".to_owned()
+            } else {
+                "[no output captured]".to_owned()
+            }
+        });
+    format!(
+        "Task '{}' {}. Started at {} ms; ended at {} ms. Command: {}. Output:\n{}{}{}",
+        completion.id,
+        status,
+        completion.started_at_unix_ms,
+        completion.ended_at_unix_ms,
+        completion.command,
+        output,
+        completion
+            .log_error
+            .as_ref()
+            .map_or_else(String::new, |error| format!(
+                "\nLog capture stopped early: {error}"
+            )),
+        if completion.output_log.is_some() {
+            format!(
+                "\nCaptured log: manage_task action 'logs' for task '{}'.",
+                completion.id
+            )
+        } else {
+            String::new()
+        }
+    )
+}
+
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        6 => "SIGABRT",
+        9 => "SIGKILL",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        _ => "signal",
+    }
+}
+
+fn task_state_label(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Starting => "STARTING",
+        TaskState::Running { .. } => "RUNNING",
+        TaskState::Terminating { .. } => "TERMINATING",
+        TaskState::CancelRequested => "CANCEL REQUESTED",
+    }
+}
+
+fn task_wait_hint(task_id: &str, notify_on_complete: bool, has_log: bool) -> String {
+    let policy = if notify_on_complete {
+        "A completion turn is enabled."
+    } else {
+        "Completion is silent; use manage_task action 'wait' when you need the result."
+    };
+    let log = if has_log {
+        format!(" Full output is available with manage_task action 'logs' for '{task_id}'.")
+    } else {
+        String::new()
+    };
+    format!("{policy}{log}")
+}
+
+fn read_task_log(
+    path: &std::path::Path,
+    full: bool,
+    tail_bytes: usize,
+) -> Result<(String, usize, usize), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file =
+        std::fs::File::open(path).map_err(|error| format!("failed to read task log: {error}"))?;
+    let total = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect task log: {error}"))?
+        .len() as usize;
+    let start = if full {
+        0
+    } else {
+        total.saturating_sub(tail_bytes)
+    };
+    file.seek(SeekFrom::Start(start as u64))
+        .map_err(|error| format!("failed to seek task log: {error}"))?;
+    let mut bytes = Vec::with_capacity(total.saturating_sub(start));
+    file.take(total.saturating_sub(start) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read task log: {error}"))?;
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), start, total))
 }
 
 fn format_wait_result(task_id: &str, event: TaskEvent) -> String {
@@ -1111,11 +1345,17 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "N/A".to_string());
                 out.push_str(&format!(
-                    "- TaskId: {}, PID: {}, Runtime: {}s, Command: {}\n",
-                    info.id, pid_str, elapsed, info.command
+                    "- TaskId: {}, State: {}, PID: {}, Runtime: {}s, Command: {} · notify={} · logs={}\n",
+                    info.id,
+                    task_state_label(info.state),
+                    pid_str,
+                    elapsed,
+                    info.command,
+                    if info.notify_on_complete { "on" } else { "off" },
+                    if info.output_log.is_some() { "available" } else { "unavailable" }
                 ));
             }
-            out.push_str("\n(Note: You will be notified automatically with the full output when tasks complete — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion.)");
+            out.push_str("\nUse manage_task action 'wait' with task_ids to return on the first completion in a set.");
             Ok(out.trim_end().to_string())
         }
         "status" => {
@@ -1130,14 +1370,65 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "N/A".to_string());
                 Ok(format!(
-                    "TaskId: {}, Status: RUNNING, PID: {}, Runtime: {}s, Command: {}\n(Note: You will be notified automatically with the full output when this task completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion.)",
-                    task_id, pid_str, elapsed, info.command
+                    "TaskId: {}, Status: {}, PID: {}, Runtime: {}s, Command: {}\n{}",
+                    task_id,
+                    task_state_label(info.state),
+                    pid_str,
+                    elapsed,
+                    info.command,
+                    task_wait_hint(task_id, info.notify_on_complete, info.output_log.is_some())
                 ))
+            } else if let Some(completion) = manager.completion(&session_id, task_id) {
+                Ok(format_completion_result(&completion))
             } else {
                 Ok(format!(
-                    "TaskId '{task_id}' is not running (finished or cancelled)."
+                    "No retained task status for '{task_id}' in this session."
                 ))
             }
+        }
+        "logs" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(|t| t.as_str())
+                .ok_or("missing 'task_id' argument for logs action")?;
+            let path = tasks
+                .iter()
+                .find(|task| task.id.as_str() == task_id)
+                .and_then(|task| task.output_log.clone())
+                .or_else(|| {
+                    manager
+                        .completion(&session_id, task_id)
+                        .and_then(|task| task.output_log)
+                });
+            let Some(path) = path else {
+                return Ok(format!(
+                    "No captured task log for '{task_id}' in this session."
+                ));
+            };
+            let full = args.get("full").and_then(parse_json_bool).unwrap_or(false);
+            let limit = args
+                .get("tail_bytes")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(16_384)
+                .clamp(1, 65_536) as usize;
+            let (excerpt, start, total) = read_task_log(&path, full, limit)?;
+            let prefix = if start > 0 {
+                format!(
+                    "Task '{}' log tail ({} of {} bytes):\n",
+                    task_id,
+                    total - start,
+                    total
+                )
+            } else {
+                format!("Task '{}' log ({} bytes):\n", task_id, total)
+            };
+            let capture_note = manager
+                .completion(&session_id, task_id)
+                .and_then(|completion| completion.log_error)
+                .map_or_else(String::new, |error| {
+                    format!("\n[log capture was incomplete: {error}]")
+                });
+            Ok(format!("{prefix}{excerpt}{capture_note}"))
         }
         "kill" => {
             let task_id = args
@@ -1148,19 +1439,30 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             cancel_result_message(task_id, manager.cancel_in_session(&session_id, task_id))
         }
         "wait" => {
-            let task_id = args
-                .get("task_id")
-                .and_then(|t| t.as_str())
-                .ok_or("missing 'task_id' argument for wait action")?;
-            Ok(wait_for_background_task(
+            let task_ids = args
+                .get("task_ids")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| {
+                    args.get("task_id")
+                        .and_then(Value::as_str)
+                        .map(|id| vec![id.to_owned()])
+                })
+                .ok_or("missing 'task_id' or 'task_ids' argument for wait action")?;
+            Ok(wait_for_background_tasks(
                 manager,
                 &session_id,
-                task_id,
+                &task_ids,
                 wait_timeout(args),
             ))
         }
         _ => Err(format!(
-            "Unknown action '{action}'. Supported actions: list, status, kill, wait."
+            "Unknown action '{action}'. Supported actions: list, status, logs, kill, wait."
         )),
     }
 }
@@ -1236,7 +1538,7 @@ mod tests {
         command_manages_own_background_jobs, command_requires_confirmation, has_interactive_sudo,
         has_shell_background_operator, manage_task_tool, pull_request_base, reject_broad_git_stage,
         run_command, run_command_output, run_command_output_cancellable,
-        run_command_output_with_progress, task_event_to_tool_output,
+        run_command_output_with_progress, task_event_to_tool_output, wait_for_background_tasks,
     };
 
     #[cfg(unix)]
@@ -1626,6 +1928,45 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn wait_any_returns_first_completion_without_consuming_or_cancelling_others() {
+        let manager =
+            rustcode_tasks::TaskManager::new(std::sync::Arc::new(super::RootProcessTerminator));
+        let session = "wait-any-session";
+        let fast = manager
+            .spawn_with_id(
+                "wait-any-fast",
+                rustcode_tasks::TaskSpec::new(session, task_request("sleep 0.2", None)),
+            )
+            .unwrap();
+        let slow = manager
+            .spawn_with_id(
+                "wait-any-slow",
+                rustcode_tasks::TaskSpec::new(session, task_request("sleep 30", None)),
+            )
+            .unwrap();
+
+        let result = wait_for_background_tasks(
+            &manager,
+            session,
+            &[fast.id().to_string(), slow.id().to_string()],
+            std::time::Duration::from_secs(5),
+        );
+
+        assert!(result.contains("wait-any-fast"), "{result}");
+        assert!(
+            manager
+                .list(session)
+                .iter()
+                .any(|task| task.id == *slow.id())
+        );
+        assert_eq!(
+            manager.cancel(slow.id()),
+            rustcode_tasks::CancelResult::Cancelled
+        );
+    }
+
     #[test]
     fn task_manager_root_adapter_cancels_before_pid_without_duplicate_terminal() {
         let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
@@ -1704,6 +2045,7 @@ mod tests {
             session_id: rustcode_tasks::SessionId::new("cancelled-session"),
             call_id: None,
             command: "cargo test".to_string(),
+            notify_on_complete: true,
         };
 
         let (task_id, session_id, output) = task_event_to_tool_output(event).expect("cancelled");
@@ -1715,7 +2057,12 @@ mod tests {
             output.error_kind,
             Some(crate::tools::ToolErrorKind::Cancelled)
         );
-        assert_eq!(output.content, "background task cancelled");
+        assert!(
+            output.content.contains("Background task cancelled"),
+            "{}",
+            output.content
+        );
+        assert!(output.content.contains("no process exit code"));
     }
 
     #[test]
@@ -1768,7 +2115,7 @@ mod tests {
         }));
         assert_eq!(
             result,
-            Ok("TaskId 'no-such-task' is not running (finished or cancelled).".to_string())
+            Ok("None of the requested tasks are running or retained: no-such-task".to_string())
         );
         crate::tools::set_active_session_id(None);
     }
@@ -1795,7 +2142,7 @@ mod tests {
         }));
         let output = result.expect("wait should return the finished result");
         assert!(
-            output.contains("finished successfully"),
+            output.contains("exited successfully (code 0)"),
             "unexpected wait output: {output}"
         );
         crate::tools::stop_background_tasks(session);
@@ -2218,6 +2565,15 @@ mod tests {
             "command": "sleep 30 &",
         }))
         .expect("shell background command should start detached");
+        for _ in 0..100 {
+            if super::super::background_task_snapshots(&session_id)
+                .first()
+                .is_some_and(|task| task.child_pid.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let snapshots = super::super::background_task_snapshots(&session_id);
         let stop = super::super::stop_background_tasks(&session_id);
         super::super::set_active_session_id(None);
