@@ -853,6 +853,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/status",
     },
     PaletteItem {
+        group: "Help",
+        name: "Preview the TUI demo",
+        shortcut: "/test",
+    },
+    PaletteItem {
         group: "Agent",
         name: "Set parser/tool protocol",
         shortcut: "/parser",

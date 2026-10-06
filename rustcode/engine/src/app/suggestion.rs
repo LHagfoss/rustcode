@@ -201,6 +201,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show token usage and context statistics",
     },
     CommandInfo {
+        name: "/test",
+        desc: "Preview a fixed TUI demo (Tab question, Esc close)",
+    },
+    CommandInfo {
         name: "/compact",
         desc: "Manually compact session history to save context space",
     },

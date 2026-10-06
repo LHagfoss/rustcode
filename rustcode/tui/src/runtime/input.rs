@@ -18,6 +18,7 @@ pub(super) struct InputContext<'a> {
     pub(super) app_event_sender: &'a AppEventSender,
     pub(super) agent_ui_event_sender: &'a AgentUiEventSender,
     pub(super) composer: &'a ui::Composer,
+    pub(super) demo_state: &'a mut Option<ui::DemoState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +211,24 @@ fn picker_cursor_boundary(text: &str, cursor: usize) -> usize {
         cursor -= 1;
     }
     cursor
+}
+
+async fn open_demo_if_requested(
+    app_state: &Arc<Mutex<AppState>>,
+    demo_state: &mut Option<ui::DemoState>,
+) -> bool {
+    let mut state = app_state.lock().await;
+    if state.input_buffer.trim() != "/test" {
+        return false;
+    }
+
+    let mut demo = ui::demo_state(rustcode::controller::render_state(&state));
+    demo.freeze();
+    *demo_state = Some(demo);
+    state.input_buffer.clear();
+    state.cursor_position = 0;
+    state.reset_suggestion_cycle();
+    true
 }
 
 fn previous_char_boundary(text: &str, cursor: usize) -> usize {
@@ -503,6 +522,7 @@ pub(super) async fn handle_app_event(
         app_event_sender,
         agent_ui_event_sender,
         composer,
+        demo_state,
     } = ctx;
     match app_event {
         AppEvent::ApprovalDecision(decision) => {
@@ -571,9 +591,35 @@ pub(super) async fn handle_app_event(
             *needs_redraw = true;
         }
         AppEvent::CancelActiveTurn => {
-            rustcode::app::handle_escape(&app_state, current_cancel_token).await;
-            *needs_redraw = true;
+            if demo_state.is_none() {
+                rustcode::app::handle_escape(&app_state, current_cancel_token).await;
+                *needs_redraw = true;
+            }
         }
+        AppEvent::Tui(ev) if demo_state.is_some() => match ev {
+            TuiEvent::Key(key)
+                if key.code == KeyCode::Esc
+                    && !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(event::KeyModifiers::ALT)
+                    && !key.modifiers.contains(event::KeyModifiers::SUPER) =>
+            {
+                *demo_state = None;
+                *needs_redraw = true;
+            }
+            TuiEvent::Key(key)
+                if key.code == KeyCode::Tab
+                    && !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(event::KeyModifiers::ALT)
+                    && !key.modifiers.contains(event::KeyModifiers::SUPER) =>
+            {
+                if let Some(demo) = demo_state {
+                    demo.toggle_question_preview();
+                    *needs_redraw = true;
+                }
+            }
+            TuiEvent::Resize { .. } | TuiEvent::Draw => *needs_redraw = true,
+            _ => {}
+        },
         AppEvent::Tui(ev) => match ev {
             TuiEvent::Key(key) => {
                 *needs_redraw = true;
@@ -1705,6 +1751,10 @@ pub(super) async fn handle_app_event(
                                     s.input_buffer = item.shortcut.to_owned();
                                     s.cursor_position = s.input_buffer.len();
                                     drop(s);
+                                    if open_demo_if_requested(app_state, demo_state).await {
+                                        *needs_redraw = true;
+                                        return Ok(InputFlow::ContinueIteration);
+                                    }
                                     let should_exit = rustcode::app::handle_enter_with_ui_events(
                                         app_state,
                                         client,
@@ -1765,6 +1815,16 @@ pub(super) async fn handle_app_event(
                 }
                 // Escape closes transcript browsing without discarding a draft.
                 if return_to_latest_for_key(transcript_state, key.code) {
+                    return Ok(InputFlow::ContinueIteration);
+                }
+                if key.code == KeyCode::Enter
+                    && !key.modifiers.intersects(
+                        event::KeyModifiers::SHIFT
+                            | event::KeyModifiers::CONTROL
+                            | event::KeyModifiers::ALT,
+                    )
+                    && open_demo_if_requested(app_state, demo_state).await
+                {
                     return Ok(InputFlow::ContinueIteration);
                 }
                 match {
@@ -2032,6 +2092,9 @@ pub(super) async fn handle_app_event(
                             s.insert_char('\n');
                             s.reset_suggestion_cycle();
                         } else {
+                            if open_demo_if_requested(app_state, demo_state).await {
+                                return Ok(InputFlow::ContinueIteration);
+                            }
                             if rustcode::app::handle_enter_with_ui_events(
                                 &app_state,
                                 &client,
@@ -2462,9 +2525,9 @@ mod tests {
         clear_selection_for_composer_key, filtered_command_picker_items, handle_cmd_copy_chord,
         handle_cmd_copy_chord_with, handle_copy_or_exit_chord, handle_picker_search_key,
         insert_clipboard_paste, insert_mcp_edit_paste, is_cmd_copy_chord, is_copy_or_exit_chord,
-        is_keyboard_range_key, is_shift_tab, is_transcript_navigation, picker_selection_for_key,
-        report_selection_copy, return_to_latest_for_key, scroll_panel_selection,
-        selection_owns_key, subagent_picker_action,
+        is_keyboard_range_key, is_shift_tab, is_transcript_navigation, open_demo_if_requested,
+        picker_selection_for_key, report_selection_copy, return_to_latest_for_key,
+        scroll_panel_selection, selection_owns_key, subagent_picker_action,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2475,6 +2538,41 @@ mod tests {
     use rustcode::clipboard::ClipboardCopyStatus;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn opening_demo_consumes_only_the_command_and_preserves_live_session() {
+        let mut state = AppState::new();
+        state.active_session_id = "live-session".to_owned();
+        state
+            .history
+            .push(rustcode::app::ChatMessage::new("user", "existing history"));
+        state.input_buffer = "/test".to_owned();
+        state.cursor_position = state.input_buffer.len();
+        let expected_history = state.history.snapshot();
+        let app_state = Arc::new(Mutex::new(state));
+        let mut demo_state = None;
+
+        assert!(open_demo_if_requested(&app_state, &mut demo_state).await);
+        let live = app_state.lock().await;
+        assert_eq!(live.active_session_id, "live-session");
+        assert_eq!(live.history.snapshot(), expected_history);
+        assert!(live.input_buffer.is_empty());
+        let demo = demo_state.expect("demo view is separate from the live session");
+        assert_eq!(demo.render_state().active_session_id, "static-visual-demo");
+        assert_eq!(demo.render_state().history.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn demo_command_does_not_match_a_prompt_with_arguments() {
+        let mut state = AppState::new();
+        state.input_buffer = "/test please".to_owned();
+        let app_state = Arc::new(Mutex::new(state));
+        let mut demo_state = None;
+
+        assert!(!open_demo_if_requested(&app_state, &mut demo_state).await);
+        assert!(demo_state.is_none());
+        assert_eq!(app_state.lock().await.input_buffer, "/test please");
+    }
 
     #[test]
     fn picker_navigation_stops_at_both_ends_and_reaches_long_list_tail() {
