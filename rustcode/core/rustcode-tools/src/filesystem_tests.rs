@@ -90,6 +90,63 @@ fn markdown_outline_is_partial_and_sections_expand_by_exact_range() {
 }
 
 #[test]
+fn markdown_outline_ignores_provider_supplied_ordinary_read_defaults() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("README.md");
+    std::fs::write(&file, "# Overview\nintro\n## Setup\nsteps\n").expect("write");
+
+    let output = view_file_output(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "start_line": 1,
+        "end_line": 800,
+        "content_offset": 0,
+        "outline": true,
+        "outline_offset": 0,
+        "outline_limit": 100
+    }))
+    .expect("explicit outline mode ignores ordinary-read defaults");
+
+    assert!(output.truncated);
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+    assert!(output.content.contains("# Overview"));
+    assert!(output.content.contains("## Setup"));
+    assert!(output.content.contains("no body lines were inspected"));
+}
+
+#[test]
+fn ordinary_read_ignores_provider_supplied_outline_pagination_defaults() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("Cargo.toml");
+    std::fs::write(
+        &file,
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write");
+
+    let output = view_file_output(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "start_line": 1,
+        "end_line": 300,
+        "content_offset": 0,
+        "outline": false,
+        "outline_offset": 0,
+        "outline_limit": 50
+    }))
+    .expect("ordinary mode ignores outline pagination defaults");
+
+    assert!(!output.truncated);
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+    assert!(output.content.contains("name = \"fixture\""));
+    assert!(!output.content.contains("heading outline"));
+}
+
+#[test]
 fn markdown_outline_respects_atx_heading_syntax_and_fenced_code() {
     assert_eq!(markdown_heading("## C#"), Some((2, "C#")));
     assert_eq!(markdown_heading("### Title ###"), Some((3, "Title")));

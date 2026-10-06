@@ -32,12 +32,12 @@ pub fn copy_file_schema() -> Value {
 pub fn view_file_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
-            "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 800 lines. Request targeted follow-up ranges for more content." },
-            "content_offset": { "type": "integer", "minimum": 0 },
+            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; ignored when outline=true." },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; inclusive and capped at 800 lines. Request targeted follow-up ranges for more content. Ignored when outline=true." },
+            "content_offset": { "type": "integer", "minimum": 0, "description": "Ordinary-read byte offset; ignored when outline=true." },
             "outline": { "type": "boolean", "description": "Explicitly request a bounded Markdown heading outline; expand sections with the returned start_line and end_line." },
-            "outline_offset": { "type": "integer", "minimum": 0, "description": "Heading offset for the next outline page." },
-            "outline_limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum headings in this outline page (default 50)." }
+            "outline_offset": { "type": "integer", "minimum": 0, "description": "Heading offset for the next outline page; used only when outline=true, otherwise ignored." },
+            "outline_limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum headings in this outline page (default 50); used only when outline=true, otherwise ignored." }
         }, "required": ["path"]
     })
 }
@@ -294,34 +294,10 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
             .map(Some)
             .map_err(|_| format!("{name} is too large for this platform"))
     };
-    let requested_start = parse_index("start_line")?;
-    let requested_end = parse_index("end_line")?;
-    if requested_start == Some(0) {
-        return Err("start_line must be at least 1".to_string());
-    }
-    if requested_end == Some(0) {
-        return Err("end_line must be at least 1".to_string());
-    }
-    if let (Some(start_line), Some(end_line)) = (requested_start, requested_end)
-        && end_line < start_line
-    {
-        return Err(format!(
-            "end_line {end_line} must be greater than or equal to start_line {start_line}"
-        ));
-    }
-
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
     if args.get("outline").and_then(Value::as_bool) == Some(true) {
-        if args.get("start_line").is_some()
-            || args.get("end_line").is_some()
-            || args.get("content_offset").is_some()
-        {
-            return Err(
-                "outline cannot be combined with start_line, end_line, or content_offset; expand a section with a separate ranged read".to_string(),
-            );
-        }
         if !matches!(
             resolved_path
                 .extension()
@@ -347,8 +323,20 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         );
     }
 
-    if args.get("outline_offset").is_some() || args.get("outline_limit").is_some() {
-        return Err("outline_offset and outline_limit require outline=true".to_string());
+    let requested_start = parse_index("start_line")?;
+    let requested_end = parse_index("end_line")?;
+    if requested_start == Some(0) {
+        return Err("start_line must be at least 1".to_string());
+    }
+    if requested_end == Some(0) {
+        return Err("end_line must be at least 1".to_string());
+    }
+    if let (Some(start_line), Some(end_line)) = (requested_start, requested_end)
+        && end_line < start_line
+    {
+        return Err(format!(
+            "end_line {end_line} must be greater than or equal to start_line {start_line}"
+        ));
     }
 
     let byte_offset = parse_index("content_offset")?.unwrap_or(0);
