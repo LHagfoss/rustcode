@@ -1282,4 +1282,17 @@ mod tests {
         ];
         assert!(super::has_pending_tool_work(&history));
     }
+
+    #[test]
+    fn unmatched_assistant_tool_call_is_detected_as_pending_work() {
+        let history = vec![
+            ChatMessage::new("user", "Review the features."),
+            ChatMessage::new("assistant", "").with_tool_calls(vec![crate::app::ToolCallRef {
+                id: "call_pending".into(),
+                name: "view_file".into(),
+                arguments: r#"{"path":"README.md"}"#.into(),
+            }]),
+        ];
+        assert!(super::has_pending_tool_work(&history));
+    }
 }
