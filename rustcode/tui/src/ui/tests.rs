@@ -2087,7 +2087,7 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         "rendered: {rendered:?}"
     );
     assert!(
-        rendered.contains("context:     128.0K tokens"),
+        rendered.contains("context:     100k tokens"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("/context to change"));
@@ -2120,26 +2120,24 @@ fn welcome_banner_pads_above_session_and_groups_session_with_model() {
 }
 
 #[test]
-fn welcome_wordmark_has_room_above_and_to_its_left() {
+fn welcome_banner_has_no_wordmark_and_no_gap_in_its_place() {
+    // #1772: the block-letter wordmark only repeated the titled border and
+    // pushed the useful rows down. Its rows and its separator are both gone.
     let state = RenderState::new();
     let rendered = super::build_claude_startup_banner(&state, 100, 28)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    let first_wordmark = rendered
-        .iter()
-        .position(|line| line.contains('█'))
-        .expect("wordmark is visible");
-    assert_eq!(
-        first_wordmark, 2,
-        "one blank row sits above the wordmark: {rendered:?}"
-    );
     assert!(
-        rendered[1..first_wordmark]
-            .iter()
-            .all(|line| line.trim_matches(['│', ' ']).is_empty())
+        !rendered.iter().any(|line| line.contains(['█', '▀', '▄'])),
+        "{rendered:?}"
     );
-    assert!(rendered[first_wordmark].starts_with("│    "));
+    assert!(rendered[0].contains(">_ RustCode v"), "{rendered:?}");
+    assert!(
+        rendered[1].trim_matches(['│', ' ']).is_empty(),
+        "one blank row pads the top: {rendered:?}"
+    );
+    assert!(rendered[2].contains("session:"), "{rendered:?}");
 }
 
 #[test]
@@ -2254,26 +2252,6 @@ fn active_tool_and_background_command_rows_keep_a_fixed_footprint() {
             "{background_rows:?}"
         );
     }
-}
-
-#[test]
-fn welcome_wordmark_colors_the_whole_c_white() {
-    let state = RenderState::new();
-    let lines = super::build_claude_startup_banner(&state, 100, 28);
-    let glyph_row = lines
-        .iter()
-        .find(|line| line.to_string().contains("▄▀▀▀ █   █"))
-        .expect("wordmark glyph row is visible");
-    assert_eq!(
-        glyph_row.spans[2].style.fg,
-        Some(ratatui::style::Color::Rgb(181, 139, 255))
-    );
-    assert_eq!(
-        glyph_row.spans[3].style.fg,
-        Some(ratatui::style::Color::White)
-    );
-    assert_eq!(glyph_row.spans[3].content.chars().next(), Some('▄'));
-    assert!(glyph_row.spans[3].content.starts_with("▄▀▀▀▀"));
 }
 
 #[test]
@@ -6980,13 +6958,15 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(rendered[0], "• Running Bash $ cargo test · 1/2");
+    assert_eq!(rendered[0], "• Running · esc interrupt");
+    assert_eq!(rendered[1], "├ • Bash cargo test · 1/2");
+    assert_eq!(rendered[2], "└ • Bash cargo test · 2/2");
     assert!(!rendered.iter().any(|line| line.contains("local:1")));
     assert!(!rendered.iter().any(|line| line.contains("local:2")));
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| line.contains("Bash $ cargo test"))
+            .filter(|line| line.contains("Bash cargo test"))
             .count(),
         2,
         "the live cell must not deduplicate distinct invocation identities"
@@ -7162,8 +7142,9 @@ fn live_exploration_batch_keeps_each_calls_state() {
     assert_eq!(
         rendered,
         [
-            "• Queued Grep src/**/*.rs",
-            "• Running Read src/main.rs · esc interrupt"
+            "• Running · esc interrupt",
+            "├ ◦ Grep src/**/*.rs · queued",
+            "└ • Read src/main.rs"
         ]
     );
 }
@@ -7195,8 +7176,9 @@ fn mixed_live_exploration_and_action_batch_uses_running_heading() {
     assert_eq!(
         rendered,
         [
-            "• Running Read src/main.rs",
-            "• Running Writing src/main.rs · esc interrupt"
+            "• Running · esc interrupt",
+            "├ • Read src/main.rs",
+            "└ • Writing src/main.rs"
         ]
     );
 }
@@ -7227,8 +7209,9 @@ fn live_mcp_calls_use_running_heading_when_one_call_is_executing() {
     assert_eq!(
         rendered,
         [
-            "• Queued ClockifyGetTime workspace",
-            "• Running ClockifyStartTimer task-42 · esc interrupt"
+            "• Running · esc interrupt",
+            "├ ◦ ClockifyGetTime workspace · queued",
+            "└ • ClockifyStartTimer task-42"
         ]
     );
 }
@@ -7280,8 +7263,9 @@ fn speculative_live_tools_keep_individual_queued_rows() {
     assert_eq!(
         rendered,
         [
-            "• Queued UseSkill release-automation",
-            "• Queued Bash $ cargo test"
+            "• Queued",
+            "├ ◦ UseSkill release-automation",
+            "└ ◦ Bash cargo test"
         ]
     );
 }
@@ -7438,8 +7422,9 @@ fn live_batched_edits_with_casing_aliases_include_actions() {
     assert_eq!(
         rendered,
         [
-            "• Running Edit src/game/engine.ts",
-            "• Running Write src/App.tsx · esc interrupt",
+            "• Running · esc interrupt",
+            "├ • Edit src/game/engine.ts",
+            "└ • Write src/App.tsx",
         ]
     );
 }
@@ -7470,8 +7455,9 @@ fn live_multiple_generic_tools_show_running_heading() {
     assert_eq!(
         rendered,
         [
-            "• Running ClockifyTimer start",
-            "• Running NotifyUser done · esc interrupt",
+            "• Running · esc interrupt",
+            "├ • ClockifyTimer start",
+            "└ • NotifyUser done",
         ]
     );
 }
@@ -10095,7 +10081,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     assert!(stored_history_estimate > active_usage.used_tokens as usize);
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(
-        rendered.contains("USED 4.0k/100.0k · 4%"),
+        rendered.contains("USED 4.0k/100k · 4%"),
         "context summary must match provider prompt usage: {rendered:?}"
     );
     assert!(
@@ -10136,7 +10122,7 @@ fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths(
     for (width, height) in [(120, 24), (60, 24), (40, 24), (40, 12)] {
         let rendered = render_context_modal_to_text(&state, width, height);
         assert!(
-            rendered.contains("USED 116.7k/272.0k · 43%"),
+            rendered.contains("USED 116.7k/300k · 43%"),
             "used percentage must remain visible at {width}x{height}: {rendered:?}"
         );
         assert!(
@@ -11186,9 +11172,12 @@ fn mixed_live_work_has_status_markers_and_hanging_wrap() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("• Running Bash"), "{text}");
-        assert!(text.contains("• Queued mail.Search"), "{text}");
-        assert!(text.contains("• Running SpawnAgent"), "{text}");
+        assert!(text.starts_with("• Running"), "{text}");
+        assert!(text.contains("├ • Bash"), "{text}");
+        assert!(text.contains("├ ◦ mail.Search"), "{text}");
+        assert!(text.contains("· queued"), "{text}");
+        assert!(text.contains("└ • SpawnAgent"), "{text}");
+        assert_eq!(text.matches("Running").count(), 1, "{text}");
         assert!(
             !text.contains('│') && !text.contains('●') && !text.contains('○'),
             "{text}"
@@ -11421,8 +11410,9 @@ fn out_of_order_live_completion_preserves_remaining_sibling_marker_and_identity(
     assert_eq!(
         before,
         [
-            "• Running mail.Search query",
-            "• Running SpawnAgent inspect tests · esc interrupt"
+            "• Running · esc interrupt",
+            "├ • mail.Search query",
+            "└ • SpawnAgent inspect tests"
         ]
     );
     assert_eq!(
@@ -11573,6 +11563,11 @@ fn foreground_bottom_indicator_omits_repeated_identity_and_caps_width() {
     );
     assert!(!indicator.to_string().contains("Running"), "{indicator:?}");
     assert!(indicator.to_string().contains('⠋'), "{indicator:?}");
+    // #1773: the row still says what is happening and on which model.
+    assert_eq!(
+        indicator.to_string(),
+        format!("⠋ Executing · {}", snapshot.model_name())
+    );
 
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
@@ -11960,9 +11955,15 @@ fn many_live_children_preserve_the_cap_and_omission_count() {
         .collect::<Vec<_>>();
     let child_rows = rendered
         .iter()
-        .filter(|line| line.starts_with("• Running"))
+        .filter(|line| line.starts_with("├ • "))
         .count();
     assert_eq!(child_rows, 8, "{rendered:?}");
+    assert_eq!(rendered[0], "• Running · esc interrupt");
+    assert_eq!(
+        rendered.last().map(String::as_str),
+        Some("└ … +4 more"),
+        "the omission row closes the tree: {rendered:?}"
+    );
     assert!(
         rendered.iter().any(|line| line.contains("query 7")),
         "{rendered:?}"
@@ -12120,7 +12121,12 @@ fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
     let text = super::composer_render::active_work_indicator(&snapshot, 80, None)
         .expect("queued work keeps an indicator")
         .to_string();
-    assert_eq!(text.trim(), "⠋", "{text:?}");
+    // #1773: never a bare spinner; the state word differs from the cell's.
+    assert_eq!(
+        text,
+        format!("⠋ Generating · {}", snapshot.model_name()),
+        "{text:?}"
+    );
     let row = super::live_running_indicator(&snapshot, 80)
         .expect("queued work keeps the reserved row")
         .to_string();
@@ -12237,4 +12243,81 @@ fn disjoint_hunk_separator_is_padded_like_every_diff_row() {
             );
         }
     }
+}
+
+#[test]
+fn context_window_rounds_to_human_figures() {
+    // #1771: `1000.0K` was the banner's rendering of a one-million window.
+    for (tokens, expected) in [
+        (0, "0"),
+        (999, "999"),
+        (8_192, "8k"),
+        (32_000, "32k"),
+        (100_000, "100k"),
+        (128_000, "100k"),
+        (200_000, "200k"),
+        (262_144, "300k"),
+        (1_000_000, "1M"),
+        (1_048_576, "1M"),
+        (1_500_000, "1.5M"),
+        (2_000_000, "2M"),
+    ] {
+        assert_eq!(
+            super::composer_render::format_context_window(tokens),
+            expected,
+            "{tokens}"
+        );
+    }
+}
+
+#[test]
+fn committed_thought_is_not_repeated_while_an_mcp_call_is_still_invisible() {
+    // #1770: an argument-less MCP call has no target until it starts, so the
+    // live cell is hidden while `current_response` still holds the thought
+    // that history already committed. The thought painted twice.
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let thought = "<think>List the Teams chats.</think>";
+    for started in [false, true] {
+        let mut state = RenderState::new();
+        state.history.push(ChatMessage::new("user", "teams?"));
+        state.history.push(ChatMessage::new("assistant", thought));
+        set_current_response(&mut state, thought);
+        state.status = AppStatus::Streaming;
+        let mut call = rustcode::controller::LiveToolCall::new(
+            "call-1",
+            None,
+            "mcp__teams__list_chats",
+            "teams.list_chats",
+            "?",
+        );
+        call.execution_started = started;
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+        let rendered = render_state_to_text(&mut state, 100, 24);
+        assert_eq!(
+            rendered.matches("Thought for").count()
+                + rendered.matches("List the Teams chats.").count(),
+            1,
+            "started={started}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn committed_mcp_row_names_the_kind_of_call() {
+    use rustcode::controller::ToolResultRecord;
+    // #1770: `• Ran` over a bare `└ ✓ teams.list_chats` read as a broken row.
+    let mut state = RenderState::new();
+    state.history.push(
+        ChatMessage::new("tool", "mcp__teams__list_chats: []").with_tool_result(ToolResultRecord {
+            tool_name: "mcp__teams__list_chats".into(),
+            success: true,
+            ..Default::default()
+        }),
+    );
+    let text = super::render_committed_tool_result_group(&state, &[0], 80, false)
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("└ ✓ MCP teams.list_chats"), "{text}");
 }

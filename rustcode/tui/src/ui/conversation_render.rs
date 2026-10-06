@@ -90,10 +90,16 @@ fn render_live_tail_mode(
     // A tool may start after the assistant's thought has already entered
     // committed history while current_response still holds the same text.
     // Keep the committed thought and the live tool row, but do not paint the
-    // stale thought a second time below the tool.
-    if !visible_live_tool_calls.is_empty()
+    // stale thought a second time below the tool. The live call may not be
+    // visible yet (an argument-less MCP call has no target until it starts),
+    // and the inline tail holds only the unflushed part of the stream, so the
+    // check compares the whole response and does not wait for a tool (#1770).
+    if !model_live_text.is_empty()
         && state.history().last().is_some_and(|message| {
-            message.role == "assistant" && message.content.trim() == model_live_text.trim()
+            let committed = message.content.trim();
+            message.role == "assistant"
+                && (committed == model_live_text.trim()
+                    || committed == state.current_response().trim())
         })
     {
         model_live_text = "";

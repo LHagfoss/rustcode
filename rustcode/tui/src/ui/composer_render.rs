@@ -497,6 +497,27 @@ pub(super) fn format_token_count(tokens: u32) -> String {
     }
 }
 
+/// Human-sized model context window shared by the welcome banner and the
+/// `/context` panel. Windows are advertised in round figures, so values from
+/// 100k up snap to the nearest 100k (`128_000` → `100k`, `262_144` → `300k`,
+/// `1_000_000` → `1M`) and never carry a spurious `.0` (#1771).
+pub(in crate::ui) fn format_context_window(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 100_000 {
+        return format!("{}k", (tokens + 500) / 1_000);
+    }
+    let steps = (tokens + 50_000) / 100_000;
+    if steps < 10 {
+        format!("{}k", steps * 100)
+    } else if steps % 10 == 0 {
+        format!("{}M", steps / 10)
+    } else {
+        format!("{}.{}M", steps / 10, steps % 10)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ActiveWorkState {
     Idle,
@@ -593,7 +614,14 @@ pub(super) fn active_work_indicator(
             .any(super::history_cell::is_live_tool_call_visible);
     let short_background_head = matches!(work, ActiveWorkState::Background) && width <= 32;
     let head = if live_state_is_named {
-        marker.to_string()
+        // The live cell already says `Running`/`Queued`; a distinct state word
+        // keeps this row readable without repeating it (#1773). A queued call
+        // is still being streamed by the model, a started one is executing.
+        if matches!(work, ActiveWorkState::Queued) {
+            format!("{marker} Generating")
+        } else {
+            format!("{marker} Executing")
+        }
     } else if short_background_head {
         format!("{marker} Background")
     } else {
@@ -615,8 +643,9 @@ pub(super) fn active_work_indicator(
                 // The transcript's live cell already names the state, the tools
                 // and their identity: repeating either here rendered the same
                 // information twice. The bottom row keeps only what the cell
-                // lacks (#1725, #1726).
-                String::new()
+                // lacks (#1725, #1726): the model, so the row never collapses
+                // to a bare spinner beside the token total (#1773).
+                format!(" · {}", state.model_name())
             } else if matches!(work, ActiveWorkState::Queued) {
                 // Queued with nothing started yet: keep the model visible so
                 // the running row stays findable; there is nothing to

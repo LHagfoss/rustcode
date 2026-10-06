@@ -1112,9 +1112,11 @@ mod tests {
             100,
             30,
         );
+        // The wordmark belongs to the exit handoff only; the welcome banner
+        // no longer repeats it (#1772).
         let rendered = banner.iter().map(ToString::to_string).collect::<Vec<_>>();
         for line in lines {
-            assert!(rendered.iter().any(|row| row.contains(line.trim_end())));
+            assert!(!rendered.iter().any(|row| row.contains(line.trim_end())));
         }
     }
 

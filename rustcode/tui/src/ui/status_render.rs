@@ -530,33 +530,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     // the compact rewrite dropped it).
     banner.push(make_row(vec![]));
 
-    let wordmark_width = RUSTCODE_WORDMARK
-        .lines()
-        .map(UnicodeWidthStr::width)
-        .max()
-        .unwrap_or(0);
-    if inner_w >= wordmark_width + 4 {
-        for wordmark_line in RUSTCODE_WORDMARK.lines() {
-            let purple = wordmark_line
-                .chars()
-                .take(RUSTCODE_WORDMARK_SPLIT)
-                .collect::<String>();
-            let white = wordmark_line
-                .chars()
-                .skip(RUSTCODE_WORDMARK_SPLIT)
-                .collect::<String>();
-            banner.push(make_row(vec![
-                Span::raw("    "),
-                Span::styled(
-                    purple,
-                    Style::default().fg(Color::Rgb(181, 139, 255)).bg(reset_bg),
-                ),
-                Span::styled(white, Style::default().fg(Color::White).bg(reset_bg)),
-            ]));
-        }
-        banner.push(make_row(vec![]));
-    }
-
     // Session identity is useful when copying a report or resuming a run, so
     // keep it visually separate from the mutable model/workspace settings.
     // Keep the welcome card's content comfortably away from the border on
@@ -597,7 +570,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
 
     let context_window = format!(
         "{} tokens",
-        format_token_count(state.active_context_window())
+        format_context_window(u64::from(state.active_context_window()))
     );
     let context_display = fit_to_width(&context_window, inner_w.saturating_sub(label_w))
         .trim_end()
