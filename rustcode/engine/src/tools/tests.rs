@@ -37,6 +37,11 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "native function-calling interface",
         "plain-text summary",
         "do NOT print tool calls as text or JSON",
+        "For research/review answers, use comparison tables when useful",
+        "concise bullets, or short paragraphs",
+        "label verified findings, judgments, and gaps",
+        "never claim comprehensive coverage without evidence",
+        "Avoid fixed long templates",
     ] {
         assert!(prompt.contains(required), "missing {required:?}");
     }
