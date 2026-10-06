@@ -144,6 +144,9 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         return false;
     }
 
+    // Keep the exact persisted prefix available for archival even when the
+    // local request projection below prunes rendered tool output.
+    let archival_source = history.clone();
     let local_before: usize = history.iter().map(estimate_message_tokens).sum();
     let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
@@ -222,7 +225,12 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         lower.contains("11434") || lower.contains("ollama")
     };
     if is_local_engine || deterministic_only {
-        let structured = compact_with_structured_memory(history, keep_count, budget);
+        let structured = super::memory::compact_with_structured_memory_from_archive(
+            history,
+            keep_count,
+            budget,
+            &archival_source,
+        );
         emit_compaction_metrics(
             raw_tokens,
             total_tokens,
@@ -244,6 +252,7 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         summarize_count,
         Some(budget),
         Some(cancel_token),
+        &archival_source,
     )
     .await
     .is_ok();
@@ -284,6 +293,7 @@ pub async fn force_compact_with_budget_deterministic(
     budget: Option<usize>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    let archival_source = history.clone();
     prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_historical_reasoning(history, KEEP_RECENT_TURNS);
@@ -297,10 +307,11 @@ pub async fn force_compact_with_budget_deterministic(
         return Err("Not enough messages to compact.".to_string());
     }
     let keep_count = history.len().saturating_sub(summarize_count);
-    let compacted = compact_with_structured_memory(
+    let compacted = super::memory::compact_with_structured_memory_from_archive(
         history,
         keep_count,
         budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD),
+        &archival_source,
     );
     if !compacted {
         return Err("Deterministic local compaction could not reduce the history.".to_string());
@@ -405,6 +416,7 @@ pub async fn force_compact_with_budget(
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    let archival_source = history.clone();
     prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_historical_reasoning(history, KEEP_RECENT_TURNS);
@@ -427,6 +439,7 @@ pub async fn force_compact_with_budget(
         summarize_count,
         budget,
         cancel_token,
+        &archival_source,
     )
     .await;
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
@@ -447,6 +460,7 @@ async fn force_compact_internal(
     summarize_count: usize,
     budget: Option<usize>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
+    archival_source: &[ChatMessage],
 ) -> Result<(), String> {
     // A caller may have selected a message-count cut point. Normalize it to a
     // complete turn so a result is never sent without its announcing call.
@@ -500,7 +514,7 @@ async fn force_compact_internal(
         })
         .collect();
 
-    let summary = match generate_summary(
+    let mut summary = match generate_summary(
         client,
         url,
         model,
@@ -513,6 +527,21 @@ async fn force_compact_internal(
         Some(s) => s,
         None => return Err("Failed to generate summary.".to_string()),
     };
+
+    let archival_prefix = archival_source
+        .get(..summarize_count)
+        .ok_or_else(|| "archival history no longer matches compaction boundary".to_string())?;
+    let history_archive = crate::config::archive_history_prefix(archival_prefix)?;
+    let mut evidence_memory =
+        super::memory::StructuredSessionMemory::extract_from_history(archival_prefix);
+    evidence_memory.attach_archive_to_unlinked_reads(&history_archive);
+    let read_evidence = evidence_memory.format_read_evidence(2_000);
+    let command_evidence = evidence_memory.format_command_evidence(1_500);
+    if !read_evidence.is_empty() || !command_evidence.is_empty() {
+        summary.push_str("\n\n");
+        summary.push_str(&read_evidence);
+        summary.push_str(&command_evidence);
+    }
 
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
     let task_in_tail = pinned_task
@@ -555,7 +584,11 @@ async fn force_compact_internal(
         ));
     }
     retained_tail.extend(tail);
-    history.push(durable_compaction_message(&summary, &retained_tail));
+    history.push(durable_compaction_message(
+        &summary,
+        &retained_tail,
+        &history_archive,
+    ));
     history.extend(retained_tail);
 
     Ok(())
@@ -568,14 +601,15 @@ async fn force_compact_internal(
 pub(crate) fn durable_compaction_message(
     summary: &str,
     retained_tail: &[ChatMessage],
+    history_archive: &str,
 ) -> ChatMessage {
     ChatMessage::new(
         "system",
         format!(
-            "{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"
+            "{SUMMARY_MARKER}\n{summary}\n[Full compacted history prefix: {history_archive}; exact JSONL archive with one original message per line.]\n[End Summary — the following messages are the most recent conversation]"
         ),
     )
-    .with_compaction_boundary(compaction_boundary(summary, retained_tail))
+    .with_compaction_boundary(compaction_boundary(summary, retained_tail, history_archive))
 }
 
 /// Build a typed deterministic record without changing its historical
@@ -584,16 +618,27 @@ pub(crate) fn durable_compaction_message(
 pub(crate) fn durable_compaction_record_message(
     record: &str,
     retained_tail: &[ChatMessage],
+    history_archive: &str,
 ) -> ChatMessage {
-    ChatMessage::new("system", record)
-        .with_compaction_boundary(compaction_boundary(record, retained_tail))
+    ChatMessage::new(
+        "system",
+        format!(
+            "{record}\nFull compacted history prefix: {history_archive}; exact JSONL archive with one original message per line."
+        ),
+    )
+    .with_compaction_boundary(compaction_boundary(record, retained_tail, history_archive))
 }
 
-fn compaction_boundary(summary: &str, retained_tail: &[ChatMessage]) -> CompactionBoundary {
+fn compaction_boundary(
+    summary: &str,
+    retained_tail: &[ChatMessage],
+    history_archive: &str,
+) -> CompactionBoundary {
     CompactionBoundary {
         version: COMPACTION_BOUNDARY_VERSION,
         summary: summary.to_string(),
         first_retained_entry: retained_tail.first().map(CompactionEntry::from_message),
+        history_archive: Some(history_archive.to_string()),
     }
 }
 
@@ -932,6 +977,90 @@ mod preserved_user_request_tests {
     use super::*;
 
     #[tokio::test]
+    async fn ai_compaction_archives_the_exact_unpruned_prefix_before_rewrite() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let response = r#"{"choices":[{"message":{"content":"summary"}}]}"#;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 16 * 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let mut old_output = ChatMessage::new(
+            "tool",
+            format!("legacy output {}", "raw evidence ".repeat(4_000)),
+        );
+        old_output.tool_call_id = Some("command-call".into());
+        old_output.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            command: Some("cargo test -p rustcode".into()),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let mut history = vec![ChatMessage::new("user", "original task"), old_output];
+        for turn in 0..20 {
+            history.push(ChatMessage::new("user", format!("follow-up {turn}")));
+            history.push(ChatMessage::new("assistant", format!("progress {turn}")));
+        }
+        let original = history.clone();
+
+        force_compact_with_budget(
+            &reqwest::Client::new(),
+            &endpoint,
+            "mock-model",
+            &mut history,
+            Some(10_000),
+            None,
+        )
+        .await
+        .expect("mock summary compaction");
+        server.await.unwrap();
+
+        let boundary = history[0]
+            .compaction_boundary
+            .as_ref()
+            .expect("AI compaction boundary");
+        let archive_path = boundary
+            .history_archive
+            .as_ref()
+            .expect("AI compaction archives retired history");
+        let archived = std::fs::read_to_string(archive_path).expect("exact archived JSONL");
+        let archived_messages = archived
+            .lines()
+            .map(|line| serde_json::from_str::<ChatMessage>(line).expect("archived message"))
+            .collect::<Vec<_>>();
+        assert!(!archived_messages.is_empty());
+        assert_eq!(
+            archived_messages,
+            original[..archived_messages.len()].to_vec()
+        );
+        assert!(archived[0..].contains("raw evidence ".repeat(4_000).as_str()));
+        assert!(history[0].content.contains("Command evidence:"));
+        assert!(history[0].content.contains("cargo test -p rustcode"));
+        assert!(history[0].content.contains("\"exit_code\":0"));
+        assert!(history[0].content.contains("command-call"));
+    }
+
+    #[tokio::test]
     async fn deterministic_plan_compaction_never_opens_provider_http() {
         use tokio::net::TcpListener;
 
@@ -1170,6 +1299,30 @@ mod preserved_user_request_tests {
     fn deterministic_record_carries_bounded_file_inventories() {
         let mut read = ChatMessage::new("tool", "view_file: [File: src/lib.rs]\ncontents");
         read.tool_call_id = Some("read-1".into());
+        read.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "view_file".into(),
+            success: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
+            workspace_epoch: Some("epoch-1".into()),
+            workspace_generation: Some(9),
+            evidence_hash: Some("read-hash".into()),
+            full_output_artifact: Some("artifact://read-output".into()),
+            inspection: Some(rustcode_core::InspectionResultMetadata {
+                requested_path: Some("src/lib.rs".into()),
+                returned_path: Some("src/lib.rs".into()),
+                returned_range: Some(rustcode_core::InspectionRange {
+                    start: Some(3),
+                    end: Some(7),
+                }),
+                delivered_ranges: vec![rustcode_core::InspectionRange {
+                    start: Some(3),
+                    end: Some(7),
+                }],
+                fingerprint: "fingerprint".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
         let mut write = ChatMessage::new("tool", "write_to_file: wrote it");
         write.tool_result = Some(crate::app::ToolResultRecord {
             workspace_generation: None,
@@ -1187,6 +1340,14 @@ mod preserved_user_request_tests {
         ])
         .format_record(2_000);
         assert!(record.contains("Modified files: src/lib.rs"));
-        assert!(record.contains("Inspected files: src/lib.rs"));
+        assert!(record.contains("Inspected file paths: src/lib.rs"));
+        assert!(record.contains("\"path\":\"src/lib.rs\""));
+        assert!(record.contains("\"start\":3"));
+        assert!(record.contains("\"end\":7"));
+        assert!(record.contains("read-1"));
+        assert!(record.contains("read-hash"));
+        assert!(record.contains("artifact://read-output"));
+        assert!(!record.contains("tested"));
+        assert!(!record.contains("runtime-validated"));
     }
 }

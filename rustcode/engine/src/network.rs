@@ -568,6 +568,25 @@ pub(crate) fn failure_replan_message(tool: &str, category: &str, repeats: usize)
 const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
 
 fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
+    compact_history_deterministically_with_archive(history, budget, |prefix| {
+        crate::config::archive_history_prefix(prefix)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn compact_history_deterministically_with_archive(
+    history: &mut Vec<ChatMessage>,
+    budget: u32,
+    archive: impl FnOnce(&[ChatMessage]) -> Result<String, String>,
+) -> bool {
+    compact_history_deterministically_inner(history, budget, archive)
+}
+
+fn compact_history_deterministically_inner(
+    history: &mut Vec<ChatMessage>,
+    budget: u32,
+    archive: impl FnOnce(&[ChatMessage]) -> Result<String, String>,
+) -> bool {
     if history.len() < 4 {
         return false;
     }
@@ -604,17 +623,26 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
     let record_limit = budget
         .saturating_mul(3)
         .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
-    let record = deterministic_context_record(&history[..boundary], record_limit);
+    let history_archive = match archive(&history[..boundary]) {
+        Ok(path) => path,
+        Err(error) => {
+            dbg_log!("Skipping deterministic compaction because history archive failed: {error}");
+            return false;
+        }
+    };
+    let mut memory = crate::network::compaction::StructuredSessionMemory::extract_from_history(
+        &history[..boundary],
+    );
+    memory.attach_archive_to_unlinked_reads(&history_archive);
+    let record = memory.format_record(record_limit);
     let retained_tail = history[boundary..].to_vec();
-    let record_message =
-        crate::network::compaction::durable_compaction_record_message(&record, &retained_tail);
+    let record_message = crate::network::compaction::durable_compaction_record_message(
+        &record,
+        &retained_tail,
+        &history_archive,
+    );
     history.splice(0..boundary, [record_message]);
     true
-}
-
-fn deterministic_context_record(history: &[ChatMessage], max_chars: usize) -> String {
-    crate::network::compaction::StructuredSessionMemory::extract_from_history(history)
-        .format_record(max_chars)
 }
 
 pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) -> bool {

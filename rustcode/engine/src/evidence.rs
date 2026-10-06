@@ -88,8 +88,29 @@ pub(crate) fn project(
                         .unwrap_or("unknown source")
                 })
                 .unwrap_or("source recorded in transcript");
+            let ranges = record
+                .inspection
+                .as_ref()
+                .map(|inspection| {
+                    let ranges = if !inspection.delivered_ranges.is_empty() {
+                        inspection.delivered_ranges.as_slice()
+                    } else {
+                        inspection.returned_range.as_slice()
+                    };
+                    ranges
+                        .iter()
+                        .filter_map(|range| Some(format!("{}-{}", range.start?, range.end?)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .filter(|ranges| !ranges.is_empty())
+                .unwrap_or_else(|| "unknown".into());
+            let completeness = record.resolved_completeness().as_str();
+            let epoch = record.workspace_epoch.as_deref().unwrap_or("unknown");
+            let call_id = message.tool_call_id.as_deref().unwrap_or("unknown");
+            let artifact = record.full_output_artifact.as_deref().unwrap_or("none");
             Some(format!(
-                "[Recoverable evidence: {source}; generation={:?}; fingerprint={}. Reacquire with the original inspection tool before relying on current contents.]",
+                "[Recoverable evidence: {source}; completeness={completeness}; delivered_ranges={ranges}; workspace_generation={:?}; workspace_epoch={epoch}; tool_call_id={call_id}; evidence_hash={}; full_output_artifact={artifact}. This is source/document inspection evidence only, not test or runtime validation. Reacquire with the original inspection tool before relying on current contents.]",
                 record.workspace_generation,
                 record.evidence_hash.as_deref().unwrap_or("unknown")
             ))
@@ -172,5 +193,60 @@ mod tests {
                 .contains("Reacquire")
         );
         assert!(project(&restored, Some(1), true).is_none());
+    }
+
+    #[test]
+    fn stale_read_projection_keeps_exact_retrieval_and_range_provenance() {
+        let inspection = rustcode_core::InspectionResultMetadata {
+            requested_path: Some("src/lib.rs".into()),
+            requested_range: Some(rustcode_core::InspectionRange {
+                start: Some(10),
+                end: Some(14),
+            }),
+            returned_path: Some("src/lib.rs".into()),
+            returned_range: Some(rustcode_core::InspectionRange {
+                start: Some(10),
+                end: Some(14),
+            }),
+            complete: true,
+            next_range: None,
+            delivered_ranges: vec![rustcode_core::InspectionRange {
+                start: Some(10),
+                end: Some(14),
+            }],
+            fingerprint: "fingerprint-10-14".into(),
+        };
+        let read = ChatMessage::new("tool", "view_file: source text")
+            .answering(Some("call-read-10".into()))
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "view_file".into(),
+                success: true,
+                workspace_epoch: Some("epoch-old".into()),
+                workspace_generation: Some(7),
+                evidence_hash: Some("sha256-source".into()),
+                completeness: rustcode_core::ToolResultCompleteness::UserLimited,
+                full_output_artifact: Some("/config/tool_output/source.txt".into()),
+                inspection: Some(inspection),
+                ..Default::default()
+            });
+
+        let projected = project(&read, Some(8), false).expect("stale read is projected");
+        for required in [
+            "src/lib.rs",
+            "10-14",
+            "generation=Some(7)",
+            "epoch-old",
+            "call-read-10",
+            "sha256-source",
+            "/config/tool_output/source.txt",
+            "user_limited",
+        ] {
+            assert!(
+                projected.contains(required),
+                "missing {required}: {projected}"
+            );
+        }
+        assert!(!projected.contains("tested"));
+        assert!(!projected.contains("runtime-validated"));
     }
 }

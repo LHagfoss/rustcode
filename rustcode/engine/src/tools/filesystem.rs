@@ -88,8 +88,8 @@ fn view_file_schema() -> Value {
 
 pub const VIEW_FILE: Tool = Tool {
     name: "view_file",
-    description: "Return exact, numbered file text for an inclusive 1-indexed range (or list a directory). Output is never silently summarized: when the 800-line hard cap omits content, the result reports the omitted lines and exact next start line. Use targeted follow-up ranges instead of retrying through cat/sed/awk. Supports an optional UTF-8 byte offset.",
-    arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 800 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
+    description: "Return exact numbered file text for a requested inclusive 1-indexed range (or list a directory). For Markdown, explicitly request outline=true to get bounded headings with exact section ranges; expand a section with start_line and end_line. An outline is partial and never counts as a complete file read. Ordinary reads keep the 800-line cap and report the exact continuation range. Supports a UTF-8 byte offset for ordinary reads.",
+    arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 800 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content", "outline": "optional true to return a bounded Markdown heading outline only", "outline_offset": "optional zero-based offset for the next heading page", "outline_limit": "optional number of headings per page, 1 to 100 (default 50)"}"#,
     handler: view_file_tool,
     requires_confirmation: false,
     schema: view_file_schema,
