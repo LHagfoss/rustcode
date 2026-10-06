@@ -804,17 +804,22 @@ pub(super) fn background_command_lines_with_width(
     for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
         let command = rustcode::controller::background_command_label(&task.command, 240);
         let elapsed = fmt_elapsed_compact(task.started_at.elapsed().as_secs());
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![
-                Span::styled("• ", status_style),
-                Span::styled("Running ", status_style),
-                Span::styled(command, style),
-                Span::styled(format!(" · {elapsed}"), style),
-            ],
-            usize::from(width).max(1),
-            Some(Span::raw("  ")),
-        );
+        let marker = "• Running ";
+        let available = usize::from(width).saturating_sub(marker.width());
+        let candidate_suffix = format!(" · {elapsed}");
+        let suffix = if available > candidate_suffix.width() {
+            candidate_suffix
+        } else {
+            String::new()
+        };
+        let command_width = available.saturating_sub(suffix.width());
+        let command = super::modals::truncate_middle_to_width(&command, command_width);
+        lines.push(Line::from(vec![
+            Span::styled("• ", status_style),
+            Span::styled("Running ", status_style),
+            Span::styled(command, style),
+            Span::styled(suffix, style),
+        ]));
     }
     for result in state
         .pending_background_results()

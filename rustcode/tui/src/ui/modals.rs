@@ -354,19 +354,8 @@ pub(super) fn render_at_popup_menu(
 
 #[derive(Clone)]
 pub struct PickerItem {
-    pub group: String,
     pub name: String,
     pub desc: String,
-}
-
-fn picker_group_for_url(url: &str) -> &'static str {
-    if url.contains(":11434") {
-        "ollama"
-    } else if url.contains(":1976") {
-        "Apple Foundation Models"
-    } else {
-        "custom providers"
-    }
 }
 
 /// Model picker rows for the current config profiles, filtered by the
@@ -374,22 +363,16 @@ fn picker_group_for_url(url: &str) -> &'static str {
 /// The filter uses the shared fuzzy rule, so a typo still finds its profile
 /// and the row list agrees with the engine's selection rule (#1588).
 pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
-    let search = state.model_picker_search().to_lowercase();
-    state
-        .config()
-        .models
-        .iter()
-        .map(|p| PickerItem {
-            group: picker_group_for_url(&p.url).to_string(),
-            name: p.name.clone(),
-            desc: p.model.clone(),
-        })
-        .filter(|item| {
-            panel_row_matches(&item.name, search.as_str())
-                || panel_row_matches(&item.group, search.as_str())
-                || panel_row_matches(&item.desc, search.as_str())
-        })
-        .collect()
+    rustcode::controller::filtered_model_picker_profiles(
+        &state.config().models,
+        state.model_picker_search(),
+    )
+    .iter()
+    .map(|p| PickerItem {
+        name: p.name.clone(),
+        desc: p.model.clone(),
+    })
+    .collect()
 }
 
 /// Panel heights for the inline modals anchored above the composer. Each
@@ -579,7 +562,7 @@ fn paint_panel_line_backgrounds(lines: &mut [Line<'static>], panel: Color) {
     }
 }
 
-fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
+pub(super) fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
     let text = text.replace(['\r', '\n'], " ");
     if text.width() <= max_width {
         return text;

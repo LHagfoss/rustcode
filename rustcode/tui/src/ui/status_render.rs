@@ -536,7 +536,6 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         .max()
         .unwrap_or(0);
     if inner_w >= wordmark_width + 4 {
-        banner.push(make_row(vec![]));
         for wordmark_line in RUSTCODE_WORDMARK.lines() {
             let purple = wordmark_line
                 .chars()

@@ -1117,7 +1117,7 @@ fn append_expand_hint(lines: &mut [Line<'static>], width: u16, show_picker: bool
 /// 4 columns wide combined, matching the previous flat indent.
 fn tool_status_glyph(entry: &ToolTranscriptEntry) -> char {
     match entry.status.as_str() {
-        "running" => '●',
+        "running" => '•',
         "cancelled" => '−',
         _ if entry.success => '✓',
         _ => '×',
@@ -2117,6 +2117,27 @@ pub(super) fn fit_to_width(s: &str, target_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn running_tool_result_uses_the_shared_small_status_marker() {
+        let entry = super::ToolTranscriptEntry {
+            message_index: 0,
+            tool_name: "run_command".to_owned(),
+            action: "Bash".to_owned(),
+            target: "cargo test".to_owned(),
+            success: false,
+            status: "running".to_owned(),
+            body: Vec::new(),
+            kind: super::ToolTranscriptKind::Command,
+            diff_counts: None,
+        };
+        assert_eq!(super::tool_status_glyph(&entry), '•');
+
+        let mut completed = entry;
+        completed.status = "completed".to_owned();
+        completed.success = true;
+        assert_eq!(super::tool_status_glyph(&completed), '✓');
+    }
+
     #[test]
     fn legacy_arguments_skip_prose_without_losing_supported_call_encodings() {
         use rustcode::controller::{ChatMessage, ToolProtocol};

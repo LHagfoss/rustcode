@@ -71,6 +71,7 @@ pub(super) struct RenderFrameContext<'a> {
     /// inside the terminal) so the loop can notice and schedule a clean
     /// redraw instead of leaving a stale viewport.
     pub frame_presented: &'a mut bool,
+    pub demo_state: Option<&'a rustcode::controller::RenderState>,
 }
 
 pub(super) async fn render_frame(
@@ -89,7 +90,29 @@ pub(super) async fn render_frame(
         response_just_finished,
         last_progress_sent,
         frame_presented,
+        demo_state,
     } = context;
+    if let Some(demo_state) = demo_state {
+        let snapshot = render_snapshot(demo_state);
+        let size = terminal_runtime.terminal().size()?;
+        let mut demo_transcript = TranscriptState::default();
+        let desired_height = crate::ui::desired_height_snapshot(
+            &snapshot,
+            &mut demo_transcript,
+            size.width,
+            size.height,
+        );
+        *frame_presented = terminal_runtime
+            .terminal()
+            .draw_height(desired_height, |frame| {
+                let _ = crate::ui::render_with_transcript_snapshot(
+                    frame,
+                    &snapshot,
+                    &mut demo_transcript,
+                );
+            })?;
+        return Ok(());
+    }
     let (
         snapshot,
         terminal_width,

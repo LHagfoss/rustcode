@@ -10,6 +10,7 @@
 use crate::app::{AppStatus, LiveToolCall};
 
 pub use crate::app::activity::{ActivityKind, ActivitySnapshot};
+pub use crate::app::filtered_model_picker_profiles;
 pub use crate::app::fuzzy::{fuzzy_match_positions, fuzzy_matches};
 pub use crate::app::suggestion::CommandInfo;
 

@@ -81,6 +81,8 @@ pub(crate) struct AppRuntime {
     agent_ui_event_sender: AgentUiEventSender,
     agent_ui_event_receiver: AgentUiEventReceiver,
     task_subscriptions: HashMap<String, rustcode_tasks::TaskSubscription>,
+    /// TUI-only immutable view shown by `/test`; never installed in AppState.
+    demo_state: Option<ui::DemoState>,
 }
 
 #[derive(Debug)]
@@ -137,6 +139,7 @@ impl AppRuntime {
             agent_ui_event_sender,
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
+            demo_state: None,
         })
     }
 
@@ -167,6 +170,7 @@ impl AppRuntime {
             agent_ui_event_sender,
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
+            demo_state: None,
         }
     }
 
