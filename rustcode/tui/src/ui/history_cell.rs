@@ -874,10 +874,29 @@ pub(super) fn render_live_tool_cell_at(
     let action_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
     let target_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker);
     let mut lines = Vec::new();
-    let interrupt_row = calls
-        .iter()
-        .take(MAX_LIVE_CHILDREN)
-        .rposition(|call| call.execution_started);
+    // Several calls share one heading and hang beneath it as a tree, the shape
+    // the committed `• Ran` group takes once they finish. A lone call stays
+    // folded into its heading, like the committed single-command summary.
+    let grouped = calls.len() > 1;
+    let any_started = calls.iter().any(|call| call.execution_started);
+    let shown = calls.len().min(MAX_LIVE_CHILDREN);
+    let has_overflow = calls.len() > MAX_LIVE_CHILDREN;
+    if grouped {
+        let heading = if any_started { "Running" } else { "Queued" };
+        let hint = if any_started {
+            cancel_hint_suffix(width, 2 + heading.width())
+        } else {
+            ""
+        };
+        lines.push(fit_live_row(
+            Line::from(vec![
+                Span::styled("• ", title_style),
+                Span::styled(heading, title_style),
+                Span::styled(hint, detail_style),
+            ]),
+            usize::from(width),
+        ));
+    }
     for (call_index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
         let status = if call.execution_started {
             "Running"
@@ -887,7 +906,7 @@ pub(super) fn render_live_tool_cell_at(
         let target = super::tool_transcript::contract_home_path(&call.target, home_path);
         let target = if target.is_empty() || target == "?" {
             String::new()
-        } else if call.action == "Bash" {
+        } else if call.action == "Bash" && !grouped {
             format!("$ {target}")
         } else {
             target
@@ -913,11 +932,23 @@ pub(super) fn render_live_tool_cell_at(
             None
         }
         .unwrap_or_default();
-        let prefix_width = 2 + status.width() + 1 + call.action.width();
+        // The group heading names the running state once; a child only says
+        // so when it differs, i.e. it is still waiting its turn.
+        let state_suffix = if grouped && any_started && !call.execution_started {
+            " · queued"
+        } else {
+            ""
+        };
+        let is_last = call_index + 1 == shown && !has_overflow;
+        let prefix_width = if grouped {
+            4 + call.action.width()
+        } else {
+            2 + status.width() + 1 + call.action.width()
+        };
         let target_space = usize::from(!target.is_empty());
         let min_target = if target.is_empty() { 0 } else { 6 };
-        let suffix_width = duplicate_suffix.width() + elapsed_suffix.width();
-        let interrupt_hint = if interrupt_row == Some(call_index) {
+        let suffix_width = duplicate_suffix.width() + elapsed_suffix.width() + state_suffix.width();
+        let interrupt_hint = if !grouped && call.execution_started {
             cancel_hint_suffix(
                 width,
                 prefix_width + target_space + min_target + suffix_width,
@@ -926,14 +957,26 @@ pub(super) fn render_live_tool_cell_at(
             ""
         };
         let fixed = prefix_width + target_space + suffix_width + interrupt_hint.width();
-        // Each call carries its own state/action/target summary. This keeps
-        // mixed batches clear without a group heading, tree, or duplicate
-        // status glyph.
-        let mut spans = vec![
-            Span::styled("• ", title_style),
-            Span::styled(format!("{status} "), title_style),
-            Span::styled(call.action.clone(), action_style),
-        ];
+        let mut spans = if grouped {
+            vec![
+                super::tool_transcript::tool_tree_prefix(is_last, show_picker),
+                Span::styled(
+                    if call.execution_started {
+                        "• "
+                    } else {
+                        "◦ "
+                    },
+                    detail_style,
+                ),
+                Span::styled(call.action.clone(), action_style),
+            ]
+        } else {
+            vec![
+                Span::styled("• ", title_style),
+                Span::styled(format!("{status} "), title_style),
+                Span::styled(call.action.clone(), action_style),
+            ]
+        };
         if !target.is_empty() {
             let target_width = usize::from(width).saturating_sub(fixed);
             if target_width > 0 {
@@ -950,6 +993,9 @@ pub(super) fn render_live_tool_cell_at(
         if !elapsed_suffix.is_empty() {
             spans.push(Span::styled(elapsed_suffix, detail_style));
         }
+        if !state_suffix.is_empty() {
+            spans.push(Span::styled(state_suffix, detail_style));
+        }
         if !interrupt_hint.is_empty() {
             spans.push(Span::styled(interrupt_hint, detail_style));
         }
@@ -962,12 +1008,19 @@ pub(super) fn render_live_tool_cell_at(
                 .filter(|line| !line.trim().is_empty())
                 .next_back();
             if let Some(latest) = latest {
+                // Output hangs under its own call: beside the spine while
+                // siblings follow, under the action once it is the last child.
+                let indent = match (grouped, is_last) {
+                    (false, _) => "  ",
+                    (true, true) => "    ",
+                    (true, false) => "│   ",
+                };
                 lines.push(Line::from(vec![
-                    Span::raw("  "),
+                    Span::styled(indent, detail_style),
                     Span::styled(
                         truncate_to_width(
                             &rustcode_tool_protocol::text::strip_ansi_escapes(latest),
-                            usize::from(width).saturating_sub(2).max(1),
+                            usize::from(width).saturating_sub(indent.width()).max(1),
                         ),
                         detail_style,
                     ),
@@ -975,9 +1028,9 @@ pub(super) fn render_live_tool_cell_at(
             }
         }
     }
-    if calls.len() > MAX_LIVE_CHILDREN {
+    if has_overflow {
         lines.push(Line::from(vec![
-            Span::raw("  "),
+            super::tool_transcript::tool_tree_prefix(true, show_picker),
             Span::styled(
                 truncate_to_width(
                     &format!("… +{} more", calls.len() - MAX_LIVE_CHILDREN),
@@ -1077,13 +1130,13 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
-        assert!(
-            rendered[0].contains("Read src/main.rs · 1/2"),
-            "{rendered:?}"
-        );
-        assert!(
-            rendered[1].contains("Read src/main.rs · 2/2"),
-            "{rendered:?}"
+        assert_eq!(
+            rendered,
+            [
+                "• Running · esc interrupt",
+                "├ • Read src/main.rs · 1/2",
+                "└ • Read src/main.rs · 2/2"
+            ]
         );
         assert_eq!(
             rendered.join("\n").matches("esc").count(),

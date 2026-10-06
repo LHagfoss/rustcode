@@ -1182,6 +1182,15 @@ pub(super) fn tool_child_line(
             ));
         }
     } else {
+        // A dotted `server.tool` name alone reads as a broken row, most of all
+        // when the call took no arguments. Name what kind of call it was, the
+        // way siblings lead with `Bash`/`Read` (#1770).
+        if entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.') {
+            spans.push(Span::styled(
+                "MCP ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
         spans.push(Span::styled(
             entry.action.clone(),
             get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
