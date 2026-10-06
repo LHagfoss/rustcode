@@ -4,7 +4,7 @@ use sha2::Digest;
 use super::super::events::{ToolResult, ToolResultMetadata};
 use super::super::output::{
     COMPLETED_MUTATION_MARKER, COMPLETED_MUTATION_NOTICE, INCOMPLETE_TOOL_RESULT_MARKER,
-    truncate_tool_output_for_message_with_completion,
+    sanitize_tool_output, save_full_tool_output, truncate_tool_output_for_message_with_completion,
 };
 use super::super::{is_mutating_tool, mutation_made_progress};
 use super::preview::get_file_preview;
@@ -620,6 +620,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
     prefix: &str,
     answered_call: Option<String>,
 ) -> ChatMessage {
+    summarize_successful_verification(&mut result);
     normalize_incomplete_metadata(&mut result);
     let envelope = result.execution_envelope();
     let ToolResult {
@@ -656,6 +657,223 @@ pub(crate) fn tool_result_history_message_with_prefix(
         })
 }
 
+const MIN_VERIFICATION_OUTPUT_BYTES: usize = 8 * 1024;
+
+/// Summarize large successful Cargo check/test results as they first enter
+/// history. The complete sanitized output stays in its artifact, while failed,
+/// incomplete, unknown, and mixed-shell commands retain their original text.
+fn summarize_successful_verification(result: &mut ToolResult) {
+    if !matches!(result.tool_name.as_str(), "run_command" | "background_task")
+        || !result.metadata.success
+        || result.metadata.exit_code != Some(0)
+        || result.metadata.pending
+        || result.content.len() < MIN_VERIFICATION_OUTPUT_BYTES
+    {
+        return;
+    }
+    let incomplete = result.metadata.truncated
+        || !matches!(
+            result.metadata.completeness,
+            ToolResultCompleteness::Complete | ToolResultCompleteness::UserLimited
+        );
+    if incomplete && result.metadata.full_output_artifact.is_none() {
+        return;
+    }
+    let Some(command) = result.metadata.command.as_deref() else {
+        return;
+    };
+    if !known_cargo_verification_command(command) {
+        return;
+    }
+    let sanitized_content = sanitize_tool_output(&result.content);
+    let capture_is_partial = incomplete
+        || result
+            .metadata
+            .command_status
+            .as_ref()
+            .is_some_and(|status| status.output_truncated);
+    let Some(mut summary) = cargo_verification_summary(
+        command,
+        result
+            .metadata
+            .exit_code
+            .expect("checked successful exit code"),
+        result.metadata.command_status.as_ref(),
+        &sanitized_content,
+        capture_is_partial,
+    ) else {
+        return;
+    };
+    if summary.len() >= result.content.len() {
+        return;
+    }
+    let artifact = result
+        .metadata
+        .full_output_artifact
+        .clone()
+        .or_else(|| save_full_tool_output(&result.tool_name, &sanitized_content));
+    let Some(artifact) = artifact else {
+        return;
+    };
+    summary.push_str(&format!(
+        "\nFull output saved to: {artifact}\nUse grep to search the full output or view_file with line offsets to inspect it."
+    ));
+    result.content = summary;
+    result.metadata.full_output_artifact = Some(artifact);
+}
+
+fn known_cargo_verification_command(command: &str) -> bool {
+    let commands = command.split("&&").map(str::trim).collect::<Vec<_>>();
+    !commands.is_empty()
+        && commands.iter().all(|command| {
+            let cargo_command = command.split_whitespace().take(2).collect::<Vec<_>>();
+            matches!(cargo_command.as_slice(), ["cargo", "check" | "test"])
+                && super::super::compiler::is_verification_command(command)
+        })
+}
+
+fn cargo_verification_summary(
+    command: &str,
+    exit_code: i32,
+    command_status: Option<&rustcode_core::CommandResultMetadata>,
+    content: &str,
+    capture_is_partial: bool,
+) -> Option<String> {
+    let lines = content.lines().collect::<Vec<_>>();
+    if lines.iter().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("error:")
+            || line.starts_with("error[")
+            || line.starts_with("test ") && line.ends_with(" ... FAILED")
+            || line == "failures:"
+    }) {
+        return None;
+    }
+
+    let mut completion = Vec::new();
+    let mut warnings = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut collecting_warning = false;
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Finished ")
+            || trimmed.starts_with("running ")
+            || trimmed.starts_with("test result:")
+            || trimmed.starts_with("Doc-tests ")
+            || trimmed.starts_with("Running ")
+        {
+            completion.push(*line);
+            collecting_warning = false;
+        }
+        if trimmed.starts_with("warning:") {
+            warnings.push(*line);
+            collecting_warning = true;
+        } else if collecting_warning {
+            if is_cargo_output_boundary(trimmed) {
+                collecting_warning = false;
+            } else {
+                warnings.push(*line);
+            }
+        } else if !is_known_cargo_progress_line(trimmed) {
+            diagnostics.push(*line);
+        }
+    }
+
+    let is_test = command.split("&&").any(|segment| {
+        segment
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .as_slice()
+            == ["cargo", "test"]
+    });
+    let has_test_totals = completion
+        .iter()
+        .any(|line| line.trim_start().starts_with("test result:"));
+    let has_check_completion = completion
+        .iter()
+        .any(|line| line.trim_start().starts_with("Finished "));
+    if (is_test && !has_test_totals) || (!is_test && !has_check_completion) {
+        return None;
+    }
+
+    let mut summary = vec!["[Successful Cargo verification summary]".to_owned()];
+    summary.push(format!("Command: {command}"));
+    summary.push(format!("exit code: {exit_code}"));
+    if let Some(status) = command_status {
+        let signal = status.signal.map_or_else(
+            || "none".to_owned(),
+            |signal| match signal {
+                13 => "13 (SIGPIPE)".to_owned(),
+                signal => signal.to_string(),
+            },
+        );
+        summary.push(format!(
+            "[command status: completed={}; success=true; exit_code={:?}; signal={signal}; downstream_consumer_terminated={}; bytes_returned={}; total_output_bytes={:?}; output_truncated_by_rustcode={}]",
+            status.completed,
+            status.exit_code,
+            status.downstream_consumer_terminated,
+            status.bytes_returned,
+            status.total_output_bytes,
+            status.output_truncated,
+        ));
+    }
+    if !warnings.is_empty() {
+        summary.push("Warnings:".to_owned());
+        summary.extend(warnings.into_iter().map(str::to_owned));
+    }
+    if !diagnostics.is_empty() {
+        summary.push("Additional output:".to_owned());
+        summary.extend(diagnostics.into_iter().map(str::to_owned));
+    }
+    if !completion.is_empty() {
+        summary.push("Verification totals:".to_owned());
+        summary.extend(completion.into_iter().map(str::to_owned));
+    }
+    if capture_is_partial {
+        summary.push(
+            "Captured output is partial; totals cover only suites present in this capture. Use the saved artifact to inspect all text returned by the command runner."
+                .to_owned(),
+        );
+    }
+    Some(summary.join("\n"))
+}
+
+fn is_known_cargo_progress_line(line: &str) -> bool {
+    line.is_empty()
+        || line.starts_with("stdout:")
+        || line.starts_with("stderr:")
+        || line.starts_with("[command status:")
+        || line.starts_with("exit code:")
+        || line.starts_with("Checking ")
+        || line.starts_with("Compiling ")
+        || line.starts_with("Downloading ")
+        || line.starts_with("Downloaded ")
+        || line.starts_with("Updating ")
+        || line.starts_with("Locking ")
+        || line.starts_with("Adding ")
+        || line.starts_with("Removing ")
+        || line.starts_with("Fresh ")
+        || line.starts_with("Waiting for file lock on ")
+        || line.starts_with("Running ")
+        || line.starts_with("Finished ")
+        || line.starts_with("running ")
+        || line.starts_with("test result:")
+        || line.starts_with("Doc-tests ")
+        || (line.starts_with("test ") && line.ends_with(" ... ok"))
+}
+
+fn is_cargo_output_boundary(line: &str) -> bool {
+    line.starts_with("Checking ")
+        || line.starts_with("Compiling ")
+        || line.starts_with("Finished ")
+        || line.starts_with("Running ")
+        || line.starts_with("running ")
+        || line.starts_with("test result:")
+        || line.starts_with("Doc-tests ")
+        || line.starts_with("test ")
+}
+
 pub(crate) fn bounded_tool_result_history_message(
     result: ToolResult,
     prefix: &str,
@@ -683,6 +901,164 @@ pub(crate) fn subagent_tool_history_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verification_result(command: &str, content: String, success: bool) -> ToolResult {
+        ToolResult {
+            tool_name: "run_command".to_owned(),
+            content,
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success,
+                command: Some(command.to_owned()),
+                exit_code: Some(if success { 0 } else { 101 }),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn successful_cargo_test_is_summarized_with_warning_totals_artifact_and_call_pairing() {
+        let mut content = String::from(
+            "[command status: completed=true; success=true; exit_code=Some(0)]\nexit code: 0\nstdout:\nfatal: additional successful-command diagnostic\nwarning: unused import: `Thing`\n  --> src/lib.rs:4:5\n   |\n4  | use Thing;\n   |     ^^^^^\nwarning: api_key=verification-secret\nwarning: `rustcode-engine` generated 2 warnings\n    Checking rustcode-engine v0.57.6\n    Finished `dev` profile [unoptimized + debuginfo]\n    Finished `test` profile [unoptimized + debuginfo]\nrunning 1822 tests\n",
+        );
+        for index in 0..700 {
+            content.push_str(&format!("test suite::case_{index} ... ok\n"));
+        }
+        content.push_str(
+            "test result: ok. 700 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+        let input_bytes = content.len() as u64;
+        let original = sanitize_tool_output(&content);
+        let command = "cargo check --tests && cargo test --locked";
+        let mut result = verification_result(command, content, true);
+        result.metadata.command_status = Some(rustcode_core::CommandResultMetadata {
+            completed: true,
+            exit_code: Some(0),
+            signal: None,
+            downstream_consumer_terminated: false,
+            bytes_returned: input_bytes,
+            total_output_bytes: Some(original.len() as u64),
+            output_truncated: false,
+        });
+
+        let message = tool_result_history_message(result, Some("call-verification".to_owned()));
+
+        assert!(message.content.len() < original.len() / 4);
+        assert!(message.content.contains(command));
+        assert!(message.content.contains("exit code: 0"));
+        assert!(
+            message
+                .content
+                .contains("test result: ok. 700 passed; 0 failed")
+        );
+        assert!(message.content.contains("warning: unused import: `Thing`"));
+        assert!(message.content.contains("src/lib.rs:4:5"));
+        assert!(
+            message
+                .content
+                .contains("fatal: additional successful-command diagnostic")
+        );
+        assert!(message.content.contains("api_key=[REDACTED]"));
+        assert!(message.content.contains("bytes_returned="));
+        assert!(message.content.contains("Full output saved to:"));
+        assert!(!message.content.contains("verification-secret"));
+        assert_eq!(message.tool_call_id.as_deref(), Some("call-verification"));
+
+        let record = message.tool_result.expect("structured result record");
+        assert!(record.success);
+        assert_eq!(record.command.as_deref(), Some(command));
+        assert_eq!(record.exit_code, Some(0));
+        assert_eq!(record.command_status.unwrap().bytes_returned, input_bytes);
+        let artifact = record.full_output_artifact.expect("full output artifact");
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact content"),
+            original
+        );
+    }
+
+    #[test]
+    fn failed_cargo_test_keeps_diagnostics_unchanged() {
+        let content = format!(
+            "exit code: 101\nerror: test failed\n{}",
+            "diagnostic context\n".repeat(600)
+        );
+
+        let message = tool_result_history_message(
+            verification_result("cargo test", content.clone(), false),
+            Some("call-failed".to_owned()),
+        );
+
+        assert!(message.content.ends_with(&content));
+        let record = message.tool_result.expect("structured result record");
+        assert!(!record.success);
+        assert_eq!(record.command.as_deref(), Some("cargo test"));
+        assert_eq!(record.exit_code, Some(101));
+        assert_eq!(record.full_output_artifact, None);
+    }
+
+    #[test]
+    fn mixed_shell_command_keeps_successful_cargo_output_unchanged() {
+        let content = format!("exit code: 0\n{}", "test output\n".repeat(600));
+        let message = tool_result_history_message(
+            verification_result("cargo test && echo unrelated", content.clone(), true),
+            None,
+        );
+
+        assert!(message.content.ends_with(&content));
+        assert_eq!(message.tool_result.unwrap().full_output_artifact, None);
+    }
+
+    #[test]
+    fn unrecognized_cargo_command_keeps_successful_output_unchanged() {
+        let content = format!("exit code: 0\n{}", "clippy output\n".repeat(600));
+        let message = tool_result_history_message(
+            verification_result("cargo clippy --all-targets", content.clone(), true),
+            None,
+        );
+
+        assert!(message.content.ends_with(&content));
+        assert_eq!(message.tool_result.unwrap().full_output_artifact, None);
+    }
+
+    #[test]
+    fn truncated_success_requires_and_preserves_its_existing_artifact() {
+        let dir = tempfile::tempdir().expect("temporary artifact directory");
+        let artifact_path = dir.path().join("cargo-output.txt");
+        let mut content = String::from("exit code: 0\nrunning 400 tests\n");
+        for index in 0..600 {
+            content.push_str(&format!("test suite::case_{index} ... ok\n"));
+        }
+        content.push_str(
+            "test result: ok. 400 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+        std::fs::write(&artifact_path, &content).expect("write full output artifact");
+
+        let mut result = verification_result("cargo test", content, true);
+        result.metadata.truncated = true;
+        result.metadata.completeness = ToolResultCompleteness::ByteTruncated;
+        result.metadata.full_output_artifact = Some(artifact_path.to_string_lossy().to_string());
+
+        let message = tool_result_history_message(result, None);
+
+        assert!(
+            message
+                .content
+                .contains("test result: ok. 400 passed; 0 failed")
+        );
+        assert!(
+            message
+                .content
+                .contains(&artifact_path.to_string_lossy().to_string())
+        );
+        assert!(message.content.contains("Captured output is partial"));
+        let record = message.tool_result.expect("structured result record");
+        assert!(record.truncated);
+        assert_eq!(
+            record.full_output_artifact.as_deref(),
+            Some(artifact_path.to_string_lossy().as_ref())
+        );
+    }
 
     #[test]
     fn history_preserves_evidence_epoch_generation_and_hash_after_resume() {
