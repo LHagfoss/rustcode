@@ -630,6 +630,42 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     super::composer_render::truncate_to_display_width(text, width)
 }
 
+/// Keep each live status summary on one terminal row while preserving its
+/// colored prefix and marking clipped detail with an ellipsis.
+fn fit_live_row(line: Line<'static>, width: usize) -> Line<'static> {
+    if line.width() <= width {
+        return line;
+    }
+    if width == 0 {
+        return Line::default();
+    }
+    let mut fitted = Vec::new();
+    let mut remaining = width.saturating_sub(1);
+    let mut clipped_style = None;
+    'spans: for span in line.spans {
+        let mut kept = String::new();
+        for grapheme in span.content.graphemes(true) {
+            let grapheme_width = grapheme.width();
+            if grapheme_width > remaining {
+                clipped_style = Some(span.style);
+                if !kept.is_empty() {
+                    fitted.push(Span::styled(kept, span.style));
+                }
+                break 'spans;
+            }
+            remaining -= grapheme_width;
+            kept.push_str(grapheme);
+        }
+        if !kept.is_empty() {
+            fitted.push(Span::styled(kept, span.style));
+        }
+    }
+    if let Some(style) = clipped_style {
+        fitted.push(Span::styled("…", style));
+    }
+    Line::from(fitted)
+}
+
 /// Render the single mutable live tool cell shown at the end of the transcript.
 ///
 /// The cell deliberately contains only a bounded invocation summary. Tool
@@ -686,11 +722,6 @@ pub(super) fn render_live_tool_cell_at(
         let title_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
         let command = call.target.clone();
-        let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
-            .into_iter()
-            .next()
-            .map(|line| line.spans)
-            .unwrap_or_default();
         // One indicator row: the heading carries the state word, the command
         // and the elapsed clock together, mirroring the committed
         // `• Ran $ <cmd> · <status>` summary (#1725). A separate `●` child row
@@ -699,7 +730,8 @@ pub(super) fn render_live_tool_cell_at(
             Span::styled("• ", title_style),
             Span::styled("Running", title_style),
         ];
-        if command.is_empty() || command == "?" {
+        let show_command = command.is_empty() || command == "?";
+        if show_command {
             header.push(Span::styled(
                 " Bash",
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
@@ -709,27 +741,42 @@ pub(super) fn render_live_tool_cell_at(
                 " $ ",
                 get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
-            header.extend(command_spans);
         }
         let used: usize = header.iter().map(|span| span.content.width()).sum();
         let elapsed =
             super::fmt_elapsed_compact(now.saturating_duration_since(call.started_at).as_secs());
         // The elapsed clock shares the row, so reserve its columns too.
-        let elapsed_width = format!(" · {elapsed}").width();
+        let elapsed_suffix = format!(" · {elapsed}");
+        let elapsed_suffix = if usize::from(width) > used + elapsed_suffix.width() {
+            elapsed_suffix
+        } else {
+            String::new()
+        };
+        let room_after_elapsed = usize::from(width).saturating_sub(used + elapsed_suffix.width());
+        let cancel_hint = if room_after_elapsed >= " · esc interrupt".width() + 4 {
+            " · esc interrupt"
+        } else if room_after_elapsed >= " · esc".width() + 4 {
+            " · esc"
+        } else {
+            ""
+        };
+        if !show_command {
+            let command_width = usize::from(width)
+                .saturating_sub(used + elapsed_suffix.width() + cancel_hint.width());
+            let command = truncate_to_width(&command, command_width);
+            header.extend(
+                highlight_shell_command(&command, COLOR_BG(), show_picker)
+                    .into_iter()
+                    .next()
+                    .map(|line| line.spans)
+                    .unwrap_or_default(),
+            );
+        }
         header.push(Span::styled(
-            format!(
-                " · {elapsed}{}",
-                cancel_hint_suffix(width, used + elapsed_width)
-            ),
+            format!("{elapsed_suffix}{cancel_hint}"),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
-        let mut lines = Vec::new();
-        push_wrapped_with_continuation(
-            &mut lines,
-            header,
-            usize::from(width).max(1),
-            Some(Span::raw("  ")),
-        );
+        let mut lines = vec![fit_live_row(Line::from(header), usize::from(width))];
         if let Some(cwd) = &call.cwd {
             push_wrapped_with_continuation(
                 &mut lines,
@@ -878,6 +925,7 @@ pub(super) fn render_live_tool_cell_at(
         } else {
             ""
         };
+        let fixed = prefix_width + target_space + suffix_width + interrupt_hint.width();
         // Each call carries its own state/action/target summary. This keeps
         // mixed batches clear without a group heading, tree, or duplicate
         // status glyph.
@@ -887,12 +935,14 @@ pub(super) fn render_live_tool_cell_at(
             Span::styled(call.action.clone(), action_style),
         ];
         if !target.is_empty() {
-            spans.push(Span::raw(" "));
-            let fixed = prefix_width + 1 + suffix_width + interrupt_hint.width();
-            spans.push(Span::styled(
-                tail_to_width(&target, usize::from(width).saturating_sub(fixed).max(8)),
-                target_style,
-            ));
+            let target_width = usize::from(width).saturating_sub(fixed);
+            if target_width > 0 {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    tail_to_width(&target, target_width),
+                    target_style,
+                ));
+            }
         }
         if !duplicate_suffix.is_empty() {
             spans.push(Span::styled(duplicate_suffix, detail_style));
@@ -903,12 +953,7 @@ pub(super) fn render_live_tool_cell_at(
         if !interrupt_hint.is_empty() {
             spans.push(Span::styled(interrupt_hint, detail_style));
         }
-        push_wrapped_with_continuation(
-            &mut lines,
-            spans,
-            usize::from(width).max(1),
-            Some(Span::raw("  ")),
-        );
+        lines.push(fit_live_row(Line::from(spans), usize::from(width)));
         if call.execution_started && !matches!(verbosity, Verbosity::High) {
             let latest = call
                 .output

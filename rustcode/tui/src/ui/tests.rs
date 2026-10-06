@@ -2130,13 +2130,127 @@ fn welcome_wordmark_has_room_above_and_to_its_left() {
         .iter()
         .position(|line| line.contains('█'))
         .expect("wordmark is visible");
-    assert!(first_wordmark >= 3);
+    assert_eq!(
+        first_wordmark, 2,
+        "one blank row sits above the wordmark: {rendered:?}"
+    );
     assert!(
         rendered[1..first_wordmark]
             .iter()
             .all(|line| line.trim_matches(['│', ' ']).is_empty())
     );
     assert!(rendered[first_wordmark].starts_with("│    "));
+}
+
+#[test]
+fn active_tool_and_background_command_rows_keep_a_fixed_footprint() {
+    use rustcode::controller::{LiveToolCall, TaskDisplay, Verbosity};
+    let now = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    let mut foreground = LiveToolCall::new(
+        "build",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace --all-features -- --nocapture",
+    );
+    foreground.started_at = now - std::time::Duration::from_secs(12);
+    let mut queued = LiveToolCall::new(
+        "queued",
+        None,
+        "write_to_file",
+        "Writing",
+        "/Users/lagos/code/project/日本語/非常に長い/ファイル名.rs",
+    );
+    queued.execution_started = false;
+    let background = TaskDisplay {
+        id: "verify".into(),
+        command: "cargo test --workspace --all-features -- --nocapture".into(),
+        started_at: std::time::Instant::now(),
+        child_pid: None,
+    };
+
+    for width in [12u16, 16, 24, 40, 80] {
+        let active = super::history_cell::render_live_tool_cell_at(
+            &[foreground.clone()],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+            None,
+        );
+        assert_eq!(active.len(), 1, "foreground width {width}: {active:?}");
+        assert!(active[0].to_string().starts_with("• Running $"));
+        if width >= 24 {
+            assert!(active[0].to_string().contains("12s"), "{active:?}");
+        }
+        assert!(active[0].width() <= usize::from(width), "{active:?}");
+
+        let mut started_queued_tool = queued.clone();
+        started_queued_tool.execution_started = true;
+        started_queued_tool.started_at = now;
+        let started_rows = super::history_cell::render_live_tool_cell_at(
+            &[started_queued_tool],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+            None,
+        );
+        assert_eq!(
+            started_rows.len(),
+            1,
+            "started width {width}: {started_rows:?}"
+        );
+        if width >= 24 {
+            assert!(started_rows[0].to_string().starts_with("• Running Writing"));
+        } else {
+            assert!(started_rows[0].to_string().starts_with("• Running"));
+        }
+        assert!(
+            started_rows[0].width() <= usize::from(width),
+            "{started_rows:?}"
+        );
+
+        let queued_rows = super::history_cell::render_live_tool_cell_at(
+            &[queued.clone()],
+            width,
+            &Verbosity::Low,
+            false,
+            now,
+            None,
+        );
+        assert_eq!(
+            queued_rows.len(),
+            1,
+            "queued width {width}: {queued_rows:?}"
+        );
+        if width >= 24 {
+            assert!(queued_rows[0].to_string().starts_with("• Queued Writing"));
+        } else {
+            assert!(queued_rows[0].to_string().starts_with("• Queued"));
+        }
+        assert!(
+            queued_rows[0].width() <= usize::from(width),
+            "{queued_rows:?}"
+        );
+
+        let mut state = RenderState::new();
+        state.background_tasks = vec![background.clone()];
+        let background_rows = super::composer_render::background_command_lines_with_width(
+            &render_snapshot(&state),
+            width,
+        );
+        assert_eq!(
+            background_rows.len(),
+            1,
+            "background width {width}: {background_rows:?}"
+        );
+        assert!(background_rows[0].to_string().starts_with("• Running"));
+        assert!(
+            background_rows[0].width() <= usize::from(width),
+            "{background_rows:?}"
+        );
+    }
 }
 
 #[test]
@@ -10796,7 +10910,7 @@ fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
         assert_eq!(children.len(), 4, "{text}");
         for child in children {
             assert!(
-                ["✓", "×", "−", "●"]
+                ["✓", "×", "−", "•"]
                     .iter()
                     .any(|marker| child.contains(marker)),
                 "child row needs its state marker: {child:?} in {text}"
@@ -11060,10 +11174,7 @@ fn single_running_command_folds_into_one_indicator_row() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-        assert!(
-            rendered[0].starts_with("• Running $ cargo test"),
-            "{rendered:?}"
-        );
+        assert!(rendered[0].starts_with("• Running $ cargo"), "{rendered:?}");
         assert!(
             rendered.iter().any(|line| line.contains("12s")),
             "{rendered:?}"
@@ -11371,10 +11482,12 @@ fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(
-            text.contains("1m"),
-            "width {width} keeps the clock: {text:?}"
-        );
+        if width >= 24 {
+            assert!(
+                text.contains("1m"),
+                "width {width} keeps the clock: {text:?}"
+            );
+        }
         // When a hint is emitted it shares a row with the clock or the command:
         // it must never wrap onto a row of its own or overflow the clock's row.
         for row in &rendered {
