@@ -3516,21 +3516,19 @@ fn command_authorization_allows_harmless_inspection_but_confirms_side_effects() 
 }
 
 #[test]
-fn prompt_makes_delegation_explicitly_opt_in() {
+fn delegation_prompt_matches_tool_availability() {
     let prompt = tool_system_prompt(
         false,
         crate::config::ToolProtocol::Json,
         crate::config::AgentMode::Build,
     );
-    // Without delegation armed there is no callable subagent tool, so promising
-    // a delegation workflow only invited probing for one that was never
-    // offered. (#1589)
-    assert!(!prompt.contains("Do not spawn subagents unless the user explicitly requests"));
+    // When unavailable, explain how to enable it and honor the hard config gate.
+    assert!(!prompt.contains("Subagent tools are available by default"));
     assert!(!prompt.contains("Review every subagent result"));
     assert!(!prompt.contains("- spawn_agent | Args:"));
-    // It still has to say why, or the model searches MCP for a tool. (#1710)
-    assert!(prompt.contains("No subagent tools this task"));
+    assert!(prompt.contains("No agent tools; don't search"));
     assert!(prompt.contains("`/delegate`"));
+    assert!(prompt.contains("config disables"));
     for policy in [
         ToolSchemaPolicy::subagent(),
         ToolSchemaPolicy::read_only_inspection(),
@@ -3548,7 +3546,8 @@ fn prompt_makes_delegation_explicitly_opt_in() {
         crate::config::ToolProtocol::Json,
         crate::config::AgentMode::Build,
     );
-    assert!(delegated.contains("Do not spawn subagents unless the user explicitly requests"));
+    assert!(delegated.contains("Subagent tools are available by default"));
+    assert!(delegated.contains("use them when parallel work or independent review will help"));
     assert!(delegated.contains("Review every subagent result"));
     assert!(delegated.contains("- spawn_agent | Args:"));
     assert!(!delegated.contains("No subagent tools this task"));

@@ -1938,7 +1938,7 @@ For live local app/device state without a matching tool or route hint, check `li
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "# Delegation Policy\n\\
-- Do not spawn subagents unless the user explicitly requests delegation/parallel agent work or applicable project instructions require it.\n\\
+- Subagent tools are available by default; use them when parallel work or independent review will help the task.\n\\
 - Before delegating, identify the critical path and keep blockers in the main agent. Delegate only bounded, self-contained side tasks with clear outputs and disjoint write scopes.\n\\
 - Review every subagent result and inspect its workspace changes before treating the task as complete.\n\\n",
         );
@@ -1949,7 +1949,7 @@ For live local app/device state without a matching tool or route hint, check `li
         // hint the model spent rounds searching MCP for one. (#1710)
         p.push_str(
             "# Delegation\n\
-- No subagent tools this task; do not search. User enables via `/delegate`.\n\n",
+- No agent tools; don't search. `/delegate` unless config disables.\n\n",
         );
     }
 

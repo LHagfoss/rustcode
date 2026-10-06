@@ -1205,6 +1205,10 @@ pub struct AppConfig {
     pub max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]
     pub subagent_concurrency_limit: usize,
+    /// Allow the model to use subagent tools. This is a user-level safety
+    /// switch; project configuration cannot turn it back on when disabled.
+    #[serde(default = "default_true")]
+    pub delegation_enabled: bool,
     /// Loop-guard budgets (`[loop_guard]` in config.toml). User config only.
     #[serde(default)]
     pub loop_guard: LoopGuardConfig,
@@ -1347,6 +1351,8 @@ struct RuntimeConfig {
     max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]
     subagent_concurrency_limit: usize,
+    #[serde(default = "default_true")]
+    delegation_enabled: bool,
     #[serde(default)]
     last_active_session_id: Option<String>,
     #[serde(default)]
@@ -1405,6 +1411,8 @@ struct TomlConfig {
     max_total_tool_rounds: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_concurrency_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegation_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     loop_guard: Option<LoopGuardConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1564,6 +1572,7 @@ impl Default for AppConfig {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_total_tool_rounds: DEFAULT_MAX_TOTAL_TOOL_ROUNDS,
             subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
+            delegation_enabled: true,
             loop_guard: LoopGuardConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
@@ -1815,6 +1824,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.max_tool_rounds = runtime.max_tool_rounds;
                     config.max_total_tool_rounds = runtime.max_total_tool_rounds;
                     config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
+                    config.delegation_enabled = runtime.delegation_enabled;
                     config.last_active_session_id = runtime.last_active_session_id;
                     config.mcp_servers = runtime.mcp_servers;
                     config.approved_command_prefixes = runtime.approved_command_prefixes;
@@ -1957,6 +1967,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         max_tool_rounds: Some(config.max_tool_rounds),
         max_total_tool_rounds: Some(config.max_total_tool_rounds),
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
+        delegation_enabled: Some(config.delegation_enabled),
         loop_guard: Some(config.loop_guard),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
@@ -2050,6 +2061,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(limit) = file.subagent_concurrency_limit {
         config.subagent_concurrency_limit = limit;
     }
+    if let Some(enabled) = file.delegation_enabled {
+        config.delegation_enabled = enabled;
+    }
     if let Some(loop_guard) = file.loop_guard {
         config.loop_guard = loop_guard;
     }
@@ -2137,6 +2151,9 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Loop-guard budgets are user safety decisions, mirroring command
     // permissions: a project file must not disable recovery guards.
     file.loop_guard = None;
+    // Delegation is an explicit user-level capability; checked-out project
+    // config must not enable it when the user has disabled it.
+    file.delegation_enabled = None;
     // Legacy user data should remain attached to the global config, never a
     // checked-out project file.
     file.legacy_laya = None;
@@ -2189,6 +2206,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     }
     if file.subagent_concurrency_limit.is_some() {
         persisted.subagent_concurrency_limit = global.subagent_concurrency_limit;
+    }
+    if file.delegation_enabled.is_some() {
+        persisted.delegation_enabled = global.delegation_enabled;
     }
     if file.mcp_servers.is_some() {
         persisted.mcp_servers = global.mcp_servers.clone();
@@ -2246,6 +2266,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         max_tool_rounds: None,
         max_total_tool_rounds: None,
         subagent_concurrency_limit: None,
+        delegation_enabled: None,
         loop_guard: None,
         last_active_session_id: None,
         mcp_servers: None,
