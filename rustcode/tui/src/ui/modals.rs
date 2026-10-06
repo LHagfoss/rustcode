@@ -385,7 +385,7 @@ pub(super) const SUBAGENT_PICKER_HEIGHT: u16 = 18;
 pub(super) const MCP_CONFIG_HEIGHT: u16 = 14;
 pub(super) const COMMAND_PICKER_HEIGHT: u16 = 14;
 pub(super) const THEME_PICKER_HEIGHT: u16 = 12;
-pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 14;
+pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 17;
 /// Header, provider/account, model/session/messages, optional token line and
 /// one-row padding above and below the panel.
 pub(super) const STATUS_MODAL_HEIGHT: u16 = 10;
