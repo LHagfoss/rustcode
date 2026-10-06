@@ -296,18 +296,28 @@ async fn handle_enter_inner(
             }
 
             "/delegate" => {
-                if tokens.get(1).is_some_and(|mode| *mode == "off") {
+                if !s.config.delegation_enabled {
+                    s.delegation_armed = false;
+                    s.delegation_sticky = false;
+                    s.delegation_active = false;
+                    s.show_command_panel(
+                        "Subagents",
+                        "Subagents are disabled by `delegation_enabled = false` in config.",
+                    );
+                } else if tokens.get(1).is_some_and(|mode| *mode == "off") {
                     s.delegation_armed = false;
                     s.delegation_sticky = false;
                     s.delegation_active = false;
                     s.show_command_panel("Subagents", "Subagents disabled.");
                 } else if tokens.get(1).is_some_and(|mode| *mode == "on") {
+                    s.delegation_armed = false;
                     s.delegation_sticky = true;
                     s.show_command_panel(
                         "Subagents",
                         "Subagents enabled for this session. Use /delegate off to disable.",
                     );
                 } else {
+                    s.delegation_sticky = false;
                     s.delegation_armed = true;
                     s.show_command_panel(
                         "Subagents",
@@ -626,7 +636,7 @@ async fn handle_enter_inner(
                 if goal_text.trim().is_empty() {
                     s.show_command_panel("Goal", "Usage: /goal <task description>");
                 } else {
-                    super::submit::begin_task_delegation(&mut s, &goal_text);
+                    super::submit::begin_task_delegation(&mut s);
                     s.continuous_mode = true;
                     let goal_msg = format!(
                         "Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.",

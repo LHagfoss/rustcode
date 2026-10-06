@@ -1,9 +1,11 @@
 # Inspectable agent threads
 
-`/delegate` authorizes delegation for the next task, `/delegate on` for the
-rest of the session, and `/delegate off` revokes both. A prompt that explicitly
-asks for subagents ("use 2 subagents to ...", "spawn an agent ...") authorizes
-its own task. `spawn_agent` returns
+Subagent tools are available by default. `/delegate` arms them for the next
+task only, `/delegate on` keeps them available for the session, and
+`/delegate off` disables them for the session until an explicit `/delegate`
+command. Set
+`delegation_enabled = false` in the user `config.toml` to disable delegation
+entirely; project config cannot override this user-level setting. `spawn_agent` returns
 immediately with a stable session-local numeric ID. Children retain separate
 histories, model context budgets and loop detectors. The existing configurable
 `subagent_concurrency_limit` controls admitted execution; additional children

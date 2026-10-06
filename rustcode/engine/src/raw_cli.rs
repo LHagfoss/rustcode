@@ -112,7 +112,7 @@ fn background_task_history_message(
 pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
     let mut state = AppState::new();
     state.raw_cli_mode = true;
-    crate::app::actions::begin_task_delegation(&mut state, prompt);
+    crate::app::actions::begin_task_delegation(&mut state);
 
     if let Some(m_name) = model_override {
         if let Some(profile) = state.config.models.iter().find(|m| m.name == m_name) {
@@ -698,15 +698,9 @@ mod tests {
     }
 
     #[test]
-    fn headless_explicit_subagent_request_arms_delegation_tools() {
-        let state = build_state("use 1 sub agent to check latest PRs", None);
+    fn headless_task_has_delegation_tools_by_default() {
+        let state = build_state("inspect the project", None);
         assert!(state.delegation_active);
-    }
-
-    #[test]
-    fn headless_subagent_mention_without_request_does_not_arm_delegation() {
-        let state = build_state("fix the /agents subagent picker", None);
-        assert!(!state.delegation_active);
     }
 
     #[tokio::test]

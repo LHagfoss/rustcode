@@ -38,6 +38,7 @@ Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/lo
 - [Per-request thinking routing](docs/thinking-router.md)
 - [Runtime and workspace architecture](docs/architecture.md)
 - [TUI slash commands and command panels](docs/command-panels.md)
+- [Subagent delegation](docs/multi-agent.md)
 - [Discord Rich Presence](docs/discord-rich-presence.md)
 - [Build-boundary benchmark](scripts/bench-build-boundaries.md)
 
