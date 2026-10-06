@@ -26,3 +26,6 @@ docs/superpowers/
 /tests/
 /AGENT_HARNESS_CONTRACTS.md
 .codexignore
+
+# Scratch directory written by agent sessions and by engine tests.
+/sandbox/
