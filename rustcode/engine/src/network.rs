@@ -568,7 +568,7 @@ pub(crate) fn failure_replan_message(tool: &str, category: &str, repeats: usize)
 const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
 
 fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
-    compact_history_deterministically_with_archive(history, budget, |prefix| {
+    compact_history_deterministically_inner(history, budget, |prefix| {
         crate::config::archive_history_prefix(prefix)
     })
 }
