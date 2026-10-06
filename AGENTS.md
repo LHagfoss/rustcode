@@ -52,8 +52,18 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
 
 ## Search
 
-- Use `rg` for exact searches; use SocratiCode for unclear architecture, then
-  verify source.
+- Search in layers, from intent to exact match: **SocratiCode → ast-grep → rg**.
+  1. **SocratiCode** (`codebase_search`, `codebase_impact`, `codebase_flow`,
+     `codebase_context_search`) when you don't yet know where something lives:
+     hybrid semantic search and the dependency graph find the concept and its
+     blast radius. Verify the source before acting.
+  2. **ast-grep** (`ast-grep run -p '<pattern>' -l <lang> <path>`) once you know
+     the syntactic shape: structural matches ignore comments/strings and
+     formatting, support metavariables (`let $A = $B`, `foo($A)`), and can
+     rewrite code (codemods) or run lint rules. Prefer it over regex for
+     refactors. Use the `ast-grep` binary, not the deprecated `sg` alias.
+  3. **`rg`** for exact strings, configs, logs, and non-code files — the
+     cheapest, always-available fallback.
 - Search for existing behavior before adding helpers or dependencies.
 - Prefer project code, then std, then a small local implementation; match
   existing conventions.
