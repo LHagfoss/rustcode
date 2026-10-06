@@ -779,6 +779,7 @@ fn start_new_session_clears_history_and_starts_fresh() {
     assert_eq!(state.history.len(), 1);
     assert_eq!(state.history[0].role, "system");
     assert_eq!(state.history[0].content, "✨ New chat started");
+    assert!(state.delegation_sticky);
 }
 
 #[test]
@@ -1915,39 +1916,17 @@ fn submit_plain_prompt_ignores_empty_text_and_queues_in_order() {
 }
 
 #[test]
-fn explicit_subagent_request_enables_delegation_for_that_task() {
-    use super::submit::prompt_requests_delegation;
-
-    for prompt in [
-        // Originating session prompt (#1710), typo included.
-        "use 1 sub agent to check latet PRs or stuff done",
-        "Use two sub-agents to review the diff",
-        "spawn an agent to audit the scheduler",
-        "delegate this task to a subagent",
-        "check the PRs with 3 parallel subagents",
-        "have a subagent read the logs",
-    ] {
-        assert!(prompt_requests_delegation(prompt), "{prompt}");
-    }
-    for prompt in [
-        "fix the subagent picker",
-        "why does spawn_agent fail?",
-        "use agent mode for this",
-        "don't use subagents, just check the PRs",
-        "do this without using sub agents",
-        "check latest PRs",
-    ] {
-        assert!(!prompt_requests_delegation(prompt), "{prompt}");
-    }
-}
-
-#[test]
-fn delegation_is_scoped_by_prompt_arming_and_sticky_mode() {
+fn delegation_is_default_on_and_session_opt_out_persists() {
     use crate::app::AppState;
 
     let mut state = AppState::new();
-    super::submit_plain_prompt(&mut state, "use 1 sub agent to check PRs".into());
+    super::submit_plain_prompt(&mut state, "check PRs".into());
     assert!(state.delegation_active);
+
+    // `/delegate off` clears sticky mode; prompt wording must not opt back in.
+    state.delegation_sticky = false;
+    super::submit_plain_prompt(&mut state, "use 1 subagent to check PRs".into());
+    assert!(!state.delegation_active);
     super::submit_plain_prompt(&mut state, "check PRs".into());
     assert!(!state.delegation_active);
 
@@ -1961,6 +1940,67 @@ fn delegation_is_scoped_by_prompt_arming_and_sticky_mode() {
     state.delegation_sticky = true;
     super::submit_plain_prompt(&mut state, "check PRs".into());
     super::submit_plain_prompt(&mut state, "check them again".into());
+    assert!(state.delegation_active);
+}
+
+#[test]
+fn delegation_is_enabled_for_a_fresh_session_without_a_magic_phrase() {
+    use crate::app::AppState;
+
+    let mut state = AppState::new();
+    super::submit_plain_prompt(&mut state, "review the latest PRs".into());
+
+    assert!(state.delegation_active);
+}
+
+#[test]
+fn config_opt_out_blocks_prompt_and_slash_command_arming() {
+    use crate::app::AppState;
+
+    let mut state = AppState::new();
+    state.config.delegation_enabled = false;
+    state.delegation_sticky = true;
+    state.delegation_armed = true;
+    super::submit_plain_prompt(&mut state, "spawn an agent to inspect the diff".into());
+
+    assert!(!state.delegation_active);
+    assert!(!state.delegation_armed);
+}
+
+#[tokio::test]
+async fn delegate_commands_control_the_session_default() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+    state.lock().await.input_buffer = "/delegate off".to_owned();
+    super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
+    {
+        let mut state = state.lock().await;
+        super::submit_plain_prompt(&mut state, "spawn an agent to inspect the diff".into());
+        assert!(!state.delegation_active);
+    }
+
+    state.lock().await.input_buffer = "/delegate".to_owned();
+    super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
+    {
+        let mut state = state.lock().await;
+        assert!(state.delegation_armed);
+        assert!(!state.delegation_sticky);
+        super::submit_plain_prompt(&mut state, "inspect the diff".into());
+        assert!(state.delegation_active);
+        super::submit_plain_prompt(&mut state, "inspect again".into());
+        assert!(!state.delegation_active);
+    }
+
+    state.lock().await.input_buffer = "/delegate on".to_owned();
+    super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await;
+    let mut state = state.lock().await;
+    super::submit_plain_prompt(&mut state, "inspect one more time".into());
     assert!(state.delegation_active);
 }
 

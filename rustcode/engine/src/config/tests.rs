@@ -1150,6 +1150,44 @@ fn subagent_concurrency_limit_round_trips_through_runtime_config() {
 }
 
 #[test]
+fn delegation_enabled_defaults_on_and_round_trips_as_a_user_setting() {
+    let defaults = AppConfig::default();
+    assert!(defaults.delegation_enabled);
+
+    let dir = temp_dir("delegation_enabled");
+    let mut config = defaults;
+    config.delegation_enabled = false;
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert!(!loaded.delegation_enabled);
+}
+
+#[test]
+fn project_config_cannot_enable_delegation_disabled_by_user() {
+    let root = temp_dir("project_delegation_cannot_override_user");
+    let global_dir = root.join("global");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::create_dir_all(workspace.join(PROJECT_CONFIG_DIR)).unwrap();
+
+    let mut user_config = AppConfig::default();
+    user_config.delegation_enabled = false;
+    save_config_to(&global_dir, &user_config);
+    std::fs::write(
+        workspace.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE),
+        "delegation_enabled = true\n",
+    )
+    .unwrap();
+
+    let (_, _, mut loaded) = load_config_from(&global_dir);
+    let project =
+        read_toml_config(&workspace.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE)).unwrap();
+    apply_project_toml_config(&mut loaded, project);
+    assert!(!loaded.delegation_enabled);
+}
+
+#[test]
 fn image_input_capability_is_explicit_and_vision_profile_is_configurable() {
     let mut profile = AppConfig::default().models[0].clone();
     assert_eq!(profile.image_input_supported(), Some(false));
