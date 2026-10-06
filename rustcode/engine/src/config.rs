@@ -100,8 +100,9 @@ pub const CHATGPT_DEFAULT_CONTEXT_WINDOW: u32 = 272_000;
 /// Zero means no fixed round ceiling. Turns still terminate on context,
 /// token, cancellation, and progress/recovery safety budgets.
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 0;
-/// Zero means no additional total-round ceiling. Set this explicitly for an
-/// unattended/CI run that needs a hard cap across all continuation segments.
+/// Kept as a compatibility default for persisted configurations. Live logical
+/// turns ignore this legacy ceiling; cancellation, token, and loop guards
+/// remain active.
 pub const DEFAULT_MAX_TOTAL_TOOL_ROUNDS: usize = 0;
 pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 /// Tool rounds should be short and action-oriented. Reasoning models often
@@ -1194,13 +1195,12 @@ pub struct AppConfig {
     pub vision_model: Option<String>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
-    /// Maximum tool/recovery rounds in one resumable segment. A finite legacy
-    /// value such as 40 remains valid and is continued automatically only
-    /// after meaningful progress; zero disables this segment backstop.
+    /// Legacy setting retained for configuration-file compatibility. Live
+    /// logical turns ignore this field and do not have a round ceiling.
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: usize,
-    /// Optional hard ceiling across all segments, intended for unattended or
-    /// CI runs. Zero leaves total rounds bounded by the other safety guards.
+    /// Legacy setting retained for configuration-file compatibility. Live
+    /// logical turns ignore this field and do not have a total-round ceiling.
     #[serde(default = "default_max_total_tool_rounds")]
     pub max_total_tool_rounds: usize,
     #[serde(default = "default_subagent_concurrency_limit")]

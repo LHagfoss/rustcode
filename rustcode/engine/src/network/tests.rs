@@ -574,9 +574,10 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
 
     let mut resumed = take_turn_context_for_prompt(&mut state, true, 99);
 
-    assert_eq!(resumed.budget.max_tool_rounds, 7);
+    assert_eq!(resumed.budget.max_tool_rounds, usize::MAX);
+    assert_eq!(resumed.budget.max_total_tool_rounds, usize::MAX);
     assert_eq!(resumed.budget.tool_rounds, 4);
-    assert!(resumed.budget.round_budget_notice_sent);
+    assert!(!resumed.budget.round_budget_notice_sent);
     assert_eq!(resumed.progress.failed_mutations, 2);
     assert_eq!(resumed.progress.consecutive_failed_mutations, 2);
     assert_eq!(
@@ -633,7 +634,8 @@ fn new_user_prompt_starts_fresh_turn_context() {
 
     let fresh = take_turn_context_for_prompt(&mut state, false, 9);
 
-    assert_eq!(fresh.budget.max_tool_rounds, 9);
+    assert_eq!(fresh.budget.max_tool_rounds, usize::MAX);
+    assert_eq!(fresh.budget.max_total_tool_rounds, usize::MAX);
     assert_eq!(fresh.budget.tool_rounds, 0);
     assert!(!fresh.budget.round_budget_notice_sent);
     assert_eq!(fresh.progress.failed_mutations, 0);
@@ -4844,7 +4846,7 @@ fn max_tool_rounds_triggers_the_budget() {
 }
 
 #[tokio::test]
-async fn productive_persisted_40_round_segments_continue_without_replaying_history() {
+async fn legacy_40_round_checkpoint_resumes_without_round_caps_or_replaying_history() {
     let state = Arc::new(Mutex::new(AppState::new()));
     {
         let mut s = state.lock().await;
@@ -4893,19 +4895,13 @@ async fn productive_persisted_40_round_segments_continue_without_replaying_histo
     assert_eq!(resumed.budget.tool_rounds, 40);
     assert_eq!(resumed.budget.segment_count, 2);
     assert_eq!(resumed.segment_rounds(), 0);
+    assert_eq!(resumed.budget.max_tool_rounds, usize::MAX);
+    assert_eq!(resumed.budget.max_total_tool_rounds, usize::MAX);
     assert_eq!(state.lock().await.history.len(), history_len);
 
-    // A second productive segment takes the logical task beyond the legacy
-    // 40-round ceiling while retaining the same context and completed call.
-    resumed.budget.tool_rounds = 80;
-    resumed.progress.meaningful_events = 2;
-    assert!(matches!(
-        turn_budget_exceeded(&resumed),
-        Some(TurnBudgetLimit::ProductiveSegment {
-            used: 40,
-            maximum: 40
-        })
-    ));
+    // The logical turn can keep running past the legacy checkpoint ceiling.
+    resumed.budget.tool_rounds = 141;
+    assert!(turn_budget_exceeded(&resumed).is_none());
 }
 
 #[test]

@@ -72,6 +72,10 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     mut ctx: TurnContext,
     turn_session_id: String,
 ) -> TurnContext {
+    // Every provider-driven turn is live user work. Older configs and saved
+    // checkpoints may still carry the historical round ceilings; keep them
+    // out of the runtime budget at this shared execution boundary.
+    ctx.remove_round_limits();
     let prompt_start_time = std::time::Instant::now();
     let mut turn_lifecycle = lifecycle::TurnLifecycle::new();
     while run_single_turn(

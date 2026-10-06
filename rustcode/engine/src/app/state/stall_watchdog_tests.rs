@@ -63,6 +63,22 @@ fn stuck_orchestrator_flag_with_queued_prompts_resets() {
 }
 
 #[test]
+fn a_recent_stream_update_prevents_recovery_of_a_queued_follow_up() {
+    let mut state = stale_active_state();
+    state.status = AppStatus::Streaming;
+    state.pending_queue.push("user follow-up".to_string());
+    state.orchestrator_running = true;
+    let mut tracker = super::super::StreamTracker::new();
+    tracker.last_update = Instant::now();
+    state.stream_tracker = Some(tracker);
+
+    assert!(
+        state.check_stall_watchdog(false, Instant::now()).is_none(),
+        "an old turn start is not evidence of a stall while the stream recently progressed"
+    );
+}
+
+#[test]
 fn stale_orchestrator_release_cannot_clear_a_new_session_claim() {
     let mut state = AppState::new();
     let old = state.claim_orchestrator().expect("first claim");

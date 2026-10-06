@@ -614,6 +614,9 @@ pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
     if !context.restore_segment(&checkpoint, &s.active_session_id) {
         return;
     }
+    // Older sidecars preserve finite round ceilings. They remain readable,
+    // while live resumed work uses the current unbounded round policy.
+    context.remove_round_limits();
     s.background_turn_context = Some(Box::new(context));
 }
 

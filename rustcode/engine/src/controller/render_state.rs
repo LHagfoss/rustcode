@@ -182,12 +182,14 @@ pub struct RenderState {
     pub model_picker_index: usize,
     pub modal_picker_index: usize,
     pub model_picker_search: String,
+    pub model_picker_search_cursor: usize,
     pub show_theme_picker: bool,
     pub theme_picker_index: usize,
     pub theme_picker_initial: String,
     pub show_command_picker: bool,
     pub command_picker_index: usize,
     pub command_picker_search: String,
+    pub command_picker_search_cursor: usize,
     pub show_history_picker: bool,
     pub history_picker_index: usize,
     pub history_picker_sessions: Vec<SessionMeta>,
@@ -289,7 +291,15 @@ pub fn render_state(state: &AppState) -> RenderState {
     let capture_subagents = state.show_context_modal || state.show_subagent_picker;
     RenderState {
         revision: state.render_revision,
-        status: state.status.clone(),
+        // The queue orchestrator owns the full turn across provider-round
+        // boundaries. Some intermediate callbacks set the live status to
+        // Idle before the next round starts; keep the rendered activity
+        // continuous while that owner is still running.
+        status: if state.orchestrator_running && state.status == AppStatus::Idle {
+            AppStatus::Streaming
+        } else {
+            state.status.clone()
+        },
         input_buffer: state.input_buffer.clone(),
         cursor_position: state.cursor_position,
         composer_selection_anchor: state.composer_selection_anchor,
@@ -388,6 +398,7 @@ pub fn render_state(state: &AppState) -> RenderState {
             .show_model_picker
             .then(|| state.model_picker_search.clone())
             .unwrap_or_default(),
+        model_picker_search_cursor: state.model_picker_search_cursor,
         show_theme_picker: state.show_theme_picker,
         theme_picker_index: state.theme_picker_index,
         theme_picker_initial: state
@@ -400,6 +411,7 @@ pub fn render_state(state: &AppState) -> RenderState {
             .show_command_picker
             .then(|| state.command_picker_search.clone())
             .unwrap_or_default(),
+        command_picker_search_cursor: state.command_picker_search_cursor,
         show_history_picker: state.show_history_picker,
         history_picker_index: state.history_picker_index,
         history_picker_sessions: state
@@ -431,5 +443,23 @@ pub fn render_state(state: &AppState) -> RenderState {
             .flatten(),
         modal_scroll_row: state.modal_scroll_row,
         tool_confirmation_selected: state.tool_confirmation_selected,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_state;
+    use crate::app::{AppState, AppStatus};
+
+    #[test]
+    fn orchestrator_ownership_keeps_turn_activity_continuous_across_idle_gaps() {
+        let mut state = AppState::new();
+        state.status = AppStatus::Idle;
+        state.orchestrator_running = true;
+
+        assert_eq!(render_state(&state).status, AppStatus::Streaming);
+
+        state.orchestrator_running = false;
+        assert_eq!(render_state(&state).status, AppStatus::Idle);
     }
 }
