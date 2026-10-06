@@ -271,7 +271,7 @@ fn manage_task_schema() -> Value {
 
 pub const MANAGE_TASK: Tool = Tool {
     name: "manage_task",
-    description: "Manage background tasks spawned with run_command (action: 'list', 'status', 'logs', 'kill', or 'wait'). Use action 'wait' with task_id or task_ids to block until a task finishes instead of polling; task_ids returns on the first completion. Use action 'logs' to retrieve captured output. Completion notifications are controlled by run_command notify_on_complete.",
+    description: "Manage run_command tasks (action: 'list', 'status', 'logs', 'kill', or 'wait'). Use 'wait' to wait for a task's result without polling; task_ids returns the first completion. Detached tasks are silent by default; wait for results or enable notify_on_complete for a model follow-up. Use 'logs' for captured output.",
     arguments: r#"{"action": "list, status, logs, kill, or wait", "task_id": "required for status/kill/logs or single-task wait", "task_ids": "optional list of IDs for wait-any", "full": "optional true to retrieve the complete log", "tail_bytes": "optional log tail limit, max 65536", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
     handler: manage_task_tool,
     requires_confirmation: false,
@@ -2057,7 +2057,12 @@ mod tests {
             output.error_kind,
             Some(crate::tools::ToolErrorKind::Cancelled)
         );
-        assert_eq!(output.content, "background task cancelled");
+        assert!(
+            output.content.contains("Background task cancelled"),
+            "{}",
+            output.content
+        );
+        assert!(output.content.contains("no process exit code"));
     }
 
     #[test]
@@ -2110,7 +2115,7 @@ mod tests {
         }));
         assert_eq!(
             result,
-            Ok("TaskId 'no-such-task' is not running (finished or cancelled).".to_string())
+            Ok("None of the requested tasks are running or retained: no-such-task".to_string())
         );
         crate::tools::set_active_session_id(None);
     }
@@ -2137,7 +2142,7 @@ mod tests {
         }));
         let output = result.expect("wait should return the finished result");
         assert!(
-            output.contains("finished successfully"),
+            output.contains("exited successfully (code 0)"),
             "unexpected wait output: {output}"
         );
         crate::tools::stop_background_tasks(session);
@@ -2560,6 +2565,15 @@ mod tests {
             "command": "sleep 30 &",
         }))
         .expect("shell background command should start detached");
+        for _ in 0..100 {
+            if super::super::background_task_snapshots(&session_id)
+                .first()
+                .is_some_and(|task| task.child_pid.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let snapshots = super::super::background_task_snapshots(&session_id);
         let stop = super::super::stop_background_tasks(&session_id);
         super::super::set_active_session_id(None);
