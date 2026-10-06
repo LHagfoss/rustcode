@@ -1,3 +1,11 @@
+## [v0.57.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.9) - 2026-10-06
+
+### Fixes
+- Group several live tool calls under one Running or Queued heading with tree children, matching the finished Ran group.
+- Keep a state word and the model name on the bottom running row instead of a bare spinner beside the token total.
+- Stop a committed thought from painting twice while an argument-less MCP call is starting, and label MCP tool rows.
+- Show the context window in round figures such as 1M and 200k in the welcome banner and the context panel.
+- Remove the block-letter wordmark from the welcome banner.
 ## [v0.57.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.8) - 2026-10-06
 
 ### Fixes
