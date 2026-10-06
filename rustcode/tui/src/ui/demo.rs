@@ -272,8 +272,10 @@ mod tests {
         for expected in [
             "Static /test preview",
             "Ran $ cargo check --workspace",
-            "Running Bash $ cargo test --workspace",
-            "Queued mail.Search",
+            "• Running · esc interrupt",
+            "├ • Bash cargo test --workspace",
+            "└ ◦ mail.Search release notes · queued",
+            "Executing · ",
             "Cargo.toml",
             "Finished with 0 errors",
             "warning: dependency graph",

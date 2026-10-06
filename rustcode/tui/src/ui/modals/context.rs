@@ -920,7 +920,7 @@ pub(in crate::ui) fn render_context_modal(
     let summary_text = format!(
         "USED {}/{} · {:.0}%",
         format_token_count(breakdown.current_usage.used_tokens as usize),
-        format_token_count(breakdown.context_window),
+        crate::ui::composer_render::format_context_window(breakdown.context_window as u64),
         current_usage_pct
     );
     let show_source_inline =
