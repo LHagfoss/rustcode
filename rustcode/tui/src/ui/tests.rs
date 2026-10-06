@@ -9456,13 +9456,13 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     let breakdown = modals::calculate_context_breakdown(&render_snapshot(&state));
     assert!(breakdown.user_tokens > 0);
     assert!(breakdown.assistant_tokens > 0);
-    assert!(breakdown.prompt_headroom_tokens < breakdown.context_window);
+    assert!(breakdown.remaining_tokens < breakdown.context_window);
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
     assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
     assert!(
-        rendered.contains("Saved history estimate"),
+        rendered.contains("saved history estimate"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
@@ -9470,10 +9470,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         rendered.contains("Agent responses"),
         "rendered: {rendered:?}"
     );
-    assert!(
-        rendered.contains("Estimated headroom"),
-        "rendered: {rendered:?}"
-    );
+    assert!(rendered.contains("REMAINING"), "rendered: {rendered:?}");
 
     let lines = rendered.lines().collect::<Vec<_>>();
     let header_row = lines
@@ -9482,34 +9479,25 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .expect("context header should be rendered");
     let summary_row = lines
         .iter()
-        .position(|line| {
-            line.contains(" · ") && (line.contains(" prompt") || line.contains(" estimate"))
-        })
+        .position(|line| line.contains("USED"))
         .expect("context summary should be rendered");
     let first_grid_row = lines
         .iter()
         .position(|line| line.chars().take(60).collect::<String>().contains("● "))
         .expect("context grid should be rendered");
-    let category_header_row = lines
+    let remaining_row = lines
         .iter()
-        .position(|line| line.contains("Saved history estimate"))
-        .expect("category header should be rendered");
-    let headroom_row = lines
-        .iter()
-        .position(|line| line.contains("Estimated headroom"))
-        .expect("headroom row should be rendered");
+        .position(|line| line.contains("REMAINING"))
+        .expect("remaining row should be rendered");
     assert!(header_row > 0);
     assert!(
         lines[header_row - 1].trim().is_empty(),
         "context modal should have top padding above the header: {rendered:?}"
     );
-    assert_eq!(summary_row, header_row + 2);
-    assert_eq!(first_grid_row, summary_row);
-    assert_eq!(category_header_row, summary_row + 2);
-    assert!(
-        headroom_row < lines.len() - 1,
-        "context stats should fit within the full-height view: {rendered:?}"
-    );
+    assert_eq!(summary_row, header_row + 1);
+    assert_eq!(first_grid_row, summary_row + 1);
+    assert_eq!(remaining_row, summary_row + 1);
+    assert!(rendered.contains("Saved history categories · % of window"));
 }
 
 /// A `/context` state with one category well over `OVER_THRESHOLD_PCT` of the
@@ -9872,7 +9860,7 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
 
     let breakdown = modals::calculate_context_breakdown(&snapshot);
     assert_eq!(
-        breakdown.prompt_headroom_tokens, 96_000,
+        breakdown.remaining_tokens, 96_000,
         "live prompt headroom must be based on provider prompt usage, not the stored transcript estimate"
     );
     let stored_history_estimate = breakdown
@@ -9886,17 +9874,129 @@ fn footer_and_context_modal_use_provider_prompt_usage_for_the_active_context() {
     assert!(stored_history_estimate > active_usage.used_tokens as usize);
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(
-        rendered.contains("4.0k/100.0k (4.0%) prompt"),
+        rendered.contains("USED 4.0k/100.0k · 4%"),
         "context summary must match provider prompt usage: {rendered:?}"
     );
     assert!(
-        rendered.contains("Saved history estimate"),
+        rendered.contains("measured provider prompt"),
         "estimated saved history must be distinguished from active prompt usage: {rendered:?}"
     );
 
     state.show_context_modal = false;
     let footer = render_state_to_text(&mut state, 120, 24);
     assert!(footer.contains("96% context left"), "footer: {footer:?}");
+}
+
+#[test]
+fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths() {
+    let mut state = RenderState::new();
+    let mut profile = rustcode::controller::ModelProfile::default();
+    profile.name = state.model_name.clone();
+    profile.model = state.model_name.clone();
+    profile.url = state.api_base_url.clone();
+    profile.context_window = Some(272_000);
+    profile.max_output_tokens = Some(16_000);
+    state.config.models.clear();
+    state.config.models.push(profile.clone());
+    state.active_model_profile = Some(profile);
+    state.active_context_window = 272_000;
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 116_706,
+        completion_tokens: 600,
+        total_tokens: 117_306,
+        ..Default::default()
+    });
+
+    let breakdown = modals::calculate_context_breakdown(&render_snapshot(&state));
+    assert_eq!(breakdown.current_usage.used_tokens, 116_706);
+    assert_eq!(breakdown.remaining_tokens, 155_294);
+    assert!(breakdown.configured_guards.is_some());
+
+    for (width, height) in [(120, 24), (60, 24), (40, 24), (40, 12)] {
+        let rendered = render_context_modal_to_text(&state, width, height);
+        assert!(
+            rendered.contains("USED 116.7k/272.0k · 43%"),
+            "used percentage must remain visible at {width}x{height}: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("measured provider prompt"),
+            "usage source must remain visible at {width}x{height}: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("REMAINING 155.3k · 57%"),
+            "remaining percentage must remain visible at {width}x{height}: {rendered:?}"
+        );
+    }
+
+    let rendered = render_context_modal_to_text(&state, 120, 24);
+    assert!(rendered.contains("Configured reserves:") && rendered.contains("not usage"));
+    assert!(rendered.contains("provider overhead"), "{rendered:?}");
+    assert!(rendered.contains("thinking") && rendered.contains("incl."));
+}
+
+#[test]
+fn context_modal_clamps_remaining_when_provider_prompt_exceeds_window() {
+    let mut state = RenderState::new();
+    state.active_context_window = 272_000;
+    state.current_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 300_000,
+        ..Default::default()
+    });
+
+    let breakdown = modals::calculate_context_breakdown(&render_snapshot(&state));
+    assert_eq!(breakdown.remaining_tokens, 0);
+    let rendered = render_context_modal_to_text(&state, 80, 24);
+    assert!(rendered.contains("REMAINING 0 · 0%"), "{rendered:?}");
+}
+
+#[test]
+fn context_modal_hides_configured_reserves_without_a_matching_profile() {
+    let mut state = RenderState::new();
+    state.active_context_window = 272_000;
+    let mut profile = rustcode::controller::ModelProfile::default();
+    profile.name = state.model_name.clone();
+    profile.model = state.model_name.clone();
+    profile.url = state.api_base_url.clone();
+    profile.context_window = Some(272_000);
+    state.config.models.clear();
+    state.config.models.push(profile.clone());
+    state.active_model_profile = None;
+
+    assert!(
+        modals::calculate_context_breakdown(&render_snapshot(&state))
+            .configured_guards
+            .is_none()
+    );
+
+    state.active_model_profile = Some(profile.clone());
+    let child = rustcode::controller::SubAgentView {
+        id: 7,
+        name: "reviewer".to_owned(),
+        task: "review".to_owned(),
+        history: std::sync::Arc::new(Vec::new()),
+        status: rustcode::controller::SubAgentStatus::Completed,
+        active_turn: false,
+        parent_id: None,
+        model: Some("another-model".to_owned()),
+        elapsed_ms: 0,
+    };
+    state.selected_subagent = Some(child.clone());
+    state.subagents.push(child);
+    state.selected_subagent_id = Some(7);
+    assert!(
+        modals::calculate_context_breakdown(&render_snapshot(&state))
+            .configured_guards
+            .is_none()
+    );
+
+    state.subagents[0].model = Some(profile.model.clone());
+    state.selected_subagent.as_mut().unwrap().model = Some(profile.model.clone());
+    state.active_context_window = 128_000;
+    assert!(
+        modals::calculate_context_breakdown(&render_snapshot(&state))
+            .configured_guards
+            .is_none()
+    );
 }
 
 #[test]

@@ -590,9 +590,9 @@ pub(in crate::ui) fn render_theme_picker_modal(
 
 #[derive(Debug, Clone)]
 pub struct ContextBreakdown {
-    pub model_name: String,
     pub context_window: usize,
     pub current_usage: super::super::context_usage::ContextUsage,
+    pub configured_guards: Option<ConfiguredContextGuards>,
     pub user_tokens: usize,
     pub assistant_tokens: usize,
     pub tool_tokens: usize,
@@ -600,12 +600,47 @@ pub struct ContextBreakdown {
     pub system_tools_tokens: usize,
     pub skills_tokens: usize,
     pub subagent_tokens: usize,
-    pub prompt_headroom_tokens: usize,
+    pub remaining_tokens: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfiguredContextGuards {
+    pub output_tokens: u32,
+    pub thinking_tokens: u32,
+    pub tool_tokens: u32,
+    pub safety_tokens: u32,
+    pub provider_framing_tokens: u32,
 }
 
 pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let context_window = state.active_context_window() as usize;
     let current_usage = super::super::context_usage::context_usage(state);
+    let configured_guards = state.active_model_profile().and_then(|profile| {
+        if let Some(selected_id) = state.selected_subagent_id() {
+            let selected_model = state
+                .subagents()
+                .iter()
+                .find(|agent| agent.id == selected_id)?
+                .model
+                .as_deref()?;
+            if !selected_model.eq_ignore_ascii_case(&profile.model)
+                && !selected_model.eq_ignore_ascii_case(&profile.name)
+            {
+                return None;
+            }
+        }
+        let budget = profile.context_budget();
+        if budget.context_window != state.active_context_window() {
+            return None;
+        }
+        Some(ConfiguredContextGuards {
+            output_tokens: budget.max_output_tokens,
+            thinking_tokens: budget.thinking_reserve,
+            tool_tokens: budget.tool_reserve,
+            safety_tokens: budget.safety_reserve,
+            provider_framing_tokens: budget.provider_overhead_margin,
+        })
+    });
 
     let mut user_tokens = 0;
     let mut assistant_tokens = 0;
@@ -673,12 +708,12 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         0
     };
 
-    let prompt_headroom_tokens = context_window.saturating_sub(current_usage.used_tokens as usize);
+    let remaining_tokens = context_window.saturating_sub(current_usage.used_tokens as usize);
 
     ContextBreakdown {
-        model_name: state.model_name().to_owned(),
         context_window,
         current_usage,
+        configured_guards,
         user_tokens,
         assistant_tokens,
         tool_tokens,
@@ -686,7 +721,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         system_tools_tokens,
         skills_tokens,
         subagent_tokens,
-        prompt_headroom_tokens,
+        remaining_tokens,
     }
 }
 
@@ -705,8 +740,8 @@ pub(in crate::ui) fn render_context_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    // The stats column needs twelve content rows. Reserve one row above the
-    // header, then size the panel so the content reaches its bottom edge.
+    // The stats column fits twelve content rows in the existing modal height.
+    // On narrow panels, keep the usage source on a separate row beneath USED.
     let modal_area = input_anchor_rect(f, input_area, CONTEXT_MODAL_HEIGHT);
     f.render_widget(Clear, modal_area);
     f.render_widget(
@@ -748,19 +783,21 @@ pub(in crate::ui) fn render_context_modal(
 
     let breakdown = calculate_context_breakdown(state);
 
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(56), // Matrix grid
-            Constraint::Length(2),      // Spacer
-            Constraint::Percentage(42), // Stats breakdown
-        ])
-        .split(modal_chunks[2]);
-
-    let mut grid_area = cols[0];
+    let (mut grid_area, stats_area) = if inner_area.width < 90 {
+        (ratatui::layout::Rect::default(), modal_chunks[2])
+    } else {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(42), // Matrix grid
+                Constraint::Length(2),      // Spacer
+                Constraint::Percentage(56), // Stats breakdown
+            ])
+            .split(modal_chunks[2]);
+        (cols[0], cols[2])
+    };
     grid_area.y = grid_area.y.saturating_add(1);
     grid_area.height = grid_area.height.saturating_sub(1);
-    let stats_area = cols[2];
 
     // Build the matrix of token dots/blocks
     let grid_w = (grid_area.width as usize).max(4);
@@ -855,8 +892,8 @@ pub(in crate::ui) fn render_context_modal(
         0.0
     };
 
-    let headroom_pct = if breakdown.context_window > 0 {
-        (breakdown.prompt_headroom_tokens as f64 / breakdown.context_window as f64) * 100.0
+    let remaining_pct = if breakdown.context_window > 0 {
+        (breakdown.remaining_tokens as f64 / breakdown.context_window as f64) * 100.0
     } else {
         0.0
     };
@@ -871,45 +908,63 @@ pub(in crate::ui) fn render_context_modal(
 
     let mut stats_lines: Vec<Line<'static>> = Vec::new();
 
-    // Model and overall usage header. The summary value turns Strong once
-    // overall usage crosses HIGH_USAGE_PCT so a nearly-full window stands out.
+    // Report live provider usage or the saved-history estimate explicitly.
+    let usage_source = match breakdown.current_usage.source {
+        super::super::context_usage::ContextUsageSource::ProviderPrompt => {
+            "measured provider prompt"
+        }
+        super::super::context_usage::ContextUsageSource::HistoryEstimate => {
+            "saved history estimate"
+        }
+    };
     let summary_text = format!(
-        "{}/{} ({:.1}%) {}",
+        "USED {}/{} · {:.0}%",
         format_token_count(breakdown.current_usage.used_tokens as usize),
         format_token_count(breakdown.context_window),
-        current_usage_pct,
-        match breakdown.current_usage.source {
-            super::super::context_usage::ContextUsageSource::ProviderPrompt => "prompt",
-            super::super::context_usage::ContextUsageSource::HistoryEstimate => "estimate",
-        }
+        current_usage_pct
     );
+    let show_source_inline =
+        format!("{summary_text} · {usage_source}").width() <= usize::from(stats_area.width);
     let summary_emphasis = if current_usage_pct >= HIGH_USAGE_PCT {
         PanelEmphasis::Strong
     } else {
         PanelEmphasis::Normal
     };
-    let mut summary_spans = vec![Span::styled(
-        format!("{} · ", breakdown.model_name),
-        Style::default()
-            .fg(COLOR_TEXT())
-            .add_modifier(Modifier::BOLD),
-    )];
-    summary_spans.extend(panel_value_spans(
-        &summary_text,
+    let displayed_summary = if show_source_inline {
+        format!("{summary_text} · {usage_source}")
+    } else {
+        summary_text
+    };
+    let summary_spans = panel_value_spans(
+        &displayed_summary,
         summary_emphasis,
         Style::default()
             .fg(COLOR_TEXT())
             .add_modifier(Modifier::BOLD),
-    ));
-    stats_lines.push(Line::default());
+    );
     stats_lines.push(Line::from(summary_spans));
-
-    stats_lines.push(Line::default());
-    stats_lines.push(Line::from(vec![Span::styled(
-        "Saved history estimate · % of context window",
-        Style::default().fg(COLOR_MUTED()),
-    )]));
-
+    if !show_source_inline {
+        stats_lines.push(Line::from(vec![Span::styled(
+            format!("Source: {usage_source}"),
+            Style::default().fg(COLOR_MUTED()),
+        )]));
+    }
+    let remaining_text = format!(
+        "REMAINING {} · {:.0}%",
+        format_token_count(breakdown.remaining_tokens),
+        remaining_pct
+    );
+    stats_lines.push(Line::from(panel_value_spans(
+        &remaining_text,
+        if remaining_pct <= 10.0 {
+            PanelEmphasis::Strong
+        } else {
+            PanelEmphasis::Normal
+        },
+        Style::default()
+            .fg(COLOR_TEXT())
+            .add_modifier(Modifier::BOLD),
+    )));
     // Category breakdown lines. Every swatch uses the same ● glyph as the
     // grid; over-threshold categories (see OVER_THRESHOLD_PCT) get an
     // emphasized value through the shared panel markup helper.
@@ -972,6 +1027,87 @@ pub(in crate::ui) fn render_context_modal(
         ),
     ];
 
+    if let Some(guards) = breakdown.configured_guards {
+        if stats_area.width >= 56 {
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Configured reserves: output {} incl. thinking {} · not usage",
+                    format_token_count(guards.output_tokens as usize),
+                    format_token_count(guards.thinking_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "tools {} · safety {} · provider overhead {}",
+                    format_token_count(guards.tool_tokens as usize),
+                    format_token_count(guards.safety_tokens as usize),
+                    format_token_count(guards.provider_framing_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+        } else if stats_area.width >= 40 {
+            stats_lines.push(Line::from(vec![Span::styled(
+                "Configured reserves (not usage)",
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Output {} · thinking {} within output",
+                    format_token_count(guards.output_tokens as usize),
+                    format_token_count(guards.thinking_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            stats_lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "tools {} · safety {} · provider overhead {}",
+                    format_token_count(guards.tool_tokens as usize),
+                    format_token_count(guards.safety_tokens as usize),
+                    format_token_count(guards.provider_framing_tokens as usize),
+                ),
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+        } else {
+            stats_lines.push(Line::from(vec![Span::styled(
+                "Configured reserves (not usage)",
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            )]));
+            for line in [
+                format!(
+                    "Output {}",
+                    format_token_count(guards.output_tokens as usize)
+                ),
+                format!(
+                    "Thinking {} within output",
+                    format_token_count(guards.thinking_tokens as usize)
+                ),
+                format!("tools {}", format_token_count(guards.tool_tokens as usize)),
+                format!(
+                    "Safety {}",
+                    format_token_count(guards.safety_tokens as usize)
+                ),
+                format!(
+                    "Provider overhead {}",
+                    format_token_count(guards.provider_framing_tokens as usize)
+                ),
+            ] {
+                stats_lines.push(Line::from(vec![Span::styled(
+                    line,
+                    Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+                )]));
+            }
+        }
+    } else {
+        stats_lines.push(Line::from(vec![Span::styled(
+            "Configured guards unavailable for active model",
+            Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+        )]));
+    }
+    stats_lines.push(Line::from(vec![Span::styled(
+        "Saved history categories · % of window",
+        Style::default().fg(COLOR_MUTED()),
+    )]));
     for (icon, color, label, count, percent, include_tokens_word) in categories {
         let count_str = if include_tokens_word {
             format!(": {} tokens ({:.1}%)", format_token_count(count), percent)
@@ -993,26 +1129,6 @@ pub(in crate::ui) fn render_context_modal(
         ));
         stats_lines.push(Line::from(row_spans));
     }
-
-    stats_lines.push(Line::from(vec![
-        Span::styled("□ ", Style::default().fg(color_free).bg(COLOR_PANEL())),
-        Span::styled(
-            format!(
-                "{}: {} ({:.1}%)",
-                match breakdown.current_usage.source {
-                    super::super::context_usage::ContextUsageSource::ProviderPrompt => {
-                        "Latest prompt headroom"
-                    }
-                    super::super::context_usage::ContextUsageSource::HistoryEstimate => {
-                        "Estimated headroom"
-                    }
-                },
-                format_token_count(breakdown.prompt_headroom_tokens),
-                headroom_pct
-            ),
-            Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
-        ),
-    ]));
     f.render_widget(
         Paragraph::new(stats_lines).style(Style::default().bg(COLOR_PANEL())),
         stats_area,
