@@ -74,6 +74,10 @@ get_editor() {
     fi
 }
 
+release_title() {
+    printf 'chore(ci): release v%s' "$VERSION"
+}
+
 # Cleanup: restore branch if we switched, print recovery instructions.
 # Uses EXIT trap for reliable cleanup on any exit (normal or error).
 cleanup_and_exit() {
@@ -682,7 +686,7 @@ $outside"
             git -C "$REPO_ROOT" add -- "$file"
         done <<< "$allowed"
     fi
-    run git -C "$REPO_ROOT" commit -m "chore: release v$VERSION"
+    run git -C "$REPO_ROOT" commit -m "$(release_title)"
 }
 
 phase_push() {
@@ -694,7 +698,8 @@ phase_push() {
 phase_create_pr() {
     info "Phase 9: Creating pull request"
 
-    local pr_title="chore: release v$VERSION"
+    local pr_title
+    pr_title="$(release_title)"
     local pr_body
     pr_body="$(cat <<EOF
 ## Release v$VERSION
@@ -1369,6 +1374,18 @@ run_tests() {
         error "  ✗ release file scope wrong"
         failed=$((failed + 1))
     fi
+
+    # Test 12: Release commit and PR share a Conventional Commit title.
+    info "Test 12: Release title format"
+    local saved_version="$VERSION"
+    VERSION="1.2.3"
+    if [[ "$(release_title)" == "chore(ci): release v1.2.3" ]]; then
+        info "  ✓ Release title uses the ci scope and target version"
+    else
+        error "  ✗ Release title format is incorrect: $(release_title)"
+        failed=$((failed + 1))
+    fi
+    VERSION="$saved_version"
 
     if [[ "$failed" -eq 0 ]]; then
         info "All tests passed."
