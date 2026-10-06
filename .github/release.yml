@@ -1,25 +1,44 @@
 changelog:
+    # Titles must NOT include a leading "###" — GitHub already renders each
+    # category title as a heading, so "### Features" produced "### ### Features".
+    # Labels here are kept in sync with .github/workflows/pr-label.yml, which
+    # maps the Conventional Commit prefix in a PR title to these labels.
     categories:
-        - title: "### Features"
+        - title: Features
           labels:
-              - "enhancement"
-              - "feature"
-        - title: "### Fixes"
+              - feature
+              - enhancement
+        - title: Fixes
           labels:
-              - "bug"
-              - "fix"
-        - title: "### UI"
+              - fix
+              - bug
+        - title: Performance
           labels:
-              - "ui"
-              - "design"
-        - title: "### Performance"
+              - performance
+        - title: Refactor
           labels:
-              - "performance"
-              - "speed"
-        - title: "### Chores"
+              - refactor
+        - title: UI
           labels:
-              - "chore"
-              - "dependencies"
-        - title: "### Other Changes"
+              - ui
+              - design
+        - title: Documentation
+          labels:
+              - documentation
+        - title: Tests
+          labels:
+              - test
+        - title: Build & CI
+          labels:
+              - build
+              - ci
+        - title: Chores
+          labels:
+              - chore
+              - dependencies
+        - title: Breaking changes
+          labels:
+              - breaking
+        - title: Other Changes
           labels:
               - "*"
