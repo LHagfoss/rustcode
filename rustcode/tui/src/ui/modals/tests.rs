@@ -821,6 +821,62 @@ fn picker_panel_is_bounded_above_the_composer() {
 }
 
 #[test]
+fn subagent_picker_hints_fit_without_clipping_at_24_40_and_80_columns() {
+    let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+        .lock()
+        .expect("theme test lock");
+
+    for width in [24u16, 40, 80] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        let state = picker_state();
+        terminal
+            .draw(|frame| {
+                render_subagent_picker_modal(
+                    frame,
+                    &render_snapshot(&state),
+                    Rect::new(0, 20, width, 3),
+                )
+            })
+            .unwrap();
+
+        let instruction = (0..24)
+            .map(|y| {
+                (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .find(|line| line.contains("→ open"))
+            .expect("picker instruction row");
+        assert!(
+            unicode_width::UnicodeWidthStr::width(instruction.as_str()) <= usize::from(width),
+            "{width}: {instruction:?}"
+        );
+        if width < 80 {
+            assert!(
+                !instruction.contains("switch fr"),
+                "{width}: {instruction:?}"
+            );
+        }
+
+        match width {
+            24 => assert!(instruction.contains("→ open"), "{instruction:?}"),
+            40 => assert!(instruction.contains("alt+←/→ switch"), "{instruction:?}"),
+            80 => {
+                assert!(
+                    instruction.contains("switch from the prompt"),
+                    "{instruction:?}"
+                );
+                assert!(
+                    instruction.contains("parent history preserved"),
+                    "{instruction:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn picker_panel_never_exceeds_the_space_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 

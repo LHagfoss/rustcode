@@ -577,6 +577,24 @@ pub(super) fn active_work_indicator(
     suffix: Option<Span<'static>>,
 ) -> Option<Line<'static>> {
     let work = active_work_state(state);
+    let marker = match work {
+        ActiveWorkState::Approval | ActiveWorkState::Input => '!',
+        ActiveWorkState::ResultsReady => '✓',
+        _ => running_spinner_char(state),
+    };
+    let live_state_is_named = matches!(work, ActiveWorkState::Foreground | ActiveWorkState::Queued)
+        && state
+            .live_tool_calls()
+            .iter()
+            .any(super::history_cell::is_live_tool_call_visible);
+    let short_background_head = matches!(work, ActiveWorkState::Background) && width <= 32;
+    let head = if live_state_is_named {
+        marker.to_string()
+    } else if short_background_head {
+        format!("{marker} Background")
+    } else {
+        format!("{marker} {}", work.label())
+    };
     let detail = match work {
         ActiveWorkState::Approval => state
             .pending_tool_confirmation()
@@ -606,27 +624,20 @@ pub(super) fn active_work_indicator(
                 format!(" · {} · esc interrupt", state.running_tools().join(", "))
             }
         }
-        ActiveWorkState::Background => format!(" · {}", background_terminal_summary(state)),
+        ActiveWorkState::Background => {
+            let suffix_width = suffix.as_ref().map_or(0, |span| span.content.width());
+            let detail_width =
+                usize::from(width).saturating_sub(head.width() + suffix_width + " · ".width());
+            format!(
+                " · {}",
+                background_terminal_summary_for_width(state, detail_width)
+            )
+        }
         ActiveWorkState::ResultsReady => format!(
             " · {} waiting for consumption",
             state.pending_background_results().len()
         ),
         _ => return None,
-    };
-    let marker = match work {
-        ActiveWorkState::Approval | ActiveWorkState::Input => '!',
-        ActiveWorkState::ResultsReady => '✓',
-        _ => running_spinner_char(state),
-    };
-    let live_state_is_named = matches!(work, ActiveWorkState::Foreground | ActiveWorkState::Queued)
-        && state
-            .live_tool_calls()
-            .iter()
-            .any(super::history_cell::is_live_tool_call_visible);
-    let head = if live_state_is_named {
-        marker.to_string()
-    } else {
-        format!("{marker} {}", work.label())
     };
     // The row owns exactly one terminal row and the caller appends the token
     // suffix afterwards, so head + detail + suffix must fit together. Shrink
@@ -749,6 +760,30 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
         format!("{count} tasks")
     };
     format!("{task_count} · {elapsed} · /ps · /stop")
+}
+
+fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -> String {
+    let full = background_terminal_summary(state);
+    if full.width() <= width {
+        return full;
+    }
+
+    let count = state.background_tasks().len();
+    let task_count = if count == 1 {
+        "1 task".to_owned()
+    } else {
+        format!("{count} tasks")
+    };
+    let compact = format!("{task_count} /ps /stop");
+    if compact.width() <= width {
+        compact
+    } else if "/ps /stop".width() <= width {
+        "/ps /stop".to_owned()
+    } else if "/ps".width() <= width {
+        "/ps".to_owned()
+    } else {
+        String::new()
+    }
 }
 
 pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
