@@ -1022,6 +1022,7 @@ const SHORT_EXPAND_HINT: &str = " (o)";
 /// Maximum terminal rows in a collapsed tool-result preview, including the
 /// omission marker (#1602).
 pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 5;
+const COLLAPSED_FILE_DIFF_PREVIEW_LINES: usize = 5;
 
 /// Row window shared by committed and live tool previews. Callers supply their
 /// own marker text so live output can retain its omitted-byte note.
@@ -1476,6 +1477,37 @@ pub(super) fn indent_full_tool_body(
     indented
 }
 
+/// Keep the first five wrapped diff rows visible while leaving the complete
+/// diff available through Ctrl+O.
+fn indent_file_edit_preview_body(
+    lines: Vec<Line<'static>>,
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let mut indented = indent_full_tool_body(lines, width, show_picker)
+        .into_iter()
+        .filter(|line| line.to_string().trim_start_matches('│').trim().is_empty() == false)
+        .collect::<Vec<_>>();
+    if indented.len() <= COLLAPSED_FILE_DIFF_PREVIEW_LINES {
+        return indented;
+    }
+    let omitted = indented.len() - COLLAPSED_FILE_DIFF_PREVIEW_LINES;
+    indented.truncate(COLLAPSED_FILE_DIFF_PREVIEW_LINES);
+    indented.push(Line::from(vec![
+        tool_body_spine(show_picker),
+        Span::styled(
+            format!("… +{omitted} lines"),
+            get_themed_style(
+                COLOR_MUTED(),
+                COLOR_BG(),
+                Modifier::ITALIC | Modifier::DIM,
+                show_picker,
+            ),
+        ),
+    ]));
+    indented
+}
+
 /// Whether an edit entry carries an expandable diff body.
 ///
 /// Successful edits with changed lines (embedded or synthesized diffs, #1567)
@@ -1632,6 +1664,12 @@ fn render_tool_result_group_snapshot(
                 } else if kind == ToolTranscriptKind::Edit {
                     if group.iter().all(|entry| entry.action == "Write") {
                         "Wrote"
+                    } else if group.iter().all(|entry| entry.action == "Delete") {
+                        "Deleted"
+                    } else if group.iter().all(|entry| entry.action == "Copy") {
+                        "Copied"
+                    } else if group.iter().all(|entry| entry.action == "Move") {
+                        "Moved"
                     } else {
                         "Edited"
                     }
@@ -1703,12 +1741,10 @@ fn render_tool_result_group_snapshot(
                                 show_picker,
                             ));
                         } else {
-                            body.extend(indent_generic_tool_body(
+                            body.extend(indent_file_edit_preview_body(
                                 entry.body.clone(),
-                                &state.verbosity(),
                                 width,
                                 show_picker,
-                                false,
                             ));
                         }
                     } else if expandable && low {

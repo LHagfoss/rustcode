@@ -150,6 +150,101 @@ pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<S
     }
 }
 
+/// Capture the pre-mutation text for operations whose tool output has no diff.
+/// Callers run this only after authorization and in the execution worker's
+/// ToolContext, so confirmation dialogs never expose file contents and path
+/// resolution follows the mutation handler exactly.
+pub(crate) fn capture_text_mutation_before(
+    name: &str,
+    args: &serde_json::Value,
+    context: &rustcode_tools::ToolContext,
+) -> Option<(std::path::PathBuf, String)> {
+    const MAX_DELETE_DIFF_FILE_BYTES: u64 = 50 * 1024;
+
+    let path_arg = match name {
+        "delete_file" | "write_file_chunk" => "path",
+        "copy_file" => "dest",
+        _ => return None,
+    };
+    if context.workspace_root.is_none() && !context.allow_task_scope_escape {
+        return None;
+    }
+    let raw_path = args.get(path_arg)?.as_str()?;
+    let target = canonical_mutation_target(raw_path, context)?;
+    validate_mutation_target(&target, context)?;
+    let Ok(metadata) = target.metadata() else {
+        // New copy/chunk targets have an empty before-state.
+        if matches!(name, "copy_file" | "write_file_chunk") {
+            return Some((target, String::new()));
+        }
+        return None;
+    };
+    if !metadata.is_file() || metadata.len() > MAX_DELETE_DIFF_FILE_BYTES {
+        return None;
+    }
+    let before = read_bounded_text_file(&target)?;
+    Some((target, before))
+}
+
+pub(crate) fn finish_text_mutation_diff(
+    snapshot: Option<(std::path::PathBuf, String)>,
+    context: &rustcode_tools::ToolContext,
+) -> Option<String> {
+    let (target, before) = snapshot?;
+    let target = canonical_mutation_target(&target.to_string_lossy(), context)?;
+    validate_mutation_target(&target, context)?;
+    let after = if target.exists() {
+        read_bounded_text_file(&target)?
+    } else {
+        String::new()
+    };
+    let diff = rustcode_tools::filesystem::generate_unified_diff(&before, &after);
+    (!diff.trim().is_empty()).then_some(diff)
+}
+
+fn canonical_mutation_target(
+    raw_path: &str,
+    context: &rustcode_tools::ToolContext,
+) -> Option<std::path::PathBuf> {
+    let resolved = rustcode_tools::resolve_tool_path_with_context(raw_path, context);
+    if let Ok(canonical) = resolved.canonicalize() {
+        return Some(canonical);
+    }
+    if std::fs::symlink_metadata(&resolved).is_ok() {
+        return None;
+    }
+    let parent = resolved.parent()?.canonicalize().ok()?;
+    Some(parent.join(resolved.file_name()?))
+}
+
+fn validate_mutation_target(
+    target: &std::path::Path,
+    context: &rustcode_tools::ToolContext,
+) -> Option<()> {
+    if let Some(workspace_root) = context.workspace_root.as_deref() {
+        let root = workspace_root.canonicalize().ok()?;
+        if !target.starts_with(root) {
+            return None;
+        }
+    } else if !context.allow_task_scope_escape {
+        return None;
+    }
+    Some(())
+}
+
+fn read_bounded_text_file(path: &std::path::Path) -> Option<String> {
+    const MAX_MUTATION_DIFF_FILE_BYTES: u64 = 50 * 1024;
+    let metadata = path.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_MUTATION_DIFF_FILE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() as u64 > MAX_MUTATION_DIFF_FILE_BYTES || bytes.contains(&0) {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
 pub(crate) fn extract_diff_block(content: &str) -> Option<String> {
     let after_fence = content.split_once("```diff\n")?.1;
     let (body, _) = after_fence.split_once("\n```")?;

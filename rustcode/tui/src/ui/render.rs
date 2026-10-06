@@ -279,7 +279,7 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         raw_input_lines + 2
     };
-    let queue_block_height = queue_preview_height(state);
+    let queue_block_height = queue_preview_height(state, inner_width as usize);
 
     let (_, at_query) =
         rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
