@@ -233,12 +233,9 @@ pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 3;
 /// recovery budget and permit an endless search/read cycle.
 pub(crate) const MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS: u8 = 4;
 
-/// Safety budgets for a single agent turn. These are deliberately generous —
-/// the goal is to catch a runaway session (the benchmark that motivated this
-/// hit 106 rounds with no hard stop), not to cut off healthy long-running
-/// work. Any one signal firing is enough: a session that is genuinely
-/// healthy on every other axis but has spent 500k tokens or 40 rounds has
-/// stopped being worth running unattended.
+/// Safety budgets for a single agent turn. Production live turns leave round
+/// ceilings disabled and rely on the token and progress/recovery guards;
+/// finite round budgets remain available to explicit low-level callers.
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much

@@ -107,12 +107,14 @@ struct OverlaySnapshot {
     model_picker_index: usize,
     modal_picker_index: usize,
     model_picker_search: String,
+    model_picker_search_cursor: usize,
     show_theme_picker: bool,
     theme_picker_index: usize,
     theme_picker_initial: String,
     show_command_picker: bool,
     command_picker_index: usize,
     command_picker_search: String,
+    command_picker_search_cursor: usize,
     show_history_picker: bool,
     history_picker_index: usize,
     history_picker_sessions: Vec<rustcode::controller::SessionMeta>,
@@ -144,12 +146,14 @@ impl OverlaySnapshot {
             model_picker_index: view.model_picker_index,
             modal_picker_index: view.modal_picker_index,
             model_picker_search: view.model_picker_search.clone(),
+            model_picker_search_cursor: view.model_picker_search_cursor,
             show_theme_picker: view.show_theme_picker,
             theme_picker_index: view.theme_picker_index,
             theme_picker_initial: view.theme_picker_initial.clone(),
             show_command_picker: view.show_command_picker,
             command_picker_index: view.command_picker_index,
             command_picker_search: view.command_picker_search.clone(),
+            command_picker_search_cursor: view.command_picker_search_cursor,
             show_history_picker: view.show_history_picker,
             history_picker_index: view.history_picker_index,
             history_picker_sessions: view.history_picker_sessions.clone(),
@@ -480,6 +484,9 @@ impl RenderSnapshot {
     pub(crate) fn model_picker_search(&self) -> &str {
         &self.overlay.model_picker_search
     }
+    pub(crate) fn model_picker_search_cursor(&self) -> usize {
+        self.overlay.model_picker_search_cursor
+    }
     pub(crate) fn show_theme_picker(&self) -> bool {
         self.overlay.show_theme_picker
     }
@@ -497,6 +504,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn command_picker_search(&self) -> &str {
         &self.overlay.command_picker_search
+    }
+    pub(crate) fn command_picker_search_cursor(&self) -> usize {
+        self.overlay.command_picker_search_cursor
     }
     pub(crate) fn show_history_picker(&self) -> bool {
         self.overlay.show_history_picker

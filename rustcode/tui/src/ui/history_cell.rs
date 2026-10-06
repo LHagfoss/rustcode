@@ -574,10 +574,6 @@ impl HistoryCell for AssistantMarkdownCell {
     }
 }
 
-fn is_exploration_tool(name: &str) -> bool {
-    rustcode_core::activity::is_exploration_tool(name)
-}
-
 /// Keep the tail of an over-long target so the informative part (the file name
 /// and its parents) survives on a single row instead of the head, which says
 /// little about *which* item is queued or running.
@@ -681,8 +677,8 @@ pub(super) fn render_live_tool_cell_at(
         return Vec::new();
     }
 
-    // Speculative calls are only projections of the model's streamed output;
-    // their lifecycle state does not change the category heading.
+    // Speculative calls are only projections of streamed model output; the
+    // compact generic rows avoid presenting those as an executing command.
     let has_speculative = calls.iter().any(|call| !call.execution_started);
 
     if !has_speculative && calls.len() == 1 && calls[0].tool_name == "run_command" {
@@ -748,25 +744,10 @@ pub(super) fn render_live_tool_cell_at(
                 Some(super::tool_transcript::tool_body_spine(show_picker)),
             );
         }
-        // High verbosity never shows live output in this cell, so the quiet
-        // placeholder is omitted there too: output arriving mid-turn must not
-        // change the cell height while the reader is anchored above it.
+        // High verbosity never shows live output in this cell. Quiet calls
+        // also stay one row tall until output actually arrives.
         if matches!(verbosity, Verbosity::High) {
             return lines;
-        }
-        if call.output.iter().all(|chunk| chunk.text.trim().is_empty()) {
-            push_wrapped_with_continuation(
-                &mut lines,
-                vec![
-                    super::tool_transcript::tool_body_spine(show_picker),
-                    Span::styled(
-                        "no output yet",
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                    ),
-                ],
-                usize::from(width).max(1),
-                Some(super::tool_transcript::tool_body_spine(show_picker)),
-            );
         }
 
         let mut output = Vec::<(String, bool)>::new();
@@ -841,121 +822,117 @@ pub(super) fn render_live_tool_cell_at(
         return lines;
     }
 
-    let all_exploration = calls
-        .iter()
-        .all(|call| is_exploration_tool(&call.tool_name));
-    let label = if calls.iter().all(|call| !call.execution_started) {
-        "Queued"
-    } else if all_exploration {
-        "Exploring"
-    } else {
-        "Running"
-    };
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let detail_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
-    let heading_used = 2 + label.width();
-    let has_started = calls.iter().any(|call| call.execution_started);
-    let hint = if has_started {
-        cancel_hint_suffix(width, heading_used)
-    } else {
-        ""
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled("• ", title_style),
-        Span::styled(label, title_style),
-        Span::styled(hint.to_owned(), detail_style),
-    ])];
-    let shown_children = calls.len().min(MAX_LIVE_CHILDREN);
-    let show_all = calls.len() <= MAX_LIVE_CHILDREN;
-    for (child_index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
-        let is_last = show_all && child_index + 1 == shown_children;
-        let mut spans = vec![
-            super::tool_transcript::tool_tree_prefix(is_last, show_picker),
-            Span::styled(
-                if call.execution_started {
-                    "● "
-                } else {
-                    "○ "
-                },
-                detail_style,
-            ),
-            Span::styled(
-                call.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-        ];
-        // Budget the row before rendering it: the key disambiguator and the
-        // elapsed clock are appended after the target, so the target's share
-        // must be computed from the same values that are actually rendered.
-        let key_suffix = calls
+    let action_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let target_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker);
+    let mut lines = Vec::new();
+    let interrupt_row = calls
+        .iter()
+        .take(MAX_LIVE_CHILDREN)
+        .rposition(|call| call.execution_started);
+    for (call_index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
+        let status = if call.execution_started {
+            "Running"
+        } else {
+            "Queued"
+        };
+        let target = super::tool_transcript::contract_home_path(&call.target, home_path);
+        let target = if target.is_empty() || target == "?" {
+            String::new()
+        } else if call.action == "Bash" {
+            format!("$ {target}")
+        } else {
+            target
+        };
+        let matching = calls
             .iter()
-            .filter(|other| other.tool_name == call.tool_name && other.target == call.target)
+            .filter(|other| other.action == call.action && other.target == call.target)
+            .count();
+        let ordinal = calls[..call_index]
+            .iter()
+            .filter(|other| other.action == call.action && other.target == call.target)
             .count()
-            > 1;
-        let elapsed = if call.execution_started {
-            format!(
-                " · {}",
-                super::fmt_elapsed_compact(
-                    now.saturating_duration_since(call.started_at).as_secs()
-                )
-            )
+            + 1;
+        let duplicate_suffix = if matching > 1 {
+            format!(" · {ordinal}/{matching}")
         } else {
             String::new()
         };
-        if !call.target.is_empty() && call.target != "?" {
-            spans.push(Span::raw(if call.action == "Bash" { " $ " } else { " " }));
-            // Contract `~` and keep the tail so a long absolute path stays on
-            // one row: a queued call is a projection, not a scrollback log.
-            let target = super::tool_transcript::contract_home_path(&call.target, home_path);
-            let fixed = spans.iter().map(|span| span.content.width()).sum::<usize>()
-                + usize::from(key_suffix) * (3 + call.key.width())
-                + elapsed.width();
+        let elapsed_suffix = if call.execution_started {
+            let elapsed = now.saturating_duration_since(call.started_at).as_secs();
+            (elapsed >= 5).then(|| format!(" · {}", super::fmt_elapsed_compact(elapsed)))
+        } else {
+            None
+        }
+        .unwrap_or_default();
+        let prefix_width = 2 + status.width() + 1 + call.action.width();
+        let target_space = usize::from(!target.is_empty());
+        let min_target = if target.is_empty() { 0 } else { 6 };
+        let suffix_width = duplicate_suffix.width() + elapsed_suffix.width();
+        let interrupt_hint = if interrupt_row == Some(call_index) {
+            cancel_hint_suffix(
+                width,
+                prefix_width + target_space + min_target + suffix_width,
+            )
+        } else {
+            ""
+        };
+        // Each call carries its own state/action/target summary. This keeps
+        // mixed batches clear without a group heading, tree, or duplicate
+        // status glyph.
+        let mut spans = vec![
+            Span::styled("• ", title_style),
+            Span::styled(format!("{status} "), title_style),
+            Span::styled(call.action.clone(), action_style),
+        ];
+        if !target.is_empty() {
+            spans.push(Span::raw(" "));
+            let fixed = prefix_width + 1 + suffix_width + interrupt_hint.width();
             spans.push(Span::styled(
                 tail_to_width(&target, usize::from(width).saturating_sub(fixed).max(8)),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                target_style,
             ));
         }
-        if key_suffix {
-            spans.push(Span::styled(format!(" · {}", call.key), detail_style));
+        if !duplicate_suffix.is_empty() {
+            spans.push(Span::styled(duplicate_suffix, detail_style));
         }
-        if !elapsed.is_empty() {
-            spans.push(Span::styled(elapsed, detail_style));
+        if !elapsed_suffix.is_empty() {
+            spans.push(Span::styled(elapsed_suffix, detail_style));
+        }
+        if !interrupt_hint.is_empty() {
+            spans.push(Span::styled(interrupt_hint, detail_style));
         }
         push_wrapped_with_continuation(
             &mut lines,
             spans,
             usize::from(width).max(1),
-            Some(Span::styled(
-                if is_last { "    " } else { "│   " },
-                detail_style,
-            )),
+            Some(Span::raw("  ")),
         );
-        if call.execution_started {
+        if call.execution_started && !matches!(verbosity, Verbosity::High) {
             let latest = call
                 .output
                 .iter()
                 .flat_map(|chunk| chunk.text.lines())
                 .filter(|line| !line.trim().is_empty())
                 .next_back();
-            let text = if matches!(verbosity, Verbosity::High) && latest.is_some() {
-                "output received".to_owned()
-            } else {
-                latest
-                    .map(rustcode_tool_protocol::text::strip_ansi_escapes)
-                    .unwrap_or_else(|| "no output yet".to_owned())
-            };
-            lines.push(Line::from(vec![
-                super::tool_transcript::tool_body_spine(show_picker),
-                Span::styled(
-                    truncate_to_width(&text, usize::from(width).saturating_sub(2).max(1)),
-                    detail_style,
-                ),
-            ]));
+            if let Some(latest) = latest {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        truncate_to_width(
+                            &rustcode_tool_protocol::text::strip_ansi_escapes(latest),
+                            usize::from(width).saturating_sub(2).max(1),
+                        ),
+                        detail_style,
+                    ),
+                ]));
+            }
         }
     }
     if calls.len() > MAX_LIVE_CHILDREN {
         lines.push(Line::from(vec![
-            super::tool_transcript::tool_body_spine(show_picker),
+            Span::raw("  "),
             Span::styled(
                 truncate_to_width(
                     &format!("… +{} more", calls.len() - MAX_LIVE_CHILDREN),
@@ -972,7 +949,118 @@ pub(super) fn render_live_tool_cell_at(
 #[cfg(test)]
 mod tests {
     use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
-    use rustcode::controller::{ChatMessage, History, RenderState};
+    use rustcode::controller::{ChatMessage, History, RenderState, Verbosity};
+
+    #[test]
+    fn live_tool_rows_keep_state_and_action_without_nested_decoration() {
+        let mut call = rustcode::controller::LiveToolCall::new(
+            "call-1",
+            None,
+            "view_file",
+            "Read",
+            "src/main.rs",
+        );
+        call.execution_started = true;
+        call.output
+            .push_back(rustcode::controller::LiveToolOutputChunk {
+                stderr: false,
+                text: "12 lines read".to_owned(),
+            });
+
+        let rendered = super::render_live_tool_cell(&[call], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            [
+                "• Running Read src/main.rs · esc interrupt",
+                "  12 lines read"
+            ]
+        );
+    }
+
+    #[test]
+    fn generic_running_rows_add_elapsed_only_after_five_seconds() {
+        let mut call = rustcode::controller::LiveToolCall::new(
+            "call-1",
+            None,
+            "view_file",
+            "Read",
+            "src/main.rs",
+        );
+        call.execution_started = true;
+        let now = call.started_at + std::time::Duration::from_secs(4);
+        let before_threshold =
+            super::render_live_tool_cell_at(&[call.clone()], 80, &Verbosity::Low, false, now, None)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(!before_threshold.contains("4s"), "{before_threshold}");
+
+        let now = call.started_at + std::time::Duration::from_secs(5);
+        let after_threshold =
+            super::render_live_tool_cell_at(&[call], 80, &Verbosity::Low, false, now, None)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(after_threshold.contains("· 5s"), "{after_threshold}");
+    }
+
+    #[test]
+    fn identical_live_rows_get_ordinals_and_one_interrupt_hint() {
+        let mut first = rustcode::controller::LiveToolCall::new(
+            "internal-1",
+            None,
+            "view_file",
+            "Read",
+            "src/main.rs",
+        );
+        first.execution_started = true;
+        let second = rustcode::controller::LiveToolCall::new(
+            "internal-2",
+            None,
+            "view_file",
+            "Read",
+            "src/main.rs",
+        );
+        let rendered = super::render_live_tool_cell(&[first, second], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered[0].contains("Read src/main.rs · 1/2"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered[1].contains("Read src/main.rs · 2/2"),
+            "{rendered:?}"
+        );
+        assert_eq!(
+            rendered.join("\n").matches("esc").count(),
+            1,
+            "{rendered:?}"
+        );
+        assert!(!rendered.join("\n").contains("internal-"));
+
+        let bash = rustcode::controller::LiveToolCall::new(
+            "internal-bash",
+            None,
+            "run_command",
+            "Bash",
+            "cargo test",
+        );
+        let rendered_bash = super::render_live_tool_cell(&[bash], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered_bash.matches("esc").count(), 1, "{rendered_bash}");
+    }
 
     #[test]
     fn committed_history_cache_shares_large_block_and_projects_only_viewport() {

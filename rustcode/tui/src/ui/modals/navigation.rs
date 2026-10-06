@@ -530,7 +530,9 @@ pub(in crate::ui) fn render_mcp_config_modal(
     input_area: ratatui::layout::Rect,
 ) {
     let servers = &state.config().mcp_servers;
-    let selected_idx = state.mcp_picker_index();
+    let selected_idx = state
+        .mcp_picker_index()
+        .min(servers.len().saturating_sub(1));
 
     let modal_area = input_anchor_rect(f, input_area, MCP_CONFIG_HEIGHT);
     f.render_widget(Clear, modal_area);
@@ -733,8 +735,13 @@ pub(in crate::ui) fn render_mcp_config_modal(
                 modal_chunks[2],
             );
         } else {
+            let list_height = modal_chunks[2].height as usize;
+            let total_lines = list_lines.len();
+            let scroll_y = picker_list_window(selected_idx, total_lines, list_height);
             f.render_widget(
-                Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
+                Paragraph::new(list_lines)
+                    .scroll((scroll_y, 0))
+                    .style(Style::default().bg(COLOR_PANEL())),
                 modal_chunks[2],
             );
         }

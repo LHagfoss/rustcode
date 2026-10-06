@@ -52,15 +52,15 @@ pub(crate) fn take_turn_context_for_prompt(
 pub(crate) fn take_turn_context_for_prompt_with_limits(
     state: &mut AppState,
     is_wakeup: bool,
-    max_tool_rounds: usize,
-    max_total_tool_rounds: usize,
+    _max_tool_rounds: usize,
+    _max_total_tool_rounds: usize,
 ) -> TurnContext {
-    if is_wakeup {
+    let mut context = if is_wakeup {
         let mut context = state
             .background_turn_context
             .take()
             .map(|context| *context)
-            .unwrap_or_else(|| TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds));
+            .unwrap_or_else(TurnContext::new);
         if context.budget.continuation_pending {
             context.begin_next_segment();
         }
@@ -91,8 +91,13 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // prompt's transcript never promised them.
         state.clear_deferred_tool_calls();
         crate::config::clear_segment_checkpoint(&state.active_session_id);
-        TurnContext::with_budgets(max_tool_rounds, max_total_tool_rounds)
-    }
+        TurnContext::new()
+    };
+    // The arguments and checkpoint fields are retained for compatibility with
+    // older callers and saved sessions. Neither live logical turns nor their
+    // resumptions use a max-round or max-call ceiling.
+    context.remove_round_limits();
+    context
 }
 
 pub(crate) fn save_turn_context_after_run(
@@ -355,7 +360,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 mod tests {
     use super::{
         messages_for_response_continuation, reasoning_loop_final_response,
-        take_turn_context_for_prompt,
+        take_turn_context_for_prompt, take_turn_context_for_prompt_with_limits,
     };
     use crate::app::{AppState, TokenUsage};
     use crate::network::EMPTY_RESPONSE_RECOVERY_PROMPT;
@@ -448,5 +453,39 @@ mod tests {
             Some(provider_usage)
         );
         assert!(!provider_state.current_turn_token_usage_is_estimated);
+    }
+
+    #[test]
+    fn live_turns_ignore_legacy_config_and_saved_round_ceilings() {
+        let mut state = AppState::new();
+        state.config.max_tool_rounds = 1000;
+        state.config.max_total_tool_rounds = 2000;
+
+        let mut saved = super::TurnContext::with_budgets(40, 80);
+        saved.budget.tool_rounds = 40;
+        saved.budget.continuation_pending = true;
+        let checkpoint = saved.segment_checkpoint("legacy-session", true, false);
+        let checkpoint: super::SegmentCheckpoint = serde_json::from_str(
+            &serde_json::to_string(&checkpoint).expect("serialize legacy checkpoint"),
+        )
+        .expect("deserialize legacy checkpoint");
+        let mut restored = super::TurnContext::new();
+        assert!(restored.restore_segment(&checkpoint, "legacy-session"));
+        state.background_turn_context = Some(Box::new(restored));
+
+        let mut resumed = take_turn_context_for_prompt_with_limits(&mut state, true, 1000, 2000);
+        assert_eq!(resumed.budget.tool_rounds, 40);
+        assert_eq!(resumed.budget.max_tool_rounds, usize::MAX);
+        assert_eq!(resumed.budget.max_total_tool_rounds, usize::MAX);
+        resumed.budget.tool_rounds = 141;
+        assert_eq!(
+            crate::network::turn_budget_exceeded(&resumed),
+            None,
+            "a legacy 40-round checkpoint must keep running past 40"
+        );
+
+        let fresh = take_turn_context_for_prompt_with_limits(&mut state, false, 1000, 2000);
+        assert_eq!(fresh.budget.max_tool_rounds, usize::MAX);
+        assert_eq!(fresh.budget.max_total_tool_rounds, usize::MAX);
     }
 }
