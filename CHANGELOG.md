@@ -1,3 +1,10 @@
+## [v0.57.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.4) - 2026-10-06
+
+### Fixes
+- Simplify queued/running tool, task, and subagent displays while retaining progress and interrupt hints ([#1732](https://github.com/LHagfoss/rustcode/pull/1732)).
+- Keep long turns responsive during queued work and tool waits; move workspace refresh off the application lock ([#1732](https://github.com/LHagfoss/rustcode/pull/1732)).
+- Remove live tool-round limits from legacy sessions and resumed turns, preserving token safety and cancellation ([#1732](https://github.com/LHagfoss/rustcode/pull/1732)).
+- Fix picker navigation, list scrolling, cursor movement, and keyboard/bracketed paste in panels ([#1732](https://github.com/LHagfoss/rustcode/pull/1732)).
 ## [v0.57.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.3) - 2026-10-05
 
 ### Fixes
