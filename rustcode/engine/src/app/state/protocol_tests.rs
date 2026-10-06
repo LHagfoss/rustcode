@@ -123,13 +123,16 @@ fn pending_question_word_navigation_and_deletion_use_cursor_position() {
 }
 
 #[test]
-fn pending_question_paste_ignores_line_breaks() {
+fn pending_question_paste_preserves_normalized_line_breaks() {
     let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
     question.activate_custom_input();
     question.insert_str("first\r\nsecond\nthird");
 
-    assert_eq!(question.custom_input.as_deref(), Some("firstsecondthird"));
-    assert_eq!(question.custom_cursor, "firstsecondthird".len());
+    assert_eq!(
+        question.custom_input.as_deref(),
+        Some("first\nsecond\nthird")
+    );
+    assert_eq!(question.custom_cursor, "first\nsecond\nthird".len());
 }
 
 #[test]

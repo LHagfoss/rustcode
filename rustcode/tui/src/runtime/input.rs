@@ -1,4 +1,6 @@
 use super::*;
+use crate::ui::keymap::{KeyAction, KeyMap};
+use crossterm::event::KeyEvent;
 
 pub(super) enum InputFlow {
     ContinueIteration,
@@ -25,6 +27,116 @@ pub(super) struct InputContext<'a> {
 enum PickerSearchTarget {
     Model,
     Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuestionEditAction {
+    Handled,
+    Submit,
+    Paste,
+}
+
+fn insert_question_answer_text(question: &mut rustcode::controller::PendingQuestion, text: &str) {
+    question.insert_str(text);
+}
+
+fn move_question_cursor_vertical(question: &mut rustcode::controller::PendingQuestion, down: bool) {
+    let Some(text) = question.custom_input.as_ref() else {
+        return;
+    };
+    let cursor = question.custom_cursor.min(text.len());
+    if !text.is_char_boundary(cursor) {
+        return;
+    }
+    let before = &text[..cursor];
+    let current_line_start = before.rfind('\n').map_or(0, |index| index + 1);
+    let column = before[current_line_start..].chars().count();
+    if down {
+        let Some(next_line_start_rel) = text[cursor..].find('\n') else {
+            question.custom_cursor = text.len();
+            return;
+        };
+        let next_line_start = cursor + next_line_start_rel + 1;
+        let next_line_end = text[next_line_start..]
+            .find('\n')
+            .map_or(text.len(), |index| next_line_start + index);
+        let target_column = column.min(text[next_line_start..next_line_end].chars().count());
+        question.custom_cursor = next_line_start
+            + text[next_line_start..next_line_end]
+                .chars()
+                .take(target_column)
+                .map(char::len_utf8)
+                .sum::<usize>();
+    } else if current_line_start > 0 {
+        let previous_line_end = current_line_start - 1;
+        let previous_line_start = text[..previous_line_end]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let previous_line = &text[previous_line_start..previous_line_end];
+        let target_column = column.min(previous_line.chars().count());
+        question.custom_cursor = previous_line_start
+            + previous_line
+                .chars()
+                .take(target_column)
+                .map(char::len_utf8)
+                .sum::<usize>();
+    } else {
+        question.custom_cursor = 0;
+    }
+}
+
+fn delete_question_word_forward(question: &mut rustcode::controller::PendingQuestion) {
+    let start = question.custom_cursor;
+    question.move_cursor_word_right();
+    let end = question.custom_cursor;
+    question.custom_cursor = start;
+    if start < end
+        && let Some(text) = question.custom_input.as_mut()
+    {
+        text.replace_range(start..end, "");
+    }
+}
+
+fn kill_question_line_to_start(question: &mut rustcode::controller::PendingQuestion) {
+    let end = question.custom_cursor;
+    let Some(text) = question.custom_input.as_mut() else {
+        return;
+    };
+    let start = text[..end].rfind('\n').map_or(0, |index| index + 1);
+    if start < end {
+        text.replace_range(start..end, "");
+        question.custom_cursor = start;
+    }
+}
+
+fn handle_question_custom_key(
+    question: &mut rustcode::controller::PendingQuestion,
+    key: KeyEvent,
+) -> QuestionEditAction {
+    use QuestionEditAction::{Handled, Paste, Submit};
+
+    match KeyMap::from_environment().resolve(key) {
+        KeyAction::Insert(character) => question.insert_char(character),
+        KeyAction::InsertNewline => question.insert_char('\n'),
+        KeyAction::Submit => return Submit,
+        KeyAction::Paste => return Paste,
+        KeyAction::MoveLeft => question.move_cursor_left(),
+        KeyAction::MoveRight => question.move_cursor_right(),
+        KeyAction::MoveWordLeft => question.move_cursor_word_left(),
+        KeyAction::MoveWordRight => question.move_cursor_word_right(),
+        KeyAction::MoveStart => question.move_cursor_home(),
+        KeyAction::MoveEnd => question.move_cursor_end(),
+        KeyAction::DeleteBackward => question.delete_char_before(),
+        KeyAction::DeleteForward => question.delete_char_after(),
+        KeyAction::DeleteWordBackward => question.delete_word_before(),
+        KeyAction::DeleteWordForward => delete_question_word_forward(question),
+        KeyAction::KillLineStart => kill_question_line_to_start(question),
+        KeyAction::HistoryPrevious => move_question_cursor_vertical(question, false),
+        KeyAction::HistoryNext => move_question_cursor_vertical(question, true),
+        // Modal and composer actions do not edit an answer.
+        _ => {}
+    }
+    Handled
 }
 
 /// Bound list movement at the visible endpoints so repeated arrow presses can
@@ -801,124 +913,34 @@ pub(super) async fn handle_app_event(
                         drop(s);
 
                         if typing {
-                            match key.code {
-                                KeyCode::Char('v') | KeyCode::Char('V')
-                                    if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                        || key.modifiers.contains(event::KeyModifiers::SUPER)
-                                        || key.modifiers.contains(event::KeyModifiers::META) =>
-                                {
-                                    if let Some(text) =
-                                        rustcode::clipboard::read_text_from_clipboard()
-                                    {
-                                        let normalized =
-                                            text.replace("\r\n", "\n").replace('\r', "\n");
-                                        let mut s = app_state.lock().await;
-                                        if let Some(q) = s.pending_question.as_mut() {
-                                            q.insert_str(&normalized);
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('a') | KeyCode::Char('A')
-                                    if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                                {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.move_cursor_home();
-                                    }
-                                }
-                                KeyCode::Char('e') | KeyCode::Char('E')
-                                    if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                                {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.move_cursor_end();
-                                    }
-                                }
-                                KeyCode::Char('w') | KeyCode::Char('W')
-                                    if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                                {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.delete_word_before();
-                                    }
-                                }
-                                KeyCode::Char(c) => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.insert_char(c);
-                                    }
-                                }
-                                KeyCode::Backspace => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        if key.modifiers.contains(event::KeyModifiers::ALT) {
-                                            q.delete_word_before();
-                                        } else {
-                                            q.delete_char_before();
-                                        }
-                                    }
-                                }
-                                KeyCode::Delete => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.delete_char_after();
-                                    }
-                                }
-                                KeyCode::Left => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        if key.modifiers.contains(event::KeyModifiers::ALT)
-                                            || key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                        {
-                                            q.move_cursor_word_left();
-                                        } else {
-                                            q.move_cursor_left();
-                                        }
-                                    }
-                                }
-                                KeyCode::Right => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        if key.modifiers.contains(event::KeyModifiers::ALT)
-                                            || key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                        {
-                                            q.move_cursor_word_right();
-                                        } else {
-                                            q.move_cursor_right();
-                                        }
-                                    }
-                                }
-                                KeyCode::Home => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.move_cursor_home();
-                                    }
-                                }
-                                KeyCode::End => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.move_cursor_end();
-                                    }
-                                }
-                                KeyCode::Up => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.selected = q.selected.saturating_sub(1);
-                                        if q.selected < q.options.len() {
-                                            q.custom_input = None;
-                                            q.custom_cursor = 0;
-                                        }
-                                    }
-                                }
+                            let action = match key.code {
                                 KeyCode::Tab => {
-                                    let mut s = app_state.lock().await;
-                                    s.focus_question(1);
+                                    app_state.lock().await.focus_question(1);
+                                    QuestionEditAction::Handled
                                 }
                                 KeyCode::BackTab => {
-                                    let mut s = app_state.lock().await;
-                                    s.focus_question(-1);
+                                    app_state.lock().await.focus_question(-1);
+                                    QuestionEditAction::Handled
                                 }
-                                KeyCode::Enter => {
+                                KeyCode::Esc => {
+                                    let mut s = app_state.lock().await;
+                                    if let Some(q) = s.pending_question.as_mut() {
+                                        q.custom_input = None;
+                                        q.custom_cursor = 0;
+                                    }
+                                    QuestionEditAction::Handled
+                                }
+                                _ => {
+                                    let mut s = app_state.lock().await;
+                                    s.pending_question
+                                        .as_mut()
+                                        .map_or(QuestionEditAction::Handled, |q| {
+                                            handle_question_custom_key(q, key)
+                                        })
+                                }
+                            };
+                            match action {
+                                QuestionEditAction::Submit => {
                                     let answer_event = {
                                         let s = app_state.lock().await;
                                         s.pending_question
@@ -929,14 +951,17 @@ pub(super) async fn handle_app_event(
                                         let _ = app_event_sender.send(answer_event);
                                     }
                                 }
-                                KeyCode::Esc => {
-                                    let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut() {
-                                        q.custom_input = None;
-                                        q.custom_cursor = 0;
+                                QuestionEditAction::Paste => {
+                                    if let Some(text) =
+                                        rustcode::clipboard::read_text_from_clipboard()
+                                    {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            insert_question_answer_text(q, &text);
+                                        }
                                     }
                                 }
-                                _ => {}
+                                QuestionEditAction::Handled => {}
                             }
                             *needs_redraw = true;
                             return Ok(InputFlow::ContinueIteration);
@@ -2496,7 +2521,7 @@ pub(super) async fn handle_app_event(
                 if s.status == AppStatus::AwaitingQuestion && !s.user_overlay_open() {
                     if let Some(q) = s.pending_question.as_mut() {
                         if q.custom_input.is_some() {
-                            q.insert_str(&normalized);
+                            insert_question_answer_text(q, &normalized);
                         }
                     }
                 } else if s.show_mcp_config {
@@ -2521,13 +2546,15 @@ pub(super) async fn handle_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        InputFlow, PickerSearchTarget, SubagentPickerAction, agent_context_return_target,
-        clear_selection_for_composer_key, filtered_command_picker_items, handle_cmd_copy_chord,
-        handle_cmd_copy_chord_with, handle_copy_or_exit_chord, handle_picker_search_key,
-        insert_clipboard_paste, insert_mcp_edit_paste, is_cmd_copy_chord, is_copy_or_exit_chord,
-        is_keyboard_range_key, is_shift_tab, is_transcript_navigation, open_demo_if_requested,
-        picker_selection_for_key, report_selection_copy, return_to_latest_for_key,
-        scroll_panel_selection, selection_owns_key, subagent_picker_action,
+        InputFlow, PickerSearchTarget, QuestionEditAction, SubagentPickerAction,
+        agent_context_return_target, clear_selection_for_composer_key,
+        filtered_command_picker_items, handle_cmd_copy_chord, handle_cmd_copy_chord_with,
+        handle_copy_or_exit_chord, handle_picker_search_key, handle_question_custom_key,
+        insert_clipboard_paste, insert_mcp_edit_paste, insert_question_answer_text,
+        is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
+        is_transcript_navigation, open_demo_if_requested, picker_selection_for_key,
+        report_selection_copy, return_to_latest_for_key, scroll_panel_selection,
+        selection_owns_key, subagent_picker_action,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2536,8 +2563,79 @@ mod tests {
     use ratatui::{buffer::Buffer, layout::Rect};
     use rustcode::app::AppState;
     use rustcode::clipboard::ClipboardCopyStatus;
+    use rustcode::controller::PendingQuestion;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn ask_question_editor_matches_composer_modified_enter_and_word_navigation() {
+        let mut question = PendingQuestion::new("Question?".to_owned(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("café tools");
+
+        assert_eq!(
+            handle_question_custom_key(
+                &mut question,
+                KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)
+            ),
+            QuestionEditAction::Handled
+        );
+        assert_eq!(question.custom_cursor, "café ".len());
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+        );
+        assert_eq!(question.custom_input.as_deref(), Some("café Xtools"));
+
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+        );
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(question.custom_input.as_deref(), Some("café X\n\ntools"));
+        assert_eq!(
+            handle_question_custom_key(
+                &mut question,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            QuestionEditAction::Submit
+        );
+    }
+
+    #[test]
+    fn ask_question_editor_supports_forward_word_delete_and_line_kill() {
+        let mut question = PendingQuestion::new("Question?".to_owned(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("one two three");
+        question.custom_cursor = "one ".len();
+
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT),
+        );
+        assert_eq!(question.custom_input.as_deref(), Some("one three"));
+        assert_eq!(question.custom_cursor, "one ".len());
+
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::SUPER),
+        );
+        assert_eq!(question.custom_input.as_deref(), Some("three"));
+        assert_eq!(question.custom_cursor, 0);
+    }
+
+    #[test]
+    fn ask_question_paste_preserves_normalized_newlines_and_unicode() {
+        let mut question = PendingQuestion::new("Question?".to_owned(), vec![], false);
+        question.activate_custom_input();
+        insert_question_answer_text(&mut question, "først\r\n二つ\rslutt");
+
+        assert_eq!(question.custom_input.as_deref(), Some("først\n二つ\nslutt"));
+        assert_eq!(question.custom_cursor, "først\n二つ\nslutt".len());
+    }
 
     #[tokio::test]
     async fn opening_demo_consumes_only_the_command_and_preserves_live_session() {
