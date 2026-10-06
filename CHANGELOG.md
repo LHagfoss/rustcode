@@ -1,3 +1,14 @@
+## [v0.57.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.7) - 2026-10-06
+
+### Fixes
+- Reduce successful Cargo verification output in model context while preserving captured output artifacts and diagnostics.
+- Make broad repository research progressive with paginated project maps, Markdown outlines, and evidence-preserving history compaction.
+- Guide concise, evidence-backed review answers with useful comparison tables and explicit coverage gaps.
+- Clarify context used versus remaining and distinguish configured reserves from measured usage.
+- Keep detached task completion silent by default, retain captured logs and terminal reasons, and support waiting for the first task in a set.
+- Separate live tasks and recent outcomes with clearer command labels, semantic status, unread-result counts, and batch summaries.
+- Align AskQuestion editing shortcuts with the composer; preserve multiline paste and whitespace, and keep the cursor visible in long answers.
+- Repair GitHub release-note generation and PR labeling, and document the repository search workflow.
 ## [v0.57.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.6) - 2026-10-06
 
 ### Fixes
