@@ -1,7 +1,7 @@
 use crate::app::TokenUsage;
 use crate::network::messages::RequestPrefixCache;
 use crate::network::{ContextCheckpoint, events, lifecycle, loop_detect, verification};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,9 @@ pub struct RecoveryState {
     /// turn-scoped continuation. Keeping this separate from transport retries
     /// prevents a failed recovery from opening an unbounded loop.
     pub stream_recovery_attempts: u8,
+    /// A provider output-token limit permits one continuation with the saved
+    /// partial answer before the turn is marked incomplete.
+    pub output_budget_recovery_attempts: u8,
     pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub completion_blocks: u8,
@@ -68,10 +71,11 @@ pub struct ProgressState {
     /// known artifact instead of opening another whole-file inspection loop.
     pub grounded_artifact: Option<GroundedArtifactEvidence>,
     /// Complete read-only source results that can support a final review.
-    /// Incomplete inspection results stay separately tracked so a truncated
-    /// review can never be promoted to a successful headless completion.
+    /// Inspection status is keyed by stable fingerprint so a complete reread
+    /// supersedes an earlier truncated result for the same evidence.
     pub complete_inspection_results: usize,
     pub incomplete_inspection_results: usize,
+    pub inspection_results: BTreeMap<String, bool>,
     pub made_edits: bool,
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
@@ -89,6 +93,32 @@ pub struct ProgressState {
     /// checkpoint of this value so progress from an earlier segment cannot
     /// authorize an endless sequence of empty continuations.
     pub meaningful_events: usize,
+}
+
+impl ProgressState {
+    pub fn record_inspection_result(&mut self, fingerprint: &str, complete: bool) {
+        if fingerprint.is_empty() {
+            return;
+        }
+        if let Some(previous) = self
+            .inspection_results
+            .insert(fingerprint.to_owned(), complete)
+        {
+            if previous {
+                self.complete_inspection_results =
+                    self.complete_inspection_results.saturating_sub(1);
+            } else {
+                self.incomplete_inspection_results =
+                    self.incomplete_inspection_results.saturating_sub(1);
+            }
+        }
+        if complete {
+            self.complete_inspection_results = self.complete_inspection_results.saturating_add(1);
+        } else {
+            self.incomplete_inspection_results =
+                self.incomplete_inspection_results.saturating_add(1);
+        }
+    }
 }
 
 pub struct GroundedArtifactEvidence {
@@ -233,6 +263,7 @@ impl TurnContext {
                 reasoning_recovery_pending: false,
                 empty_response_recovery_attempts: 0,
                 stream_recovery_attempts: 0,
+                output_budget_recovery_attempts: 0,
                 reasoning_loops_detected: 0,
                 force_final: false,
                 completion_blocks: 0,
@@ -246,6 +277,7 @@ impl TurnContext {
                 grounded_artifact: None,
                 complete_inspection_results: 0,
                 incomplete_inspection_results: 0,
+                inspection_results: BTreeMap::new(),
                 made_edits: false,
                 failed_mutations: 0,
                 consecutive_no_progress: 0,
@@ -485,6 +517,7 @@ impl TurnContext {
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
             "infrastructure_failure_streak": self.recovery.infrastructure_failures.streak(),
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,
+            "output_budget_recovery_attempts": self.recovery.output_budget_recovery_attempts,
             "empty_response_recovery_attempts": self.recovery.empty_response_recovery_attempts,
             "last_stream_termination": self
                 .response
