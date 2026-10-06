@@ -2516,9 +2516,7 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(
-        rendered.contains("pending steers · apply after next tool result or when the turn ends")
-    );
+    assert!(rendered.contains("pending steering · applies after a result or turn ends"));
     assert!(rendered.find("first steer").unwrap() < rendered.find("second steer").unwrap());
     assert!(rendered.contains("queued follow-ups (2) · ↑ edit last"));
     assert!(rendered.contains("follow-up one"));
@@ -2526,6 +2524,43 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
     assert!(!rendered.contains("esc interrupt and apply now"));
     assert!(!rendered.contains("Working · "));
     assert!(!rendered.contains("Steer · Tab switches to Queue"));
+}
+
+#[test]
+fn queued_steering_prompts_wrap_within_the_composer_width() {
+    let mut state = RenderState::new();
+    state.status = rustcode::controller::AppStatus::Streaming;
+    state.pending_steers = vec![
+        "Please inspect the complete change, explain the failing behavior, and update the relevant tests before making the fix.".to_owned(),
+    ];
+
+    let rendered = render_state_to_text(&mut state, 60, 24);
+    let prompt_rows = rendered
+        .lines()
+        .filter(|line| line.contains("Please inspect") || line.contains("relevant tests"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(prompt_rows.len(), 2, "{rendered}");
+    assert!(
+        prompt_rows.iter().all(|row| line_width(row) <= 60),
+        "{rendered}"
+    );
+    assert!(rendered.contains("pending steering"), "{rendered}");
+}
+
+#[test]
+fn narrow_queue_previews_truncate_inside_the_available_width() {
+    let rows = super::composer_render::queue_prompt_preview_lines(
+        "one extremelylongwordthatmustbreak and then continue with more text",
+        12,
+    );
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.width() <= 12), "{rows:?}");
+    assert!(
+        rows.last().is_some_and(|row| row.ends_with('…')),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -4301,6 +4336,47 @@ fn completed_edits_have_a_distinct_transcript_heading() {
 }
 
 #[test]
+fn deleted_text_file_renders_removed_lines_in_red() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "delete_file".to_owned(),
+            arguments: r#"{"path":"src/removed.txt"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "delete_file: deleted 'src/removed.txt'")
+            .answering(Some("call-1".to_owned()))
+            .with_diff(Some(
+                "--- a/src/removed.txt\n+++ b/src/removed.txt\n@@ -1,2 +0,0 @@\n-first removed line\n-second removed line\n".to_owned(),
+            ))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "delete_file".to_owned(),
+                success: true,
+                changed_paths: vec!["src/removed.txt".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false);
+    assert_eq!(rendered[0].to_string(), "• Deleted");
+    assert!(
+        rendered.iter().any(|line| {
+            line.to_string().contains("first removed line")
+                && line
+                    .spans
+                    .iter()
+                    .any(|span| span.style.bg == Some(super::COLOR_DIFF_REMOVE_BG()))
+        }),
+        "{rendered:?}"
+    );
+}
+
+#[test]
 fn committed_file_write_is_labeled_as_a_write() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
@@ -4386,6 +4462,148 @@ fn low_verbosity_write_shows_added_lines_preview() {
     );
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1]);
+}
+
+#[test]
+fn low_verbosity_write_diff_shows_first_five_lines_and_expands_completely() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    let content = (1..=12)
+        .map(|index| format!("pub fn item_{index}() {{}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "write_to_file".to_owned(),
+            arguments: serde_json::json!({"path":"src/new.rs", "content":content}).to_string(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "write_to_file: wrote 'src/new.rs' (12 lines)")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "write_to_file".to_owned(),
+                success: true,
+                changed_paths: vec!["src/new.rs".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let collapsed = super::render_committed_tool_result_group(&state, &[1], 100, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for index in 1..=5 {
+        assert!(
+            collapsed
+                .iter()
+                .any(|line| line.contains(&format!("item_{index}"))),
+            "{collapsed:?}"
+        );
+    }
+    assert!(
+        !collapsed.iter().any(|line| line.contains("item_6")),
+        "{collapsed:?}"
+    );
+    assert!(
+        collapsed.iter().any(|line| line.contains("… +7 lines")),
+        "{collapsed:?}"
+    );
+    assert!(
+        collapsed.iter().any(|line| line.contains("ctrl+o")),
+        "{collapsed:?}"
+    );
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_tool_result_group(&state, &[1], 100, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    for index in 1..=12 {
+        assert!(
+            expanded
+                .iter()
+                .any(|line| line.contains(&format!("item_{index}"))),
+            "{expanded:?}"
+        );
+    }
+}
+
+#[test]
+fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,3 @@\n-let old_value = 1;\n+let value = 2;\n+let second_value = 3;\n+let third_value = 4;\n+let fourth_value = 5;\n+let fifth_value = 6;\n";
+    let render = |tool_name: &str, result: &str, expanded: bool| {
+        let mut state = RenderState::new();
+        state.verbosity = Verbosity::Low;
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: "call-1".to_owned(),
+                name: tool_name.to_owned(),
+                arguments: r#"{"path":"src/main.rs","content":"let value = 2;"}"#.to_owned(),
+            }]),
+        );
+        state.history.push(
+            ChatMessage::new("tool", format!("{tool_name}: {result}"))
+                .answering(Some("call-1".to_owned()))
+                .with_diff(Some(diff.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: tool_name.to_owned(),
+                    success: true,
+                    changed_paths: vec!["src/main.rs".to_owned()],
+                    ..Default::default()
+                }),
+        );
+        if expanded {
+            state.expanded_thoughts.insert(1);
+        }
+
+        super::render_committed_tool_result_group(&state, &[1], 100, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    for expanded in [false, true] {
+        let wrote = render("write_to_file", "wrote 'src/main.rs'", expanded);
+        let edited = render("replace_file_content", "successfully edited", expanded);
+        assert_eq!(wrote[0], "• Wrote");
+        assert_eq!(edited[0], "• Edited");
+        assert_eq!(
+            &wrote[1..],
+            &edited[1..],
+            "Write and Edit should render the same diff rows when expanded={expanded}"
+        );
+        assert!(wrote.iter().any(|line| line.contains("old_value = 1;")));
+        for value in if expanded {
+            vec![2, 3, 4, 5, 6]
+        } else {
+            vec![2, 3, 4, 5]
+        } {
+            assert!(
+                wrote
+                    .iter()
+                    .any(|line| line.contains(&format!("value = {value};"))),
+                "expanded={expanded}: {wrote:?}"
+            );
+        }
+        if !expanded {
+            assert!(
+                !wrote.iter().any(|line| line.contains("value = 6;")),
+                "{wrote:?}"
+            );
+            assert!(
+                wrote.iter().any(|line| line.contains("… +1 lines")),
+                "{wrote:?}"
+            );
+        } else {
+            assert!(!wrote.iter().any(|line| line.contains("… +")), "{wrote:?}");
+        }
+    }
 }
 
 #[test]

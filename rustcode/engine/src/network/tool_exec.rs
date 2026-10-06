@@ -26,8 +26,8 @@ mod result;
 #[cfg(test)]
 pub(crate) use preview::extract_diff_block;
 pub(crate) use preview::{
-    final_tool_diff, get_diff_preview, get_tool_project_root,
-    tool_result_precludes_preview_fallback,
+    capture_text_mutation_before, final_tool_diff, finish_text_mutation_diff, get_diff_preview,
+    get_tool_project_root, tool_result_precludes_preview_fallback,
 };
 pub(crate) use result::{
     bounded_tool_result_history_message, compact_replayed_read_result, finalize_tool_result,
@@ -524,7 +524,8 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         }
     }
 
-    let diff_opt = get_diff_preview(name, args);
+    let mut diff_opt = get_diff_preview(name, args);
+    let mutation_diff = Arc::new(std::sync::Mutex::new(None));
 
     let needs_confirm = matches!(
         authorization,
@@ -554,6 +555,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let live_key_owned = live_key.map(str::to_owned);
         let cancel_token_for_task = cancel_token.clone();
         let client_for_task = client.clone();
+        let mutation_diff_for_task = Arc::clone(&mutation_diff);
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let run_fut = async move {
             if name_owned == "search_web" {
@@ -575,6 +577,12 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                         task_working_directory_for_task,
                         false,
                         Some(sandbox_mode_for_task),
+                    );
+                    let tool_context = crate::tools::current_tool_context();
+                    let mutation_snapshot = capture_text_mutation_before(
+                        &name_owned,
+                        &args_owned,
+                        &tool_context,
                     );
                     let result = if name_owned == "run_command" {
                         if live_key_owned.is_some() {
@@ -616,6 +624,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                             call_id_owned.as_deref(),
                         )
                     };
+                    if result.success
+                        && let Ok(mut diff) = mutation_diff_for_task.lock()
+                    {
+                        *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
+                    }
                     crate::tools::set_active_workspace_context(None, None, false, None);
                     crate::tools::set_active_session_id(None);
                     result
@@ -824,6 +837,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
                 let live_key_for_task = live_key.map(str::to_owned);
+                let mutation_diff_for_task = Arc::clone(&mutation_diff);
                 let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
                 let mcp_registry = crate::mcp::get_mcp_registry();
                 let run_fut = tokio::task::spawn_blocking(move || {
@@ -836,6 +850,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                             false,
                             Some(sandbox_mode_for_task),
                         );
+                        let tool_context = crate::tools::current_tool_context();
+                        let mutation_snapshot =
+                            capture_text_mutation_before(&name_owned, &args_owned, &tool_context);
                         let result = if name_owned == "render_video" && live_key_for_task.is_some()
                         {
                             let callback: crate::tools::CommandProgressCallback =
@@ -863,6 +880,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                                 call_id_owned.as_deref(),
                             )
                         };
+                        if result.success
+                            && let Ok(mut diff) = mutation_diff_for_task.lock()
+                        {
+                            *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
+                        }
                         crate::tools::set_active_workspace_context(None, None, false, None);
                         crate::tools::set_active_session_id(None);
                         result
@@ -939,6 +961,10 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         }
         res
     };
+
+    if diff_opt.is_none() {
+        diff_opt = mutation_diff.lock().ok().and_then(|mut diff| diff.take());
+    }
 
     (result, diff_opt, user_wait_dur)
 }

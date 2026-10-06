@@ -6318,6 +6318,99 @@ async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
 }
 
 #[tokio::test]
+async fn approved_text_file_deletion_records_removed_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
+    let file = dir.path().join("remove.txt");
+    std::fs::write(&file, "first line\nsecond line\n").expect("write source file");
+
+    let result = run_one_tool_with_state(
+        &state,
+        test_tool_call(
+            "delete_file",
+            serde_json::json!({"path": file.to_string_lossy()}),
+        ),
+    )
+    .await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    let diff = result.diff.expect("deletion should retain a text diff");
+    assert!(diff.contains("-first line"), "got: {diff}");
+    assert!(diff.contains("-second line"), "got: {diff}");
+    assert!(!file.exists(), "the approved deletion still executes");
+}
+
+#[test]
+fn delete_file_is_not_read_for_the_pre_approval_confirmation_preview() {
+    assert!(get_diff_preview("delete_file", &serde_json::json!({"path":"secret.txt"})).is_none());
+}
+
+#[tokio::test]
+async fn approved_text_copy_diff_covers_new_and_overwritten_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
+    let source = dir.path().join("source.txt");
+    let target = dir.path().join("target.txt");
+    std::fs::write(&source, "copied line\n").expect("write source");
+
+    let call = || {
+        test_tool_call(
+            "copy_file",
+            serde_json::json!({"src":source.to_string_lossy(), "dest":target.to_string_lossy()}),
+        )
+    };
+    let created = run_one_tool_with_state(&state, call()).await;
+    assert!(created.metadata.success, "got: {}", created.content);
+    let created_diff = created
+        .diff
+        .expect("new text copy should have an added-line diff");
+    assert!(created_diff.contains("+copied line"), "got: {created_diff}");
+
+    std::fs::write(&source, "replacement line\n").expect("update source");
+    let overwritten = run_one_tool_with_state(&state, call()).await;
+    assert!(overwritten.metadata.success, "got: {}", overwritten.content);
+    let overwritten_diff = overwritten.diff.expect("overwrite should have a text diff");
+    assert!(
+        overwritten_diff.contains("-copied line"),
+        "got: {overwritten_diff}"
+    );
+    assert!(
+        overwritten_diff.contains("+replacement line"),
+        "got: {overwritten_diff}"
+    );
+}
+
+#[tokio::test]
+async fn approved_text_chunk_write_records_the_appended_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    state.lock().await.workspace_root = Some(dir.path().to_path_buf());
+    let file = dir.path().join("chunk.txt");
+    std::fs::write(&file, "first").expect("write initial content");
+
+    let result = run_one_tool_with_state(
+        &state,
+        test_tool_call(
+            "write_file_chunk",
+            serde_json::json!({
+                "path": file.to_string_lossy(),
+                "content": " second",
+                "offset": 5,
+                "expected_size": 5,
+            }),
+        ),
+    )
+    .await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    let diff = result.diff.expect("text chunk write should have a diff");
+    assert!(diff.contains("-first"), "got: {diff}");
+    assert!(diff.contains("+first second"), "got: {diff}");
+}
+
+#[tokio::test]
 async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
     // The classic insert shape: replacement_content contains the full
     // target_content as a suffix. The old argument-only preview and the

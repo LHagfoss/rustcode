@@ -1159,6 +1159,7 @@ pub(super) fn activity_status_line(
 
 /// Maximum queued user prompts previewed above the composer.
 pub(super) const MAX_QUEUE_PREVIEW_ROWS: usize = 3;
+const MAX_QUEUE_PROMPT_PREVIEW_LINES: usize = 2;
 
 pub(super) fn pending_steer_prompts(state: &RenderSnapshot) -> Vec<&str> {
     state
@@ -1187,20 +1188,68 @@ pub(super) fn queued_user_prompts(state: &RenderSnapshot) -> Vec<&str> {
         .collect()
 }
 
-pub(super) fn queue_preview_height(state: &RenderSnapshot) -> u16 {
-    let steer_rows = pending_steer_prompts(state).len();
-    let queue_rows = queued_user_prompts(state).len();
-    let steer_height = if steer_rows == 0 {
+pub(super) fn queue_preview_height(state: &RenderSnapshot, width: usize) -> u16 {
+    let steers = pending_steer_prompts(state);
+    let prompts = queued_user_prompts(state);
+    let prompt_width = width.saturating_sub("  › ".width()).max(1);
+    let steer_height = if steers.is_empty() {
         0
     } else {
-        steer_rows as u16 + 1
+        1 + steers
+            .iter()
+            .map(|prompt| queue_prompt_preview_lines(prompt, prompt_width).len() as u16)
+            .sum::<u16>()
     };
-    let queue_height = if queue_rows == 0 {
+    let queue_height = if prompts.is_empty() {
         0
     } else {
-        queue_rows as u16 + 1
+        1 + prompts
+            .iter()
+            .map(|prompt| queue_prompt_preview_lines(prompt, prompt_width).len() as u16)
+            .sum::<u16>()
     };
     steer_height + queue_height
+}
+
+pub(super) fn queue_prompt_preview_lines(prompt: &str, max_width: usize) -> Vec<String> {
+    let max_width = max_width.max(1);
+    let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if prompt.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut rows = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    let mut truncated = false;
+    for character in prompt.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if current_width + character_width > max_width {
+            if rows.len() + 1 == MAX_QUEUE_PROMPT_PREVIEW_LINES {
+                truncated = true;
+                break;
+            }
+            rows.push(std::mem::take(&mut current));
+            current_width = 0;
+            if character.is_whitespace() {
+                continue;
+            }
+        }
+        current.push(character);
+        current_width += character_width;
+    }
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    if truncated {
+        if let Some(last) = rows.last_mut() {
+            *last = format!(
+                "{}…",
+                truncate_queue_prompt(last, max_width.saturating_sub(1))
+            );
+        }
+    }
+    rows
 }
 
 pub(super) fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
@@ -1243,17 +1292,20 @@ pub(super) fn render_queue_line(
     let mut row_offset = 0u16;
     if !steers.is_empty() {
         let header = Line::from(Span::styled(
-            "pending steers · apply after next tool result or when the turn ends",
+            truncate_queue_prompt(
+                "pending steering · applies after a result or turn ends",
+                block.width as usize,
+            ),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         f.render_widget(
             Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
             ratatui::layout::Rect::new(block.x, block.y, block.width, 1),
         );
-        for (row, steer) in steers.into_iter().enumerate() {
-            render_preview_prompt(f, block, row_offset + row as u16 + 1, steer, show_picker);
+        for steer in steers {
+            row_offset += render_preview_prompt(f, block, row_offset + 1, steer, show_picker);
         }
-        row_offset += pending_steer_prompts(state).len() as u16 + 1;
+        row_offset += 1;
     }
     if prompts.is_empty() {
         return;
@@ -1272,8 +1324,9 @@ pub(super) fn render_queue_line(
         ratatui::layout::Rect::new(block.x, block.y + row_offset, block.width, 1),
     );
 
-    for (row, prompt) in prompts.into_iter().enumerate() {
-        render_preview_prompt(f, block, row_offset + row as u16 + 1, prompt, show_picker);
+    row_offset += 1;
+    for prompt in prompts {
+        row_offset += render_preview_prompt(f, block, row_offset, prompt, show_picker);
     }
 }
 
@@ -1283,26 +1336,31 @@ fn render_preview_prompt(
     row: u16,
     prompt: &str,
     show_picker: bool,
-) {
+) -> u16 {
     let prefix = "  › ";
-    let preview = truncate_queue_prompt(
+    let continuation = "    ";
+    let rows = queue_prompt_preview_lines(
         prompt,
-        (block.width as usize).saturating_sub(prefix.width()),
+        (block.width as usize).saturating_sub(prefix.width()).max(1),
     );
-    let line = Line::from(vec![
-        Span::styled(
-            prefix,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            preview,
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ]);
-    f.render_widget(
-        Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
-        ratatui::layout::Rect::new(block.x, block.y + row, block.width, 1),
-    );
+    for (index, preview) in rows.iter().enumerate() {
+        let row_prefix = if index == 0 { prefix } else { continuation };
+        let line = Line::from(vec![
+            Span::styled(
+                row_prefix,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                preview.as_str(),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]);
+        f.render_widget(
+            Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
+            ratatui::layout::Rect::new(block.x, block.y + row + index as u16, block.width, 1),
+        );
+    }
+    rows.len() as u16
 }
 
 pub(crate) fn render_input(
