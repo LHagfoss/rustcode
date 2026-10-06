@@ -4533,6 +4533,80 @@ fn low_verbosity_write_diff_shows_first_five_lines_and_expands_completely() {
 }
 
 #[test]
+fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,3 @@\n-let old_value = 1;\n+let value = 2;\n+let second_value = 3;\n+let third_value = 4;\n+let fourth_value = 5;\n+let fifth_value = 6;\n";
+    let render = |tool_name: &str, result: &str, expanded: bool| {
+        let mut state = RenderState::new();
+        state.verbosity = Verbosity::Low;
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: "call-1".to_owned(),
+                name: tool_name.to_owned(),
+                arguments: r#"{"path":"src/main.rs","content":"let value = 2;"}"#.to_owned(),
+            }]),
+        );
+        state.history.push(
+            ChatMessage::new("tool", format!("{tool_name}: {result}"))
+                .answering(Some("call-1".to_owned()))
+                .with_diff(Some(diff.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: tool_name.to_owned(),
+                    success: true,
+                    changed_paths: vec!["src/main.rs".to_owned()],
+                    ..Default::default()
+                }),
+        );
+        if expanded {
+            state.expanded_thoughts.insert(1);
+        }
+
+        super::render_committed_tool_result_group(&state, &[1], 100, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    for expanded in [false, true] {
+        let wrote = render("write_to_file", "wrote 'src/main.rs'", expanded);
+        let edited = render("replace_file_content", "successfully edited", expanded);
+        assert_eq!(wrote[0], "• Wrote");
+        assert_eq!(edited[0], "• Edited");
+        assert_eq!(
+            &wrote[1..],
+            &edited[1..],
+            "Write and Edit should render the same diff rows when expanded={expanded}"
+        );
+        assert!(wrote.iter().any(|line| line.contains("old_value = 1;")));
+        for value in if expanded {
+            vec![2, 3, 4, 5, 6]
+        } else {
+            vec![2, 3, 4, 5]
+        } {
+            assert!(
+                wrote
+                    .iter()
+                    .any(|line| line.contains(&format!("value = {value};"))),
+                "expanded={expanded}: {wrote:?}"
+            );
+        }
+        if !expanded {
+            assert!(
+                !wrote.iter().any(|line| line.contains("value = 6;")),
+                "{wrote:?}"
+            );
+            assert!(
+                wrote.iter().any(|line| line.contains("… +1 lines")),
+                "{wrote:?}"
+            );
+        } else {
+            assert!(!wrote.iter().any(|line| line.contains("… +")), "{wrote:?}");
+        }
+    }
+}
+
+#[test]
 fn high_verbosity_keeps_actual_file_diff_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
