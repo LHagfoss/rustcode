@@ -52,6 +52,9 @@ pub struct RecoveryState {
     /// turn-scoped continuation. Keeping this separate from transport retries
     /// prevents a failed recovery from opening an unbounded loop.
     pub stream_recovery_attempts: u8,
+    /// A provider output-token limit permits one continuation with the saved
+    /// partial answer before the turn is marked incomplete.
+    pub output_budget_recovery_attempts: u8,
     pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub completion_blocks: u8,
@@ -233,6 +236,7 @@ impl TurnContext {
                 reasoning_recovery_pending: false,
                 empty_response_recovery_attempts: 0,
                 stream_recovery_attempts: 0,
+                output_budget_recovery_attempts: 0,
                 reasoning_loops_detected: 0,
                 force_final: false,
                 completion_blocks: 0,
@@ -485,6 +489,7 @@ impl TurnContext {
             "reasoning_loops_detected": self.recovery.reasoning_loops_detected,
             "infrastructure_failure_streak": self.recovery.infrastructure_failures.streak(),
             "reasoning_recovery_attempts": self.recovery.reasoning_recovery_attempts,
+            "output_budget_recovery_attempts": self.recovery.output_budget_recovery_attempts,
             "empty_response_recovery_attempts": self.recovery.empty_response_recovery_attempts,
             "last_stream_termination": self
                 .response

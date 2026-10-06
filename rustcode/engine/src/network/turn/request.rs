@@ -26,6 +26,7 @@ const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
 fn is_recovery_request(ctx: &TurnContext) -> bool {
     ctx.recovery.force_final
         || ctx.recovery.reasoning_recovery_pending
+        || ctx.recovery.output_budget_recovery_attempts > 0
         || ctx.recovery.loop_recovery_attempts > 0
         || ctx.recovery.reasoning_recovery_attempts > 0
         || ctx.recovery.empty_response_recovery_attempts > 0

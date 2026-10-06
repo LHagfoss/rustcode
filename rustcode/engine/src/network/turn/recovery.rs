@@ -37,6 +37,8 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
 }
 
 const CLIENT_BUDGET_CONTINUATION_PROMPT: &str = "The client reasoning budget ended this response before the provider reported a stop. Continue from the saved response and tool results with one bounded, action-oriented step; do not restart the same inspection or repeat a completed tool call. If the available evidence is sufficient, answer directly. If not, use one different focused tool action.";
+const OUTPUT_BUDGET_CONTINUATION_PROMPT: &str = "The provider exhausted the output-token budget before finishing. Continue from the saved partial answer without repeating completed work. Preserve prior findings, finish the requested response, and keep any remaining gaps explicit.";
+const MAX_OUTPUT_BUDGET_RECOVERIES: u8 = 1;
 
 const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
 
@@ -141,6 +143,32 @@ pub(super) fn outstanding_external_action(history: &[ChatMessage]) -> bool {
         && !successful_external_action_after(history, index)
 }
 
+pub(super) fn has_pending_tool_work(history: &[ChatMessage]) -> bool {
+    let Some((latest_user_index, _)) = history
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role == "user")
+    else {
+        return false;
+    };
+    let turn_history = &history[latest_user_index + 1..];
+    turn_history.iter().any(|message| {
+        message
+            .tool_result
+            .as_ref()
+            .is_some_and(|result| result.pending)
+    }) || turn_history.iter().enumerate().any(|(index, message)| {
+        message.role == "assistant"
+            && message.tool_calls.iter().any(|call| {
+                !turn_history[index + 1..].iter().any(|result| {
+                    result.role == "tool"
+                        && result.tool_call_id.as_deref() == Some(call.id.as_str())
+                })
+            })
+    })
+}
+
 /// Select the recovery policy from the task, while preserving the ordinary
 /// recovery path for read-only work and compiler debugging. Compiler state is
 /// supplied by the caller because diagnostics can be discovered by a tool
@@ -184,6 +212,7 @@ fn task_aware_recovery_prompt(
     }
 }
 
+#[cfg(test)]
 pub(super) fn completed_inspection_synthesis(
     ctx: &TurnContext,
     content: &str,
@@ -191,26 +220,89 @@ pub(super) fn completed_inspection_synthesis(
     final_answer_boundary: super::super::stream::FinalAnswerBoundary,
     provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
 ) -> Option<String> {
-    // A reasoning/content transition only identifies where answer text starts.
-    // Promotion also requires the provider's terminal state; otherwise a
-    // loop/budget stop can carry plausible-looking prose through this path.
-    if !native_tool_calls_empty
-        || final_answer_boundary != super::super::stream::FinalAnswerBoundary::ReasoningClosed
-        || provider_final_answer_state != super::super::stream::ProviderFinalAnswerState::Terminal
-        || ctx.progress.made_edits
-        || ctx.progress.failed_mutations > 0
-        || ctx.progress.complete_inspection_results == 0
-        || ctx.progress.incomplete_inspection_results > 0
-        || rustcode_tool_protocol::text::has_intended_tool_call(content)
-    {
-        return None;
+    completed_inspection_synthesis_with_pending_work(
+        ctx,
+        content,
+        native_tool_calls_empty,
+        final_answer_boundary,
+        provider_final_answer_state,
+        false,
+    )
+}
+
+pub(super) fn inspection_completion_rejection_reasons(
+    ctx: &TurnContext,
+    content: &str,
+    native_tool_calls_empty: bool,
+    final_answer_boundary: super::super::stream::FinalAnswerBoundary,
+    provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
+    pending_work: bool,
+) -> Vec<&'static str> {
+    use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
+    let mut reasons = Vec::with_capacity(10);
+    if !native_tool_calls_empty {
+        reasons.push("tool_calls_pending");
+    }
+    if pending_work {
+        reasons.push("action_or_tool_result_pending");
+    }
+    if final_answer_boundary != FinalAnswerBoundary::ReasoningClosed {
+        reasons.push("final_answer_boundary_not_closed");
+    }
+    if provider_final_answer_state != ProviderFinalAnswerState::Terminal {
+        reasons.push("provider_response_not_terminal");
+    }
+    if ctx.progress.made_edits {
+        reasons.push("turn_made_edits");
+    }
+    if ctx.progress.failed_mutations > 0 {
+        reasons.push("mutation_failed");
+    }
+    if ctx.progress.complete_inspection_results == 0 {
+        reasons.push("no_complete_inspection_results");
+    }
+    if ctx.progress.incomplete_inspection_results > 0 {
+        reasons.push("incomplete_inspection_results_present");
+    }
+    if rustcode_tool_protocol::text::has_intended_tool_call(content) {
+        reasons.push("final_response_contains_tool_call");
     }
 
     let candidate = rustcode_tool_protocol::text::strip_tool_call_syntax(
         &rustcode_tool_protocol::text::strip_think_blocks(content),
     );
     let candidate = candidate.trim();
-    (!candidate.is_empty()).then(|| candidate.to_string())
+    if candidate.is_empty() {
+        reasons.push("final_response_has_no_user_facing_text");
+        return reasons;
+    }
+    reasons
+}
+
+pub(super) fn completed_inspection_synthesis_with_pending_work(
+    ctx: &TurnContext,
+    content: &str,
+    native_tool_calls_empty: bool,
+    final_answer_boundary: super::super::stream::FinalAnswerBoundary,
+    provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
+    pending_work: bool,
+) -> Option<String> {
+    if !inspection_completion_rejection_reasons(
+        ctx,
+        content,
+        native_tool_calls_empty,
+        final_answer_boundary,
+        provider_final_answer_state,
+        pending_work,
+    )
+    .is_empty()
+    {
+        return None;
+    }
+    let candidate = rustcode_tool_protocol::text::strip_tool_call_syntax(
+        &rustcode_tool_protocol::text::strip_think_blocks(content),
+    );
+    Some(candidate.trim().to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +334,60 @@ pub(super) async fn handle_response_recovery(
     };
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
     use rustcode_tool_protocol::text::{self, strip_tool_call_syntax};
+    if response_finish_reason == Some("length") && native_tool_calls_empty {
+        let mut s = state.lock().await;
+        super::clear_turn_steerability_for_session(&mut s, turn_session_id);
+        let mut partial = ChatMessage::new("assistant", &ctx.response.final_content);
+        partial.response_time_ms = Some(turn_response_time_ms);
+        partial.token_usage = turn_token_usage;
+        partial.thought_time_ms = thought_time_ms;
+        partial.thought_tokens = thought_tokens;
+        s.history.push(partial);
+        ctx.response.final_content_persisted = true;
+
+        if ctx.recovery.output_budget_recovery_attempts >= MAX_OUTPUT_BUDGET_RECOVERIES {
+            ctx.lifecycle.task_completed = false;
+            ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+            crate::logger::operational_event(
+                "turn.output_budget_exhausted",
+                serde_json::json!({
+                    "attempts": ctx.recovery.output_budget_recovery_attempts,
+                    "partial_content_bytes": ctx.response.final_content.len(),
+                    "outcome": "incomplete",
+                }),
+            );
+            crate::config::save_session_history(&s.active_session_id, &s.history);
+            s.clear_current_response();
+            return ResponseRecoveryOutcome::Stop;
+        }
+
+        ctx.recovery.output_budget_recovery_attempts = ctx
+            .recovery
+            .output_budget_recovery_attempts
+            .saturating_add(1);
+        ctx.recovery.reasoning_recovery_pending = true;
+        crate::logger::operational_event(
+            "turn.output_budget_continuation",
+            serde_json::json!({
+                "attempt": ctx.recovery.output_budget_recovery_attempts,
+                "partial_content_bytes": ctx.response.final_content.len(),
+                "outcome": "continuation_requested",
+            }),
+        );
+        push_or_replace_recovery_notice(
+            s.history.as_mut_vec(),
+            OUTPUT_BUDGET_CONTINUATION_PROMPT.to_owned(),
+        );
+        crate::config::save_session_history(&s.active_session_id, &s.history);
+        s.clear_current_response();
+        s.status = AppStatus::Streaming;
+        s.stream_tracker = Some(StreamTracker::new());
+        drop(s);
+        ctx.lifecycle.turn_machine.abandon_tool_phase();
+        ctx.budget.tool_rounds += 1;
+        return ResponseRecoveryOutcome::Continue;
+    }
+
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
         if ctx.recovery.empty_response_recovery_attempts < 1 {
             ctx.recovery.empty_response_recovery_attempts += 1;
@@ -280,12 +426,17 @@ pub(super) async fn handle_response_recovery(
         Some("reasoning_loop" | "reasoning_budget")
     );
     if is_reasoning_loop && !ctx.recovery.force_final {
-        if let Some(summary) = completed_inspection_synthesis(
+        let pending_work = {
+            let state = state.lock().await;
+            outstanding_external_action(&state.history) || has_pending_tool_work(&state.history)
+        };
+        if let Some(summary) = completed_inspection_synthesis_with_pending_work(
             ctx,
             &ctx.response.final_content,
             native_tool_calls_empty,
             final_answer_boundary,
             provider_final_answer_state,
+            pending_work,
         ) {
             dbg_log!(
                 "Reasoning loop followed complete read-only inspection; preserving final synthesis"
@@ -435,8 +586,8 @@ pub(super) async fn handle_response_recovery(
 mod tests {
     use super::{
         CLIENT_BUDGET_CONTINUATION_PROMPT, ResponseRecoveryOutcome, completed_inspection_synthesis,
-        handle_response_recovery, loop_recovery_prompt, reasoning_loop_final_response,
-        reasoning_loop_recovery_prompt,
+        completed_inspection_synthesis_with_pending_work, handle_response_recovery,
+        loop_recovery_prompt, reasoning_loop_final_response, reasoning_loop_recovery_prompt,
     };
     use crate::app::ChatMessage;
     use crate::app::ToolResultRecord;
@@ -477,6 +628,105 @@ mod tests {
         let state = state.lock().await;
         assert_eq!(state.active_turn_steerable_session, None);
         assert!(!state.can_accept_steer());
+    }
+
+    #[tokio::test]
+    async fn output_budget_exhaustion_saves_partial_and_requests_one_continuation() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = state.lock().await.active_session_id.clone();
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "partial review findings".to_owned();
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
+        assert!(ctx.response.final_content_persisted);
+        assert!(ctx.recovery.reasoning_recovery_pending);
+        let state = state.lock().await;
+        assert!(state.history.iter().any(|message| {
+            message.role == "assistant" && message.content == "partial review findings"
+        }));
+        assert!(state.history.iter().any(|message| {
+            message.role == "system" && message.content.contains("output-token budget")
+        }));
+    }
+
+    #[tokio::test]
+    async fn output_budget_continuation_is_bounded_and_preserves_second_partial() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = state.lock().await.active_session_id.clone();
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "first partial".to_owned();
+        ctx.recovery.output_budget_recovery_attempts = 1;
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Stop);
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::LoopEscalation)
+        );
+        assert_eq!(ctx.response.final_content, "first partial");
+        assert!(ctx.response.final_content_persisted);
+        assert!(
+            state.lock().await.history.iter().any(|message| {
+                message.role == "assistant" && message.content == "first partial"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn output_budget_with_native_calls_defers_to_tool_validation() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = state.lock().await.active_session_id.clone();
+        let mut ctx = TurnContext::new();
+        ctx.response.final_content = "partial tool response".to_owned();
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            false,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::Terminal,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Proceed);
+        assert_eq!(ctx.recovery.output_budget_recovery_attempts, 0);
+        assert!(!ctx.response.final_content_persisted);
+        assert!(state.lock().await.history.is_empty());
     }
 
     #[tokio::test]
@@ -523,7 +773,7 @@ mod tests {
             state.active_session_id.clone()
         };
         let mut ctx = completed_inspection_context(
-            "<think>Reviewed all relevant files.</think>Findings: the input path is validated before use.",
+            "<think>Reviewed all relevant files.</think>Coverage: inspected src/input.rs. Findings: the input path is validated before use. Gaps: external callers were not tested.",
         );
 
         let outcome = handle_response_recovery(
@@ -719,7 +969,7 @@ mod tests {
     #[test]
     fn completed_inspection_preserves_final_synthesis_after_reasoning_loop() {
         let ctx = completed_inspection_context(
-            "<think>Reviewed the complete source tree.</think>Findings: src/app.ts has an unchecked export input and src/db.ts lacks a transaction around the write.",
+            "<think>Reviewed the complete source tree.</think>Coverage: inspected src/app.ts and src/db.ts. Findings: src/app.ts has an unchecked export input and src/db.ts lacks a transaction around the write. Gaps: live GitHub state was not checked.",
         );
         let summary = completed_inspection_synthesis(
             &ctx,
@@ -822,7 +1072,7 @@ mod tests {
     #[test]
     fn concise_actionable_findings_still_pass() {
         let ctx = completed_inspection_context(
-            "Findings: src/app.ts has an unchecked export input; src/db.ts lacks transaction handling.",
+            "Coverage: checked src/app.ts and src/db.ts. Findings: src/app.ts has an unchecked export input; src/db.ts lacks transaction handling. Gaps: no runtime tests were performed.",
         );
         let summary = completed_inspection_synthesis(
             &ctx,
@@ -872,7 +1122,7 @@ mod tests {
     #[test]
     fn valid_concise_review_requires_final_boundary() {
         let ctx = completed_inspection_context(
-            "Findings: src/app.ts has no issue after checking its input validation and error handling.",
+            "Coverage: reviewed src/app.ts input validation and error handling. Findings: no issue was found. Gaps: runtime behavior was not tested.",
         );
         assert!(
             completed_inspection_synthesis(
@@ -884,5 +1134,109 @@ mod tests {
             )
             .is_some()
         );
+    }
+
+    #[test]
+    fn captured_read_only_review_shapes_complete_with_grounded_scope_and_gaps() {
+        let captured_baseline = completed_inspection_context(
+            "I reviewed the current local repository, including `README.md`, `docs/`, the CLI registries, and built-in tools. The review found product complexity across the command surface. I did not query the live GitHub API, so PR details are based on local Git history.",
+        );
+        let captured_after = completed_inspection_context(
+            "## Scope reviewed\nI reviewed `README.md`, `CHANGELOG.md`, and the engine feature registry. The terminal runtime has the broadest coverage. Gaps: I did not perform an implementation audit of every feature or fetch live GitHub data.",
+        );
+        let natural_review = completed_inspection_context(
+            "RustCode's local feature registry and recent history show a capable runtime with increasingly complex user entry points. This is a feature-level review; I did not verify live GitHub state or audit every implementation.",
+        );
+        for ctx in [captured_baseline, captured_after, natural_review] {
+            assert!(
+                completed_inspection_synthesis(
+                    &ctx,
+                    &ctx.response.final_content,
+                    true,
+                    FinalAnswerBoundary::ReasoningClosed,
+                    ProviderFinalAnswerState::Terminal,
+                )
+                .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn no_complete_or_incomplete_inspection_cannot_ground_a_review() {
+        let content =
+            "The runtime has broad provider support. Gaps: no live provider test was run.";
+        let ctx = TurnContext::new();
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
+            )
+            .is_none()
+        );
+
+        let mut incomplete = completed_inspection_context(content);
+        incomplete.progress.incomplete_inspection_results = 1;
+        assert!(
+            completed_inspection_synthesis(
+                &incomplete,
+                content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn pending_actions_and_tool_results_block_review_completion() {
+        let ctx = completed_inspection_context(
+            "Coverage: inspected src/app.ts. Findings: input validation is missing. Gaps: runtime behavior was not tested.",
+        );
+        assert!(
+            completed_inspection_synthesis_with_pending_work(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
+                true,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn inspection_completion_diagnostics_name_specific_bounded_blockers() {
+        let ctx =
+            completed_inspection_context("A useful feature review with an explicit limitation.");
+        let reasons = super::inspection_completion_rejection_reasons(
+            &ctx,
+            &ctx.response.final_content,
+            true,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            true,
+        );
+        assert!(reasons.contains(&"action_or_tool_result_pending"));
+        assert!(reasons.contains(&"final_answer_boundary_not_closed"));
+        assert!(reasons.contains(&"provider_response_not_terminal"));
+        assert!(reasons.len() <= 12);
+    }
+
+    #[test]
+    fn pending_tool_results_are_detected_in_the_active_user_turn() {
+        let history = vec![
+            ChatMessage::new("user", "Review the features."),
+            ChatMessage::new("tool", "still running").with_tool_result(ToolResultRecord {
+                tool_name: "run_command".into(),
+                pending: true,
+                ..ToolResultRecord::default()
+            }),
+        ];
+        assert!(super::has_pending_tool_work(&history));
     }
 }
