@@ -5,15 +5,116 @@ pub use rustcode_session::{
     HistorySnapshot, SessionMeta, SessionMigrationReport, SessionScope, SessionWorkspace,
     WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
 };
+use sha2::Digest;
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const HISTORY_FILE: &str = rustcode_session::HISTORY_FILE;
 pub const SESSION_SETTINGS_FILE: &str = "settings.json";
 const SESSION_SETTINGS_SCHEMA_VERSION: u32 = 1;
+static NEXT_HISTORY_ARCHIVE_TEMP: AtomicU64 = AtomicU64::new(0);
+
+/// Persist an exact JSONL copy of a history prefix before compaction removes
+/// it from the canonical session snapshot. Archives live outside the session
+/// directory tree pruned by SessionStore.
+pub(crate) fn archive_history_prefix(history: &[ChatMessage]) -> Result<String, String> {
+    let root = get_config_dir()
+        .ok_or_else(|| "configuration directory unavailable for history archive".to_string())?
+        .join("history_archive");
+    archive_history_prefix_at(&root, history)
+}
+
+fn archive_history_prefix_at(root: &Path, history: &[ChatMessage]) -> Result<String, String> {
+    fs::create_dir_all(root)
+        .map_err(|error| format!("cannot create history archive directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("cannot secure history archive directory: {error}"))?;
+    }
+
+    let mut content = Vec::new();
+    for message in history {
+        serde_json::to_writer(&mut content, message)
+            .map_err(|error| format!("cannot serialize archived history: {error}"))?;
+        content.push(b'\n');
+    }
+    let digest = hex::encode(sha2::Sha256::digest(&content));
+    let destination = root.join(format!("{digest}.jsonl"));
+    if destination.exists() {
+        return validate_history_archive(&destination, &digest, &content);
+    }
+
+    let (temporary, mut file) = loop {
+        let sequence = NEXT_HISTORY_ARCHIVE_TEMP.fetch_add(1, Ordering::Relaxed);
+        let path = root.join(format!(".{digest}-{}-{sequence}.tmp", std::process::id()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => break (path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot create history archive temporary file: {error}"
+                ));
+            }
+        }
+    };
+    let write_result = file.write_all(&content).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot write history archive: {error}"));
+    }
+
+    let result = match fs::hard_link(&temporary, &destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            validate_history_archive(&destination, &digest, &content).map(|_| ())
+        }
+        Err(error) => Err(format!("cannot publish history archive: {error}")),
+    };
+    let _ = fs::remove_file(&temporary);
+    result?;
+    #[cfg(unix)]
+    fs::File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("cannot sync history archive directory: {error}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+fn validate_history_archive(
+    path: &Path,
+    expected_digest: &str,
+    expected_content: &[u8],
+) -> Result<String, String> {
+    let stored =
+        fs::read(path).map_err(|error| format!("cannot read existing history archive: {error}"))?;
+    if hex::encode(sha2::Sha256::digest(&stored)) != expected_digest || stored != expected_content {
+        return Err(format!(
+            "existing history archive '{}' does not match its content address",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("cannot secure existing history archive: {error}"))?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
 
 fn store() -> Option<SessionStore> {
     get_config_dir().map(SessionStore::new)
@@ -284,6 +385,53 @@ fn record_session_settings_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_prefix_archive_is_exact_content_addressed_and_collision_safe() {
+        let root = tempfile::tempdir().expect("archive root");
+        let history = vec![
+            ChatMessage::new("user", "inspect src/lib.rs"),
+            ChatMessage::new("tool", "view_file: original source text")
+                .answering(Some("call-read-1".to_string())),
+        ];
+        let first = archive_history_prefix_at(root.path(), &history).expect("archive history");
+        let second = archive_history_prefix_at(root.path(), &history).expect("reuse archive");
+        assert_eq!(first, second);
+        let archived = fs::read_to_string(&first).expect("read archive");
+        let expected = history
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n")
+            + "\n";
+        assert_eq!(archived, expected);
+        assert!(archived.contains("call-read-1"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&first).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn history_prefix_archive_fails_closed_on_corrupt_address_or_unwritable_root() {
+        let root = tempfile::tempdir().expect("archive root");
+        let history = vec![ChatMessage::new("tool", "old read evidence")];
+        let path = archive_history_prefix_at(root.path(), &history).expect("archive history");
+        fs::write(&path, "corrupt").expect("corrupt archive fixture");
+        assert!(
+            archive_history_prefix_at(root.path(), &history)
+                .unwrap_err()
+                .contains("does not match its content address")
+        );
+
+        let file_root = root.path().join("not-a-directory");
+        fs::write(&file_root, "occupied").expect("create occupied path");
+        assert!(archive_history_prefix_at(&file_root, &history).is_err());
+    }
 
     #[test]
     fn session_settings_snapshot_redacts_credentials() {

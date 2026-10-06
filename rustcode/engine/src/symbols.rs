@@ -447,6 +447,31 @@ pub fn fuzzy_filter_symbols(symbols: &[SymbolInfo], query: &str, limit: usize) -
 }
 
 pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
+    get_project_map_page(root_dir, 0, DEFAULT_PROJECT_MAP_PAGE_SIZE).map(|page| page.content)
+}
+
+pub const DEFAULT_PROJECT_MAP_PAGE_SIZE: usize = 80;
+pub const MAX_PROJECT_MAP_PAGE_SIZE: usize = 80;
+pub const MAX_PROJECT_MAP_PAGE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMapPage {
+    pub content: String,
+    pub completeness: rustcode_core::ToolResultCompleteness,
+    pub next_offset: Option<usize>,
+    pub total_symbols: usize,
+}
+
+pub fn get_project_map_page(
+    root_dir: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<ProjectMapPage, String> {
+    if limit == 0 || limit > MAX_PROJECT_MAP_PAGE_SIZE {
+        return Err(format!(
+            "limit must be between 1 and {MAX_PROJECT_MAP_PAGE_SIZE}"
+        ));
+    }
     let conn = init_db()?;
     let root_str = root_dir
         .canonicalize()
@@ -459,7 +484,7 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
             "SELECT path, name, kind, signature
              FROM symbols
              WHERE project_root = ?
-             ORDER BY path ASC, start_line ASC",
+             ORDER BY path ASC, start_line ASC, name ASC, kind ASC, signature ASC",
         )
         .map_err(|e| e.to_string())?;
 
@@ -482,25 +507,104 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
             .push((name, kind, signature));
     }
 
-    let mut out = String::new();
+    let total_symbols = map_by_file.values().map(Vec::len).sum::<usize>();
+    let total_files = map_by_file.len();
     if map_by_file.is_empty() {
-        return Ok("Project Map is empty. Ensure codebase contains parsed source files (e.g. .rs, .py, .ts, .js, .go).".to_string());
+        if offset != 0 {
+            return Err(format!(
+                "offset {offset} is out of range; project map is empty"
+            ));
+        }
+        return Ok(ProjectMapPage {
+            content: "Project Map is empty. Ensure codebase contains parsed source files (e.g. .rs, .py, .ts, .js, .go).".to_string(),
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
+            next_offset: None,
+            total_symbols,
+        });
     }
 
-    out.push_str("Codebase Project Map:\n");
-    for (path, symbols) in map_by_file {
-        out.push_str(&format!("\n{}:\n", path));
+    if offset >= total_symbols {
+        return Err(format!(
+            "offset {offset} is out of range; project map contains {total_symbols} symbols"
+        ));
+    }
+    let end = offset.saturating_add(limit).min(total_symbols);
+    let mut out = format!(
+        "Codebase Project Map: symbols starting at {} of {total_symbols} across {total_files} files\n",
+        offset + 1
+    );
+    let mut position = 0usize;
+    let mut emitted = 0usize;
+    let mut previous_path: Option<String> = None;
+    'files: for (path, symbols) in map_by_file {
         for (name, kind, signature) in symbols {
+            if position < offset {
+                position += 1;
+                continue;
+            }
+            if emitted >= limit || position >= end {
+                break 'files;
+            }
             let compressed = if signature.len() > 120 {
                 format!("{}...", signature.chars().take(117).collect::<String>())
             } else {
                 signature
             };
-            out.push_str(&format!("  {} [{}] {}\n", name, kind, compressed));
+            let mut entry = String::new();
+            if previous_path.as_deref() != Some(path.as_str()) {
+                entry.push_str(&format!("\n{}:\n", path));
+            }
+            entry.push_str(&format!("  {} [{}] {}\n", name, kind, compressed));
+            if out.len().saturating_add(entry.len()).saturating_add(220)
+                > MAX_PROJECT_MAP_PAGE_BYTES
+            {
+                if emitted == 0 {
+                    return Err(format!(
+                        "symbol entry at '{}' exceeds the bounded project-map page size",
+                        path
+                    ));
+                }
+                break 'files;
+            }
+            out.push_str(&entry);
+            previous_path = Some(path.clone());
+            emitted += 1;
+            position += 1;
+        }
+        if emitted >= limit || position >= end || out.len() >= MAX_PROJECT_MAP_PAGE_BYTES {
+            break;
         }
     }
 
-    Ok(out)
+    let next = offset.saturating_add(emitted);
+    let next_offset = (next < total_symbols).then_some(next);
+    let completeness = if next_offset.is_some() {
+        rustcode_core::ToolResultCompleteness::UserLimited
+    } else {
+        rustcode_core::ToolResultCompleteness::Complete
+    };
+    if let Some(next_offset) = next_offset {
+        out.push_str(&format!(
+            "\n[Project map partial: {total_symbols} symbols across {total_files} files; {} symbols remain. This page does not describe omitted symbols. Expand with get_project_map(offset={next_offset}, limit={limit}).]\n",
+            total_symbols - next_offset
+        ));
+    } else if offset == 0 && emitted == total_symbols {
+        out.push_str(&format!(
+            "\n[Project map complete: all {total_symbols} indexed symbols across {total_files} files were returned.]\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "\n[End of this project-map page: returned symbols {}-{} of {total_symbols} across {total_files} files. Earlier pages are not repeated here.]\n",
+            offset + 1,
+            offset + emitted
+        ));
+    }
+    Ok(ProjectMapPage {
+        content: out,
+        completeness,
+        next_offset,
+        total_symbols,
+    })
 }
 
 #[cfg(test)]
@@ -731,5 +835,43 @@ func HandleRequest(r *Router) error {
         assert!(ranked.iter().any(|s| s.name == "handle_request"));
         assert_eq!(fuzzy_filter_symbols(&symbols, "", 10).len(), 0);
         assert_eq!(fuzzy_filter_symbols(&symbols, "handler", 1).len(), 1);
+    }
+
+    #[test]
+    fn project_map_pages_expand_without_losing_symbols() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma", "delta"] {
+            std::fs::write(
+                dir.path().join(format!("{name}.rs")),
+                format!("pub fn {name}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        update_index(dir.path()).unwrap();
+
+        let first = get_project_map_page(dir.path(), 0, 2).unwrap();
+        assert_eq!(
+            first.completeness,
+            rustcode_core::ToolResultCompleteness::UserLimited
+        );
+        assert_eq!(first.next_offset, Some(2));
+        assert!(first.content.contains("alpha"));
+        assert!(first.content.contains("beta"));
+        assert!(!first.content.contains("gamma"));
+
+        let second = get_project_map_page(dir.path(), first.next_offset.unwrap(), 2).unwrap();
+        assert_eq!(
+            second.completeness,
+            rustcode_core::ToolResultCompleteness::Complete
+        );
+        assert_eq!(second.next_offset, None);
+        assert!(second.content.contains("gamma"));
+        assert!(second.content.contains("delta"));
+        assert!(second.content.contains("symbols 3-4 of 4"));
+        assert!(
+            !second
+                .content
+                .contains("all 4 indexed symbols across 4 files were returned")
+        );
     }
 }

@@ -38,6 +38,196 @@ fn view_file_denies_secret_bearing_dotenv_files() {
     }
 }
 
+#[test]
+fn markdown_outline_is_partial_and_sections_expand_by_exact_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("CHANGELOG.md");
+    std::fs::write(
+        &file,
+        "# Changelog\nintro body\n\n## v2\nrelease two details\n\n### Fixes\nfix detail\n\n## v1\nrelease one details\n",
+    )
+    .expect("write changelog");
+    let path = file.to_string_lossy().to_string();
+
+    let outline = view_file_output(&serde_json::json!({
+        "path": path,
+        "outline": true,
+        "outline_limit": 2
+    }))
+    .expect("outline");
+    assert!(outline.truncated);
+    assert_eq!(
+        outline.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+    assert!(outline.content.contains("headings only"));
+    assert!(outline.content.contains("no body lines were inspected"));
+    assert!(outline.content.contains("outline_offset=2"));
+    assert!(outline.content.contains("start_line=4 end_line=9"));
+    assert!(!outline.content.contains("release two details"));
+
+    let next_outline = view_file_output(&serde_json::json!({
+        "path": path,
+        "outline": true,
+        "outline_offset": 2,
+        "outline_limit": 1
+    }))
+    .expect("next outline page");
+    assert!(next_outline.content.contains("### Fixes"));
+
+    let expanded = view_file_output(&serde_json::json!({
+        "path": path,
+        "start_line": 4,
+        "end_line": 8
+    }))
+    .expect("expanded section");
+    assert_eq!(
+        expanded.completeness,
+        rustcode_core::ToolResultCompleteness::UserLimited
+    );
+    assert!(expanded.content.contains("release two details"));
+    assert!(expanded.content.contains("fix detail"));
+}
+
+#[test]
+fn markdown_outline_ignores_provider_supplied_ordinary_read_defaults() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("README.md");
+    std::fs::write(&file, "# Overview\nintro\n## Setup\nsteps\n").expect("write");
+
+    let output = view_file_output(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "start_line": 1,
+        "end_line": 800,
+        "content_offset": 0,
+        "outline": true,
+        "outline_offset": 0,
+        "outline_limit": 100
+    }))
+    .expect("explicit outline mode ignores ordinary-read defaults");
+
+    assert!(output.truncated);
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+    assert!(output.content.contains("# Overview"));
+    assert!(output.content.contains("## Setup"));
+    assert!(output.content.contains("no body lines were inspected"));
+}
+
+#[test]
+fn ordinary_read_ignores_provider_supplied_outline_pagination_defaults() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("Cargo.toml");
+    std::fs::write(
+        &file,
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write");
+
+    let output = view_file_output(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "start_line": 1,
+        "end_line": 300,
+        "content_offset": 0,
+        "outline": false,
+        "outline_offset": 0,
+        "outline_limit": 50
+    }))
+    .expect("ordinary mode ignores outline pagination defaults");
+
+    assert!(!output.truncated);
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+    assert!(output.content.contains("name = \"fixture\""));
+    assert!(!output.content.contains("heading outline"));
+}
+
+#[test]
+fn markdown_outline_respects_atx_heading_syntax_and_fenced_code() {
+    assert_eq!(markdown_heading("## C#"), Some((2, "C#")));
+    assert_eq!(markdown_heading("### Title ###"), Some((3, "Title")));
+    assert_eq!(markdown_heading("####### invalid"), None);
+    assert_eq!(markdown_heading("    # indented code"), None);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("notes.md");
+    std::fs::write(&file, "# Visible\n```md\n# Not a heading\n```\n## C#\n")
+        .expect("write Markdown");
+    let outline = view_file_output(&serde_json::json!({
+        "path": file.to_string_lossy(),
+        "outline": true
+    }))
+    .expect("outline");
+    assert!(outline.content.contains("# Visible"));
+    assert!(outline.content.contains("## C#"));
+    assert!(!outline.content.contains("Not a heading"));
+}
+
+#[test]
+fn large_markdown_outline_stops_at_byte_limit_with_an_exact_next_heading_offset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("large.md");
+    let content = (0..100)
+        .map(|index| format!("## section-{index} {}\nbody\n", "🧪".repeat(200)))
+        .collect::<String>();
+    std::fs::write(&file, content).expect("write Markdown");
+    let path = file.to_string_lossy().to_string();
+
+    let first = view_file_output(&serde_json::json!({
+        "path": path,
+        "outline": true,
+        "outline_limit": 100
+    }))
+    .expect("bounded outline");
+    assert!(first.content.len() <= MAX_MARKDOWN_OUTLINE_BYTES);
+    let next_offset = first
+        .content
+        .split_once("outline_offset=")
+        .and_then(|(_, rest)| rest.split_once(',').map(|(offset, _)| offset))
+        .expect("outline continuation")
+        .parse::<usize>()
+        .expect("numeric outline continuation");
+    assert!(next_offset > 0 && next_offset < 100);
+
+    let mut all_pages = first.content;
+    let mut requested_offset = next_offset;
+    while requested_offset < 100 {
+        let next = view_file_output(&serde_json::json!({
+            "path": path,
+            "outline": true,
+            "outline_offset": requested_offset,
+            "outline_limit": 100
+        }))
+        .expect("next outline page");
+        all_pages.push_str(&next.content);
+        let next_offset = next
+            .content
+            .split_once("outline_offset=")
+            .and_then(|(_, rest)| rest.split_once(',').map(|(offset, _)| offset))
+            .map(str::parse::<usize>)
+            .transpose()
+            .expect("valid continuation offset");
+        let Some(next_offset) = next_offset else {
+            break;
+        };
+        assert!(
+            next_offset > requested_offset,
+            "outline continuation advances"
+        );
+        requested_offset = next_offset;
+    }
+    for index in 0..100 {
+        assert!(
+            all_pages.contains(&format!("section-{index}")),
+            "missing section {index}"
+        );
+    }
+}
+
 // Regression: session 1785594233488. A read of exactly lines 1-1 ended with
 // "content truncated (use end_line or content_offset to read more)", so the
 // model believed it had missed something and re-read the same file four

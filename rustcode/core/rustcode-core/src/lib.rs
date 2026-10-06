@@ -303,6 +303,10 @@ pub struct CompactionBoundary {
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_retained_entry: Option<CompactionEntry>,
+    /// Content-addressed JSONL archive of the exact prefix removed by this
+    /// compaction. Older boundaries remain valid without an archive link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_archive: Option<String>,
 }
 
 impl ToolResultRecord {
@@ -683,6 +687,7 @@ mod tests {
                 version: 1,
                 summary: "summary".to_string(),
                 first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+                history_archive: Some("/config/history_archive/abc.jsonl".to_string()),
             });
 
         let json = serde_json::to_string(&message).expect("serialize compaction boundary");
@@ -692,9 +697,31 @@ mod tests {
             restored
                 .compaction_boundary
                 .as_ref()
+                .and_then(|boundary| boundary.history_archive.as_deref()),
+            Some("/config/history_archive/abc.jsonl")
+        );
+        assert_eq!(
+            restored
+                .compaction_boundary
+                .as_ref()
                 .and_then(|boundary| boundary.first_retained_entry.as_ref())
                 .map(|entry| entry.role.as_str()),
             Some("assistant")
+        );
+
+        let mut legacy_json = serde_json::to_value(&message).expect("legacy fixture base");
+        legacy_json["compaction_boundary"]
+            .as_object_mut()
+            .expect("boundary object")
+            .remove("history_archive");
+        let legacy = serde_json::from_value::<ChatMessage>(legacy_json)
+            .expect("older boundary without archive field remains readable");
+        assert_eq!(
+            legacy
+                .compaction_boundary
+                .as_ref()
+                .and_then(|boundary| boundary.history_archive.as_deref()),
+            None
         );
     }
 
@@ -706,6 +733,7 @@ mod tests {
                 version: 1,
                 summary: "summary".to_string(),
                 first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+                history_archive: Some("/config/history_archive/rebuild.jsonl".to_string()),
             });
         let rebuilt = rebuild_from_compaction_boundary(vec![
             ChatMessage::new("user", "old summarized task"),
@@ -717,6 +745,13 @@ mod tests {
 
         assert_eq!(rebuilt.len(), 3);
         assert_eq!(rebuilt[0].content, "[Session History Summary]\nsummary");
+        assert_eq!(
+            rebuilt[0]
+                .compaction_boundary
+                .as_ref()
+                .and_then(|boundary| boundary.history_archive.as_deref()),
+            Some("/config/history_archive/rebuild.jsonl")
+        );
         assert_eq!(rebuilt[1], retained);
         assert_eq!(rebuilt[2].content, "recent result");
         assert!(
