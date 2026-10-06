@@ -363,7 +363,7 @@ pub struct PickerItem {
 /// The filter uses the shared fuzzy rule, so a typo still finds its profile
 /// and the row list agrees with the engine's selection rule (#1588).
 pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
-    rustcode::app::filtered_model_picker_profiles(
+    rustcode::controller::filtered_model_picker_profiles(
         &state.config().models,
         state.model_picker_search(),
     )
