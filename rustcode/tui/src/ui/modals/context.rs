@@ -1028,13 +1028,14 @@ pub(in crate::ui) fn render_context_modal(
     ];
 
     if let Some(guards) = breakdown.configured_guards {
-        if stats_area.width >= 56 {
+        let compact_reserves = format!(
+            "Configured reserves: output {} incl. thinking {} · not usage",
+            format_token_count(guards.output_tokens as usize),
+            format_token_count(guards.thinking_tokens as usize),
+        );
+        if compact_reserves.width() <= usize::from(stats_area.width) {
             stats_lines.push(Line::from(vec![Span::styled(
-                format!(
-                    "Configured reserves: output {} incl. thinking {} · not usage",
-                    format_token_count(guards.output_tokens as usize),
-                    format_token_count(guards.thinking_tokens as usize),
-                ),
+                compact_reserves,
                 Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
             )]));
             stats_lines.push(Line::from(vec![Span::styled(

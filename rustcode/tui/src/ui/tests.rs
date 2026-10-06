@@ -9932,6 +9932,17 @@ fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths(
     assert!(rendered.contains("Configured reserves:") && rendered.contains("not usage"));
     assert!(rendered.contains("provider overhead"), "{rendered:?}");
     assert!(rendered.contains("thinking") && rendered.contains("incl."));
+
+    let rendered = render_context_modal_to_text(&state, 60, 24);
+    assert!(
+        rendered.contains("Configured reserves (not usage)"),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.contains("thinking 0 within output"),
+        "{rendered:?}"
+    );
+    assert!(rendered.contains("provider overhead"), "{rendered:?}");
 }
 
 #[test]
