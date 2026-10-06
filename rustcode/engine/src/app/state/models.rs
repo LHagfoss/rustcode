@@ -160,10 +160,8 @@ impl PendingQuestion {
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        for c in s.chars() {
-            if c != '\n' && c != '\r' {
-                self.insert_char(c);
-            }
+        for c in s.replace("\r\n", "\n").replace('\r', "\n").chars() {
+            self.insert_char(c);
         }
     }
 

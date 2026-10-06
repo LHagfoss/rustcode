@@ -585,6 +585,36 @@ fn question_modal_keeps_selected_option_and_footer_on_narrow_terminal() {
 }
 
 #[test]
+fn question_custom_answer_preserves_spaces_and_explicit_lines() {
+    let mut question = PendingQuestion::new("Question?".to_owned(), vec![], false);
+    question.activate_custom_input();
+    question.custom_input = Some("first  line\n  second line".to_owned());
+    question.custom_cursor = question.custom_input.as_ref().unwrap().len();
+
+    let (lines, _, _) = super::question::question_modal_lines(&question, "  Question", 40);
+    let rendered = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("first  line")));
+    assert!(rendered.iter().any(|line| line.contains("  second line")));
+}
+
+#[test]
+fn question_custom_cursor_wraps_before_a_character_that_moves_to_the_next_row() {
+    assert_eq!(
+        super::question::question_custom_cursor_position("abc界", 3, 3),
+        (1, 0)
+    );
+}
+
+#[test]
 fn settings_picker_uses_unified_modal_picker_style() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = RenderState::new();
