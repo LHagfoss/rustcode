@@ -1131,6 +1131,7 @@ impl AppState {
         }
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
+        let delegation_enabled = config.delegation_enabled;
         let subagent_supervisor =
             crate::app::SubagentSupervisor::new(config.subagent_concurrency_limit);
         let history = History::default();
@@ -1268,7 +1269,7 @@ impl AppState {
             subagents: Vec::new(),
             selected_subagent_id: None,
             delegation_armed: false,
-            delegation_sticky: false,
+            delegation_sticky: delegation_enabled,
             delegation_active: false,
             next_subagent_id: 1,
             todos: Vec::new(),
