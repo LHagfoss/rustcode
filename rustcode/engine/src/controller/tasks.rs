@@ -32,8 +32,11 @@ pub struct TaskDisplay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackgroundResultDisplay {
     pub id: String,
+    pub command: String,
     pub success: bool,
     pub cancelled: bool,
+    pub unread: bool,
+    pub ended_at: std::time::Instant,
 }
 
 impl TaskDisplay {
@@ -74,6 +77,33 @@ pub fn background_task_snapshots(session_id: &str) -> Vec<TaskDisplay> {
     crate::tools::background_task_snapshots(session_id)
         .into_iter()
         .map(TaskDisplay::from)
+        .collect()
+}
+
+/// Recent terminal outcomes retained by the task manager for this session.
+pub fn recent_background_results(session_id: &str) -> Vec<BackgroundResultDisplay> {
+    crate::tools::recent_background_task_completions(session_id)
+        .into_iter()
+        .rev()
+        .map(|completion| {
+            use rustcode_tasks::TaskTerminalReason;
+            let (success, cancelled) = match completion.reason {
+                TaskTerminalReason::Exited { success, .. } => (success, false),
+                TaskTerminalReason::Signalled { .. } => (false, false),
+                TaskTerminalReason::Cancelled => (false, true),
+                TaskTerminalReason::SpawnFailed(_) | TaskTerminalReason::Failed(_) => {
+                    (false, false)
+                }
+            };
+            BackgroundResultDisplay {
+                id: completion.id.to_string(),
+                command: completion.command,
+                success,
+                cancelled,
+                unread: false,
+                ended_at: completion.ended_at,
+            }
+        })
         .collect()
 }
 

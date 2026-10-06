@@ -1,8 +1,78 @@
 use crate::app::{AppState, ChatMessage};
 use rustcode_tasks::{TaskEvent, TaskManager};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use tokio::sync::Mutex;
+
+static RAW_CLI_TASK_SINKS: OnceLock<
+    StdMutex<HashMap<(String, usize), (Weak<Mutex<AppState>>, Arc<Mutex<HashSet<String>>>)>>,
+> = OnceLock::new();
+
+fn ensure_raw_cli_task_history_sink(
+    state: Arc<Mutex<AppState>>,
+    session_id: &str,
+) -> Arc<Mutex<HashSet<String>>> {
+    let key = (session_id.to_owned(), Arc::as_ptr(&state) as usize);
+    let sinks = RAW_CLI_TASK_SINKS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut sinks = sinks.lock().expect("raw CLI task sink mutex poisoned");
+    sinks.retain(|_, (state, _)| state.strong_count() > 0);
+    if let Some((state, seen)) = sinks.get(&key) {
+        if state.strong_count() > 0 {
+            return Arc::clone(seen);
+        }
+    }
+
+    let subscription = crate::tools::background_task_manager().subscribe_session(session_id);
+    let sink_state = Arc::clone(&state);
+    let seen = Arc::new(Mutex::new(HashSet::new()));
+    sinks.insert(key, (Arc::downgrade(&state), Arc::clone(&seen)));
+    drop(sinks);
+    let sink_seen = Arc::clone(&seen);
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = subscription.recv() {
+            if sender.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    let sink_state = Arc::downgrade(&sink_state);
+    tokio::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            let Some(state) = sink_state.upgrade() else {
+                break;
+            };
+            persist_task_event_once(&state, &sink_seen, event).await;
+        }
+    });
+    seen
+}
+
+async fn persist_task_event_once(
+    state: &Arc<Mutex<AppState>>,
+    seen: &Arc<Mutex<HashSet<String>>>,
+    event: TaskEvent,
+) {
+    let Some((task_id, event_session_id, output)) = crate::tools::task_event_to_tool_output(event)
+    else {
+        return;
+    };
+    let mut seen = seen.lock().await;
+    if !seen.insert(task_id.clone()) {
+        return;
+    }
+    let mut state = state.lock().await;
+    if state.active_session_id == event_session_id {
+        state
+            .history
+            .push(background_task_history_message(&task_id, output));
+        crate::config::save_session_history(&event_session_id, &state.history);
+    } else {
+        let mut history = crate::config::load_session_history_direct(&event_session_id);
+        history.push(background_task_history_message(&task_id, output));
+        crate::config::save_session_history(&event_session_id, &history);
+    }
+}
 
 fn background_task_history_message(
     task_id: &str,
@@ -280,12 +350,19 @@ struct BackgroundTurnTasks {
 
 impl BackgroundTurnTasks {
     fn new(manager: &TaskManager, session_id: &str) -> Self {
-        Self {
-            existing: manager
-                .list(session_id)
+        let mut existing = manager
+            .list(session_id)
+            .into_iter()
+            .map(|task| task.id.to_string())
+            .collect::<HashSet<_>>();
+        existing.extend(
+            manager
+                .completions(session_id)
                 .into_iter()
-                .map(|task| task.id.to_string())
-                .collect(),
+                .map(|completion| completion.id.to_string()),
+        );
+        Self {
+            existing,
             ..Self::default()
         }
     }
@@ -293,21 +370,35 @@ impl BackgroundTurnTasks {
     fn observe_live_tasks(&mut self, manager: &TaskManager, session_id: &str) {
         for task in manager.list(session_id) {
             let id = task.id.to_string();
-            if !self.existing.contains(&id) {
+            if task.notify_on_complete && !self.existing.contains(&id) {
                 self.pending.insert(id);
+            }
+        }
+    }
+
+    fn observe_retained_completions(
+        &mut self,
+        completions: impl IntoIterator<Item = rustcode_tasks::TaskCompletion>,
+    ) {
+        for completion in completions {
+            let id = completion.id.to_string();
+            if completion.notify_on_complete && !self.existing.contains(&id) {
+                self.pending.insert(id.clone());
+                self.terminal.insert(id);
             }
         }
     }
 
     fn observe_event(&mut self, event: &TaskEvent) -> bool {
         let id = event.task_id().to_string();
-        if self.existing.contains(&id) {
+        if self.existing.contains(&id) || !event.is_terminal() {
+            return false;
+        }
+        if event.notify_on_complete() == Some(false) {
             return false;
         }
         self.pending.insert(id.clone());
-        if event.is_terminal() {
-            self.terminal.insert(id);
-        }
+        self.terminal.insert(id);
         true
     }
 
@@ -392,6 +483,7 @@ pub(crate) async fn run_headless_turn_cancellable(
     }
     let session_id = state_arc.lock().await.active_session_id.clone();
     let task_manager = crate::tools::background_task_manager();
+    let persisted_task_ids = ensure_raw_cli_task_history_sink(Arc::clone(&state_arc), &session_id);
     let task_subscription = task_manager.subscribe_session(session_id.clone());
     let mut turn_tasks = BackgroundTurnTasks::new(task_manager, &session_id);
 
@@ -409,6 +501,14 @@ pub(crate) async fn run_headless_turn_cancellable(
     ) {
         let session_id = state_arc.lock().await.active_session_id.clone();
         turn_tasks.observe_live_tasks(task_manager, &session_id);
+        turn_tasks.observe_retained_completions(task_manager.completions(&session_id));
+        if turn_tasks.pending.is_empty() {
+            // A detached task may have started without asking for a model
+            // wakeup. Its start is the completed outcome for this turn.
+            ctx.lifecycle.task_completed = true;
+            ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Completed);
+            break;
+        }
         loop {
             let first_event = loop {
                 match task_subscription.try_recv() {
@@ -436,16 +536,9 @@ pub(crate) async fn run_headless_turn_cancellable(
                 }
             }
             for event in events {
-                let is_turn_event = turn_tasks.observe_event(&event);
-                if let Some((task_id, event_session_id, output)) = is_turn_event
-                    .then(|| crate::tools::task_event_to_tool_output(event))
-                    .flatten()
-                {
-                    let mut state = state_arc.lock().await;
-                    state
-                        .history
-                        .push(background_task_history_message(&task_id, output));
-                    crate::config::save_session_history(&event_session_id, &state.history);
+                let _resumes_turn = turn_tasks.observe_event(&event);
+                if event.is_terminal() {
+                    persist_task_event_once(&state_arc, &persisted_task_ids, event).await;
                 }
             }
             turn_tasks.observe_live_tasks(task_manager, &session_id);
@@ -804,6 +897,7 @@ mod tests {
             session_id: "session".into(),
             call_id: None,
             command: "sleep 1".to_owned(),
+            notify_on_complete: true,
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
@@ -827,15 +921,21 @@ mod tests {
             call_id: None,
             pid: 11,
         };
-        assert!(tracker.observe_event(&first));
-        assert!(tracker.observe_event(&second));
+        assert!(!tracker.observe_event(&first));
+        assert!(!tracker.observe_event(&second));
         assert!(!tracker.complete());
+        // Started events do not reveal notification policy. The task snapshots
+        // register only notifying live tasks after the prompt returns.
+        tracker
+            .pending
+            .extend(["new-a".to_owned(), "new-b".to_owned()]);
 
         let finished = TaskEvent::Finished {
             id: "new-a".into(),
             session_id: "session".into(),
             call_id: None,
             command: "cargo test".to_owned(),
+            notify_on_complete: true,
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
@@ -853,9 +953,57 @@ mod tests {
             session_id: "session".into(),
             call_id: None,
             command: "cargo check".to_owned(),
+            notify_on_complete: true,
         };
         assert!(tracker.observe_event(&cancelled));
         assert!(tracker.complete());
+
+        let mut silent = BackgroundTurnTasks::default();
+        let silent_finished = TaskEvent::Finished {
+            id: "detached-silent".into(),
+            session_id: "session".into(),
+            call_id: None,
+            command: "sleep 30".to_owned(),
+            notify_on_complete: false,
+            output: Ok(rustcode_command::CommandOutput {
+                success: true,
+                exit_code: Some(0),
+                signal: None,
+                downstream_consumer_terminated: false,
+                stdout: Default::default(),
+                stderr: Default::default(),
+            }),
+        };
+        assert!(!silent.observe_event(&silent_finished));
+        assert!(silent.pending.is_empty());
+        assert!(!silent.complete());
+
+        let ended_at = std::time::Instant::now();
+        let old_completion = rustcode_tasks::TaskCompletion {
+            id: rustcode_tasks::TaskId::new("old-completed"),
+            session_id: rustcode_tasks::SessionId::new("session"),
+            command: "old command".to_owned(),
+            started_at: ended_at,
+            ended_at,
+            started_at_unix_ms: 1,
+            ended_at_unix_ms: 2,
+            notify_on_complete: true,
+            reason: rustcode_tasks::TaskTerminalReason::Exited {
+                success: true,
+                code: Some(0),
+            },
+            output: None,
+            error: None,
+            output_log: None,
+            log_error: None,
+        };
+        silent.existing.insert("old-completed".to_owned());
+        let mut fresh_completion = old_completion.clone();
+        fresh_completion.id = rustcode_tasks::TaskId::new("fresh-completed");
+        silent.observe_retained_completions([old_completion, fresh_completion]);
+        assert_eq!(silent.pending, ["fresh-completed".to_owned()].into());
+        assert_eq!(silent.terminal, ["fresh-completed".to_owned()].into());
+        assert!(silent.complete());
     }
 
     #[test]

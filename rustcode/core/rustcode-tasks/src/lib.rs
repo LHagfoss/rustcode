@@ -100,6 +100,10 @@ pub struct TaskSpec {
     pub request: CommandRequest,
     /// Provider/tool correlation ID, when the caller has one.
     pub call_id: Option<String>,
+    /// Whether the application should wake its session when this task ends.
+    pub notify_on_complete: bool,
+    /// Optional full-output log captured while the command runs.
+    pub output_log: Option<std::path::PathBuf>,
 }
 
 /// Gate terminal publication until an integration has exposed the task's
@@ -151,6 +155,8 @@ impl TaskSpec {
             command: request.command.clone(),
             request,
             call_id: None,
+            notify_on_complete: true,
+            output_log: None,
         }
     }
 
@@ -158,6 +164,44 @@ impl TaskSpec {
         self.call_id = Some(call_id.into());
         self
     }
+
+    pub fn with_notification(mut self, notify_on_complete: bool) -> Self {
+        self.notify_on_complete = notify_on_complete;
+        self
+    }
+
+    pub fn with_output_log(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.output_log = Some(path.into());
+        self
+    }
+}
+
+/// Why a background task reached a terminal state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskTerminalReason {
+    Exited { success: bool, code: Option<i32> },
+    Signalled { signal: i32 },
+    Cancelled,
+    SpawnFailed(String),
+    Failed(String),
+}
+
+/// Retained completion metadata and bounded in-memory output for a task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskCompletion {
+    pub id: TaskId,
+    pub session_id: SessionId,
+    pub command: String,
+    pub started_at: Instant,
+    pub ended_at: Instant,
+    pub started_at_unix_ms: u128,
+    pub ended_at_unix_ms: u128,
+    pub notify_on_complete: bool,
+    pub reason: TaskTerminalReason,
+    pub output: Option<CommandOutput>,
+    pub error: Option<String>,
+    pub output_log: Option<std::path::PathBuf>,
+    pub log_error: Option<String>,
 }
 
 /// State of a task which has not reached a terminal state yet.
@@ -192,6 +236,8 @@ pub struct TaskSnapshot {
     pub command: String,
     pub started_at: Instant,
     pub state: TaskState,
+    pub notify_on_complete: bool,
+    pub output_log: Option<std::path::PathBuf>,
 }
 
 /// Events published by the manager.  Finished and cancelled are terminal;
@@ -210,12 +256,14 @@ pub enum TaskEvent {
         call_id: Option<String>,
         command: String,
         output: Result<CommandOutput, String>,
+        notify_on_complete: bool,
     },
     Cancelled {
         id: TaskId,
         session_id: SessionId,
         call_id: Option<String>,
         command: String,
+        notify_on_complete: bool,
     },
 }
 
@@ -244,6 +292,18 @@ impl TaskEvent {
 
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Finished { .. } | Self::Cancelled { .. })
+    }
+
+    pub fn notify_on_complete(&self) -> Option<bool> {
+        match self {
+            Self::Finished {
+                notify_on_complete, ..
+            }
+            | Self::Cancelled {
+                notify_on_complete, ..
+            } => Some(*notify_on_complete),
+            Self::Started { .. } => None,
+        }
     }
 }
 
@@ -357,8 +417,12 @@ struct TaskRecord {
     call_id: Option<String>,
     command: String,
     started_at: Instant,
+    started_at_unix_ms: u128,
     state: TaskState,
     completion: Option<Result<CommandOutput, String>>,
+    notify_on_complete: bool,
+    output_log: Option<std::path::PathBuf>,
+    completion_log_error: Option<String>,
     start_barrier: Option<TaskStartBarrier>,
 }
 
@@ -366,6 +430,7 @@ struct Inner {
     tasks: Mutex<HashMap<TaskId, TaskRecord>>,
     subscribers: Mutex<Vec<Subscriber>>,
     terminal_ids: Mutex<TerminalIds>,
+    completions: Mutex<VecDeque<TaskCompletion>>,
     /// Serializes the task snapshot check with terminal event publication.
     /// A consumer can therefore perform a final non-blocking drain after a
     /// quiescent check without racing an already-removed task's event.
@@ -378,6 +443,27 @@ struct Inner {
 
 const TERMINAL_ID_CAPACITY: usize = 1024;
 const SUBSCRIBER_BUFFER_CAPACITY: usize = 64;
+const COMPLETION_CAPACITY: usize = 256;
+
+fn write_task_log(file: &mut std::fs::File, error: &Arc<Mutex<Option<String>>>, bytes: &[u8]) {
+    use std::io::Write;
+    if let Err(write_error) = file.write_all(bytes) {
+        let mut captured = error.lock().expect("task log error mutex poisoned");
+        if captured.is_none() {
+            *captured = Some(write_error.to_string());
+        }
+    }
+}
+
+fn flush_task_log(file: &mut std::fs::File, error: &Arc<Mutex<Option<String>>>) {
+    use std::io::Write;
+    if let Err(write_error) = file.flush() {
+        let mut captured = error.lock().expect("task log error mutex poisoned");
+        if captured.is_none() {
+            *captured = Some(write_error.to_string());
+        }
+    }
+}
 
 /// Bounded tombstones let a cancellation racing with completion report
 /// `AlreadyFinished` without retaining every task ID forever.
@@ -419,6 +505,7 @@ impl TaskManager {
                 tasks: Mutex::new(HashMap::new()),
                 subscribers: Mutex::new(Vec::new()),
                 terminal_ids: Mutex::new(TerminalIds::default()),
+                completions: Mutex::new(VecDeque::new()),
                 publication: Mutex::new(()),
                 start_wakeup: std::sync::Condvar::new(),
                 next_id: AtomicU64::new(1),
@@ -483,6 +570,36 @@ impl TaskManager {
         self.spawn_with_task_id(id.into(), spec, Some(start_barrier))
     }
 
+    /// Read one retained completion only when it belongs to `session_id`.
+    pub fn completion(
+        &self,
+        session_id: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Option<TaskCompletion> {
+        self.inner
+            .completions
+            .lock()
+            .expect("task completion mutex poisoned")
+            .iter()
+            .find(|completion| {
+                completion.session_id.as_str() == session_id.as_ref()
+                    && completion.id.as_str() == id.as_ref()
+            })
+            .cloned()
+    }
+
+    /// Return retained completions for one session, oldest first.
+    pub fn completions(&self, session_id: impl AsRef<str>) -> Vec<TaskCompletion> {
+        self.inner
+            .completions
+            .lock()
+            .expect("task completion mutex poisoned")
+            .iter()
+            .filter(|completion| completion.session_id.as_str() == session_id.as_ref())
+            .cloned()
+            .collect()
+    }
+
     /// Wait until the task's child PID has been published, or until the task
     /// reaches a terminal state. This is useful for a sequential tool batch:
     /// a command that follows a background start should not race the worker
@@ -533,6 +650,35 @@ impl TaskManager {
             }
             return Err(format!("task ID '{id}' is already in use"));
         }
+        let output_log = match spec.output_log.as_ref() {
+            Some(path) => {
+                if let Some(parent) = path.parent()
+                    && let Err(error) = std::fs::create_dir_all(parent)
+                {
+                    let message = format!("failed to create task log directory: {error}");
+                    self.mark_log_unavailable(&id, message.clone());
+                    self.finish(&id, Err(message.clone()));
+                    return Err(message);
+                }
+                let mut options = std::fs::OpenOptions::new();
+                options.create_new(true).write(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                match options.open(path) {
+                    Ok(file) => Some(file),
+                    Err(error) => {
+                        let message = format!("failed to create task log: {error}");
+                        self.mark_log_unavailable(&id, message.clone());
+                        self.finish(&id, Err(message.clone()));
+                        return Err(message);
+                    }
+                }
+            }
+            None => None,
+        };
 
         let manager = self.clone();
         let thread_name = format!("rustcode-task-{}", id);
@@ -542,14 +688,38 @@ impl TaskManager {
             let started: StartedCallback = Arc::new(move |pid| {
                 started_manager.child_started(&started_id, pid);
             });
+            let log_error = Arc::new(Mutex::new(None::<String>));
+            let progress: Option<rustcode_command::ProgressCallback> = output_log.map(|file| {
+                let file = Arc::new(Mutex::new((file, None::<bool>)));
+                let callback_error = Arc::clone(&log_error);
+                Arc::new(move |bytes: &[u8], stderr: bool| {
+                    let mut state = file.lock().expect("task output log mutex poisoned");
+                    if state.1 != Some(stderr) {
+                        if state.1.is_some() {
+                            write_task_log(&mut state.0, &callback_error, b"\n");
+                        }
+                        let label: &[u8] = if stderr { b"[stderr]\n" } else { b"[stdout]\n" };
+                        write_task_log(&mut state.0, &callback_error, label);
+                        state.1 = Some(stderr);
+                    }
+                    write_task_log(&mut state.0, &callback_error, bytes);
+                    flush_task_log(&mut state.0, &callback_error);
+                }) as rustcode_command::ProgressCallback
+            });
             let result = catch_unwind(AssertUnwindSafe(|| {
-                rustcode_command::run_until_exit(&spec.request, None, Some(started))
+                rustcode_command::run_until_exit(&spec.request, progress, Some(started))
             }));
+            let log_error = log_error
+                .lock()
+                .expect("task log error mutex poisoned")
+                .clone();
             match result {
-                Ok(output) => manager.finish(&id, output),
-                Err(_) => {
-                    manager.finish(&id, Err("background command runner panicked".to_string()))
-                }
+                Ok(output) => manager.finish_with_log_error(&id, output, log_error),
+                Err(_) => manager.finish_with_log_error(
+                    &id,
+                    Err("background command runner panicked".to_string()),
+                    log_error,
+                ),
             }
         });
 
@@ -582,6 +752,8 @@ impl TaskManager {
                 command: task.command.clone(),
                 started_at: task.started_at,
                 state: task.state,
+                notify_on_complete: task.notify_on_complete,
+                output_log: task.output_log.clone(),
             })
             .collect();
         tasks.sort_by_key(|task| task.started_at);
@@ -711,8 +883,15 @@ impl TaskManager {
                 call_id: spec.call_id.clone(),
                 command: spec.command.clone(),
                 started_at: Instant::now(),
+                started_at_unix_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
                 state: TaskState::Starting,
                 completion: None,
+                notify_on_complete: spec.notify_on_complete,
+                output_log: spec.output_log.clone(),
+                completion_log_error: None,
                 start_barrier,
             },
         );
@@ -780,6 +959,7 @@ impl TaskManager {
             if terminated {
                 let task = tasks.remove(id).expect("task was just observed");
                 self.remember_terminal(id);
+                self.retain_completion(id, &task, None, true, task.completion_log_error.clone());
                 (
                     CancelResult::Cancelled,
                     Some(TaskEvent::Cancelled {
@@ -787,12 +967,20 @@ impl TaskManager {
                         session_id: task.session_id,
                         call_id: task.call_id,
                         command: task.command,
+                        notify_on_complete: task.notify_on_complete,
                     }),
                     task.start_barrier,
                 )
             } else if let Some(output) = task.completion.take() {
                 let task = tasks.remove(id).expect("task was just observed");
                 self.remember_terminal(id);
+                self.retain_completion(
+                    id,
+                    &task,
+                    Some(output.clone()),
+                    false,
+                    task.completion_log_error.clone(),
+                );
                 (
                     CancelResult::Failed,
                     Some(TaskEvent::Finished {
@@ -801,6 +989,7 @@ impl TaskManager {
                         call_id: task.call_id,
                         command: task.command,
                         output,
+                        notify_on_complete: task.notify_on_complete,
                     }),
                     task.start_barrier,
                 )
@@ -830,6 +1019,15 @@ impl TaskManager {
     }
 
     fn finish(&self, id: &TaskId, output: Result<CommandOutput, String>) {
+        self.finish_with_log_error(id, output, None);
+    }
+
+    fn finish_with_log_error(
+        &self,
+        id: &TaskId,
+        output: Result<CommandOutput, String>,
+        log_error: Option<String>,
+    ) {
         let (event, barrier) = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
             let Some(task) = tasks.get_mut(id) else {
@@ -842,18 +1040,28 @@ impl TaskManager {
                 // completion until that call commits the race outcome.
                 if task.completion.is_none() {
                     task.completion = Some(output);
+                    task.completion_log_error = log_error;
                 }
                 return;
             }
             let task = tasks.remove(id).expect("task was just observed");
             self.remember_terminal(id);
-            let barrier = task.start_barrier;
-            let event = if matches!(task.state, TaskState::CancelRequested) {
+            let barrier = task.start_barrier.clone();
+            let cancelled = matches!(task.state, TaskState::CancelRequested);
+            self.retain_completion(
+                id,
+                &task,
+                (!cancelled).then(|| output.clone()),
+                cancelled,
+                log_error,
+            );
+            let event = if cancelled {
                 TaskEvent::Cancelled {
                     id: id.clone(),
                     session_id: task.session_id,
                     call_id: task.call_id,
                     command: task.command,
+                    notify_on_complete: task.notify_on_complete,
                 }
             } else {
                 TaskEvent::Finished {
@@ -862,6 +1070,7 @@ impl TaskManager {
                     call_id: task.call_id,
                     command: task.command,
                     output,
+                    notify_on_complete: task.notify_on_complete,
                 }
             };
             (event, barrier)
@@ -883,6 +1092,73 @@ impl TaskManager {
                 manager.publish(event);
             })
             .expect("failed to spawn task terminal barrier worker");
+    }
+
+    fn retain_completion(
+        &self,
+        id: &TaskId,
+        task: &TaskRecord,
+        output: Option<Result<CommandOutput, String>>,
+        cancelled: bool,
+        log_error: Option<String>,
+    ) {
+        let reason = if cancelled {
+            TaskTerminalReason::Cancelled
+        } else {
+            match output
+                .as_ref()
+                .expect("non-cancelled completion has output")
+            {
+                Ok(output) if let Some(signal) = output.signal => {
+                    TaskTerminalReason::Signalled { signal }
+                }
+                Ok(output) => TaskTerminalReason::Exited {
+                    success: output.success,
+                    code: output.exit_code,
+                },
+                Err(error)
+                    if error.starts_with("failed to spawn process:")
+                        || error.starts_with("failed to start task thread:")
+                        || error.starts_with("failed to create task log")
+                        || error.starts_with("failed to protect task log") =>
+                {
+                    TaskTerminalReason::SpawnFailed(error.clone())
+                }
+                Err(error) => TaskTerminalReason::Failed(error.clone()),
+            }
+        };
+        let (output, error) = match output {
+            Some(Ok(output)) => (Some(output), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
+        let completion = TaskCompletion {
+            id: id.clone(),
+            session_id: task.session_id.clone(),
+            command: task.command.clone(),
+            started_at: task.started_at,
+            ended_at: Instant::now(),
+            started_at_unix_ms: task.started_at_unix_ms,
+            ended_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            notify_on_complete: task.notify_on_complete,
+            reason,
+            output,
+            error,
+            output_log: task.output_log.clone(),
+            log_error: log_error.or_else(|| task.completion_log_error.clone()),
+        };
+        let mut completions = self
+            .inner
+            .completions
+            .lock()
+            .expect("task completion mutex poisoned");
+        completions.push_back(completion);
+        while completions.len() > COMPLETION_CAPACITY {
+            completions.pop_front();
+        }
     }
 
     fn publish(&self, event: TaskEvent) {
@@ -926,6 +1202,19 @@ impl TaskManager {
             .remember(id.clone());
     }
 
+    fn mark_log_unavailable(&self, id: &TaskId, error: String) {
+        if let Some(task) = self
+            .inner
+            .tasks
+            .lock()
+            .expect("task state mutex poisoned")
+            .get_mut(id)
+        {
+            task.output_log = None;
+            task.completion_log_error = Some(error);
+        }
+    }
+
     #[cfg(test)]
     fn register_for_test(&self, session_id: &str, command: &str) -> TaskId {
         let id = self.allocate_id();
@@ -936,6 +1225,8 @@ impl TaskManager {
                 command: command.to_owned(),
                 request: test_request(command),
                 call_id: None,
+                notify_on_complete: true,
+                output_log: None,
             },
             None,
         );
@@ -1035,6 +1326,115 @@ mod tests {
 
         barrier.release();
         assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
+    }
+
+    #[test]
+    fn completion_is_retained_with_full_log_and_session_scoped_reason() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let log_dir = std::env::temp_dir().join(format!(
+            "rustcode-task-log-{}-{}",
+            std::process::id(),
+            manager.inner.next_id.load(Ordering::Relaxed)
+        ));
+        let log_path = log_dir.join("task.log");
+        let command = if cfg!(target_os = "windows") {
+            "echo captured-output"
+        } else {
+            "printf captured-output"
+        };
+        let handle = manager
+            .spawn_with_id(
+                "captured-task",
+                TaskSpec::new("owner", test_request(command))
+                    .with_notification(false)
+                    .with_output_log(log_path.clone()),
+            )
+            .unwrap();
+        let events = manager.subscribe_session("owner");
+        while let Ok(event) = events.recv_timeout(Duration::from_secs(5)) {
+            if event.task_id() == handle.id() && event.is_terminal() {
+                break;
+            }
+        }
+
+        let completion = manager.completion("owner", handle.id()).unwrap();
+        assert!(!completion.notify_on_complete);
+        assert!(matches!(
+            completion.reason,
+            TaskTerminalReason::Exited {
+                success: true,
+                code: Some(0)
+            }
+        ));
+        assert!(completion.ended_at >= completion.started_at);
+        assert!(manager.completion("other-session", handle.id()).is_none());
+        let saved_log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(saved_log.contains("captured-output"));
+        assert!(
+            manager
+                .spawn_with_id(
+                    "captured-task",
+                    TaskSpec::new("owner", test_request(command)).with_output_log(log_path.clone()),
+                )
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&log_path).unwrap(), saved_log);
+        let _ = std::fs::remove_dir_all(log_dir);
+    }
+
+    #[test]
+    fn terminal_reason_distinguishes_cancellation_and_spawn_failure() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let cancelled = manager.register_for_test("owner", "sleep 1");
+        manager.mark_started_for_test(&cancelled, 42);
+        assert_eq!(manager.cancel(&cancelled), CancelResult::Cancelled);
+        assert_eq!(
+            manager.completion("owner", &cancelled).unwrap().reason,
+            TaskTerminalReason::Cancelled
+        );
+
+        let failed = manager.register_for_test("owner", "missing executable");
+        manager.finish_for_test(
+            &failed,
+            Err("failed to spawn process: executable not found".to_owned()),
+        );
+        assert!(matches!(
+            manager.completion("owner", &failed).unwrap().reason,
+            TaskTerminalReason::SpawnFailed(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_log_spools_output_beyond_the_bounded_model_capture() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let temp =
+            std::env::temp_dir().join(format!("rustcode-full-task-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let path = temp.join("task.log");
+        let events = manager.subscribe_session("owner");
+        let handle = manager
+            .spawn_with_id(
+                "large-output-task",
+                TaskSpec::new(
+                    "owner",
+                    test_request("head -c 200000 /dev/zero | tr '\\000' x"),
+                )
+                .with_output_log(path.clone()),
+            )
+            .unwrap();
+        loop {
+            let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+            if event.task_id() == handle.id() && event.is_terminal() {
+                break;
+            }
+        }
+        let completion = manager.completion("owner", &handle.id()).unwrap();
+        let output = completion.output.unwrap();
+        assert!(output.stdout.is_truncated());
+        assert!(std::fs::metadata(&path).unwrap().len() >= 200_000);
+        assert!(completion.log_error.is_none());
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -1550,6 +1950,7 @@ mod tests {
             session_id: session.clone(),
             call_id: None,
             command: String::new(),
+            notify_on_complete: true,
         };
         assert_eq!(event.task_id(), &id);
         assert_eq!(event.session_id(), &session);

@@ -927,6 +927,19 @@ pub struct BackgroundTaskSnapshot {
     pub command: String,
     pub start_time: Instant,
     pub child_pid: Option<u32>,
+    pub notify_on_complete: bool,
+    pub output_log: Option<std::path::PathBuf>,
+}
+
+pub fn background_task_completion(
+    session_id: &str,
+    task_id: &str,
+) -> Option<rustcode_tasks::TaskCompletion> {
+    background_task_manager().completion(session_id, task_id)
+}
+
+pub fn recent_background_task_completions(session_id: &str) -> Vec<rustcode_tasks::TaskCompletion> {
+    background_task_manager().completions(session_id)
 }
 
 pub fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot> {
@@ -943,6 +956,8 @@ pub fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot
                 | rustcode_tasks::TaskState::Terminating { .. }
                 | rustcode_tasks::TaskState::CancelRequested => None,
             },
+            notify_on_complete: task.notify_on_complete,
+            output_log: task.output_log,
         })
         .collect()
 }

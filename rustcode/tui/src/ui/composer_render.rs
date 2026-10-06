@@ -521,7 +521,7 @@ impl ActiveWorkState {
             Self::Approval => "Awaiting approval",
             Self::Input => "Awaiting input",
             Self::Background => "Background running",
-            Self::ResultsReady => "Results ready",
+            Self::ResultsReady => "Unread result",
         }
     }
 }
@@ -553,7 +553,11 @@ fn active_work_state(state: &RenderSnapshot) -> ActiveWorkState {
             ActiveWorkState::Generating
         };
     }
-    if !state.pending_background_results().is_empty() {
+    if state
+        .pending_background_results()
+        .iter()
+        .any(|result| result.unread)
+    {
         return ActiveWorkState::ResultsReady;
     }
     if !state.background_tasks().is_empty() {
@@ -633,19 +637,31 @@ pub(super) fn active_work_indicator(
                 background_terminal_summary_for_width(state, detail_width)
             )
         }
-        ActiveWorkState::ResultsReady => format!(
-            " · {} waiting for consumption",
-            state.pending_background_results().len()
-        ),
+        ActiveWorkState::ResultsReady => {
+            let count = state
+                .pending_background_results()
+                .iter()
+                .filter(|result| result.unread)
+                .count();
+            format!(
+                " · {count} unread result{}",
+                if count == 1 { "" } else { "s" }
+            )
+        }
         _ => return None,
     };
     // The row owns exactly one terminal row and the caller appends the token
     // suffix afterwards, so head + detail + suffix must fit together. Shrink
     // the droppable detail first, then the state word; a clipped row must never
     // eat the cumulative token total (#1725).
+    let head_color = if matches!(work, ActiveWorkState::ResultsReady) {
+        Color::Green
+    } else {
+        COLOR_PRIMARY()
+    };
     let head_span = Span::styled(
         head,
-        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        get_themed_style(head_color, COLOR_BG(), Modifier::BOLD, false),
     );
     let detail_span = Span::styled(
         detail,
@@ -759,7 +775,7 @@ pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
     } else {
         format!("{count} tasks")
     };
-    format!("{task_count} · {elapsed} · /ps · /stop")
+    format!("LIVE · {task_count} · {elapsed} · /ps · /stop")
 }
 
 fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -> String {
@@ -774,7 +790,7 @@ fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -
     } else {
         format!("{count} tasks")
     };
-    let compact = format!("{task_count} /ps /stop");
+    let compact = format!("LIVE · {task_count} /ps /stop");
     if compact.width() <= width {
         compact
     } else if "/ps /stop".width() <= width {
@@ -801,6 +817,14 @@ pub(super) fn background_command_lines_with_width(
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let status_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
     let mut lines = Vec::new();
+    if !state.background_tasks().is_empty() {
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![Span::styled("LIVE", status_style)],
+            usize::from(width).max(1),
+            None,
+        );
+    }
     for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
         let command = rustcode::controller::background_command_label(&task.command, 240);
         let elapsed = fmt_elapsed_compact(task.started_at.elapsed().as_secs());
@@ -821,23 +845,49 @@ pub(super) fn background_command_lines_with_width(
             Span::styled(suffix, style),
         ]));
     }
-    for result in state
-        .pending_background_results()
-        .iter()
-        .take(MAX_VISIBLE_COMMANDS)
-    {
-        let status = if result.cancelled {
-            "Cancelled"
-        } else if result.success {
-            "Completed"
+    let results = state.pending_background_results();
+    if !results.is_empty() {
+        let completed = results.iter().filter(|result| result.success).count();
+        let cancelled = results.iter().filter(|result| result.cancelled).count();
+        let failed = results.len().saturating_sub(completed + cancelled);
+        let task_count = if results.len() == 1 {
+            "1 task".to_owned()
         } else {
-            "Failed"
+            format!("{} tasks", results.len())
         };
+        let mut rollup =
+            format!("RECENT · {task_count} · {completed} done · {cancelled} cancelled");
+        if failed > 0 {
+            rollup.push_str(&format!(" · {failed} failed"));
+        }
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![Span::styled(rollup, status_style)],
+            usize::from(width).max(1),
+            None,
+        );
+    }
+    for result in results.iter().take(MAX_VISIBLE_COMMANDS) {
+        let status = if result.cancelled {
+            ("⊘ Cancelled", Color::DarkGray)
+        } else if result.success {
+            ("✓ Completed", Color::Green)
+        } else {
+            ("✗ Failed", Color::Red)
+        };
+        let command = rustcode::controller::background_command_label(&result.command, 240);
+        let label = super::modals::truncate_middle_to_width(
+            &command,
+            usize::from(width).saturating_sub(status.0.width() + 1),
+        );
         push_wrapped_with_continuation(
             &mut lines,
             vec![
-                Span::styled("• ", status_style),
-                Span::styled(format!("{status} {}", result.id), status_style),
+                Span::styled(
+                    format!("{} ", status.0),
+                    get_themed_style(status.1, COLOR_BG(), Modifier::BOLD, false),
+                ),
+                Span::styled(label, style),
             ],
             usize::from(width).max(1),
             Some(Span::raw("  ")),

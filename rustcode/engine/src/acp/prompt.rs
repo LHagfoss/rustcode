@@ -79,6 +79,12 @@ impl BackgroundTurnTasks {
             .map(|task| task.id.to_string())
             .collect::<HashSet<_>>();
         existing.extend(
+            manager
+                .completions(session_id)
+                .into_iter()
+                .map(|completion| completion.id.to_string()),
+        );
+        existing.extend(
             known_task_ids
                 .lock()
                 .expect("ACP known task IDs mutex poisoned")
@@ -94,8 +100,21 @@ impl BackgroundTurnTasks {
     fn observe_live_tasks(&mut self, manager: &TaskManager, session_id: &str) {
         for task in manager.list(session_id) {
             let id = task.id.to_string();
-            if !self.existing.contains(&id) {
+            if task.notify_on_complete && !self.existing.contains(&id) {
                 self.pending.insert(id);
+            }
+        }
+    }
+
+    fn observe_retained_completions(
+        &mut self,
+        completions: impl IntoIterator<Item = rustcode_tasks::TaskCompletion>,
+    ) {
+        for completion in completions {
+            let id = completion.id.to_string();
+            if completion.notify_on_complete && !self.existing.contains(&id) {
+                self.pending.insert(id.clone());
+                self.terminal.insert(id);
             }
         }
     }
@@ -106,6 +125,16 @@ impl BackgroundTurnTasks {
         known_task_ids: &Arc<std::sync::Mutex<KnownTaskIds>>,
     ) -> bool {
         let id = event.task_id().to_string();
+        if !event.is_terminal() {
+            return false;
+        }
+        if event.notify_on_complete() == Some(false) {
+            known_task_ids
+                .lock()
+                .expect("ACP known task IDs mutex poisoned")
+                .remove(&id);
+            return false;
+        }
         if self.existing.contains(&id) {
             if event.is_terminal() {
                 known_task_ids
@@ -237,6 +266,14 @@ pub(crate) async fn run_prompt(
             return Ok(StopReason::Cancelled);
         }
         turn_tasks.observe_live_tasks(task_manager, &session_id);
+        turn_tasks.observe_retained_completions(task_manager.completions(&session_id));
+        if turn_tasks.pending.is_empty() {
+            // The detached task requested history/client updates only; do not
+            // wait for its terminal event or schedule a model continuation.
+            context.lifecycle.task_completed = true;
+            context.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Completed);
+            break;
+        }
         loop {
             if turn.cancel_token().is_cancelled() {
                 return Ok(StopReason::Cancelled);
@@ -479,7 +516,7 @@ where
 mod tests {
     use super::{BackgroundTurnTasks, SessionTitleTracker, drain_task_events};
     use rustcode_tasks::TaskEvent;
-    use std::collections::VecDeque;
+    use std::collections::{HashSet, VecDeque};
     use std::sync::Arc;
 
     #[test]
@@ -528,6 +565,7 @@ mod tests {
             session_id: "session".into(),
             call_id: None,
             command: "sleep 1".to_owned(),
+            notify_on_complete: true,
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),
@@ -552,16 +590,33 @@ mod tests {
             call_id: None,
             pid: 42,
         };
-        assert!(tracker.observe_event(&started, &known_task_ids));
+        assert!(!tracker.observe_event(&started, &known_task_ids));
         assert!(!tracker.complete());
         let cancelled = TaskEvent::Cancelled {
             id: "new-task".into(),
             session_id: "session".into(),
             call_id: None,
             command: "sleep 1".to_owned(),
+            notify_on_complete: true,
         };
         assert!(tracker.observe_event(&cancelled, &known_task_ids));
         assert!(tracker.complete());
+
+        let mut silent_tracker = BackgroundTurnTasks {
+            existing: HashSet::new(),
+            pending: HashSet::new(),
+            terminal: HashSet::new(),
+        };
+        let silent = TaskEvent::Cancelled {
+            id: "silent-task".into(),
+            session_id: "session".into(),
+            call_id: None,
+            command: "sleep 30".to_owned(),
+            notify_on_complete: false,
+        };
+        assert!(!silent_tracker.observe_event(&silent, &known_task_ids));
+        assert!(silent_tracker.pending.is_empty());
+        assert!(!silent_tracker.complete());
     }
 
     #[test]
@@ -573,6 +628,7 @@ mod tests {
                 session_id: "session".into(),
                 call_id: None,
                 command: "cargo test".to_owned(),
+                notify_on_complete: true,
                 output: Ok(rustcode_command::CommandOutput {
                     success: true,
                     exit_code: Some(0),
