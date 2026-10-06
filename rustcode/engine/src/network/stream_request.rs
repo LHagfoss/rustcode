@@ -746,12 +746,22 @@ fn normalize_responses_event(
                 .and_then(|details| details.get("reason"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown");
-            Some(serde_json::json!({
-                "error": {
-                    "code": "response_incomplete",
-                    "message": format!("Responses API did not complete the response (reason: {reason})"),
+            if reason == "max_output_tokens" {
+                let mut event = serde_json::json!({
+                    "choices": [{"delta": {}, "finish_reason": "length"}],
+                });
+                if let Some(usage) = responses_usage(value) {
+                    event["usage"] = usage;
                 }
-            }))
+                Some(event)
+            } else {
+                Some(serde_json::json!({
+                    "error": {
+                        "code": "response_incomplete",
+                        "message": format!("Responses API did not complete the response (reason: {reason})"),
+                    }
+                }))
+            }
         }
         "response.failed" => {
             let error = value
@@ -1575,6 +1585,15 @@ mod tests {
         assert_eq!(finish.as_deref(), Some("stop"));
         assert_eq!(buffer.lock().await.content, "final answer");
         assert_eq!(
+            buffer.lock().await.final_answer_boundary,
+            super::super::stream::FinalAnswerBoundary::ReasoningClosed,
+            "a terminal prose response without a reasoning delta still closes the answer boundary"
+        );
+        assert_eq!(
+            buffer.lock().await.provider_final_answer_state,
+            super::super::stream::ProviderFinalAnswerState::Terminal
+        );
+        assert_eq!(
             state.lock().await.current_token_usage,
             Some(crate::app::TokenUsage {
                 prompt_tokens: 12,
@@ -1709,6 +1728,63 @@ mod tests {
                 .is_some_and(|detail| detail.contains("before its completion event"))
         );
         assert_eq!(buffer.lock().await.content, "partial");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_max_output_tokens_keeps_partial_text_and_returns_length() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial answer\"}\n\n",
+            "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":12,\"output_tokens\":20,\"total_tokens\":32}}}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "200 OK", &body).await;
+            socket.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        state.lock().await.config.models[0].api_protocol =
+            Some(crate::config::ApiProtocol::Responses);
+        let buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+        let finish = stream_request(
+            &reqwest::Client::new(),
+            state.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("output-budget exhaustion is a recoverable terminal response");
+
+        assert_eq!(finish.as_deref(), Some("length"));
+        assert_eq!(buffer.lock().await.content, "partial answer");
+        assert_eq!(
+            state.lock().await.current_token_usage,
+            Some(crate::app::TokenUsage {
+                prompt_tokens: 12,
+                completion_tokens: 20,
+                total_tokens: 32,
+                ..Default::default()
+            })
+        );
         server.await.unwrap();
     }
 
@@ -2608,7 +2684,22 @@ mod tests {
         let incomplete = normalize_responses_event(
             &serde_json::json!({
                 "type": "response.incomplete",
-                "response": {"incomplete_details": {"reason": "max_output_tokens"}}
+                "response": {
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": {"input_tokens": 12, "output_tokens": 20, "total_tokens": 32}
+                }
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(incomplete["choices"][0]["finish_reason"], "length");
+        assert_eq!(incomplete["usage"]["prompt_tokens"], 12);
+
+        let incomplete = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.incomplete",
+                "response": {"incomplete_details": {"reason": "content_filter"}}
             }),
             &mut call_ids,
             &mut argument_deltas,
@@ -5084,7 +5175,7 @@ async fn stream_request_with_timeouts(
                                 stream_trace.record(line_buf.len(), &value);
                                 if responses_api
                                     && value.get("type").and_then(serde_json::Value::as_str)
-                                        == Some("response.completed")
+                                        .is_some_and(|kind| matches!(kind, "response.completed" | "response.incomplete"))
                                 {
                                     responses_completed = true;
                                 }
@@ -5301,10 +5392,12 @@ async fn stream_request_with_timeouts(
                                             let mut buffer = buffer.lock().await;
                                             buffer.termination =
                                                 Some(StreamTermination::ProviderStop);
-                                            if reasoning.is_none()
-                                                && buffer.final_answer_boundary
-                                                    == super::stream::FinalAnswerBoundary::ReasoningClosed
-                                            {
+                                            if reasoning.is_none() {
+                                                // Some providers omit explicit reasoning deltas.
+                                                // Their terminal prose response is still a closed
+                                                // final-answer boundary.
+                                                buffer.final_answer_boundary =
+                                                    super::stream::FinalAnswerBoundary::ReasoningClosed;
                                                 buffer.provider_final_answer_state =
                                                     super::stream::ProviderFinalAnswerState::Terminal;
                                             }

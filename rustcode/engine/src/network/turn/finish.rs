@@ -10,7 +10,9 @@ use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
 use super::recovery::{
-    completed_inspection_synthesis, outstanding_external_action, reasoning_loop_final_response,
+    completed_inspection_synthesis_with_pending_work, has_pending_tool_work,
+    inspection_completion_rejection_reasons, outstanding_external_action,
+    reasoning_loop_final_response,
 };
 use super::{TurnContext, run_single_turn};
 
@@ -137,7 +139,8 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     ctx.performance.completed = ctx.lifecycle.task_completed;
     ctx.performance.recoveries = ctx.metrics.failure_replans
         + ctx.metrics.evidence_recoveries
-        + ctx.recovery.reasoning_recovery_attempts as usize;
+        + ctx.recovery.reasoning_recovery_attempts as usize
+        + ctx.recovery.output_budget_recovery_attempts as usize;
     if let Some(usage) = ctx.response.turn_token_usage.as_ref() {
         ctx.performance.input_tokens = Some(usage.prompt_tokens as u64);
         ctx.performance.output_tokens = Some(usage.completion_tokens as u64);
@@ -588,9 +591,9 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         }
     }
 
-    let has_outstanding_external_action = {
+    let has_pending_completion_work = {
         let state = state.lock().await;
-        outstanding_external_action(&state.history)
+        outstanding_external_action(&state.history) || has_pending_tool_work(&state.history)
     };
 
     if finish_gate_passed
@@ -599,7 +602,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
             ctx,
             cancel_token,
             &response_finish_reason,
-            has_outstanding_external_action,
+            has_pending_completion_work,
         )
     {
         dbg_log!("Normal interactive prose accepted as completion");
@@ -619,15 +622,23 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
     } else if finish_gate_passed
         && policy.is_headless()
         && ctx.lifecycle.stop_reason.is_none()
-        && let Some(summary) = completed_inspection_synthesis(
+        && let Some(summary) = completed_inspection_synthesis_with_pending_work(
             ctx,
             &ctx.response.final_content,
             true,
             final_answer_boundary,
             provider_final_answer_state,
+            has_pending_completion_work,
         )
     {
         dbg_log!("Complete read-only inspection accepted as headless completion");
+        crate::logger::operational_event(
+            "turn.inspection_completion_accepted",
+            serde_json::json!({
+                "complete_inspection_results": ctx.progress.complete_inspection_results,
+                "incomplete_inspection_results": ctx.progress.incomplete_inspection_results,
+            }),
+        );
         let mut s = state.lock().await;
         if !ctx.response.final_content_persisted {
             let mut msg = ChatMessage::new("assistant", summary.clone());
@@ -655,6 +666,30 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         ctx.response.final_content_persisted = true;
         ctx.lifecycle.task_completed = true;
         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
+    }
+
+    if policy.is_headless() && !ctx.lifecycle.task_completed {
+        let mut rejection_reasons = inspection_completion_rejection_reasons(
+            ctx,
+            &ctx.response.final_content,
+            true,
+            final_answer_boundary,
+            provider_final_answer_state,
+            has_pending_completion_work,
+        );
+        if !finish_gate_passed {
+            rejection_reasons.push("finish_gate_not_passed");
+        }
+        if ctx.lifecycle.stop_reason.is_some() {
+            rejection_reasons.push("turn_stop_reason_set");
+        }
+        if rejection_reasons.len() > 12 {
+            rejection_reasons.truncate(12);
+        }
+        crate::logger::operational_event(
+            "turn.inspection_completion_rejected",
+            serde_json::json!({"conditions": rejection_reasons}),
+        );
     }
 
     FinishGateOutcome::Stop
@@ -793,9 +828,7 @@ mod tests {
         let policy = Arc::new(crate::raw_cli::HeadlessPolicy { quiet: true });
         let mut ctx = TurnContext::new();
         ctx.progress.complete_inspection_results = 1;
-        ctx.response.final_content =
-            "<think>Reviewed the source.</think>Findings: src/app.ts validates its export input."
-                .to_string();
+        ctx.response.final_content = "<think>Reviewed the source.</think>RustCode's local feature registry shows a capable runtime with increasingly complex entry points. This is a feature-level review; I did not verify live GitHub state or audit every implementation.".to_string();
 
         let outcome = handle_plain_response_finish(
             &state,
@@ -845,8 +878,47 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert_eq!(
             reports[0].content,
-            "Findings: src/app.ts validates its export input."
+            "RustCode's local feature registry shows a capable runtime with increasingly complex entry points. This is a feature-level review; I did not verify live GitHub state or audit every implementation."
         );
+    }
+
+    #[tokio::test]
+    async fn headless_inspection_does_not_complete_with_a_pending_tool_result() {
+        let mut app = AppState::new();
+        app.history
+            .push(ChatMessage::new("user", "Review the features."));
+        app.history
+            .push(ChatMessage::new("tool", "still running").with_tool_result(
+                crate::app::ToolResultRecord {
+                    tool_name: "run_command".into(),
+                    pending: true,
+                    ..crate::app::ToolResultRecord::default()
+                },
+            ));
+        let state = Arc::new(Mutex::new(app));
+        let policy = Arc::new(crate::raw_cli::HeadlessPolicy { quiet: true });
+        let mut ctx = TurnContext::new();
+        ctx.progress.complete_inspection_results = 1;
+        ctx.response.final_content = "RustCode supports several frontends and providers.".into();
+
+        handle_plain_response_finish(
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &mut ctx,
+            FinishReason::Stop,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+        )
+        .await;
+
+        assert!(!ctx.lifecycle.task_completed);
+        assert!(!ctx.response.final_content_persisted);
+        assert!(ctx.lifecycle.stop_reason.is_none());
     }
 
     #[tokio::test]
