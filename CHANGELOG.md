@@ -1,3 +1,7 @@
+## [v0.57.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.5) - 2026-10-06
+
+### Fixes
+- Keep background task commands and agent navigation hints complete at narrow terminal widths ([#1734](https://github.com/LHagfoss/rustcode/pull/1734)).
 ## [v0.57.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.4) - 2026-10-06
 
 ### Fixes
