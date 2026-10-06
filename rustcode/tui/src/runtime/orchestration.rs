@@ -25,6 +25,7 @@ impl AppRuntime {
             agent_ui_event_sender,
             agent_ui_event_receiver,
             task_subscriptions,
+            demo_state,
         } = self;
         let mut terminal_runtime = terminal_runtime
             .ok_or_else(|| Box::<dyn Error>::from("interactive terminal is unavailable"))?;
@@ -42,6 +43,7 @@ impl AppRuntime {
         let mut app_event_receiver = app_event_receiver;
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
         let mut task_subscriptions = task_subscriptions;
+        let mut demo_state = demo_state;
         let update_exit;
         let mut last_progress_sent = std::time::Instant::now();
         let mut consecutive_skipped_frames = 0u32;
@@ -319,6 +321,7 @@ impl AppRuntime {
                     response_just_finished,
                     last_progress_sent: &mut last_progress_sent,
                     frame_presented: &mut frame_presented,
+                    demo_state: demo_state.as_ref().map(ui::DemoState::render_state),
                 }))
                 .catch_unwind()
                 .await;
@@ -406,6 +409,7 @@ impl AppRuntime {
                     app_event_sender: &app_event_sender,
                     agent_ui_event_sender: &agent_ui_event_sender,
                     composer: &composer,
+                    demo_state: &mut demo_state,
                 },
             )
             .await?

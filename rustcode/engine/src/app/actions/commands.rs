@@ -620,26 +620,97 @@ pub fn build_help_text() -> String {
 }
 
 pub fn get_picker_items_count(s: &AppState) -> usize {
-    let search = s.model_picker_search.to_lowercase();
-    s.config
-        .models
+    filtered_model_picker_profiles(&s.config.models, &s.model_picker_search).len()
+}
+
+/// Provider group shown by the model picker for a configured profile.
+pub fn model_picker_group_for_url(url: &str) -> &'static str {
+    if url.contains(":11434") {
+        "ollama"
+    } else if url.contains(":1976") {
+        "Apple Foundation Models"
+    } else {
+        "custom providers"
+    }
+}
+
+/// Return profiles visible in the model picker while preserving config order,
+/// so rendering, keyboard movement, and activation share the same indices.
+pub fn filtered_model_picker_profiles<'a>(
+    profiles: &'a [crate::config::ModelProfile],
+    search: &str,
+) -> Vec<&'a crate::config::ModelProfile> {
+    let search = search.to_lowercase();
+    profiles
         .iter()
-        .filter(|m| crate::app::fuzzy::fuzzy_matches(&m.name, &search))
-        .count()
+        .filter(|profile| {
+            let group = model_picker_group_for_url(&profile.url);
+            crate::app::fuzzy::fuzzy_matches(&profile.name, &search)
+                || crate::app::fuzzy::fuzzy_matches(group, &search)
+                || crate::app::fuzzy::fuzzy_matches(&profile.model, &search)
+        })
+        .collect()
+}
+
+/// Resolve the model picker index against the same filtered row order used by
+/// rendering and keyboard navigation.
+pub fn selected_model_picker_profile(s: &AppState) -> Option<&crate::config::ModelProfile> {
+    let filtered = filtered_model_picker_profiles(&s.config.models, &s.model_picker_search);
+    filtered
+        .get(s.model_picker_index.min(filtered.len().saturating_sub(1)))
+        .copied()
+}
+
+#[cfg(test)]
+mod model_picker_tests {
+    use super::{
+        filtered_model_picker_profiles, get_picker_items_count, selected_model_picker_profile,
+    };
+    use crate::app::AppState;
+    use crate::config::ModelProfile;
+
+    #[test]
+    fn picker_count_includes_matches_from_visible_model_details() {
+        let mut state = AppState::new();
+        state.config.models = vec![
+            ModelProfile {
+                name: "profile 1".to_owned(),
+                url: "http://localhost:11434".to_owned(),
+                model: "deepseek coder one".to_owned(),
+                ..Default::default()
+            },
+            ModelProfile {
+                name: "profile 2".to_owned(),
+                url: "https://api.example.test".to_owned(),
+                model: "deepseek coder two".to_owned(),
+                ..Default::default()
+            },
+            ModelProfile {
+                name: "profile 3".to_owned(),
+                url: "https://api.other.test".to_owned(),
+                model: "deepseek coder three".to_owned(),
+                ..Default::default()
+            },
+        ];
+
+        state.model_picker_search = "deepseek".to_owned();
+        assert_eq!(get_picker_items_count(&state), 3);
+        let filtered =
+            filtered_model_picker_profiles(&state.config.models, &state.model_picker_search);
+        assert_eq!(filtered[2].name, "profile 3");
+        state.model_picker_index = 2;
+        assert_eq!(
+            selected_model_picker_profile(&state).map(|profile| profile.name.as_str()),
+            Some("profile 3")
+        );
+
+        state.model_picker_search = "ollama".to_owned();
+        assert_eq!(get_picker_items_count(&state), 1);
+    }
 }
 
 pub fn select_picker_model(s: &mut AppState) {
-    let search = s.model_picker_search.to_lowercase();
-    let filtered: Vec<&crate::config::ModelProfile> = s
-        .config
-        .models
-        .iter()
-        .filter(|m| crate::app::fuzzy::fuzzy_matches(&m.name, &search))
-        .collect();
-
-    let idx = s.model_picker_index.min(filtered.len().saturating_sub(1));
-    if !filtered.is_empty() {
-        let profile = filtered[idx];
+    if let Some(profile) = selected_model_picker_profile(s).cloned() {
         s.api_base_url = profile.url.clone();
         s.model_name = profile.model.clone();
         s.config.default.set_big(profile.name.clone());

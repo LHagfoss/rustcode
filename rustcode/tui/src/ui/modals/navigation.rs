@@ -401,7 +401,7 @@ pub(in crate::ui) fn render_subagent_picker_modal(
     };
     let instruction = crate::ui::composer_render::fit_hint_clauses(
         "",
-        &["→ open", "← close", switch_hint, "parent history preserved"],
+        &["← enter", "→ back", switch_hint, "parent history preserved"],
         inner.width as usize,
     )
     .unwrap_or_default();
@@ -851,6 +851,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         group: "Session",
         name: "Show session status",
         shortcut: "/status",
+    },
+    PaletteItem {
+        group: "Help",
+        name: "Preview the TUI demo",
+        shortcut: "/test",
     },
     PaletteItem {
         group: "Agent",

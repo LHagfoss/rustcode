@@ -64,6 +64,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/stats` | Existing usage panel with captured monthly data. |
 | `/stop` | Immediate background-terminal stop action. |
 | `/status` | Existing session status panel with the active provider account. |
+| `/test` | TUI-only static visual demo; Escape returns to the unchanged live conversation without making model or tool calls. |
 | `/compact` | Immediate asynchronous conversation compaction; retains its existing task/result lifecycle. |
 | `/summarize` | Immediate asynchronous conversation summary; the resulting summary belongs to the transcript. |
 | `/sync` | Immediate asynchronous configuration repository synchronization. |
@@ -87,6 +88,12 @@ name. User command files are included in config sync, while workspace files
 stay with the project.
 The desktop controller has its own smaller native command parser; this audit
 covers the terminal frontend registry.
+
+`/test` is intercepted by the TUI before normal slash-command dispatch. Its
+fixed preview shows completed, running and queued tool work, a Markdown table
+and bounded long output. Tab opens and closes a fixed question preview; Escape
+returns to the prior live conversation. The preview is never added to session
+history.
 
 ## Panel rendering
 
