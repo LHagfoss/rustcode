@@ -562,7 +562,7 @@ fn paint_panel_line_backgrounds(lines: &mut [Line<'static>], panel: Color) {
     }
 }
 
-fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
+pub(super) fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
     let text = text.replace(['\r', '\n'], " ");
     if text.width() <= max_width {
         return text;

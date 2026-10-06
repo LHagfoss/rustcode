@@ -813,7 +813,7 @@ pub(super) fn background_command_lines_with_width(
             String::new()
         };
         let command_width = available.saturating_sub(suffix.width());
-        let command = truncate_to_display_width(&command, command_width);
+        let command = super::modals::truncate_middle_to_width(&command, command_width);
         lines.push(Line::from(vec![
             Span::styled("• ", status_style),
             Span::styled("Running ", status_style),

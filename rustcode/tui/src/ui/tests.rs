@@ -11531,6 +11531,61 @@ fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
 }
 
 #[test]
+fn compact_command_rows_preserve_distinguishing_tails() {
+    use rustcode::controller::{LiveToolCall, TaskDisplay, Verbosity};
+    let commands = ["cargo test --package alpha", "cargo test --package beta"];
+
+    let foreground = commands.map(|command| {
+        super::history_cell::render_live_tool_cell_at(
+            &[LiveToolCall::new(
+                "task",
+                None,
+                "run_command",
+                "Bash",
+                command,
+            )],
+            32,
+            &Verbosity::Low,
+            false,
+            std::time::Instant::now(),
+            None,
+        )[0]
+        .to_string()
+    });
+    assert!(foreground[0].contains("…ha"), "{:?}", foreground[0]);
+    assert!(foreground[1].contains("…ta"), "{:?}", foreground[1]);
+    assert_ne!(foreground[0], foreground[1]);
+    assert!(
+        foreground
+            .iter()
+            .all(|row| { row.contains("0s") && row.contains("esc") && line_width(row) <= 32 })
+    );
+
+    let mut state = RenderState::new();
+    state.background_tasks = commands
+        .map(|command| TaskDisplay {
+            id: command.to_owned(),
+            command: command.to_owned(),
+            started_at: std::time::Instant::now(),
+            child_pid: None,
+        })
+        .to_vec();
+    let background =
+        super::composer_render::background_command_lines_with_width(&render_snapshot(&state), 28)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+    assert!(background[0].contains("…lpha"), "{:?}", background[0]);
+    assert!(background[1].contains("…beta"), "{:?}", background[1]);
+    assert_ne!(background[0], background[1]);
+    assert!(
+        background
+            .iter()
+            .all(|row| { row.contains("0s") && line_width(row) <= 28 })
+    );
+}
+
+#[test]
 fn many_live_children_preserve_the_cap_and_omission_count() {
     use rustcode::controller::LiveToolCall;
     // #1725: a capped child list still ends with a downward connector only when

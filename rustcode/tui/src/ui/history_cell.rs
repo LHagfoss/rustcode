@@ -763,7 +763,7 @@ pub(super) fn render_live_tool_cell_at(
         if !show_command {
             let command_width = usize::from(width)
                 .saturating_sub(used + elapsed_suffix.width() + cancel_hint.width());
-            let command = truncate_to_width(&command, command_width);
+            let command = super::modals::truncate_middle_to_width(&command, command_width);
             header.extend(
                 highlight_shell_command(&command, COLOR_BG(), show_picker)
                     .into_iter()
