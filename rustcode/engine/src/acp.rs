@@ -478,6 +478,7 @@ impl SessionTaskSink {
         prompt_sender: std::sync::mpsc::SyncSender<TaskEvent>,
     ) {
         let id = event.task_id().to_string();
+        let should_resume_model = event.notify_on_complete().unwrap_or(true);
         if !self
             .terminal_ledger
             .lock()
@@ -534,20 +535,19 @@ impl SessionTaskSink {
             // Do not expose the fallback event until its history and ACP
             // notification have been handled. This keeps a prompt that wins
             // the receive race from resuming before durable completion.
-            {
-                let mut backlog = terminal_backlog
-                    .lock()
-                    .expect("ACP terminal backlog mutex poisoned");
-                backlog.push_back(event.clone());
-                while backlog.len() > ACP_TERMINAL_BACKLOG_CAPACITY {
-                    backlog.pop_front();
-                    terminal_overflow.store(true, Ordering::Release);
+            if should_resume_model {
+                {
+                    let mut backlog = terminal_backlog
+                        .lock()
+                        .expect("ACP terminal backlog mutex poisoned");
+                    backlog.push_back(event.clone());
+                    while backlog.len() > ACP_TERMINAL_BACKLOG_CAPACITY {
+                        backlog.pop_front();
+                        terminal_overflow.store(true, Ordering::Release);
+                    }
                 }
+                let _ = prompt_sender.try_send(event);
             }
-            // Release the correlated wakeup only after history persistence and
-            // the ACP notification have been scheduled, so a continuation
-            // cannot race ahead of its durable tool evidence.
-            let _ = prompt_sender.try_send(event);
         });
     }
 }
@@ -926,6 +926,7 @@ mod tests {
             session_id: session_id.into(),
             call_id: None,
             command: "cargo test".to_owned(),
+            notify_on_complete: true,
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
                 exit_code: Some(0),

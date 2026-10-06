@@ -2242,12 +2242,15 @@ fn active_tool_and_background_command_rows_keep_a_fixed_footprint() {
         );
         assert_eq!(
             background_rows.len(),
-            1,
+            2,
             "background width {width}: {background_rows:?}"
         );
-        assert!(background_rows[0].to_string().starts_with("• Running"));
+        assert_eq!(background_rows[0].to_string(), "LIVE");
+        assert!(background_rows[1].to_string().starts_with("• Running"));
         assert!(
-            background_rows[0].width() <= usize::from(width),
+            background_rows
+                .iter()
+                .all(|row| row.width() <= usize::from(width)),
             "{background_rows:?}"
         );
     }
@@ -6586,7 +6589,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     assert!(!neutral_status.contains("esc to interrupt"));
 
     let commands = super::background_command_lines(&snapshot);
-    assert_eq!(commands.len(), 1);
+    assert_eq!(commands.len(), 2);
     assert!(
         commands
             .iter()
@@ -11082,18 +11085,21 @@ fn explicit_active_work_states_override_model_and_clear_on_completion() {
     state.background_tasks.clear();
     state.pending_background_results = vec![BackgroundResultDisplay {
         id: "background-build".into(),
+        command: "cargo build".into(),
         success: true,
         cancelled: false,
+        unread: true,
+        ended_at: std::time::Instant::now(),
     }];
     assert_eq!(
         super::activity_status_label(&render_snapshot(&state)),
-        "Results ready"
+        "Unread result"
     );
     let lines = super::background_command_lines(&render_snapshot(&state));
     assert!(
         lines
             .iter()
-            .any(|line| { line.to_string().contains("• Completed background-build") })
+            .any(|line| { line.to_string().contains("Completed cargo build") })
     );
     state.pending_background_results.clear();
     assert_eq!(
@@ -11228,13 +11234,19 @@ fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
     state.pending_background_results = vec![
         BackgroundResultDisplay {
             id: "mcp".into(),
+            command: "mcp child".into(),
             success: false,
             cancelled: false,
+            unread: true,
+            ended_at: std::time::Instant::now(),
         },
         BackgroundResultDisplay {
             id: "child".into(),
+            command: "child command".into(),
             success: false,
             cancelled: true,
+            unread: true,
+            ended_at: std::time::Instant::now(),
         },
     ];
     for width in [24, 80] {
@@ -11249,14 +11261,18 @@ fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        for token in ["• Running", "• Failed mcp", "• Cancelled child"] {
+        for token in ["Running", "✗ Failed", "⊘ Cancelled"] {
             assert!(text.contains(token), "{text}");
+        }
+        if width == 80 {
+            assert!(text.contains("Failed mcp child"), "{text}");
+            assert!(text.contains("Cancelled child command"), "{text}");
         }
         assert!(!text.contains("pid") && !text.contains("4321"), "{text}");
         assert!(!text.contains('│'), "{text}");
     }
     let snapshot = render_snapshot(&state);
-    assert_eq!(super::activity_status_label(&snapshot), "Results ready");
+    assert_eq!(super::activity_status_label(&snapshot), "Unread result");
 }
 
 #[test]
@@ -11548,8 +11564,11 @@ fn bottom_indicator_fits_wide_suffixes_for_every_work_state() {
     ready.current_turn_token_usage = Some(usage);
     ready.pending_background_results = vec![BackgroundResultDisplay {
         id: "build".into(),
+        command: "cargo build".into(),
         success: true,
         cancelled: false,
+        unread: true,
+        ended_at: std::time::Instant::now(),
     }];
     states.push(("results-ready", ready));
 
@@ -11689,12 +11708,14 @@ fn compact_command_rows_preserve_distinguishing_tails() {
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
-    assert!(background[0].contains("…lpha"), "{:?}", background[0]);
-    assert!(background[1].contains("…beta"), "{:?}", background[1]);
-    assert_ne!(background[0], background[1]);
+    assert_eq!(background[0], "LIVE");
+    assert!(background[1].contains("…lpha"), "{:?}", background[1]);
+    assert!(background[2].contains("…beta"), "{:?}", background[2]);
+    assert_ne!(background[1], background[2]);
     assert!(
         background
             .iter()
+            .skip(1)
             .all(|row| { row.contains("0s") && line_width(row) <= 28 })
     );
 }
@@ -11898,14 +11919,18 @@ fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
     }];
     state.pending_background_results = vec![rustcode::controller::BackgroundResultDisplay {
         id: "build".into(),
+        command: "cargo build".into(),
         success: true,
         cancelled: false,
+        unread: true,
+        ended_at: std::time::Instant::now(),
     }];
     let snapshot = render_snapshot(&state);
     let text = super::composer_render::active_work_indicator(&snapshot, 80, None)
         .expect("background work keeps an indicator")
         .to_string();
-    assert!(text.contains("Results ready"), "{text:?}");
+    assert!(text.contains("Unread result"), "{text:?}");
+    assert!(text.contains("1 unread result"), "{text:?}");
 }
 
 #[test]
@@ -11927,8 +11952,11 @@ fn background_list_keeps_terminal_results_when_running_rows_hit_the_cap() {
         .pending_background_results
         .push(BackgroundResultDisplay {
             id: "mcp".into(),
+            command: "mcp child".into(),
             success: true,
             cancelled: false,
+            unread: false,
+            ended_at: std::time::Instant::now(),
         });
     let snapshot = render_snapshot(&state);
     let text = super::composer_render::background_command_lines_with_width(&snapshot, 80)
@@ -11938,11 +11966,11 @@ fn background_list_keeps_terminal_results_when_running_rows_hit_the_cap() {
         .join("\n");
     for step in 0..3 {
         assert!(
-            text.contains(&format!("• Running cargo build step {step}")),
+            text.contains(&format!("Running cargo build step {step}")),
             "{text}"
         );
     }
-    assert!(text.contains("• Completed mcp"), "{text}");
+    assert!(text.contains("Completed mcp child"), "{text}");
     assert!(!text.contains('└') && !text.contains('├'), "{text}");
 }
 

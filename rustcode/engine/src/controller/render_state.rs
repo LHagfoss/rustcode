@@ -368,18 +368,33 @@ pub fn render_state(state: &AppState) -> RenderState {
         active_tool_protocol: state.active_tool_protocol(),
 
         background_tasks: super::background_task_snapshots(&state.active_session_id),
-        pending_background_results: state
-            .pending_background_outputs
-            .iter()
-            .map(|pending| super::BackgroundResultDisplay {
-                id: pending.task_id.clone(),
-                success: pending.output.success,
-                cancelled: matches!(
-                    pending.output.error_kind,
-                    Some(rustcode_core::ToolErrorKind::Cancelled)
-                ),
-            })
-            .collect(),
+        pending_background_results: {
+            let mut results = state
+                .pending_background_outputs
+                .iter()
+                .map(|pending| super::BackgroundResultDisplay {
+                    id: pending.task_id.clone(),
+                    command: pending.output.command.clone().unwrap_or_default(),
+                    success: pending.output.success,
+                    cancelled: matches!(
+                        pending.output.error_kind,
+                        Some(rustcode_core::ToolErrorKind::Cancelled)
+                    ),
+                    unread: true,
+                    ended_at: std::time::Instant::now(),
+                })
+                .collect::<Vec<_>>();
+            let pending_ids = results
+                .iter()
+                .map(|result| result.id.clone())
+                .collect::<std::collections::HashSet<_>>();
+            results.extend(
+                super::recent_background_results(&state.active_session_id)
+                    .into_iter()
+                    .filter(|result| !pending_ids.contains(&result.id)),
+            );
+            results
+        },
         waiting_for_background_terminal: state.background_turn_context.is_some(),
 
         subagents: capture_subagents

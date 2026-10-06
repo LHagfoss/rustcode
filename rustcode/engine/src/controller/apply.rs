@@ -133,6 +133,7 @@ fn record_active_background_task(
     state: &mut crate::app::AppState,
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
+    notify_on_complete: bool,
 ) -> bool {
     if state.background_wakeup_ids.contains(task_id) {
         return false;
@@ -147,13 +148,23 @@ fn record_active_background_task(
                 task_id: task_id.to_owned(),
                 output,
             });
-        crate::queue_background_wakeup(state, task_id);
+        if notify_on_complete {
+            crate::queue_background_wakeup(state, task_id);
+        } else {
+            state.background_wakeup_ids.insert(task_id.to_owned());
+            state.request_redraw();
+        }
         return true;
     }
     state
         .history
         .push(crate::background_task_history_message(task_id, output));
-    crate::queue_background_wakeup(state, task_id);
+    if notify_on_complete {
+        crate::queue_background_wakeup(state, task_id);
+    } else {
+        state.background_wakeup_ids.insert(task_id.to_owned());
+        state.request_redraw();
+    }
     true
 }
 
@@ -161,12 +172,13 @@ pub async fn apply_background_task_event(
     app_state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
     event: TaskEvent,
 ) -> bool {
+    let notify_on_complete = event.notify_on_complete().unwrap_or(true);
     let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
         return false;
     };
     let mut state = app_state.lock().await;
     if state.active_session_id == session_id {
-        if record_active_background_task(&mut state, &task_id, output) {
+        if record_active_background_task(&mut state, &task_id, output, notify_on_complete) {
             crate::config::save_session_history(&session_id, &state.history);
             true
         } else {
@@ -342,12 +354,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-completed-once",
-            output.clone()
+            output.clone(),
+            true
         ));
         assert!(!record_active_background_task(
             &mut state,
             "task-completed-once",
-            output
+            output,
+            true
         ));
         assert_eq!(state.history.len(), 1);
         assert_eq!(
@@ -355,6 +369,29 @@ mod tests {
             vec!["__task_wakeup__:task-completed-once".to_owned()]
         );
         assert!(state.background_wakeup_ids.contains("task-completed-once"));
+    }
+
+    #[test]
+    fn silent_completion_is_recorded_without_queuing_a_turn() {
+        let mut state = AppState::new();
+        state.active_session_id = "silent-completion-session".to_owned();
+        let output = ToolExecutionOutput::success("[command status: exit_code=0]".to_owned());
+
+        assert!(record_active_background_task(
+            &mut state,
+            "silent-task",
+            output.clone(),
+            false,
+        ));
+        assert!(!record_active_background_task(
+            &mut state,
+            "silent-task",
+            output,
+            false,
+        ));
+        assert_eq!(state.history.len(), 1);
+        assert!(state.pending_queue.is_empty());
+        assert!(state.background_wakeup_ids.contains("silent-task"));
     }
 
     #[test]
@@ -367,12 +404,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-withheld",
-            output.clone()
+            output.clone(),
+            true
         ));
         assert!(!record_active_background_task(
             &mut state,
             "task-withheld",
-            output
+            output,
+            true
         ));
         assert_eq!(state.history.len(), 0);
         assert_eq!(state.pending_background_outputs.len(), 1);
