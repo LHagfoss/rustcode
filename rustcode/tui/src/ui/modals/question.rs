@@ -30,40 +30,56 @@ pub(in crate::ui) fn render_question_modal(
     lines.extend(footer);
 
     // Keep the submission and chain-navigation hint visible when a long
-    // question fills the panel. The available area comes from `question_height`.
+    // question fills the panel. While editing, scroll the body to keep the
+    // custom-answer cursor in view.
     let visible_height = content_area.height as usize;
-    let mut visible_body_rows = footer_start;
-    if lines.len() > visible_height {
-        let footer = lines.split_off(footer_start.min(lines.len()));
-        let body_height = visible_height.saturating_sub(footer.len());
-        lines.truncate(body_height);
-        visible_body_rows = body_height;
-        lines.extend(
-            footer
-                .into_iter()
-                .take(visible_height.saturating_sub(lines.len())),
-        );
-    }
-    paint_panel_line_backgrounds(&mut lines, panel);
+    let footer = lines.split_off(footer_start.min(lines.len()));
+    let body_height = visible_height.saturating_sub(footer.len());
+    let body_start =
+        if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref()) {
+            let (cursor_row, _) = question_custom_cursor_position(
+                custom,
+                question.custom_cursor,
+                custom_text_width.max(1) as usize,
+            );
+            (row as usize)
+                .saturating_add(cursor_row)
+                .saturating_sub(body_height.saturating_sub(1))
+        } else {
+            0
+        }
+        .min(footer_start.saturating_sub(body_height));
+    let mut visible_lines = lines
+        .into_iter()
+        .skip(body_start)
+        .take(body_height)
+        .collect::<Vec<_>>();
+    visible_lines.extend(
+        footer
+            .into_iter()
+            .take(visible_height.saturating_sub(visible_lines.len())),
+    );
+    let visible_body_end = body_start.saturating_add(body_height);
+    paint_panel_line_backgrounds(&mut visible_lines, panel);
     f.render_widget(
-        Paragraph::new(lines)
+        Paragraph::new(visible_lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(panel)),
         content_area,
     );
     if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref()) {
-        let cursor = question.custom_cursor.min(custom.len());
-        let cursor_lines = wrap_spans(
-            vec![Span::raw(custom[..cursor].to_owned())],
+        let (extra_rows, cursor_column) = question_custom_cursor_position(
+            custom,
+            question.custom_cursor,
             custom_text_width.max(1) as usize,
         );
-        let extra_rows = cursor_lines.len().saturating_sub(1) as u16;
-        let cursor_column = cursor_lines.last().map_or(0, |line| line.width() as u16);
-        let cursor_row = row.saturating_add(extra_rows);
-        if cursor_row < content_area.height && cursor_row < visible_body_rows as u16 {
+        let cursor_row = (row as usize).saturating_add(extra_rows);
+        if cursor_row >= body_start && cursor_row < visible_body_end {
             f.set_cursor_position((
-                content_area.x + 4 + cursor_column.min(content_area.width.saturating_sub(5)),
-                content_area.y + cursor_row,
+                content_area.x
+                    + 4
+                    + (cursor_column as u16).min(content_area.width.saturating_sub(5)),
+                content_area.y + (cursor_row - body_start) as u16,
             ));
         }
     }
@@ -107,15 +123,7 @@ pub(super) fn question_modal_lines(
             COLOR_TEXT()
         });
         let custom_text_width = width.saturating_sub(prefix.width()).max(1) as u16;
-        let mut wrapped = wrap_spans_with_prefix(
-            vec![Span::styled(
-                prefix.to_owned(),
-                Style::default().fg(COLOR_PRIMARY()),
-            )],
-            vec![Span::styled(display, style)],
-            &" ".repeat(prefix.width()),
-            width,
-        );
+        let mut wrapped = question_custom_answer_lines(&display, custom_text_width as usize, style);
         lines.append(&mut wrapped);
         lines.push(Line::from(""));
         return (lines, Some(row), custom_text_width);
@@ -200,6 +208,81 @@ pub(super) fn question_modal_lines(
     ));
     lines.push(Line::from(""));
     (lines, None, 1)
+}
+
+fn question_custom_answer_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    let mut column = 0usize;
+    for character in text.chars() {
+        if character == '\n' {
+            rows.push(String::new());
+            column = 0;
+            continue;
+        }
+        let character_width = character.width().unwrap_or(1);
+        if column > 0 && column.saturating_add(character_width) > width {
+            rows.push(String::new());
+            column = 0;
+        }
+        rows.last_mut().expect("answer row exists").push(character);
+        column = column.saturating_add(character_width);
+    }
+    if column >= width {
+        rows.push(String::new());
+    }
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            Line::from(vec![
+                Span::styled(
+                    if index == 0 { "  › " } else { "    " }.to_owned(),
+                    Style::default().fg(COLOR_PRIMARY()),
+                ),
+                Span::styled(text, style),
+            ])
+        })
+        .collect()
+}
+
+pub(super) fn question_custom_cursor_position(
+    text: &str,
+    cursor: usize,
+    width: usize,
+) -> (usize, usize) {
+    let width = width.max(1);
+    let cursor = cursor.min(text.len());
+    let mut row = 0usize;
+    let mut column = 0usize;
+    for (byte, character) in text.char_indices() {
+        if byte >= cursor {
+            if byte == cursor
+                && character != '\n'
+                && column > 0
+                && column.saturating_add(character.width().unwrap_or(1)) > width
+            {
+                row += 1;
+                column = 0;
+            }
+            break;
+        }
+        if character == '\n' {
+            row += 1;
+            column = 0;
+            continue;
+        }
+        let character_width = character.width().unwrap_or(1);
+        if column > 0 && column.saturating_add(character_width) > width {
+            row += 1;
+            column = 0;
+        }
+        column = column.saturating_add(character_width);
+    }
+    if cursor == text.len() && column >= width {
+        row += 1;
+        column = 0;
+    }
+    (row, column)
 }
 
 pub(super) fn question_modal_header(
