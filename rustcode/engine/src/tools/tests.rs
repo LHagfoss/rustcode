@@ -2633,8 +2633,25 @@ fn the_view_file_spec_describes_the_hard_read_window() {
     let schema = schema_for_tool("view_file");
     assert_eq!(
         schema["properties"]["end_line"]["description"],
-        "Inclusive end line; each call is capped at 800 lines. Request targeted follow-up ranges for more content."
+        "Ordinary-read range parameter; inclusive and capped at 800 lines. Request targeted follow-up ranges for more content. Ignored when outline=true."
     );
+    for field in ["start_line", "end_line", "content_offset"] {
+        assert!(
+            schema["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("ignored when outline=true")
+        );
+    }
+    for field in ["outline_offset", "outline_limit"] {
+        assert!(
+            schema["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .contains("used only when outline=true, otherwise ignored")
+        );
+    }
 }
 
 #[test]

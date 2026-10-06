@@ -2015,6 +2015,7 @@ mod tests {
                 version: 1,
                 summary: "prior facts".to_string(),
                 first_retained_entry: Some(CompactionEntry::from_message(&retained_call)),
+                history_archive: None,
             });
         let retained_result = ChatMessage::new("tool", "view_file: recent contents")
             .answering(Some("call-recent".to_string()));

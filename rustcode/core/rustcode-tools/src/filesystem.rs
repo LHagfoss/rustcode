@@ -32,9 +32,12 @@ pub fn copy_file_schema() -> Value {
 pub fn view_file_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
-            "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 800 lines. Request targeted follow-up ranges for more content." },
-            "content_offset": { "type": "integer", "minimum": 0 }
+            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; ignored when outline=true." },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; inclusive and capped at 800 lines. Request targeted follow-up ranges for more content. Ignored when outline=true." },
+            "content_offset": { "type": "integer", "minimum": 0, "description": "Ordinary-read byte offset; ignored when outline=true." },
+            "outline": { "type": "boolean", "description": "Explicitly request a bounded Markdown heading outline; expand sections with the returned start_line and end_line." },
+            "outline_offset": { "type": "integer", "minimum": 0, "description": "Heading offset for the next outline page; used only when outline=true, otherwise ignored." },
+            "outline_limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum headings in this outline page (default 50); used only when outline=true, otherwise ignored." }
         }, "required": ["path"]
     })
 }
@@ -110,6 +113,9 @@ pub fn write_file_chunk_schema() -> Value {
 /// opposed to a read that stopped exactly where the caller's own `end_line`
 /// asked it to.
 const DEFAULT_READ_WINDOW_LINES: usize = 800;
+const DEFAULT_MARKDOWN_OUTLINE_LIMIT: usize = 50;
+const MAX_MARKDOWN_OUTLINE_LIMIT: usize = 100;
+const MAX_MARKDOWN_OUTLINE_BYTES: usize = 24 * 1024;
 
 struct ReplacementChunk {
     start_line: usize,
@@ -288,6 +294,35 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
             .map(Some)
             .map_err(|_| format!("{name} is too large for this platform"))
     };
+    let content_bytes =
+        std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+
+    if args.get("outline").and_then(Value::as_bool) == Some(true) {
+        if !matches!(
+            resolved_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("md" | "markdown")
+        ) {
+            return Err("outline is supported only for Markdown files".to_string());
+        }
+        let outline_offset = parse_index("outline_offset")?.unwrap_or(0);
+        let outline_limit = parse_index("outline_limit")?.unwrap_or(DEFAULT_MARKDOWN_OUTLINE_LIMIT);
+        if outline_limit == 0 || outline_limit > MAX_MARKDOWN_OUTLINE_LIMIT {
+            return Err(format!(
+                "outline_limit must be between 1 and {MAX_MARKDOWN_OUTLINE_LIMIT}"
+            ));
+        }
+        return markdown_outline_output(
+            &resolved_path,
+            &content_bytes,
+            outline_offset,
+            outline_limit,
+        );
+    }
+
     let requested_start = parse_index("start_line")?;
     let requested_end = parse_index("end_line")?;
     if requested_start == Some(0) {
@@ -303,9 +338,6 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
             "end_line {end_line} must be greater than or equal to start_line {start_line}"
         ));
     }
-
-    let content_bytes =
-        std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
     let byte_offset = parse_index("content_offset")?.unwrap_or(0);
 
@@ -466,6 +498,133 @@ end_line={total} (or a smaller end_line to read it in chunks).]\n"
         content: out,
         truncated: actual_end < total && (cap_applied || requested_end.is_none()),
         completeness,
+    })
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let indent = line.len().saturating_sub(line.trim_start().len());
+    if indent > 3 {
+        return None;
+    }
+    let line = &line[indent..];
+    let level = line.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let title = &line[level..];
+    if !title.is_empty() && !title.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let title = title.trim();
+    let closing_hashes = title.trim_end_matches('#');
+    let title = if closing_hashes
+        .chars()
+        .last()
+        .is_some_and(char::is_whitespace)
+    {
+        closing_hashes.trim_end()
+    } else {
+        title
+    };
+    Some((level, title))
+}
+
+fn markdown_outline_output(
+    path: &Path,
+    content: &[u8],
+    offset: usize,
+    limit: usize,
+) -> Result<ViewFileOutput, String> {
+    let text = String::from_utf8_lossy(content);
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut headings = Vec::new();
+    let mut fence: Option<&str> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker = if trimmed.starts_with("```") {
+                "```"
+            } else {
+                "~~~"
+            };
+            if fence == Some(marker) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(marker);
+            }
+            continue;
+        }
+        if fence.is_none()
+            && let Some((level, title)) = markdown_heading(line)
+        {
+            headings.push((index + 1, level, title));
+        }
+    }
+    if offset > headings.len() {
+        return Err(format!(
+            "outline_offset {offset} is out of range; Markdown file has {} headings",
+            headings.len()
+        ));
+    }
+
+    let requested_page_end = offset.saturating_add(limit).min(headings.len());
+    let mut output = format!(
+        "[File: {}, Markdown heading outline, headings {}-{} of {}, {} lines]\n",
+        path.display(),
+        if offset < requested_page_end {
+            offset + 1
+        } else {
+            0
+        },
+        requested_page_end,
+        headings.len(),
+        lines.len()
+    );
+    if offset == requested_page_end {
+        output.push_str("[No headings on this page.]\n");
+    }
+    let mut emitted = 0usize;
+    for (index, (line_number, level, title)) in
+        headings[offset..requested_page_end].iter().enumerate()
+    {
+        let end_line = headings[offset + index + 1..]
+            .iter()
+            .find(|(_, next_level, _)| next_level <= level)
+            .map(|(next_line, _, _)| next_line.saturating_sub(1))
+            .unwrap_or(lines.len());
+        let hashes = "#".repeat(*level);
+        let title = title.chars().take(200).collect::<String>();
+        let title_suffix = if headings[offset + index].2.chars().count() > 200 {
+            "…"
+        } else {
+            ""
+        };
+        let entry = format!(
+            "{line_number}: {hashes} {title}{title_suffix} [section start_line={line_number} end_line={end_line}]\n"
+        );
+        if output.len().saturating_add(entry.len()).saturating_add(512) > MAX_MARKDOWN_OUTLINE_BYTES
+        {
+            break;
+        }
+        output.push_str(&entry);
+        emitted += 1;
+    }
+    let page_end = offset.saturating_add(emitted);
+    output.push_str(
+        "[Read partial: this outline contains headings only; no body lines were inspected. It is not a complete file read. Expand a listed section with view_file using its exact start_line and end_line.\n",
+    );
+    if page_end < headings.len() {
+        output.push_str(&format!(
+            "Continue the outline with view_file(outline=true, outline_offset={page_end}, outline_limit={limit}).]\n"
+        ));
+    } else {
+        output.push_str("]\n");
+    }
+
+    Ok(ViewFileOutput {
+        content: output,
+        truncated: true,
+        completeness: ToolResultCompleteness::LineTruncated,
     })
 }
 

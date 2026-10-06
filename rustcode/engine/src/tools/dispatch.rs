@@ -207,6 +207,15 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
             ),
         };
     }
+    if name == "get_project_map" {
+        return search::get_project_map_execution_output(args).unwrap_or_else(|error| {
+            ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error),
+                ToolErrorKind::InvalidArguments,
+                false,
+            )
+        });
+    }
     if matches!(name, "grep" | "glob" | "list_directory") {
         let result = match name {
             "grep" => search::grep_execution_output(args),

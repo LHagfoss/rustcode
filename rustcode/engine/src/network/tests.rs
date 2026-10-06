@@ -433,6 +433,7 @@ fn deterministic_compaction_persists_the_retained_suffix_anchor() {
         ChatMessage::new("assistant", "recent progress"),
     ];
 
+    let original = history.clone();
     assert!(compact_history_deterministically(&mut history, 100));
     assert!(history[0].compaction_boundary.is_some());
     let expected_anchor = history
@@ -445,6 +446,49 @@ fn deterministic_compaction_persists_the_retained_suffix_anchor() {
             .and_then(|boundary| boundary.first_retained_entry.as_ref()),
         expected_anchor.as_ref()
     );
+    let boundary = history[0]
+        .compaction_boundary
+        .as_ref()
+        .expect("typed compaction boundary");
+    let archive_path = boundary
+        .history_archive
+        .as_ref()
+        .expect("immutable history archive");
+    let archived = std::fs::read_to_string(archive_path).expect("archived JSONL history");
+    let archived_messages = archived
+        .lines()
+        .map(|line| serde_json::from_str::<ChatMessage>(line).expect("original chat message"))
+        .collect::<Vec<_>>();
+    let boundary_index = original
+        .iter()
+        .position(|message| {
+            Some(&crate::app::CompactionEntry::from_message(message))
+                == boundary.first_retained_entry.as_ref()
+        })
+        .expect("retained anchor from original history");
+    assert_eq!(archived_messages, original[..boundary_index]);
+    assert_eq!(
+        boundary.history_archive.as_deref(),
+        Some(archive_path.as_str())
+    );
+}
+
+#[test]
+fn deterministic_compaction_keeps_history_when_archive_fails() {
+    let mut history = vec![
+        ChatMessage::new("user", "old task"),
+        ChatMessage::new("assistant", "old progress ".repeat(300)),
+        ChatMessage::new("user", "recent task"),
+        ChatMessage::new("assistant", "recent progress"),
+    ];
+    let original = history.clone();
+
+    assert!(!compact_history_deterministically_with_archive(
+        &mut history,
+        100,
+        |_| Err("archive unavailable".to_string()),
+    ));
+    assert_eq!(history, original);
 }
 
 #[test]

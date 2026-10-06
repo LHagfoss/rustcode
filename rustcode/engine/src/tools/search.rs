@@ -150,14 +150,17 @@ pub const FIND_SYMBOL: Tool = Tool {
 
 fn get_project_map_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": {}, "additionalProperties": false
+        "type": "object", "properties": {
+            "offset": { "type": "integer", "minimum": 0, "default": 0 },
+            "limit": { "type": "integer", "minimum": 1, "maximum": crate::symbols::MAX_PROJECT_MAP_PAGE_SIZE, "default": crate::symbols::DEFAULT_PROJECT_MAP_PAGE_SIZE }
+        }, "additionalProperties": false
     })
 }
 
 pub const GET_PROJECT_MAP: Tool = Tool {
     name: "get_project_map",
-    description: "Generates a compressed map of all symbols and API signatures in the codebase to understand project structure.",
-    arguments: r#"{}"#,
+    description: "Returns a bounded page of indexed code symbols. Expand with the returned offset and limit to inspect later symbols.",
+    arguments: r#"{"offset": "optional zero-based symbol offset for progressive expansion", "limit": "optional page size, 1 to 80 (default 80)"}"#,
     handler: get_project_map_tool,
     requires_confirmation: false,
     schema: get_project_map_schema,
@@ -862,7 +865,7 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
+pub fn get_project_map_tool(args: &Value) -> Result<String, String> {
     let cwd = super::current_tool_context()
         .task_working_directory
         .or_else(|| super::current_tool_context().workspace_root)
@@ -871,7 +874,51 @@ pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
 
     crate::symbols::update_index(&cwd)?;
 
-    crate::symbols::get_project_map(&cwd)
+    project_map_page(args, &cwd).map(|page| page.content)
+}
+
+fn project_map_page(
+    args: &Value,
+    cwd: &std::path::Path,
+) -> Result<crate::symbols::ProjectMapPage, String> {
+    let parse = |key: &str, default: u64| match args.get(key) {
+        None => Ok(default),
+        Some(value) => super::parse_json_number(value)
+            .ok_or_else(|| format!("{key} must be a non-negative integer")),
+    };
+    let offset = parse("offset", 0)?;
+    let limit = parse(
+        "limit",
+        crate::symbols::DEFAULT_PROJECT_MAP_PAGE_SIZE as u64,
+    )?;
+    let offset = usize::try_from(offset).map_err(|_| "offset is too large for this platform")?;
+    let limit = usize::try_from(limit).map_err(|_| "limit is too large for this platform")?;
+    crate::symbols::get_project_map_page(cwd, offset, limit)
+}
+
+pub(crate) fn get_project_map_execution_output(
+    args: &Value,
+) -> Result<ToolExecutionOutput, String> {
+    let cwd = super::current_tool_context()
+        .task_working_directory
+        .or_else(|| super::current_tool_context().workspace_root)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("cannot determine current directory")?;
+    crate::symbols::update_index(&cwd)?;
+    let page = project_map_page(args, &cwd)?;
+    Ok(ToolExecutionOutput {
+        content: page.content,
+        success: true,
+        pending: false,
+        command: None,
+        exit_code: None,
+        truncated: page.completeness != ToolResultCompleteness::Complete,
+        completeness: page.completeness,
+        replayed: false,
+        error_kind: None,
+        retryable: false,
+        command_status: None,
+    })
 }
 
 #[cfg(test)]
