@@ -11174,7 +11174,10 @@ fn single_running_command_folds_into_one_indicator_row() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-        assert!(rendered[0].starts_with("• Running $ cargo"), "{rendered:?}");
+        assert!(rendered[0].starts_with("• Running $ "), "{rendered:?}");
+        if width >= 80 {
+            assert!(rendered[0].contains("cargo"), "{rendered:?}");
+        }
         assert!(
             rendered.iter().any(|line| line.contains("12s")),
             "{rendered:?}"

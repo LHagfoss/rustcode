@@ -845,7 +845,7 @@ fn subagent_picker_hints_fit_without_clipping_at_24_40_and_80_columns() {
                     .map(|x| terminal.backend().buffer()[(x, y)].symbol())
                     .collect::<String>()
             })
-            .find(|line| line.contains("→ open"))
+            .find(|line| line.contains("← enter"))
             .expect("picker instruction row");
         assert!(
             unicode_width::UnicodeWidthStr::width(instruction.as_str()) <= usize::from(width),
@@ -859,7 +859,10 @@ fn subagent_picker_hints_fit_without_clipping_at_24_40_and_80_columns() {
         }
 
         match width {
-            24 => assert!(instruction.contains("→ open"), "{instruction:?}"),
+            24 => {
+                assert!(instruction.contains("← enter"), "{instruction:?}");
+                assert!(instruction.contains("→ back"), "{instruction:?}");
+            }
             40 => assert!(instruction.contains("alt+←/→ switch"), "{instruction:?}"),
             80 => {
                 assert!(
