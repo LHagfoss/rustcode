@@ -260,9 +260,9 @@ pub(super) fn inspection_completion_rejection_reasons(
     }
     if ctx.progress.complete_inspection_results == 0 {
         reasons.push("no_complete_inspection_results");
-    }
-    if ctx.progress.incomplete_inspection_results > 0 {
-        reasons.push("incomplete_inspection_results_present");
+        if ctx.progress.incomplete_inspection_results > 0 {
+            reasons.push("only_incomplete_inspection_results");
+        }
     }
     if rustcode_tool_protocol::text::has_intended_tool_call(content) {
         reasons.push("final_response_contains_tool_call");
@@ -984,10 +984,11 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_inspection_never_promotes_loop_synthesis() {
+    fn incomplete_inspection_without_complete_evidence_never_promotes_loop_synthesis() {
         let mut ctx = completed_inspection_context(
             "<think>Reviewed the source tree. Findings: the final file is still truncated and needs another inspection before a safe review.</think>",
         );
+        ctx.progress.complete_inspection_results = 0;
         ctx.progress.incomplete_inspection_results = 1;
         assert!(
             completed_inspection_synthesis(
@@ -998,6 +999,47 @@ mod tests {
                 ProviderFinalAnswerState::None,
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn completed_inspections_can_ground_a_review_with_additional_partial_results() {
+        let mut ctx = completed_inspection_context(
+            "I reviewed the README, architecture, and tool registry. The findings below cover those sources; a few broad searches were truncated, so this is not a line-by-line audit of every module.",
+        );
+        ctx.progress.incomplete_inspection_results = 2;
+        let summary = completed_inspection_synthesis(
+            &ctx,
+            &ctx.response.final_content,
+            true,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+        );
+        assert_eq!(summary.as_deref(), Some(ctx.response.final_content.trim()));
+    }
+
+    #[test]
+    fn complete_reread_supersedes_the_same_fingerprint_truncated_result() {
+        let mut ctx = completed_inspection_context(
+            "I reviewed the returned source and documented the areas the excerpts do not cover.",
+        );
+        ctx.progress.complete_inspection_results = 0;
+        ctx.progress.incomplete_inspection_results = 0;
+        ctx.progress
+            .record_inspection_result("read:README.md#0", false);
+        ctx.progress
+            .record_inspection_result("read:README.md#0", true);
+        assert_eq!(ctx.progress.complete_inspection_results, 1);
+        assert_eq!(ctx.progress.incomplete_inspection_results, 0);
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
+            )
+            .is_some()
         );
     }
 
@@ -1178,6 +1220,7 @@ mod tests {
         );
 
         let mut incomplete = completed_inspection_context(content);
+        incomplete.progress.complete_inspection_results = 0;
         incomplete.progress.incomplete_inspection_results = 1;
         assert!(
             completed_inspection_synthesis(

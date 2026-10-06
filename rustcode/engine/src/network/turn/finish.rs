@@ -632,6 +632,13 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         )
     {
         dbg_log!("Complete read-only inspection accepted as headless completion");
+        crate::logger::operational_event(
+            "turn.inspection_completion_accepted",
+            serde_json::json!({
+                "complete_inspection_results": ctx.progress.complete_inspection_results,
+                "incomplete_inspection_results": ctx.progress.incomplete_inspection_results,
+            }),
+        );
         let mut s = state.lock().await;
         if !ctx.response.final_content_persisted {
             let mut msg = ChatMessage::new("assistant", summary.clone());

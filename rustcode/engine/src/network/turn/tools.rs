@@ -1323,7 +1323,14 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 batch_incomplete |= incomplete_tool_result(&metadata);
                 if let Some(complete) = content_bearing_inspection_status(call, &metadata, &content)
                 {
-                    if !complete {
+                    if let Some(fingerprint) = metadata
+                        .inspection
+                        .as_ref()
+                        .map(|inspection| inspection.fingerprint.as_str())
+                        .filter(|fingerprint| !fingerprint.is_empty())
+                    {
+                        ctx.progress.record_inspection_result(fingerprint, complete);
+                    } else if !complete {
                         ctx.progress.incomplete_inspection_results =
                             ctx.progress.incomplete_inspection_results.saturating_add(1);
                     } else {

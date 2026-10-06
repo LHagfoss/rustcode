@@ -1,7 +1,7 @@
 use crate::app::TokenUsage;
 use crate::network::messages::RequestPrefixCache;
 use crate::network::{ContextCheckpoint, events, lifecycle, loop_detect, verification};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -71,10 +71,11 @@ pub struct ProgressState {
     /// known artifact instead of opening another whole-file inspection loop.
     pub grounded_artifact: Option<GroundedArtifactEvidence>,
     /// Complete read-only source results that can support a final review.
-    /// Incomplete inspection results stay separately tracked so a truncated
-    /// review can never be promoted to a successful headless completion.
+    /// Inspection status is keyed by stable fingerprint so a complete reread
+    /// supersedes an earlier truncated result for the same evidence.
     pub complete_inspection_results: usize,
     pub incomplete_inspection_results: usize,
+    pub inspection_results: BTreeMap<String, bool>,
     pub made_edits: bool,
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
@@ -92,6 +93,32 @@ pub struct ProgressState {
     /// checkpoint of this value so progress from an earlier segment cannot
     /// authorize an endless sequence of empty continuations.
     pub meaningful_events: usize,
+}
+
+impl ProgressState {
+    pub fn record_inspection_result(&mut self, fingerprint: &str, complete: bool) {
+        if fingerprint.is_empty() {
+            return;
+        }
+        if let Some(previous) = self
+            .inspection_results
+            .insert(fingerprint.to_owned(), complete)
+        {
+            if previous {
+                self.complete_inspection_results =
+                    self.complete_inspection_results.saturating_sub(1);
+            } else {
+                self.incomplete_inspection_results =
+                    self.incomplete_inspection_results.saturating_sub(1);
+            }
+        }
+        if complete {
+            self.complete_inspection_results = self.complete_inspection_results.saturating_add(1);
+        } else {
+            self.incomplete_inspection_results =
+                self.incomplete_inspection_results.saturating_add(1);
+        }
+    }
 }
 
 pub struct GroundedArtifactEvidence {
@@ -250,6 +277,7 @@ impl TurnContext {
                 grounded_artifact: None,
                 complete_inspection_results: 0,
                 incomplete_inspection_results: 0,
+                inspection_results: BTreeMap::new(),
                 made_edits: false,
                 failed_mutations: 0,
                 consecutive_no_progress: 0,

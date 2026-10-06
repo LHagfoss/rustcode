@@ -1585,6 +1585,15 @@ mod tests {
         assert_eq!(finish.as_deref(), Some("stop"));
         assert_eq!(buffer.lock().await.content, "final answer");
         assert_eq!(
+            buffer.lock().await.final_answer_boundary,
+            super::super::stream::FinalAnswerBoundary::ReasoningClosed,
+            "a terminal prose response without a reasoning delta still closes the answer boundary"
+        );
+        assert_eq!(
+            buffer.lock().await.provider_final_answer_state,
+            super::super::stream::ProviderFinalAnswerState::Terminal
+        );
+        assert_eq!(
             state.lock().await.current_token_usage,
             Some(crate::app::TokenUsage {
                 prompt_tokens: 12,
@@ -5383,10 +5392,12 @@ async fn stream_request_with_timeouts(
                                             let mut buffer = buffer.lock().await;
                                             buffer.termination =
                                                 Some(StreamTermination::ProviderStop);
-                                            if reasoning.is_none()
-                                                && buffer.final_answer_boundary
-                                                    == super::stream::FinalAnswerBoundary::ReasoningClosed
-                                            {
+                                            if reasoning.is_none() {
+                                                // Some providers omit explicit reasoning deltas.
+                                                // Their terminal prose response is still a closed
+                                                // final-answer boundary.
+                                                buffer.final_answer_boundary =
+                                                    super::stream::FinalAnswerBoundary::ReasoningClosed;
                                                 buffer.provider_final_answer_state =
                                                     super::stream::ProviderFinalAnswerState::Terminal;
                                             }
