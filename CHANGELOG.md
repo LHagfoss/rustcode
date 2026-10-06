@@ -1,3 +1,11 @@
+## [v0.57.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.6) - 2026-10-06
+
+### Fixes
+- Keep filtered model picker rows, highlights, navigation and confirmation in sync.
+- Use Left to enter the selected agent and Right to close the agent picker or return to the parent.
+- Keep active tool and background-command summaries compact with consistent running markers and distinguishable command tails.
+- Remove an extra blank row above the startup wordmark.
+- Add an isolated `/test` visual demo with a Tab question preview and Escape return, without model or shell execution.
 ## [v0.57.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.5) - 2026-10-06
 
 ### Fixes
