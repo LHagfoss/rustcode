@@ -731,6 +731,15 @@ fn turn_user_message_count(messages: &[serde_json::Value]) -> usize {
         .count()
 }
 
+/// The part of a schema policy that decides which MCP tools may be offered.
+/// The session-title tool is a built-in that the preflight projection carries
+/// and the provider request does not, so keying the pin on it dropped the
+/// pinned menu between the two on every round.
+fn mcp_pin_policy(mut policy: crate::tools::ToolSchemaPolicy) -> crate::tools::ToolSchemaPolicy {
+    policy.include_session_title_tool = false;
+    policy
+}
+
 #[derive(Default)]
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
@@ -808,14 +817,15 @@ impl PromptCache {
         // `mcp_generation` is deliberately absent: a lazily started server bumps
         // it, and dropping the pin there is what made `selected_names` disjoint
         // between consecutive rounds of one turn. (#1591)
-        if self.mcp_selection_policy != Some(policy)
+        let pin_policy = mcp_pin_policy(policy);
+        if self.mcp_selection_policy != Some(pin_policy)
             || self.mcp_selection_session_id.as_deref() != Some(session_id)
             || self
                 .mcp_selection_user_count
                 .is_some_and(|previous| turn_user_message_count > previous)
         {
             self.mcp_selected_names.clear();
-            self.mcp_selection_policy = Some(policy);
+            self.mcp_selection_policy = Some(pin_policy);
             self.mcp_selection_session_id = Some(session_id.to_string());
         }
         self.mcp_selection_user_count = Some(turn_user_message_count);
@@ -841,7 +851,7 @@ impl PromptCache {
         // rejected every commit after the first lazy server start, so the menu
         // was never pinned and was re-scored on each round. (#1796)
         if crate::mcp::mcp_generation() != snapshot.generation
-            || self.mcp_selection_policy != Some(snapshot.policy)
+            || self.mcp_selection_policy != Some(mcp_pin_policy(snapshot.policy))
             || self.mcp_selection_session_id.as_deref() != Some(snapshot.session_id.as_str())
             || self.mcp_selection_user_count != Some(snapshot.turn_user_message_count)
             || self.mcp_selection_revision != snapshot.selection_revision
@@ -967,6 +977,27 @@ mod prompt_cache_snapshot_tests {
         assert!(cache.commit_native_tool_schema_selection(&after, &repinned));
         let next = cache.native_tool_schema_snapshot(policy, &transcript, "session");
         assert_eq!(next.sticky_names, repinned);
+    }
+
+    #[test]
+    fn session_title_tool_does_not_release_the_pin() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = PromptCache::default();
+        // The preflight projection offers the session-title tool and the
+        // provider request does not; both select from the same MCP menu.
+        let preflight = ToolSchemaPolicy::root(false).with_session_title_tool();
+        let request = ToolSchemaPolicy::root(false);
+        let pinned = vec!["alpha_read".to_string()];
+
+        let first = cache.native_tool_schema_snapshot(preflight, &messages(1), "session");
+        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+        let sent = cache.native_tool_schema_snapshot(request, &messages(1), "session");
+        assert_eq!(sent.sticky_names, pinned);
+        assert!(cache.commit_native_tool_schema_selection(&sent, &pinned));
+        let next_round = cache.native_tool_schema_snapshot(preflight, &messages(1), "session");
+        assert_eq!(next_round.sticky_names, pinned);
     }
 
     #[test]

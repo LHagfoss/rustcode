@@ -1238,13 +1238,25 @@ fn mcp_tool_relevance(
         .filter(|term| !term.is_empty())
         .map(str::to_ascii_lowercase)
         .collect();
+    // A verb shared by most tool names says what to do, not what to do it to.
+    // On its own it must not clear the threshold: "check ... clear ... read"
+    // in an unrelated prompt otherwise filled the whole menu.
+    const GENERIC_NAME_TERMS: &[&str] = &[
+        "add", "check", "clear", "close", "create", "delete", "fill", "get", "list", "new", "open",
+        "read", "remove", "reply", "run", "search", "send", "set", "start", "stop", "take",
+        "update", "write",
+    ];
     let mut score = 0;
     for term in terms {
         if name_terms
             .iter()
             .any(|candidate| token_matches(candidate, term))
         {
-            score += 8;
+            score += if GENERIC_NAME_TERMS.contains(&term.as_str()) {
+                3
+            } else {
+                8
+            };
         } else if description_terms
             .iter()
             .any(|candidate| token_matches(candidate, term))
@@ -1324,7 +1336,19 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
-    let terms = context_terms(messages);
+    // Once a menu is pinned for the turn, only what the user wrote may add to
+    // it. Assistant prose and tool calls grow every round, and each tool they
+    // pulled in rewrote the `tools` block the provider had cached.
+    let terms = if sticky_names.is_empty() {
+        context_terms(messages)
+    } else {
+        let user_messages = messages
+            .iter()
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+            .cloned()
+            .collect::<Vec<_>>();
+        context_terms(&user_messages)
+    };
     let explicitly_requested =
         explicitly_requested_mcp_tool_names(tools, owners, raw_names, messages);
     let mut requested = Vec::new();
@@ -1884,6 +1908,13 @@ Calls beyond the limit are held by the harness and executed automatically in a l
         )
     }
     .expect("writing to a String cannot fail");
+    // The interface folds each batch of calls into one count line, so the
+    // sentence before a batch is what the reader follows the work by.
+    prompt.push_str(
+        "\n# Progress notes\n\
+Before each batch of tool calls, write one short plain sentence saying what you are about to do or what the last results showed. \
+One line, no headings or lists, and never one per call. Skip it only when the batch simply continues what the previous note already said.\n",
+    );
 }
 
 pub(crate) fn tool_system_prompt_for_policy(

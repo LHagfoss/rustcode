@@ -785,14 +785,22 @@ fn normalize_responses_event(
                 }
             }))
         }
-        "error" => Some(serde_json::json!({
-            "error": {
-                "code": value.get("code").cloned().unwrap_or(serde_json::Value::Null),
-                "message": value.get("message").and_then(serde_json::Value::as_str).unwrap_or("Responses API request failed"),
-                "param": value.get("param").cloned().unwrap_or(serde_json::Value::Null),
-                "status_code": value.get("status_code").cloned().unwrap_or(serde_json::Value::Null),
-            }
-        })),
+        "error" => {
+            // The public API reports the fields on the event itself; the ChatGPT
+            // backend can nest them under `error`.
+            let error = value
+                .get("error")
+                .filter(|error| error.is_object())
+                .unwrap_or(value);
+            Some(serde_json::json!({
+                "error": {
+                    "code": error.get("code").cloned().unwrap_or(serde_json::Value::Null),
+                    "message": error.get("message").and_then(serde_json::Value::as_str).unwrap_or("Responses API request failed"),
+                    "param": error.get("param").cloned().unwrap_or(serde_json::Value::Null),
+                    "status_code": error.get("status_code").cloned().unwrap_or(serde_json::Value::Null),
+                }
+            }))
+        }
         _ => None,
     }
 }
@@ -2700,6 +2708,35 @@ mod tests {
             "subscription_sharing_usage_limit_exceeded"
         );
         assert_eq!(error["error"]["status_code"], 429);
+
+        // The ChatGPT backend nests the fields of a stream `error` event.
+        let nested = normalize_responses_event(
+            &serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "service_unavailable_error",
+                    "code": "server_is_overloaded",
+                    "message": "Our servers are currently overloaded.",
+                    "param": null
+                },
+                "sequence_number": 2
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(nested["error"]["code"], "server_is_overloaded");
+        assert_eq!(
+            nested["error"]["message"],
+            "Our servers are currently overloaded."
+        );
+        let flat = normalize_responses_event(
+            &serde_json::json!({"type": "error", "code": "bad", "message": "flat"}),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(flat["error"]["message"], "flat");
 
         let incomplete = normalize_responses_event(
             &serde_json::json!({
@@ -5268,6 +5305,18 @@ async fn stream_request_with_timeouts(
                                 {
                                     record_provider_rate_limits(&state, limits).await;
                                 }
+                                if responses_api
+                                    && matches!(
+                                        value.get("type").and_then(|v| v.as_str()),
+                                        Some("response.failed" | "error")
+                                    )
+                                {
+                                    let mut raw = value.clone();
+                                    if let Some(response) = raw.get_mut("response").and_then(|r| r.as_object_mut()) {
+                                        response.retain(|key, _| matches!(key.as_str(), "error" | "status" | "incomplete_details" | "id"));
+                                    }
+                                    crate::dbg_log_for_session!(request_session_id, "stream_request: provider failure event: {raw}");
+                                }
                                 let val = if responses_api {
                                     normalize_responses_event(
                                         &value,
@@ -5301,7 +5350,8 @@ async fn stream_request_with_timeouts(
                                         Some("response_incomplete") => format!(
                                             "ChatGPT Responses request ended without a completed response: {message}. Review the response limit and retry the request."
                                         ),
-                                        _ => message,
+                                        Some(code) => format!("{message} ({code})"),
+                                        None => message,
                                     };
                                     return Err(StreamFailure {
                                         kind: StreamFailureKind::ProviderError,

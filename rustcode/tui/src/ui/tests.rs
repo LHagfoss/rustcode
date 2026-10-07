@@ -793,6 +793,7 @@ fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -3172,6 +3173,7 @@ fn use_skill_renders_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -3274,6 +3276,7 @@ fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
             })
     };
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.extend([
         ChatMessage::new("assistant", "").with_tool_calls(vec![call("1", "a.rs")]),
         result("1"),
@@ -3326,6 +3329,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -3365,6 +3369,7 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -3398,6 +3403,7 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state
         .history
@@ -3456,6 +3462,7 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state
         .history
@@ -3596,6 +3603,7 @@ fn high_verbosity_hides_generic_tool_details() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -4945,6 +4953,7 @@ fn exploration_results_group_and_deduplicate_child_rows() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -5013,6 +5022,7 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -6951,6 +6961,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
 #[test]
 fn live_tool_cell_is_a_projection_not_history() {
     let mut state = RenderState::new();
+    state.verbosity = rustcode::controller::Verbosity::Low;
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
         rustcode::controller::LiveToolCall::new(
             "local:1",
@@ -6974,8 +6985,118 @@ fn live_tool_cell_is_a_projection_not_history() {
 }
 
 #[test]
+fn high_verbosity_folds_a_tool_batch_until_the_expand_key_opens_it() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolDetail, ToolResultRecord};
+
+    let mut state = RenderState::new();
+    let calls = [
+        (
+            "call-1",
+            "run_command",
+            r#"{"command":"git status --short"}"#,
+            true,
+        ),
+        (
+            "call-2",
+            "run_command",
+            r#"{"command":"cargo check"}"#,
+            false,
+        ),
+        ("call-3", "view_file", r#"{"path":"src/main.rs"}"#, true),
+    ];
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(
+            calls
+                .iter()
+                .map(|(id, name, arguments, _)| ToolCallRef {
+                    id: (*id).to_owned(),
+                    name: (*name).to_owned(),
+                    arguments: (*arguments).to_owned(),
+                })
+                .collect(),
+        ),
+    );
+    for (id, name, _, success) in calls {
+        state.history.push(
+            ChatMessage::new("tool", format!("{name}: exit code: 0\nsome output"))
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: name.to_owned(),
+                    success,
+                    ..Default::default()
+                }),
+        );
+    }
+    let render = |state: &RenderState| {
+        super::render_committed_tool_result_group(state, &[1, 2, 3], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // Folded by default: one count line, no call and no output.
+    assert_eq!(
+        render(&state),
+        ["  Ran 2 shell commands, read 1 file · 1 failed"]
+    );
+
+    // First press: the calls, still without output.
+    state.tool_detail = ToolDetail::List;
+    let list = render(&state).join("\n");
+    assert!(list.contains("git status --short"), "{list}");
+    assert!(!list.contains("some output"), "{list}");
+
+    // Second press: output shows the way low verbosity shows it.
+    state.tool_detail = ToolDetail::Output;
+    let output = render(&state).join("\n");
+    assert!(output.contains("some output"), "{output}");
+    assert_eq!(ToolDetail::Output.next(), ToolDetail::Summary);
+}
+
+#[test]
+fn high_verbosity_names_the_running_call_under_the_status_row() {
+    let mut state = RenderState::new();
+    let mut call = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace",
+    );
+    call.execution_started = true;
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
+        rustcode::controller::LiveToolCall::new("local:2", None, "view_file", "Read", "a.rs"),
+    );
+
+    // The transcript keeps no live cell; the batch lands as a count line.
+    let tail = super::render_live_tail(&state, 80, 24)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!tail.contains("Running"), "rendered: {tail:?}");
+
+    let snapshot = render_snapshot(&state);
+    let detail = super::conversation_render::live_tool_status_detail(&snapshot, 80)
+        .expect("a running call is named")
+        .to_string();
+    assert!(
+        detail.starts_with("└ $ cargo test --workspace (0s) · +1 more"),
+        "{detail}"
+    );
+    assert!(detail.ends_with("esc interrupt"), "{detail}");
+
+    // Low verbosity keeps the live cell, which streams the command output.
+    state.verbosity = rustcode::controller::Verbosity::Low;
+    let snapshot = render_snapshot(&state);
+    assert!(super::conversation_render::live_tool_status_detail(&snapshot, 80).is_none());
+}
+
+#[test]
 fn live_tool_projection_does_not_hide_partial_assistant_stream() {
     let mut state = RenderState::new();
+    state.verbosity = rustcode::controller::Verbosity::Low;
     state.status = AppStatus::Streaming;
     set_current_response(&mut state, "partial assistant response");
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
@@ -7004,6 +7125,7 @@ fn live_tool_projection_does_not_hide_partial_assistant_stream() {
 #[test]
 fn live_tool_projection_hides_streamed_code_edit_call_syntax() {
     let mut state = RenderState::new();
+    state.verbosity = rustcode::controller::Verbosity::Low;
     state.status = AppStatus::Streaming;
     set_current_response(
         &mut state,
@@ -7281,6 +7403,7 @@ fn native_speculative_exploration_without_target_uses_queued_heading() {
     call.execution_started = false;
 
     let mut state = RenderState::new();
+    state.verbosity = rustcode::controller::Verbosity::Low;
     state.status = AppStatus::Streaming;
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
 
@@ -9088,6 +9211,7 @@ fn selected_subagent_transcript_scrolls_back_to_its_first_message() {
 #[test]
 fn selected_restored_child_correlates_legacy_tool_results_with_its_history() {
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     for index in 0..9 {
         state
             .history
@@ -9491,6 +9615,7 @@ fn command_child_lines_wrap_with_indentation() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     let long_cmd = "curl -sS https://example.com/api/v1/organizations/test -H 'Authorization: Bearer test_token' --data '{\"field\":\"very long content here\"}'";
     state.history.push(
@@ -10727,6 +10852,7 @@ fn idle_chat_shows_no_running_indicator() {
 #[test]
 fn reduced_motion_chat_indicator_is_static_and_live_tools_are_shown() {
     let mut state = RenderState::new();
+    state.verbosity = rustcode::controller::Verbosity::Low;
     state.status = AppStatus::Streaming;
     state.config.reduced_motion = true;
     state.history.push(ChatMessage::new("user", "hello"));
@@ -11099,6 +11225,7 @@ fn mixed_live_work_has_status_markers_and_hanging_wrap() {
 fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
     use rustcode::controller::{ToolResultRecord, Verbosity};
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     for (name, success, error, pending) in [
         ("get_time", true, None, false),
@@ -11578,6 +11705,7 @@ fn later_tool_rounds_keep_the_downward_connector_under_a_committed_heading() {
     // continuation child therefore keeps the downward connector instead of
     // claiming to be the final sibling.
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
@@ -12213,6 +12341,7 @@ fn committed_mcp_row_names_the_kind_of_call() {
     use rustcode::controller::ToolResultRecord;
     // #1770: `• Ran` over a bare `└ ✓ teams.list_chats` read as a broken row.
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("tool", "mcp__teams__list_chats: []").with_tool_result(ToolResultRecord {
             tool_name: "mcp__teams__list_chats".into(),
@@ -12236,6 +12365,7 @@ fn tool_rounds_chain_under_one_heading_with_a_closed_tree() {
     // one heading and the last child closes the tree.
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(ChatMessage::new("user", "look around"));
     for (round, path) in ["src/a.rs", "src/b.rs", "src/c.rs"].into_iter().enumerate() {
         let id = format!("call-{round}");
@@ -12321,6 +12451,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
         "<think>Check the other file.</think>",
     ] {
         let mut state = RenderState::new();
+        state.tool_detail = rustcode::controller::ToolDetail::List;
         state.history.push(ChatMessage::new("user", "look around"));
         round(
             &mut state,
@@ -12349,6 +12480,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
     }
 
     let mut state = RenderState::new();
+    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(ChatMessage::new("user", "look around"));
     round(
         &mut state,
