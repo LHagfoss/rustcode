@@ -88,9 +88,32 @@ pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
     state.request_redraw();
 }
 
+/// Drop withheld completions the model already read through `manage_task`
+/// `wait`, along with their wakeups: delivering them again would repeat the
+/// output and leave the result listed as unread. Returns how many were dropped.
+pub(crate) fn prune_delivered_background_outputs(state: &mut AppState) -> usize {
+    let session_id = state.active_session_id.clone();
+    let before = state.pending_background_outputs.len();
+    let mut delivered = Vec::new();
+    state.pending_background_outputs.retain(|pending| {
+        let read = tools::background_result_delivered_by_wait(&session_id, &pending.task_id);
+        if read {
+            delivered.push(format!("__task_wakeup__:{}", pending.task_id));
+        }
+        !read
+    });
+    if delivered.is_empty() {
+        return 0;
+    }
+    state.pending_queue.retain(|item| !delivered.contains(item));
+    state.request_redraw();
+    before - state.pending_background_outputs.len()
+}
+
 /// Move withheld background completions into history at a turn boundary.
 /// Returns how many were flushed.
 pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
+    prune_delivered_background_outputs(state);
     if state.pending_background_outputs.is_empty() {
         return 0;
     }

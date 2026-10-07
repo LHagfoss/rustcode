@@ -2042,6 +2042,23 @@ impl AppState {
         before.saturating_sub(self.pending_queue.len())
     }
 
+    /// Remove background wakeups the request being composed already answers:
+    /// results in history and results `manage_task` `wait` returned. A wakeup
+    /// whose result is still withheld stays queued, otherwise that result
+    /// would reach neither the model nor the transcript.
+    pub(crate) fn consume_answered_background_wakeups(&mut self) -> usize {
+        crate::prune_delivered_background_outputs(self);
+        let withheld = self
+            .pending_background_outputs
+            .iter()
+            .map(|pending| format!("__task_wakeup__:{}", pending.task_id))
+            .collect::<Vec<_>>();
+        let before = self.pending_queue.len();
+        self.pending_queue
+            .retain(|item| !item.starts_with("__task_wakeup__:") || withheld.contains(item));
+        before.saturating_sub(self.pending_queue.len())
+    }
+
     pub fn history_up(&mut self) {
         self.composer().history_up();
         self.request_redraw();

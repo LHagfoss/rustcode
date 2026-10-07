@@ -107,9 +107,9 @@ fn render_live_tail_mode(
         model_live_text = "";
     }
 
-    // High verbosity keeps running calls out of the transcript: the status
-    // row names them, and the batch lands as one count line when it finishes.
-    if visible_live_tool_calls.is_empty() || live_tools_ride_the_status_row(state) {
+    // Running calls are named in the transcript at every verbosity; the status
+    // row by the composer only says what state the turn is in.
+    if visible_live_tool_calls.is_empty() {
         transcript.clear_tools();
     } else {
         transcript.set_tools_with_verbosity(
@@ -190,69 +190,6 @@ fn render_live_tail_mode(
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
-}
-
-/// Whether running calls are named under the status row instead of in a live
-/// transcript cell. Low verbosity keeps the cell: it streams command output.
-pub(super) fn live_tools_ride_the_status_row(state: &RenderSnapshot) -> bool {
-    matches!(state.verbosity(), rustcode::controller::Verbosity::High)
-}
-
-/// The row under the running indicator that names the call in flight:
-/// `└ $ cargo test (8s) · esc interrupt`.
-pub(super) fn live_tool_status_detail(state: &RenderSnapshot, width: u16) -> Option<Line<'static>> {
-    if !live_tools_ride_the_status_row(state) {
-        return None;
-    }
-    let calls = state
-        .live_tool_calls()
-        .iter()
-        .filter(|call| is_live_tool_call_visible(call))
-        .collect::<Vec<_>>();
-    let call = calls
-        .iter()
-        .find(|call| call.execution_started)
-        .or(calls.first())?;
-    let target = super::tool_transcript::contract_home_path(&call.target, state.home_path());
-    let target = if target == "?" { String::new() } else { target };
-    let mut label = if call.tool_name == "run_command" && !target.is_empty() {
-        format!("$ {target}")
-    } else if target.is_empty() {
-        call.action.clone()
-    } else {
-        format!("{} {target}", call.action)
-    };
-    label = label.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut suffix = String::new();
-    if call.execution_started {
-        suffix.push_str(&format!(
-            " ({})",
-            super::fmt_elapsed_compact(call.started_at.elapsed().as_secs())
-        ));
-    }
-    if calls.len() > 1 {
-        suffix.push_str(&format!(" · +{} more", calls.len() - 1));
-    }
-    let prefix = "└ ";
-    let width = usize::from(width);
-    let hint = " · esc interrupt";
-    let room = width.saturating_sub(prefix.width() + suffix.width());
-    let hint = if call.execution_started && room >= label.width() + hint.width() {
-        hint
-    } else {
-        ""
-    };
-    let label =
-        super::modals::truncate_middle_to_width(&label, room.saturating_sub(hint.width()).max(1));
-    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    Some(Line::from(vec![
-        Span::styled(prefix, muted),
-        Span::styled(
-            label,
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), false),
-        ),
-        Span::styled(format!("{suffix}{hint}"), muted),
-    ]))
 }
 
 /// Plain running indicator (spinner + model) painted in the reserved row at
@@ -383,6 +320,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
         }
     }
     let content_mark = (history_revision, live_content.finish() as usize);
+    transcript.tool_line_flags = Some(Vec::new());
     if let Some(agent) = state.selected_subagent() {
         // An agent context has no reading anchor of its own, so it scrolls as
         // a plain offset from the newest row of the agent's whole history.
@@ -435,6 +373,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     }
 
     if transcript.selection.is_active() {
+        transcript.tool_line_flags = None;
         return render_selected_history_projection(
             state,
             width,
@@ -457,7 +396,8 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let mut index = state.history().len();
     while index > state.history_display_start() && rows < target_rows {
         let last = index - 1;
-        let (block, next_index) = if state.history()[last].role == "tool" {
+        let is_tool = state.history()[last].role == "tool";
+        let (block, next_index) = if is_tool {
             let first = tool_chain_start(state, last, state.history_display_start());
             (
                 transcript.committed_tool_group(state, first, index, width),
@@ -467,7 +407,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
             (transcript.committed_block(state, last, width), last)
         };
         rows += block.len();
-        blocks.push(block);
+        blocks.push((block, is_tool));
         index = next_index;
     }
     // The welcome cell is the first item in the projected transcript, and the
@@ -476,7 +416,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
         let banner = build_claude_startup_banner_snapshot(state, width as usize, height as usize);
         rows += banner.len();
-        blocks.push(Arc::new(banner));
+        blocks.push((Arc::new(banner), false));
     }
     let max_scroll = rows.saturating_sub(capacity);
     let scroll = transcript.clamp_scroll_rows(max_scroll);
@@ -509,19 +449,29 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let end = rows.saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
     let mut lines = Vec::with_capacity(capacity);
+    // Tool rows are click targets (they toggle like ctrl+o); spacer rows of a
+    // tool block are not.
+    let mut tool_lines = Vec::with_capacity(capacity);
     let mut offset = 0;
-    for block in blocks.into_iter().rev() {
+    for (block, is_tool) in blocks.into_iter().rev() {
         let block_end = offset + block.len();
         let from = start.saturating_sub(offset).min(block.len());
         let through = end.saturating_sub(offset).min(block.len());
         if from < through {
             lines.extend_from_slice(&block[from..through]);
+            tool_lines.extend(
+                block[from..through]
+                    .iter()
+                    .map(|line| is_tool && line.width() > 0),
+            );
         }
         offset = block_end;
         if offset >= end {
+            transcript.tool_line_flags = Some(tool_lines);
             return lines;
         }
     }
+    transcript.tool_line_flags = Some(tool_lines);
     let from = start.saturating_sub(offset).min(live.len());
     let through = end.saturating_sub(offset).min(live.len());
     if from < through {

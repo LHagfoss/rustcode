@@ -75,7 +75,8 @@ pub use exec::background_task_manager;
 pub use exec::stop_background_tasks;
 pub(crate) use exec::{
     CommandProgressCallback, abort_background_starts, approved_command_prefix_covers_call,
-    command_confirmation_preview, command_requires_confirmation, denied_command_prefix_covers_call,
+    background_result_delivered_by_wait, command_confirmation_preview,
+    command_requires_confirmation, denied_command_prefix_covers_call,
     persisted_approved_command_prefix, release_background_start,
     rememberable_command_forbid_prefix_for_call, rememberable_command_prefix_for_call,
     run_command_output_with_progress_cancellable_for_call_and_workspace,

@@ -1044,6 +1044,30 @@ fn task_output_log_path(
     Ok(Some(directory.join(format!("{task_id}.log"))))
 }
 
+/// Terminal results `manage_task` `wait` already handed to the model, keyed by
+/// (session, task). The completion notice for the same task would repeat the
+/// output, so the turn loop drops it instead of delivering it twice.
+fn wait_delivered() -> &'static Mutex<std::collections::HashSet<(String, String)>> {
+    static DELIVERED: OnceLock<Mutex<std::collections::HashSet<(String, String)>>> =
+        OnceLock::new();
+    DELIVERED.get_or_init(Default::default)
+}
+
+pub(crate) fn note_wait_delivered(session_id: &str, task_id: &str) {
+    wait_delivered()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert((session_id.to_owned(), task_id.to_owned()));
+}
+
+/// Whether `wait` already returned this task's terminal result to the model.
+pub(crate) fn background_result_delivered_by_wait(session_id: &str, task_id: &str) -> bool {
+    wait_delivered()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&(session_id.to_owned(), task_id.to_owned()))
+}
+
 /// Block until one background task reaches a terminal state, so agents wait
 /// with a single tool call instead of hand-rolled sleep/poll shell loops.
 /// Runs on a blocking worker thread; Esc still interrupts the wait through
@@ -1058,6 +1082,10 @@ fn wait_for_background_tasks(
     // point still delivers its terminal event to us, while one that finished
     // before is simply absent from the roster below.
     let subscription = manager.subscribe_session(session_id.to_owned());
+    let deliver = |completion: &rustcode_tasks::TaskCompletion| {
+        note_wait_delivered(session_id, completion.id.as_str());
+        format_completion_result(completion)
+    };
     if task_ids.is_empty() {
         return "No task IDs were provided to wait for.".to_owned();
     }
@@ -1066,7 +1094,7 @@ fn wait_for_background_tasks(
         .into_iter()
         .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
     {
-        return format_completion_result(&completion);
+        return deliver(&completion);
     }
     let running = manager.list(session_id);
     let matched = task_ids
@@ -1080,7 +1108,7 @@ fn wait_for_background_tasks(
             .into_iter()
             .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
         {
-            return format_completion_result(&completion);
+            return deliver(&completion);
         }
         return format!(
             "None of the requested tasks are running or retained: {}",
@@ -1098,9 +1126,10 @@ fn wait_for_background_tasks(
                     && event.is_terminal() =>
             {
                 if let Some(completion) = manager.completion(session_id, event.task_id()) {
-                    return format_completion_result(&completion);
+                    return deliver(&completion);
                 }
                 let task_id = event.task_id().to_string();
+                note_wait_delivered(session_id, &task_id);
                 return format_wait_result(&task_id, event);
             }
             Ok(_) => continue,
@@ -1115,7 +1144,7 @@ fn wait_for_background_tasks(
         .into_iter()
         .find(|completion| task_ids.iter().any(|id| id == completion.id.as_str()))
     {
-        format_completion_result(&completion)
+        deliver(&completion)
     } else {
         let still_running = manager.list(session_id);
         let running_ids = matched

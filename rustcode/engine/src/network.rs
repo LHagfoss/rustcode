@@ -1350,7 +1350,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     ) = {
         let mut s = state.lock().await;
         let history_snapshot = s.history.clone();
-        let consumed_wakeups = s.consume_observed_background_wakeups();
+        let consumed_wakeups = s.consume_answered_background_wakeups();
         if consumed_wakeups > 0 {
             dbg_log!(
                 "Consumed {} background wakeup(s) already present in the request history snapshot",
