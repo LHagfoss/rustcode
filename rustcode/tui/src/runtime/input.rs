@@ -539,11 +539,12 @@ async fn copy_live_selection_with(
     transcript: &TranscriptState,
     copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
 ) -> bool {
-    if app_state.lock().await.has_composer_selection() {
-        if let Some(text) = app_state.lock().await.composer_selected_text() {
-            report_selection_copy(app_state, &text, copy).await;
-            return true;
-        }
+    // Bind the text first: an `if let` on the guard would hold the state lock
+    // across `report_selection_copy`, which locks it again and hangs the TUI.
+    let composer_text = app_state.lock().await.composer_selected_text();
+    if let Some(text) = composer_text {
+        report_selection_copy(app_state, &text, copy).await;
+        return true;
     }
     let selection = if transcript.panel_selection_area.is_some() {
         &transcript.panel_selection
@@ -3147,6 +3148,30 @@ mod tests {
             assert_eq!(copied.lock().unwrap().as_deref(), Some("hell"));
             assert!(!app_state.lock().await.ctrl_c_exit_armed());
         }
+    }
+
+    #[tokio::test]
+    async fn cmd_c_copies_a_composer_selection_without_hanging() {
+        let app_state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut state = app_state.lock().await;
+            state.input_buffer = "see ![image](file:///tmp/a.png) here".to_owned();
+            state.composer_selection_anchor = Some(0);
+            state.cursor_position = 3;
+        }
+        let copied = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let copied_by_backend = copied.clone();
+        let flow = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            handle_cmd_copy_chord_with(&app_state, &TranscriptState::default(), move |text| {
+                *copied_by_backend.lock().unwrap() = Some(text.to_owned());
+                rustcode::clipboard::ClipboardCopyStatus::Confirmed
+            }),
+        )
+        .await
+        .expect("copying a composer selection must not deadlock on the state lock");
+        assert!(matches!(flow, InputFlow::ContinueIteration));
+        assert_eq!(copied.lock().unwrap().as_deref(), Some("see"));
     }
 
     #[tokio::test]

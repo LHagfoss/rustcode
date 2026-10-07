@@ -898,6 +898,16 @@ fn format_number(value: u64) -> String {
     formatted
 }
 
+/// SGR foreground sequence for a theme color, written outside ratatui once the
+/// terminal is restored. Colors without an exact code keep the terminal default.
+fn ansi_foreground(color: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Rgb(red, green, blue) => format!("\x1b[38;2;{red};{green};{blue}m"),
+        ratatui::style::Color::Indexed(index) => format!("\x1b[38;5;{index}m"),
+        _ => "\x1b[39m".to_owned(),
+    }
+}
+
 /// Exit handoff written to an injectable sink. `color` and `wide` are
 /// resolved by the caller — production asks the real stdout and terminal —
 /// so a test can capture the transcript without a TTY.
@@ -917,9 +927,12 @@ fn write_exit_summary(out: &mut dyn Write, summary: &ExitSummary, color: bool, w
                 .chars()
                 .skip(crate::ui::RUSTCODE_WORDMARK_SPLIT)
                 .collect::<String>();
+            // Follow the active theme rather than a fixed purple and white.
             let _ = writeln!(
                 out,
-                "\x1b[38;2;181;139;255m{purple}\x1b[38;2;255;255;255m{white}\x1b[0m"
+                "{}{purple}{}{white}\x1b[0m",
+                ansi_foreground(crate::ui::COLOR_PRIMARY()),
+                ansi_foreground(crate::ui::COLOR_TEXT()),
             );
         } else {
             let _ = writeln!(out, "{line}");
@@ -1093,6 +1106,29 @@ mod tests {
         );
         assert_eq!(format_number(999), "999");
         assert_eq!(format_number(1_000), "1,000");
+    }
+
+    #[test]
+    fn exit_wordmark_uses_the_active_theme_colors() {
+        let summary = ExitSummary {
+            prompt_tokens: 0,
+            cached_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            session_id: String::new(),
+            composer_y: None,
+            print_handoff: true,
+            warnings: Vec::new(),
+        };
+        let mut sink = Vec::new();
+        write_exit_summary(&mut sink, &summary, true, false);
+        let printed = String::from_utf8(sink).unwrap();
+        assert!(printed.contains(&super::ansi_foreground(crate::ui::COLOR_PRIMARY())));
+        assert!(printed.contains(&super::ansi_foreground(crate::ui::COLOR_TEXT())));
+        assert_eq!(
+            super::ansi_foreground(ratatui::style::Color::Rgb(1, 2, 3)),
+            "\x1b[38;2;1;2;3m"
+        );
     }
 
     #[test]
