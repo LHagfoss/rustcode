@@ -11130,3 +11130,201 @@ fn prompt_improver_notice_shows_the_original_and_the_rewrite() {
         "{rendered}"
     );
 }
+
+fn background_launch_message(task_id: &str, command: &str) -> rustcode::controller::ChatMessage {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    ChatMessage::new(
+        "tool",
+        format!(
+            "run_command: Task started in background. Task ID: {task_id}. Status: Pending. Command: {command}. Completion notification: enabled."
+        ),
+    )
+    .with_tool_result(ToolResultRecord {
+        tool_name: "run_command".into(),
+        success: true,
+        pending: true,
+        command: Some(command.into()),
+        ..Default::default()
+    })
+}
+
+fn task_completion_message(
+    task_id: &str,
+    command: &str,
+    exit_code: Option<i32>,
+    error_kind: Option<&str>,
+    output: &str,
+) -> rustcode::controller::ChatMessage {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    ChatMessage::new(
+        "tool",
+        format!("background_task: Task {task_id} completed. Command: {command}. Output:\n{output}"),
+    )
+    .with_tool_result(ToolResultRecord {
+        tool_name: "background_task".into(),
+        success: exit_code == Some(0) && error_kind.is_none(),
+        exit_code,
+        error_kind: error_kind.map(str::to_owned),
+        command: Some(command.into()),
+        ..Default::default()
+    })
+}
+
+fn tool_group_text(state: &RenderState, indices: &[usize]) -> String {
+    super::render_committed_tool_result_group(state, indices, 80, false)
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn background_launch_row_follows_the_task_to_its_end() {
+    use rustcode::controller::{ChatMessage, ToolCallRef};
+    let launch = || {
+        let mut state = RenderState::new();
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"cargo build","background":true}"#.to_owned(),
+            }]),
+        );
+        state.history.push(
+            background_launch_message("task-1", "cargo build").answering(Some("call-1".to_owned())),
+        );
+        state
+    };
+
+    // No completion in history: the task is still running.
+    let state = launch();
+    let running = tool_group_text(&state, &[1]);
+    assert!(
+        running.contains("✓ Bash cargo build · background"),
+        "{running}"
+    );
+
+    // A completion for another task changes nothing.
+    let mut state = launch();
+    state.history.push(task_completion_message(
+        "task-11",
+        "sleep 1",
+        Some(1),
+        None,
+        "exit code: 1",
+    ));
+    let other = tool_group_text(&state, &[1]);
+    assert!(other.contains("Bash cargo build · background"), "{other}");
+
+    for (exit_code, error_kind, expected) in [
+        (Some(0), None, "  ✓ Bash cargo build"),
+        (Some(101), None, "  × Bash cargo build · exit 101"),
+        (None, Some("Execution"), "  × Bash cargo build · failed"),
+        (None, Some("Cancelled"), "  − Bash cargo build · cancelled"),
+    ] {
+        let mut state = launch();
+        state
+            .history
+            .push(ChatMessage::new("assistant", "Started."));
+        state.history.push(task_completion_message(
+            "task-1",
+            "cargo build",
+            exit_code,
+            error_kind,
+            "done",
+        ));
+        let text = tool_group_text(&state, &[1]);
+        let row = text
+            .lines()
+            .find(|line| line.contains("Bash cargo build"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(row.trim_end(), expected, "{text}");
+        assert!(!text.contains("background"), "{text}");
+    }
+
+    // A result the model read through `manage_task` `wait` never becomes a
+    // `background_task` message, so the wait result settles the row.
+    let mut state = launch();
+    state.history.push(ChatMessage::new(
+        "tool",
+        "manage_task: Task 'task-1' failed (exit code 2). Started at 1 ms; ended at 2 ms. Command: cargo build. Output:\nboom",
+    ));
+    let waited = tool_group_text(&state, &[1]);
+    assert!(waited.contains("× Bash cargo build · exit 2"), "{waited}");
+}
+
+#[test]
+fn consecutive_task_completions_fold_into_the_latest_row() {
+    let mut state = RenderState::new();
+    for index in 0..3 {
+        state.history.push(task_completion_message(
+            &format!("task-{index}"),
+            &format!("make step{index}"),
+            Some(if index == 1 { 2 } else { 0 }),
+            None,
+            &format!("exit code: 0\nstdout:\noutput of step{index}"),
+        ));
+    }
+    let text = tool_group_text(&state, &[0, 1, 2]);
+    let rows = text
+        .lines()
+        .filter(|line| line.contains("TaskDone"))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "{text}");
+    assert!(rows[0].contains("✓ TaskDone make step2"), "{text}");
+    assert!(rows[0].contains("+2 earlier (1 failed)"), "{text}");
+    assert!(!text.contains("step0") && !text.contains("step1"), "{text}");
+    // Closed until opened: one row, no preview.
+    assert!(!text.contains("output of step2"), "{text}");
+
+    // The expand key and a click see exactly the row that is drawn.
+    let snapshot = render_snapshot(&state);
+    assert_eq!(super::collapsible_tool_indices(&snapshot, 80), vec![2]);
+    state.expanded_thoughts.insert(2);
+    let opened = tool_group_text(&state, &[0, 1, 2]);
+    assert!(opened.contains("output of step2"), "{opened}");
+    assert!(!opened.contains("output of step1"), "{opened}");
+
+    // One completion alone carries no count.
+    let mut single = RenderState::new();
+    single.history.push(task_completion_message(
+        "task-9",
+        "make all",
+        Some(0),
+        None,
+        "exit code: 0",
+    ));
+    let text = tool_group_text(&single, &[0]);
+    assert!(text.contains("✓ TaskDone make all"), "{text}");
+    assert!(!text.contains("earlier"), "{text}");
+}
+
+#[test]
+fn task_completions_split_by_another_tool_do_not_fold() {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    let mut state = RenderState::new();
+    state.history.push(task_completion_message(
+        "task-1",
+        "make a",
+        Some(0),
+        None,
+        "exit code: 0",
+    ));
+    state.history.push(
+        ChatMessage::new("tool", "get_time: 12:00").with_tool_result(ToolResultRecord {
+            tool_name: "get_time".into(),
+            success: true,
+            ..Default::default()
+        }),
+    );
+    state.history.push(task_completion_message(
+        "task-2",
+        "make b",
+        Some(0),
+        None,
+        "exit code: 0",
+    ));
+    let text = tool_group_text(&state, &[0, 1, 2]);
+    assert_eq!(text.matches("TaskDone").count(), 2, "{text}");
+    assert!(!text.contains("earlier"), "{text}");
+}

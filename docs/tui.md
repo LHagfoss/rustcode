@@ -13,6 +13,14 @@ state behind it: elapsed time while it runs, `waiting` until it starts, and
 with `✓`, `×` or `−`. A call that finishes within 200 ms is never drawn as
 running. `Esc` interrupts foreground work.
 
+A command started in the background keeps its row: it reads `· background`
+while the task runs and takes the finished state (`✓`, `× … · exit 1`,
+`× … · failed`, `− … · cancelled`) once the task has ended. Finished tasks
+report as `TaskDone <command>`; several finishing together draw one row for the
+latest with `+N earlier` behind it, and opening that row shows the latest
+task's output. With `preserve_transcript_scrollback` the copy already written
+to the terminal's own scrollback is not revised.
+
 Output hangs under its row on a `│` spine. Verbosity only sets whether it starts
 open: `high` shows the rows alone, `low` shows a five-row preview. Hovering a
 block lights it and clicking it opens or closes that block's output; `ctrl+o`
