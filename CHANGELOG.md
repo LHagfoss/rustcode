@@ -1,3 +1,13 @@
+## [v0.57.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.15) - 2026-10-07
+
+### Features
+- Fold each batch of tool calls into one count line at high verbosity ("Ran 5 shell commands, read 2 files"); `ctrl+o` opens the calls, then their output, then folds them again. File edits keep their rows (#1807).
+- Name the running call on a row under the running indicator at high verbosity instead of in a live transcript cell (#1807).
+- Ask the model for one short sentence before each batch of tool calls (#1807).
+- Show the provider's own message and error code when a ChatGPT-plan stream fails, instead of "Responses API request failed" (#1807).
+- Retry `server_is_overloaded` twice with a short backoff before stopping the turn (#1807).
+- Keep the MCP tool menu pinned between the preflight and the provider request, so every round of a turn sends the same menu (#1807).
+- Stop a generic verb in an MCP tool name ("check", "read", "clear") from admitting the tool on its own (#1807).
 ## [v0.57.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.14) - 2026-10-07
 
 ### Features
