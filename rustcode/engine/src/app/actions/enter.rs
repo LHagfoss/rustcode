@@ -1857,7 +1857,7 @@ mod workspace_cleanup_tests {
         git(source.path(), &["commit", "-m", "base"]);
         let base_sha = git(source.path(), &["rev-parse", "HEAD"]);
         let persistence = tempfile::tempdir().unwrap();
-        let manager = WorkspaceManager::new(persistence.path());
+        let _manager = WorkspaceManager::new(persistence.path());
         let source_canonical = source.path().canonicalize().unwrap();
 
         let mut state = AppState::new_with_workspace_session(&source_canonical, None);

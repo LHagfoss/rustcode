@@ -42,6 +42,24 @@ fn should_apply_loop_recovery(
     !completion_requested && (has_evidence_recovery || (output_abort && !round_had_meaningful))
 }
 
+/// Write targets that do not exist yet, so a successful write can be recorded
+/// as a creation rather than a change to an existing file.
+fn absent_write_targets(
+    calls: &[crate::tools::ToolCall],
+    workspace_root: Option<&std::path::Path>,
+) -> std::collections::BTreeMap<String, std::path::PathBuf> {
+    let Some(root) = workspace_root else {
+        return Default::default();
+    };
+    calls
+        .iter()
+        .filter(|call| matches!(call.name.as_str(), "write_to_file" | "write_file_chunk"))
+        .filter_map(|call| call.arguments.get("path")?.as_str())
+        .map(|path| (path.to_owned(), root.join(path)))
+        .filter(|(_, resolved)| !resolved.exists())
+        .collect()
+}
+
 fn tool_changes_workspace(name: &str, arguments: Option<&serde_json::Value>) -> bool {
     if name == "spawn_agent" {
         return arguments
@@ -1038,6 +1056,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // progress evidence. The other calls are closed below, never
             // silently dropped or described as if they ran.
             let tools_started = std::time::Instant::now();
+            let workspace_root = state.lock().await.effective_workspace_root();
+            let absent_before =
+                absent_write_targets(&executable_tool_calls, workspace_root.as_deref());
             let results = super::super::tool_exec::execute_tool_batch_with_assessments(
                 client,
                 state,
@@ -1396,6 +1417,15 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 if name == "complete_task" && metadata.success {
                     completed = true;
                 }
+                for path in &metadata.changed_paths {
+                    if !ctx.progress.changed_paths.contains(path)
+                        && let Some(resolved) = absent_before.get(path)
+                    {
+                        ctx.progress
+                            .created_paths
+                            .insert(path.clone(), resolved.clone());
+                    }
+                }
                 ctx.progress
                     .changed_paths
                     .extend(metadata.changed_paths.iter().cloned());
@@ -1450,6 +1480,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         }
                     } else {
                         ctx.progress.made_edits = true;
+                        if metadata.changed_paths.is_empty()
+                            || matches!(name.as_str(), "move_file" | "copy_file")
+                        {
+                            ctx.progress.untracked_edits = true;
+                        }
                         ctx.progress.consecutive_failed_mutations = 0;
                         if !metadata.changed_paths.is_empty() || name != "run_command" {
                             ctx.verification.ledger.record_edit();

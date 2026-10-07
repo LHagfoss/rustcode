@@ -252,13 +252,12 @@ mod tests {
 
         /// Next snapshot frame, whatever it carries.
         async fn await_snapshot(&mut self) -> serde_json::Value {
-            loop {
-                let frame = self.next_value().await;
-                if frame["type"] == "event" && frame["update"]["type"] == "snapshot" {
-                    return frame;
-                }
-                panic!("expected snapshot stream, got {frame}");
-            }
+            let frame = self.next_value().await;
+            assert!(
+                frame["type"] == "event" && frame["update"]["type"] == "snapshot",
+                "expected snapshot stream, got {frame}"
+            );
+            frame
         }
 
         /// Next snapshot whose transcript contains `needle`.

@@ -737,7 +737,6 @@ pub struct PromptCache {
     system_prompt: String,
     skill_metadata: Option<Arc<Vec<crate::skills::SkillMetadata>>>,
     skill_metadata_generation: u64,
-    mcp_selection_generation: u64,
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
     mcp_selection_user_count: Option<usize>,
@@ -816,7 +815,6 @@ impl PromptCache {
                 .is_some_and(|previous| turn_user_message_count > previous)
         {
             self.mcp_selected_names.clear();
-            self.mcp_selection_generation = generation;
             self.mcp_selection_policy = Some(policy);
             self.mcp_selection_session_id = Some(session_id.to_string());
         }
@@ -838,8 +836,11 @@ impl PromptCache {
         snapshot: &NativeToolSchemaSnapshot,
         selected_names: &[String],
     ) -> bool {
+        // Only a catalog change while this selection was being computed makes it
+        // stale. Comparing against the generation recorded when the turn began
+        // rejected every commit after the first lazy server start, so the menu
+        // was never pinned and was re-scored on each round. (#1796)
         if crate::mcp::mcp_generation() != snapshot.generation
-            || self.mcp_selection_generation != snapshot.generation
             || self.mcp_selection_policy != Some(snapshot.policy)
             || self.mcp_selection_session_id.as_deref() != Some(snapshot.session_id.as_str())
             || self.mcp_selection_user_count != Some(snapshot.turn_user_message_count)
@@ -959,6 +960,13 @@ mod prompt_cache_snapshot_tests {
         // Dropping the pin here is what made consecutive rounds of one turn
         // select disjoint name sets and invalidated the cached prefix. (#1591)
         assert_eq!(after.sticky_names, pinned);
+
+        // The menu chosen after that startup must still be pinned for the next
+        // round, or every later round re-scores it from the transcript. (#1796)
+        let repinned = ["alpha_read", "beta_read"].map(str::to_string).to_vec();
+        assert!(cache.commit_native_tool_schema_selection(&after, &repinned));
+        let next = cache.native_tool_schema_snapshot(policy, &transcript, "session");
+        assert_eq!(next.sticky_names, repinned);
     }
 
     #[test]

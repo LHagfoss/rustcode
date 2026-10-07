@@ -79,11 +79,19 @@ fn explicit_external_action_request(prompt: &str) -> bool {
             Some("mcp" | "tool" | "tools" | "address" | "inbox" | "messages")
         )
     });
+    // "Reply with one line" asks for the shape of the answer, not for a
+    // message to be sent; only a reply aimed at something is an action.
+    let reply_action = words.iter().enumerate().any(|(index, word)| {
+        *word == "reply"
+            && !matches!(
+                words.get(index + 1).copied(),
+                None | Some("with" | "in" | "only" | "using" | "as" | "briefly" | "exactly")
+            )
+    });
     let action_verb = words.iter().any(|word| {
         matches!(
             *word,
             "send"
-                | "reply"
                 | "post"
                 | "publish"
                 | "upload"
@@ -94,7 +102,7 @@ fn explicit_external_action_request(prompt: &str) -> bool {
                 | "buy"
         )
     });
-    direct_mail_action || action_verb
+    direct_mail_action || reply_action || action_verb
 }
 
 fn is_external_action_tool(tool_name: &str) -> bool {
@@ -252,7 +260,7 @@ pub(super) fn inspection_completion_rejection_reasons(
     if provider_final_answer_state != ProviderFinalAnswerState::Terminal {
         reasons.push("provider_response_not_terminal");
     }
-    if ctx.progress.made_edits {
+    if ctx.progress.has_lasting_edits() {
         reasons.push("turn_made_edits");
     }
     if ctx.progress.failed_mutations > 0 {
@@ -904,6 +912,25 @@ mod tests {
         let history = vec![ChatMessage::new("user", "Reply to Aleks and @ him only.")];
         assert!(super::outstanding_external_action(&history));
         assert!(loop_recovery_prompt(&history, false, false).contains("external action"));
+    }
+
+    #[test]
+    fn an_answer_format_instruction_is_not_an_external_action() {
+        // #1774: a read-only headless prompt ending in "reply with ..." was
+        // held as an unfinished external action and reported as unverified.
+        for prompt in [
+            "Read Cargo.toml and README.md, then reply with one sentence.",
+            "List the directory and reply in one line.",
+            "Check the version. Reply only with the number.",
+        ] {
+            let history = vec![ChatMessage::new("user", prompt)];
+            assert!(!super::outstanding_external_action(&history), "{prompt}");
+        }
+        let history = vec![ChatMessage::new(
+            "user",
+            "Reply to the thread with the fix.",
+        )];
+        assert!(super::outstanding_external_action(&history));
     }
 
     #[test]
