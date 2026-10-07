@@ -321,11 +321,14 @@ fn cache_usage_metrics(usage: &serde_json::Value) -> (Option<u32>, Option<u32>, 
 }
 
 fn provider_cache_observation(
+    openrouter: bool,
     affinity_requested: bool,
     cached_tokens: Option<u32>,
     cache_write_tokens: Option<u32>,
 ) -> (&'static str, &'static str) {
-    if !affinity_requested {
+    // Session affinity is an OpenRouter request option. Other providers cache
+    // on their own, so what they report is the observation.
+    if openrouter && !affinity_requested {
         return ("not_requested", "openrouter_session_affinity_unavailable");
     }
     if cached_tokens.is_some_and(|tokens| tokens > 0) {
@@ -588,12 +591,16 @@ fn chatgpt_stream_payload(
 ) -> serde_json::Value {
     let mut input = chatgpt_plan_input_from_messages(messages);
     if let Some(tools) = chatgpt_plan_additional_tools(native_tool_schemas) {
+        // Directly after the instructions, on every request: placed before the
+        // first function call it sat at the end of a turn's first request and
+        // moved forward on the second, so no round could reuse the first
+        // request's cached prefix. (#1796)
         let insert_at = input
             .iter()
-            .position(|item| {
-                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+            .take_while(|item| {
+                item.get("role").and_then(serde_json::Value::as_str) == Some("developer")
             })
-            .unwrap_or(input.len());
+            .count();
         input.insert(insert_at, tools);
     }
     let mut payload = serde_json::json!({
@@ -2532,6 +2539,19 @@ mod tests {
             input[additional_tools]["tools"][0]["name"],
             "mcp__files__read"
         );
+        // #1796: the declaration holds the same position in the turn's first
+        // request, which has no function call yet, so later rounds extend the
+        // first request's prefix instead of rewriting it.
+        let first_round = chatgpt_stream_payload(
+            "gpt-6.1-sol",
+            &messages[..3],
+            &schemas,
+            Some(&profile),
+            ThinkingMode::Normal,
+        );
+        let first_input = first_round["input"].as_array().expect("stateless input");
+        assert_eq!(additional_tools, 2);
+        assert_eq!(first_input[..], input[..first_input.len()]);
         assert_eq!(input[function_call]["name"], "mcp__files__read");
         assert_eq!(input[function_call + 1]["type"], "function_call_output");
         assert_eq!(input[function_call + 1]["call_id"], "call-1");
@@ -3477,20 +3497,29 @@ mod tests {
     #[test]
     fn provider_cache_observation_distinguishes_affinity_and_reported_state() {
         assert_eq!(
-            provider_cache_observation(true, Some(80), Some(20)),
+            provider_cache_observation(true, true, Some(80), Some(20)),
             ("hit", "provider_reported_cached_tokens")
         );
         assert_eq!(
-            provider_cache_observation(true, Some(0), Some(0)),
+            provider_cache_observation(true, true, Some(0), Some(0)),
             ("miss", "provider_reported_zero_cache_tokens")
         );
         assert_eq!(
-            provider_cache_observation(true, None, None),
+            provider_cache_observation(true, true, None, None),
             ("unknown", "provider_did_not_report_cache_tokens")
         );
         assert_eq!(
-            provider_cache_observation(false, None, None),
+            provider_cache_observation(true, false, None, None),
             ("not_requested", "openrouter_session_affinity_unavailable")
+        );
+        // #1796: a provider without session affinity reports its own cache.
+        assert_eq!(
+            provider_cache_observation(false, false, Some(0), None),
+            ("miss", "provider_reported_zero_cache_tokens")
+        );
+        assert_eq!(
+            provider_cache_observation(false, false, Some(2944), None),
+            ("hit", "provider_reported_cached_tokens")
         );
     }
 
@@ -5512,11 +5541,11 @@ async fn stream_request_with_timeouts(
                                             cache_usage_metrics(usage);
                                         let (provider_cache_status, provider_cache_reason) =
                                             provider_cache_observation(
-                                                is_openrouter_endpoint(url)
-                                                    && bounded_openrouter_session_id(
-                                                        expected_session_id,
-                                                    )
-                                                    .is_some(),
+                                                is_openrouter_endpoint(url),
+                                                bounded_openrouter_session_id(
+                                                    expected_session_id,
+                                                )
+                                                .is_some(),
                                                 cached,
                                                 cache_write_tokens,
                                             );
