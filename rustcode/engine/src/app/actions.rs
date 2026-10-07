@@ -122,6 +122,11 @@ pub(crate) use submit::{
 #[cfg(test)]
 use commands::append_codex_rate_limits;
 use commands::{background_terminal_list, stop_background_terminals};
+
+/// The text of the tasks panel for `session_id`.
+pub(crate) fn task_list(session_id: &str) -> String {
+    background_terminal_list(session_id)
+}
 use session::{history_matches_snapshot, report_stale_compaction, try_merge_compacted_history};
 
 mod prompt_improver;

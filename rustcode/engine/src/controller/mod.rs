@@ -66,13 +66,13 @@ pub use snapshot::{
 pub use tasks::{
     BackgroundResultDisplay, SubagentController, TaskDisplay, TurnContext,
     background_command_label, background_task_snapshots, has_background_tasks,
-    recent_background_results, spawn_background_task, stop_background_tasks,
+    recent_background_results, show_tasks_panel, spawn_background_task, stop_background_tasks,
 };
 pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, CommandPanel, ExpandOutcome, History, LiveToolCall,
     LiveToolOutputChunk, PendingSteer, SettingsPicker, StreamTracker, SubAgent, SubAgentStatus,
-    TokenUsage, ToolCallRef, ToolDetail, ToolResult, ToolResultMetadata, ToolResultRecord,
-    Verbosity, is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
+    TokenUsage, ToolCallRef, ToolResult, ToolResultMetadata, ToolResultRecord, Verbosity,
+    is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
     toggle_all_expanded_bodies, toggle_all_expanded_thoughts, toggle_expanded_bodies,
     toggle_expanded_thought,
 };

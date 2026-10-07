@@ -1,16 +1,6 @@
 use super::*;
 use crate::ui::render_snapshot::{render_snapshot, set_current_response};
 
-fn spawn_background_task_for_test(
-    task_id: &str,
-    session_id: &str,
-    command: &str,
-) -> Result<(), String> {
-    // Route through the controller contract so the render layer never names
-    // engine task internals directly (frontend seam #1431/#1442).
-    rustcode::controller::spawn_background_task(task_id, session_id, command)
-}
-
 pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn render_state_to_text(state: &mut RenderState, width: u16, height: u16) -> String {
@@ -793,7 +783,6 @@ fn visible_transcript_groups_tools_from_one_batch_under_one_heading() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -2132,119 +2121,6 @@ fn welcome_banner_has_no_wordmark_and_no_gap_in_its_place() {
 }
 
 #[test]
-fn active_tool_and_background_command_rows_keep_a_fixed_footprint() {
-    use rustcode::controller::{LiveToolCall, TaskDisplay, Verbosity};
-    let now = std::time::Instant::now() + std::time::Duration::from_secs(12);
-    let mut foreground = LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test --workspace --all-features -- --nocapture",
-    );
-    foreground.started_at = now - std::time::Duration::from_secs(12);
-    let mut queued = LiveToolCall::new(
-        "queued",
-        None,
-        "write_to_file",
-        "Writing",
-        "/Users/lagos/code/project/日本語/非常に長い/ファイル名.rs",
-    );
-    queued.execution_started = false;
-    let background = TaskDisplay {
-        id: "verify".into(),
-        command: "cargo test --workspace --all-features -- --nocapture".into(),
-        started_at: std::time::Instant::now(),
-        child_pid: None,
-    };
-
-    for width in [12u16, 16, 24, 40, 80] {
-        let active = super::history_cell::render_live_tool_cell_at(
-            &[foreground.clone()],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        );
-        assert_eq!(active.len(), 1, "foreground width {width}: {active:?}");
-        assert!(active[0].to_string().starts_with("• Running $"));
-        if width >= 24 {
-            assert!(active[0].to_string().contains("12s"), "{active:?}");
-        }
-        assert!(active[0].width() <= usize::from(width), "{active:?}");
-
-        let mut started_queued_tool = queued.clone();
-        started_queued_tool.execution_started = true;
-        started_queued_tool.started_at = now;
-        let started_rows = super::history_cell::render_live_tool_cell_at(
-            &[started_queued_tool],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        );
-        assert_eq!(
-            started_rows.len(),
-            1,
-            "started width {width}: {started_rows:?}"
-        );
-        if width >= 24 {
-            assert!(started_rows[0].to_string().starts_with("• Running Writing"));
-        } else {
-            assert!(started_rows[0].to_string().starts_with("• Running"));
-        }
-        assert!(
-            started_rows[0].width() <= usize::from(width),
-            "{started_rows:?}"
-        );
-
-        let queued_rows = super::history_cell::render_live_tool_cell_at(
-            &[queued.clone()],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        );
-        assert_eq!(
-            queued_rows.len(),
-            1,
-            "queued width {width}: {queued_rows:?}"
-        );
-        if width >= 24 {
-            assert!(queued_rows[0].to_string().starts_with("• Queued Writing"));
-        } else {
-            assert!(queued_rows[0].to_string().starts_with("• Queued"));
-        }
-        assert!(
-            queued_rows[0].width() <= usize::from(width),
-            "{queued_rows:?}"
-        );
-
-        let mut state = RenderState::new();
-        state.background_tasks = vec![background.clone()];
-        let background_rows = super::composer_render::background_command_lines_with_width(
-            &render_snapshot(&state),
-            width,
-        );
-        assert_eq!(
-            background_rows.len(),
-            1,
-            "background width {width}: {background_rows:?}"
-        );
-        assert!(background_rows[0].to_string().starts_with("• "));
-        assert!(
-            background_rows
-                .iter()
-                .all(|row| row.width() <= usize::from(width)),
-            "{background_rows:?}"
-        );
-    }
-}
-
-#[test]
 fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
     let state = RenderState::new();
     let lines = super::build_claude_startup_banner(&state, 100, 28);
@@ -2930,7 +2806,7 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("• Ran $ cargo test · exit 0"))
+            .any(|line| line.contains("✓ Bash cargo test"))
     );
     assert!(
         rendered.iter().any(|line| line.contains("504 passed")),
@@ -2980,7 +2856,7 @@ fn committed_tool_result_shows_failure_status() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("• Ran $ cargo test · exit 1"))
+            .any(|line| line.contains("Bash cargo test · exit 1"))
     );
 }
 
@@ -3173,7 +3049,6 @@ fn use_skill_renders_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -3205,7 +3080,7 @@ fn use_skill_renders_in_committed_history() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered[0], "• Ran");
-    assert!(rendered.iter().any(|line| line == "└ ✓ UseSkill clockify"));
+    assert!(rendered.iter().any(|line| line == "  ✓ UseSkill clockify"));
 }
 
 #[test]
@@ -3276,7 +3151,6 @@ fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
             })
     };
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.extend([
         ChatMessage::new("assistant", "").with_tool_calls(vec![call("1", "a.rs")]),
         result("1"),
@@ -3329,7 +3203,6 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -3361,7 +3234,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "└ ✓ UseSkill clockify"]);
+    assert_eq!(rendered, ["• Ran", "  ✓ UseSkill clockify"]);
 }
 
 #[test]
@@ -3369,7 +3242,6 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -3395,7 +3267,7 @@ fn completed_generic_tool_uses_ran_heading_and_indented_child() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Ran", "└ ✓ GetTime"]);
+    assert_eq!(rendered, ["• Ran", "  ✓ GetTime"]);
 }
 
 #[test]
@@ -3403,7 +3275,6 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state
         .history
@@ -3450,8 +3321,8 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
         rendered,
         [
             "• Ran",
-            "├ ✓ Bash git status --short",
-            "└ ✓ Bash cargo check --tests"
+            "  ✓ Bash git status --short",
+            "  ✓ Bash cargo check --tests"
         ]
     );
     assert!(!rendered.iter().any(|line| line.contains("output")));
@@ -3462,7 +3333,6 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state
         .history
@@ -3511,7 +3381,7 @@ fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
 
     assert_eq!(
         rendered,
-        ["• Ran", "├ ✓ GetTime", "└ ✓ Bash git status --short"]
+        ["• Ran", "  ✓ GetTime", "  ✓ Bash git status --short"]
     );
 }
 
@@ -3603,7 +3473,6 @@ fn high_verbosity_hides_generic_tool_details() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
@@ -3635,8 +3504,8 @@ fn high_verbosity_hides_generic_tool_details() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.starts_with("├ ✓ McpCustomTool")
-                || line.starts_with("└ ✓ McpCustomTool"))
+            .any(|line| line.starts_with("  ✓ McpCustomTool")
+                || line.starts_with("  ✓ McpCustomTool"))
     );
     assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
     assert!(!rendered.iter().any(|line| line.contains("completed")));
@@ -3845,78 +3714,6 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
         );
     }
     assert!(!expanded.iter().any(|line| line.contains("(ctrl+o all")));
-}
-
-#[test]
-fn command_preview_wrap_reuse_preserves_styled_lines_and_hint_state() {
-    use super::tool_transcript::{
-        COLLAPSED_TOOL_BODY_MAX_LINES, command_preview_body, indent_tool_result_body,
-    };
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::text::{Line, Span};
-    use rustcode::controller::Verbosity;
-
-    for width in [18, 24, 80] {
-        for body in [
-            vec![
-                Line::from(vec![
-                    Span::styled("status: ", Style::default().fg(Color::Green)),
-                    Span::styled("✓ готово 日", Style::default().add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(Span::styled(
-                    "short row",
-                    Style::default().fg(Color::Yellow),
-                )),
-            ],
-            (0..12)
-                .map(|index| {
-                    Line::from(vec![
-                        Span::styled(format!("{index}: "), Style::default().fg(Color::Cyan)),
-                        Span::styled(
-                            "日本語の出力 with styled tail",
-                            Style::default()
-                                .fg(Color::Magenta)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ])
-                })
-                .collect(),
-        ] {
-            for expanded in [false, true] {
-                let full = indent_tool_result_body(
-                    body.clone(),
-                    "run_command",
-                    &Verbosity::Low,
-                    width,
-                    true,
-                );
-                let expected_hint = !expanded && full.len() > COLLAPSED_TOOL_BODY_MAX_LINES;
-                let expected_body = indent_tool_result_body(
-                    body.clone(),
-                    "run_command",
-                    &Verbosity::Low,
-                    width,
-                    expanded,
-                );
-                let (actual_body, actual_hint) = command_preview_body(
-                    body.clone(),
-                    "run_command",
-                    &Verbosity::Low,
-                    width,
-                    expanded,
-                );
-
-                assert_eq!(
-                    actual_body, expected_body,
-                    "width={width}, expanded={expanded}"
-                );
-                assert_eq!(
-                    actual_hint, expected_hint,
-                    "width={width}, expanded={expanded}"
-                );
-            }
-        }
-    }
 }
 
 #[test]
@@ -4219,10 +4016,11 @@ fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
     );
 
     // Inspect an actual rendered terminal frame (not just the group block):
-    // hierarchy (Wrote heading + path child), diff content, and no high-
+    // hierarchy (Ran heading + Write child), diff content, and no high-
     // verbosity JSON/protocol noise (#1568).
     let rendered = render_state_to_text(&mut state, 80, 24);
-    assert!(rendered.contains("Wrote"), "{rendered}");
+    assert!(rendered.contains("• Ran"), "{rendered}");
+    assert!(rendered.contains("Write src/new.rs"), "{rendered}");
     assert!(rendered.contains("src/new.rs"), "{rendered}");
     assert!(rendered.contains("pub fn new"), "{rendered}");
 }
@@ -4372,8 +4170,8 @@ fn completed_edits_have_a_distinct_transcript_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Edited");
-    assert_eq!(rendered[1], "└ ✓ src/main.rs");
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  ✓ Edit src/main.rs");
 }
 
 #[test]
@@ -4403,8 +4201,10 @@ fn deleted_text_file_renders_removed_lines_in_red() {
             }),
     );
 
+    // High verbosity shows the row alone until the entry is opened.
+    state.expanded_thoughts.insert(1);
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false);
-    assert_eq!(rendered[0].to_string(), "• Deleted");
+    assert_eq!(rendered[0].to_string(), "• Ran");
     assert!(
         rendered.iter().any(|line| {
             line.to_string().contains("first removed line")
@@ -4448,7 +4248,7 @@ fn committed_file_write_is_labeled_as_a_write() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Wrote", "└ ✓ src/new.rs"]);
+    assert_eq!(rendered, ["• Ran", "  ✓ Write src/new.rs"]);
 }
 
 #[test]
@@ -4488,7 +4288,7 @@ fn low_verbosity_write_shows_added_lines_preview() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(rendered[0], "• Wrote");
+    assert_eq!(rendered[0], "• Ran");
     assert!(
         rendered.iter().any(|line| line.contains("src/new.rs")),
         "path label stays: {rendered:?}"
@@ -4612,11 +4412,13 @@ fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
     for expanded in [false, true] {
         let wrote = render("write_to_file", "wrote 'src/main.rs'", expanded);
         let edited = render("replace_file_content", "successfully edited", expanded);
-        assert_eq!(wrote[0], "• Wrote");
-        assert_eq!(edited[0], "• Edited");
+        assert_eq!(wrote[0], "• Ran");
+        assert_eq!(edited[0], "• Ran");
+        assert!(wrote[1].starts_with("  ✓ Write src/main.rs"), "{wrote:?}");
+        assert!(edited[1].starts_with("  ✓ Edit src/main.rs"), "{edited:?}");
         assert_eq!(
-            &wrote[1..],
-            &edited[1..],
+            &wrote[2..],
+            &edited[2..],
             "Write and Edit should render the same diff rows when expanded={expanded}"
         );
         assert!(wrote.iter().any(|line| line.contains("old_value = 1;")));
@@ -4648,7 +4450,7 @@ fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
 }
 
 #[test]
-fn high_verbosity_keeps_actual_file_diff_visible() {
+fn high_verbosity_shows_the_file_diff_once_opened() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4675,6 +4477,13 @@ fn high_verbosity_keeps_actual_file_diff_visible() {
             }),
     );
 
+    let closed = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(closed, ["• Ran", "  ✓ Write src/main.rs (+1 -1)"]);
+
+    state.expanded_thoughts.insert(1);
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -4943,9 +4752,9 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Edited");
-    assert_eq!(rendered[1], "├ ✓ src/game/engine.ts");
-    assert_eq!(rendered[2], "└ ✓ src/App.tsx");
+    assert_eq!(rendered[0], "• Ran");
+    assert_eq!(rendered[1], "  ✓ Edit src/game/engine.ts");
+    assert_eq!(rendered[2], "  ✓ Write src/App.tsx");
 }
 
 #[test]
@@ -4953,7 +4762,6 @@ fn exploration_results_group_and_deduplicate_child_rows() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -5002,18 +4810,18 @@ fn exploration_results_group_and_deduplicate_child_rows() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Explored");
+    assert_eq!(rendered[0], "• Ran");
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| *line == "├ ✓ List src")
+            .filter(|line| *line == "  ✓ List src")
             .count(),
         1
     );
     assert!(
         rendered
             .iter()
-            .any(|line| line == "└ ✓ Search renderer in src")
+            .any(|line| line == "  ✓ Search renderer in src")
     );
 }
 
@@ -5022,7 +4830,6 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -5060,8 +4867,8 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "├ ✓ List src"));
-    assert!(rendered.iter().any(|line| line == "└ ✓ List tests"));
+    assert!(rendered.iter().any(|line| line == "  ✓ List src"));
+    assert!(rendered.iter().any(|line| line == "  ✓ List tests"));
 }
 
 #[test]
@@ -5248,9 +5055,9 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         rendered,
         [
             "• Ran",
-            "├ ✓ Bash git status --short",
-            "│ M src/main.rs",
-            "└ ✓ GetTime",
+            "  ✓ Bash git status --short",
+            "  │ M src/main.rs",
+            "  ✓ GetTime",
         ],
         "each hint stays on the row of the entry it expands: {rendered:?}"
     );
@@ -5458,7 +5265,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| line.starts_with("├ ✓ Bash") || line.starts_with("└ ✓ Bash"))
+            .filter(|line| line.starts_with("  ✓ Bash") || line.starts_with("  ✓ Bash"))
             .count(),
         2,
         "each homogeneous command keeps its own summary: {rendered:?}"
@@ -6773,128 +6580,6 @@ fn selection_copy_hint_degrades_by_content_at_narrow_widths() {
 }
 
 #[test]
-fn background_terminal_activity_shows_management_hints_and_command() {
-    let mut state = RenderState::new();
-    // Unique session: the shared test config dir reuses last-active sessions
-    // across tests, and task snapshots are session-scoped.
-    state.active_session_id = "ui-background-footer-session".to_owned();
-    state.waiting_for_background_terminal = true;
-    let session_id = state.active_session_id.clone();
-    let task_id = "ui-background-footer";
-    let long_command = if cfg!(target_os = "windows") {
-        "ping -n 30 127.0.0.1 > NUL"
-    } else {
-        "sleep 30"
-    };
-    spawn_background_task_for_test(task_id, &session_id, long_command).unwrap();
-    // The engine projects the live task manager into the view; see
-    // `controller::render_state`.
-    state.background_tasks = rustcode::controller::background_task_snapshots(&session_id);
-    let snapshot = render_snapshot(&state);
-    rustcode::controller::stop_background_tasks(&session_id, None);
-
-    let commands = super::background_command_lines(&snapshot);
-    assert_eq!(commands.len(), 1);
-    assert!(!commands[0].to_string().contains("LIVE"));
-    assert!(
-        commands
-            .iter()
-            .any(|line| line.to_string().contains(long_command))
-    );
-    let live_tail = super::render_live_tail_snapshot(&snapshot, 120, 10)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!live_tail.contains("Background running"));
-    assert!(!live_tail.contains("1 task"));
-    assert!(live_tail.contains(long_command));
-    assert_eq!(
-        rustcode::controller::background_command_label("cargo\n test\t--locked", 80),
-        "cargo test --locked"
-    );
-}
-
-#[test]
-fn background_indicator_keeps_short_management_hints_whole_at_narrow_widths() {
-    use rustcode::controller::TaskDisplay;
-
-    let mut state = RenderState::new();
-    state.background_tasks = vec![TaskDisplay {
-        id: "narrow-hint-task".into(),
-        command: "cargo build".into(),
-        started_at: std::time::Instant::now(),
-        child_pid: None,
-    }];
-    let snapshot = render_snapshot(&state);
-
-    for width in [24u16, 40, 80] {
-        let text = super::composer_render::active_work_indicator(&snapshot, width, None)
-            .expect("background work keeps an indicator")
-            .to_string();
-        assert!(line_width(&text) <= usize::from(width), "{width}: {text:?}");
-        assert!(
-            !text.contains("/p…"),
-            "partial command hint at {width}: {text:?}"
-        );
-        assert!(
-            !text.contains("/sto…"),
-            "partial command hint at {width}: {text:?}"
-        );
-        if width == 24 {
-            assert!(
-                text.contains("Background"),
-                "state label must remain: {text:?}"
-            );
-            assert!(text.contains("/ps"), "missing /ps at {width}: {text:?}");
-            assert!(text.contains("/stop"), "missing /stop at {width}: {text:?}");
-        }
-        if width >= 40 {
-            assert!(text.contains("/ps"), "missing /ps at {width}: {text:?}");
-            assert!(text.contains("/stop"), "missing /stop at {width}: {text:?}");
-        }
-        if width == 80 {
-            assert!(
-                text.contains("0s"),
-                "wide hint keeps elapsed time: {text:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn background_terminal_chip_compacts_more_than_three_tasks() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = RenderState::new();
-    // Unique session: the shared test config dir reuses last-active sessions
-    // across tests, and task snapshots are session-scoped.
-    state.active_session_id = "ui-background-chip-session".to_owned();
-    let session_id = state.active_session_id.clone();
-    let command = if cfg!(target_os = "windows") {
-        "ping -n 30 127.0.0.1 > NUL"
-    } else {
-        "sleep 30"
-    };
-    for index in 0..4 {
-        spawn_background_task_for_test(
-            &format!("ui-background-chip-{index}"),
-            &session_id,
-            command,
-        )
-        .unwrap();
-    }
-
-    state.background_tasks = rustcode::controller::background_task_snapshots(&session_id);
-    let snapshot = render_snapshot(&state);
-    let summary = super::background_terminal_summary(&snapshot);
-    rustcode::controller::stop_background_tasks(&session_id, None);
-
-    assert!(summary.starts_with("4 tasks"), "{summary}");
-    assert!(!summary.contains("1 more"), "{summary}");
-    assert!(summary.contains("/ps · /stop"), "{summary}");
-}
-
-#[test]
 fn composer_footer_stays_compact_when_busy() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -6920,141 +6605,213 @@ fn composer_footer_stays_compact_when_busy() {
     assert!(!rendered.contains("Enter message then press enter to queue"));
 }
 
-#[test]
-fn live_history_cell_keeps_identical_invocations_visible_separately() {
-    let calls = vec![
-        rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "run_command",
-            "Bash",
-            "cargo test",
-        ),
-        rustcode::controller::LiveToolCall::new(
-            "local:2",
-            None,
-            "run_command",
-            "Bash",
-            "cargo test",
-        ),
-    ];
+/// History with one batch: a command with output and a file read.
+#[cfg(test)]
+fn state_with_one_tool_batch() -> RenderState {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
-    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(rendered[0], "• Running · esc interrupt");
-    assert_eq!(rendered[1], "├ • Bash cargo test · 1/2");
-    assert_eq!(rendered[2], "└ • Bash cargo test · 2/2");
-    assert!(!rendered.iter().any(|line| line.contains("local:1")));
-    assert!(!rendered.iter().any(|line| line.contains("local:2")));
-    assert_eq!(
-        rendered
-            .iter()
-            .filter(|line| line.contains("Bash cargo test"))
-            .count(),
-        2,
-        "the live cell must not deduplicate distinct invocation identities"
-    );
-}
-
-#[test]
-fn live_tool_cell_is_a_projection_not_history() {
     let mut state = RenderState::new();
-    state.verbosity = rustcode::controller::Verbosity::Low;
-    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-        rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        ),
-    );
-
-    let text = super::render_live_tail(&state, 80, 24)
-        .into_iter()
-        .map(|line| line.to_string())
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"cargo test"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "view_file".to_owned(),
+                arguments: r#"{"path":"src/main.rs"}"#.to_owned(),
+            },
+        ]));
+    let output = (1..=9)
+        .map(|line| format!("line {line}"))
         .collect::<Vec<_>>()
         .join("\n");
-    // Live tools render as a transcript projection: the exploration cell is
-    // visible while nothing is committed to history.
-    assert!(text.contains("• Running Read"), "rendered: {text:?}");
-    assert!(text.contains("src/main.rs"), "rendered: {text:?}");
-    assert!(state.history.is_empty());
+    state.history.push(
+        ChatMessage::new("tool", format!("run_command: exit code: 0\n{output}"))
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "view_file: [File: src/main.rs]\nfn main() {}")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    state
 }
 
 #[test]
-fn high_verbosity_folds_a_tool_batch_until_the_expand_key_opens_it() {
-    use rustcode::controller::{ChatMessage, ToolCallRef, ToolDetail, ToolResultRecord};
-
-    let mut state = RenderState::new();
-    let calls = [
-        (
-            "call-1",
-            "run_command",
-            r#"{"command":"git status --short"}"#,
-            true,
-        ),
-        (
-            "call-2",
-            "run_command",
-            r#"{"command":"cargo check"}"#,
-            false,
-        ),
-        ("call-3", "view_file", r#"{"path":"src/main.rs"}"#, true),
-    ];
-    state.history.push(
-        ChatMessage::new("assistant", "").with_tool_calls(
-            calls
-                .iter()
-                .map(|(id, name, arguments, _)| ToolCallRef {
-                    id: (*id).to_owned(),
-                    name: (*name).to_owned(),
-                    arguments: (*arguments).to_owned(),
-                })
-                .collect(),
-        ),
-    );
-    for (id, name, _, success) in calls {
-        state.history.push(
-            ChatMessage::new("tool", format!("{name}: exit code: 0\nsome output"))
-                .answering(Some(id.to_owned()))
-                .with_tool_result(ToolResultRecord {
-                    tool_name: name.to_owned(),
-                    success,
-                    ..Default::default()
-                }),
-        );
-    }
+fn verbosity_sets_whether_output_starts_open_and_opening_an_entry_shows_it_all() {
     let render = |state: &RenderState| {
-        super::render_committed_tool_result_group(state, &[1, 2, 3], 80, false)
+        super::render_committed_tool_result_group(state, &[1, 2], 80, false)
             .into_iter()
-            .map(|line| line.to_string())
+            .map(|line| line.to_string().trim_end().to_owned())
             .collect::<Vec<_>>()
     };
+    let mut state = state_with_one_tool_batch();
 
-    // Folded by default: one count line, no call and no output.
+    // High: the calls, each named, and nothing else.
     assert_eq!(
         render(&state),
-        ["  Ran 2 shell commands, read 1 file · 1 failed"]
+        ["• Ran", "  ✓ Bash cargo test", "  ✓ Read src/main.rs"]
     );
 
-    // First press: the calls, still without output.
-    state.tool_detail = ToolDetail::List;
-    let list = render(&state).join("\n");
-    assert!(list.contains("git status --short"), "{list}");
-    assert!(!list.contains("some output"), "{list}");
+    // Low: a five-row preview of the command's output.
+    state.verbosity = rustcode::controller::Verbosity::Low;
+    let low = render(&state);
+    assert_eq!(low[0], "• Ran");
+    assert!(low[1].starts_with("  ✓ Bash cargo test"), "{low:?}");
+    assert!(low.contains(&"  │ line 1".to_owned()), "{low:?}");
+    assert!(low.contains(&"  │ line 9".to_owned()), "{low:?}");
+    assert!(!low.contains(&"  │ line 5".to_owned()), "{low:?}");
 
-    // Second press: output shows the way low verbosity shows it.
-    state.tool_detail = ToolDetail::Output;
-    let output = render(&state).join("\n");
-    assert!(output.contains("some output"), "{output}");
-    assert_eq!(ToolDetail::Output.next(), ToolDetail::Summary);
+    // Opened: all of it, at either verbosity.
+    for verbosity in [
+        rustcode::controller::Verbosity::Low,
+        rustcode::controller::Verbosity::High,
+    ] {
+        state.verbosity = verbosity;
+        state.expanded_thoughts.insert(1);
+        let open = render(&state);
+        for line in 1..=9 {
+            assert!(open.contains(&format!("  │ line {line}")), "{open:?}");
+        }
+    }
 }
 
 #[test]
-fn folded_tool_rows_are_click_targets_and_prose_is_not() {
+fn running_block_names_each_call_and_puts_its_state_behind_it() {
+    let now = std::time::Instant::now();
+    let mut running = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test --workspace",
+    );
+    running.execution_started = true;
+    running.started_at = now - std::time::Duration::from_secs(12);
+    let mut waiting = rustcode::controller::LiveToolCall::new(
+        "local:2",
+        None,
+        "view_file",
+        "Read",
+        "src/main.rs",
+    );
+    waiting.execution_started = false;
+    let rows = super::history_cell::render_live_tool_cell_at(
+        &[running, waiting],
+        80,
+        &rustcode::controller::Verbosity::High,
+        false,
+        now,
+        None,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "• Running · esc interrupt",
+            "  Bash cargo test --workspace · 12s",
+            "  Read src/main.rs · waiting",
+        ]
+    );
+}
+
+#[test]
+fn status_row_names_the_state_of_the_turn_and_never_a_tool() {
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    assert_eq!(
+        super::activity_status_label(&render_snapshot(&state)),
+        "Generating"
+    );
+
+    // A call the model is still writing has not started.
+    let mut call =
+        rustcode::controller::LiveToolCall::new("local:1", None, "run_command", "Bash", "ls");
+    call.execution_started = false;
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+    assert_eq!(
+        super::activity_status_label(&render_snapshot(&state)),
+        "Generating"
+    );
+
+    std::sync::Arc::make_mut(&mut state.live_tool_calls)[0].execution_started = true;
+    let snapshot = render_snapshot(&state);
+    assert_eq!(super::activity_status_label(&snapshot), "Working");
+    let row = super::composer_render::active_work_indicator(&snapshot, 80, None)
+        .expect("a running turn has a status row")
+        .to_string();
+    assert!(!row.contains("Bash") && !row.contains("ls"), "{row}");
+}
+
+#[test]
+fn footer_counts_tasks_and_reports_where_the_counter_is() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+    use rustcode::controller::TaskDisplay;
+
+    let mut state = RenderState::new();
+    let draw = |state: &RenderState| {
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        let snapshot = render_snapshot(state);
+        let mut chip = None;
+        terminal
+            .draw(|frame| {
+                chip = super::render_composer_footer(
+                    frame,
+                    frame.area(),
+                    &snapshot,
+                    None,
+                    false,
+                    false,
+                );
+            })
+            .unwrap();
+        let row = (0..80)
+            .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+            .collect::<String>();
+        (row, chip)
+    };
+
+    let (row, chip) = draw(&state);
+    assert!(!row.contains("task"), "{row}");
+    assert_eq!(chip, None);
+
+    state.background_tasks = (0..2)
+        .map(|index| TaskDisplay {
+            id: format!("task-{index}"),
+            command: "cargo build".into(),
+            started_at: std::time::Instant::now(),
+            child_pid: None,
+        })
+        .collect();
+    let (row, chip) = draw(&state);
+    let chip = chip.expect("running tasks are counted");
+    let painted = row
+        .chars()
+        .skip(usize::from(chip.x))
+        .take(usize::from(chip.width))
+        .collect::<String>();
+    assert_eq!(painted, " 2 tasks ");
+    assert!(row.contains("context left"), "{row}");
+}
+
+#[test]
+fn tool_blocks_are_hover_and_click_targets_and_prose_is_not() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
@@ -7100,12 +6857,26 @@ fn folded_tool_rows_are_click_targets_and_prose_is_not() {
             .unwrap_or_else(|| panic!("{needle:?} is not painted"))
     };
 
-    let tool_row = row_of("Ran 1 shell command");
-    assert!(transcript.tool_row_at(4, tool_row));
-    assert!(!transcript.tool_row_at(4, row_of("The tree is clean.")));
-    assert!(!transcript.tool_row_at(4, row_of("check the tree")));
-    // The spacer under the count line belongs to the block but not the target.
-    assert!(!transcript.tool_row_at(4, tool_row + 1));
+    // The heading and the call's row both belong to the block.
+    let heading = row_of("• Ran");
+    let call = row_of("Bash git status --short");
+    let block = transcript
+        .tool_block_at(4, call)
+        .expect("the call is a target");
+    assert_eq!(block, (2, 3));
+    assert_eq!(transcript.tool_block_at(4, heading), Some(block));
+    assert_eq!(
+        transcript.tool_block_at(4, row_of("The tree is clean.")),
+        None
+    );
+    assert_eq!(transcript.tool_block_at(4, row_of("check the tree")), None);
+    // The spacer under the block belongs to it but is not a target.
+    assert_eq!(transcript.tool_block_at(4, call + 1), None);
+
+    // Hover changes only when the pointer reaches or leaves the block.
+    assert!(transcript.hover_at(4, call));
+    assert!(!transcript.hover_at(9, heading));
+    assert!(transcript.hover_at(4, row_of("The tree is clean.")));
 }
 
 #[test]
@@ -7260,174 +7031,6 @@ fn live_tool_and_assistant_cells_update_and_clear_independently() {
 }
 
 #[test]
-fn live_exploration_batch_keeps_each_calls_state() {
-    let mut speculative =
-        rustcode::controller::LiveToolCall::new("local:1", None, "grep", "Grep", "src/**/*.rs");
-    speculative.execution_started = false;
-    let executing = rustcode::controller::LiveToolCall::new(
-        "local:2",
-        None,
-        "view_file",
-        "Read",
-        "src/main.rs",
-    );
-
-    let rendered = super::history_cell::render_live_tool_cell(&[speculative, executing], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Running · esc interrupt",
-            "├ ◦ Grep src/**/*.rs · queued",
-            "└ • Read src/main.rs"
-        ]
-    );
-}
-
-#[test]
-fn mixed_live_exploration_and_action_batch_uses_running_heading() {
-    let calls = vec![
-        rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        ),
-        rustcode::controller::LiveToolCall::new(
-            "local:2",
-            None,
-            "write_to_file",
-            "Writing",
-            "src/main.rs",
-        ),
-    ];
-
-    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Running · esc interrupt",
-            "├ • Read src/main.rs",
-            "└ • Writing src/main.rs"
-        ]
-    );
-}
-
-#[test]
-fn live_mcp_calls_use_running_heading_when_one_call_is_executing() {
-    let mut speculative = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "mcp__clockify__get_time",
-        "ClockifyGetTime",
-        "workspace",
-    );
-    speculative.execution_started = false;
-    let executing = rustcode::controller::LiveToolCall::new(
-        "local:2",
-        None,
-        "mcp__clockify__start_timer",
-        "ClockifyStartTimer",
-        "task-42",
-    );
-
-    let rendered = super::history_cell::render_live_tool_cell(&[speculative, executing], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Running · esc interrupt",
-            "├ ◦ ClockifyGetTime workspace · queued",
-            "└ • ClockifyStartTimer task-42"
-        ]
-    );
-}
-
-#[test]
-fn single_live_generic_tool_keeps_state_action_and_target_on_one_row() {
-    let call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "use_skill",
-        "UseSkill",
-        "release-automation",
-    );
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        ["• Running UseSkill release-automation · esc interrupt",]
-    );
-}
-
-#[test]
-fn speculative_live_tools_keep_individual_queued_rows() {
-    let mut generic = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "use_skill",
-        "UseSkill",
-        "release-automation",
-    );
-    generic.execution_started = false;
-    let mut command = rustcode::controller::LiveToolCall::new(
-        "local:2",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test",
-    );
-    command.execution_started = false;
-
-    let rendered = super::history_cell::render_live_tool_cell(&[generic, command], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Queued",
-            "├ ◦ UseSkill release-automation",
-            "└ ◦ Bash cargo test"
-        ]
-    );
-}
-
-#[test]
-fn speculative_file_write_uses_preparing_heading() {
-    let mut call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "write_to_file",
-        "Writing",
-        "src/main.js",
-    );
-    call.execution_started = false;
-
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(rendered, ["• Queued Writing src/main.js"]);
-}
-
-#[test]
 fn speculative_tool_without_target_is_not_rendered() {
     let mut call = rustcode::controller::LiveToolCall::new("local:1", None, "list", "List", "");
     call.execution_started = false;
@@ -7435,206 +7038,6 @@ fn speculative_tool_without_target_is_not_rendered() {
     let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false);
 
     assert!(rendered.is_empty());
-}
-
-#[test]
-fn native_speculative_exploration_without_target_uses_queued_heading() {
-    let mut call =
-        rustcode::controller::LiveToolCall::new("local:1", None, "grep", "Calling", "grep");
-    call.execution_started = false;
-
-    let mut state = RenderState::new();
-    state.verbosity = rustcode::controller::Verbosity::Low;
-    state.status = AppStatus::Streaming;
-    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
-
-    let text = super::render_live_tail(&state, 80, 24)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Speculative work is a visible queued projection, never raw protocol.
-    assert!(text.contains("• Queued"), "rendered: {text:?}");
-    assert!(text.contains("Calling grep"), "rendered: {text:?}");
-    assert!(!text.contains("[TOOL_CALLS]"), "rendered: {text:?}");
-}
-
-#[test]
-fn live_editing_tool_cell_shows_action_and_target_child() {
-    let call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "replace_file_content",
-        "Edit",
-        "src/game/engine.ts",
-    );
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        ["• Running Edit src/game/engine.ts · esc interrupt",]
-    );
-}
-
-#[test]
-fn live_audio_generation_cell_shows_running_heading_and_output_path() {
-    let arguments = serde_json::json!({
-        "prompt": "a short balloon pop",
-        "duration_seconds": 0.4,
-        "output_path": "assets/audio/balloon-pop.wav"
-    });
-    let (action, target) =
-        rustcode::controller::summarize_tool_call("generate_sound_effect", &arguments);
-    let call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "generate_sound_effect",
-        action,
-        target,
-    );
-
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        ["• Running GenerateSoundEffect assets/audio/balloon-pop.wav · esc interrupt",]
-    );
-}
-
-#[test]
-fn live_video_render_cell_shows_progress() {
-    let mut call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "render_video",
-        "RenderVideo",
-        "video-project.json",
-    );
-    call.output
-        .push_back(rustcode::controller::LiveToolOutputChunk {
-            stderr: true,
-            text: "render progress: 42% (2.1s/5.0s)\n".to_owned(),
-        });
-
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered[0],
-        "• Running RenderVideo video-project.json · esc interrupt"
-    );
-    assert!(rendered[1].contains("render progress: 42% (2.1s/5.0s)"));
-}
-
-#[test]
-fn live_batched_edits_with_casing_aliases_include_actions() {
-    let calls = vec![
-        rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "replace_file_content",
-            "Edit",
-            "src/game/engine.ts",
-        ),
-        rustcode::controller::LiveToolCall::new(
-            "local:2",
-            None,
-            "WriteFile",
-            "Write",
-            "src/App.tsx",
-        ),
-    ];
-    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Running · esc interrupt",
-            "├ • Edit src/game/engine.ts",
-            "└ • Write src/App.tsx",
-        ]
-    );
-}
-
-#[test]
-fn live_multiple_generic_tools_show_running_heading() {
-    let calls = vec![
-        rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "clockify_timer",
-            "ClockifyTimer",
-            "start",
-        ),
-        rustcode::controller::LiveToolCall::new(
-            "local:2",
-            None,
-            "notify_user",
-            "NotifyUser",
-            "done",
-        ),
-    ];
-    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rendered,
-        [
-            "• Running · esc interrupt",
-            "├ • ClockifyTimer start",
-            "└ • NotifyUser done",
-        ]
-    );
-}
-
-#[test]
-fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
-    let mut call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test",
-    );
-    call.output
-        .push_back(rustcode::controller::LiveToolOutputChunk {
-            stderr: false,
-            text: (0..12).map(|line| format!("stdout {line}\n")).collect(),
-        });
-    call.output
-        .push_back(rustcode::controller::LiveToolOutputChunk {
-            stderr: true,
-            text: "compiler error\n".to_owned(),
-        });
-    call.omitted_output_bytes = 4096;
-
-    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(rendered[0], "• Running $ cargo test · 0s · esc interrupt");
-    assert!(rendered.iter().any(|line| line.contains("compiler error")));
-    assert!(rendered.iter().any(|line| line.contains("lines")));
-    assert!(rendered.iter().any(|line| line.contains("4K")));
-    assert!(
-        rendered.len() <= 6,
-        "live output must fit a five-row body below its one-row header: {rendered:?}"
-    );
 }
 
 #[test]
@@ -7752,40 +7155,6 @@ fn live_shell_output_wraps_japanese_and_keeps_omission_inside_five_rows() {
     assert!(
         rendered.iter().all(|line| line.width() <= 24),
         "live Japanese output wraps by display width: {rendered:?}"
-    );
-}
-
-#[test]
-fn high_verbosity_live_command_cell_shows_only_the_invocation() {
-    let mut call = rustcode::controller::LiveToolCall::new(
-        "local:1",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test",
-    );
-    call.output
-        .push_back(rustcode::controller::LiveToolOutputChunk {
-            stderr: false,
-            text: "secret command output\n".to_owned(),
-        });
-
-    let rendered = super::history_cell::render_live_tool_cell_with_verbosity(
-        &[call],
-        80,
-        &rustcode::controller::Verbosity::High,
-        false,
-        None,
-    )
-    .into_iter()
-    .map(|line| line.to_string())
-    .collect::<Vec<_>>();
-
-    assert_eq!(rendered, ["• Running $ cargo test · 0s · esc interrupt"]);
-    assert!(
-        !rendered
-            .iter()
-            .any(|line| line.contains("secret command output"))
     );
 }
 
@@ -9252,7 +8621,6 @@ fn selected_subagent_transcript_scrolls_back_to_its_first_message() {
 #[test]
 fn selected_restored_child_correlates_legacy_tool_results_with_its_history() {
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     for index in 0..9 {
         state
             .history
@@ -9656,7 +9024,6 @@ fn command_child_lines_wrap_with_indentation() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     let long_cmd = "curl -sS https://example.com/api/v1/organizations/test -H 'Authorization: Bearer test_token' --data '{\"field\":\"very long content here\"}'";
     state.history.push(
@@ -9692,17 +9059,17 @@ fn command_child_lines_wrap_with_indentation() {
         "long command should collapse to a bounded preview: {rendered:?}"
     );
     assert!(rendered[0].to_string().starts_with("• Ran"));
-    assert!(rendered[1].to_string().starts_with("└ ✓ Bash"));
+    assert!(rendered[1].to_string().starts_with("  ✓ Bash"));
     assert!(
         rendered.iter().any(|line| line.to_string().contains('…')),
         "collapsed preview should carry an ellipsis: {rendered:?}"
     );
-    // Continuation lines hang under the side spine ("│ ") or, for the last
+    // Continuation lines hang under the side spine ("  │ ") or, for the last
     // child's wrapped title, the matching blank indent ("    ").
     for line in &rendered[2..] {
         let text = line.to_string();
         assert!(
-            text.starts_with("│ ") || text.starts_with("    ") || text.is_empty(),
+            text.starts_with("  │ ") || text.starts_with("    ") || text.is_empty(),
             "wrapped line must hang under the tree indent: {text:?}"
         );
     }
@@ -10717,7 +10084,7 @@ fn footer_shows_the_model_without_a_running_indicator() {
                 .unwrap();
         terminal
             .draw(|frame| {
-                super::render_composer_footer(frame, frame.area(), &snapshot, None, false);
+                super::render_composer_footer(frame, frame.area(), &snapshot, None, false, false);
             })
             .unwrap();
         let row = (0..160)
@@ -10898,20 +10265,19 @@ fn reduced_motion_chat_indicator_is_static_and_live_tools_are_shown() {
     state.config.reduced_motion = true;
     state.history.push(ChatMessage::new("user", "hello"));
     set_current_response(&mut state, "visible assistant text");
-    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-        rustcode::controller::LiveToolCall::new(
-            "call-1",
-            None,
-            "run_command",
-            "Bash",
-            "secret command",
-        ),
+    let mut call = rustcode::controller::LiveToolCall::new(
+        "call-1",
+        None,
+        "run_command",
+        "Bash",
+        "secret command",
     );
+    call.execution_started = true;
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
     let text = render_state_to_text(&mut state, 100, 20);
     assert!(text.contains("visible assistant text"));
-    // A full chat needs no indicator row: the streaming text is the signal.
-    // (Dedicated tests cover the indicator in a chat with spare room.)
-    assert!(!text.contains("Working"));
+    // The row under the chat names the state of the turn, never the tool.
+    assert!(text.contains("• Working"), "{text}");
     // Reduced motion still freezes animation, but live tools stay visible.
     assert!(text.contains("secret command"), "{text}");
     assert!(text.contains("Running"), "{text}");
@@ -11186,87 +10552,9 @@ fn agent_picker_displays_nested_parent_status_model_and_elapsed_time() {
 }
 
 #[test]
-fn quiet_foreground_command_refreshes_elapsed_without_output_or_row_churn() {
-    use rustcode::controller::{LiveToolCall, Verbosity};
-    let call = LiveToolCall::new("build", None, "run_command", "Bash", "cargo build");
-    let now = call.started_at + std::time::Duration::from_secs(12);
-    let calls = [call];
-    let render = |now| {
-        super::history_cell::render_live_tool_cell_at(&calls, 80, &Verbosity::Low, false, now, None)
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-    };
-    let before = render(now);
-    assert!(before.join("\n").contains("12s"), "{before:?}");
-    assert!(!before.join("\n").contains("no output yet"), "{before:?}");
-    assert_eq!(before.len(), 1);
-    assert!(before.join("\n").contains("esc interrupt"), "{before:?}");
-    let after = render(now + std::time::Duration::from_secs(1));
-    assert_eq!(before.len(), after.len());
-    assert!(after.join("\n").contains("13s"), "{after:?}");
-    assert_eq!(
-        before[1..],
-        after[1..],
-        "only elapsed changes without an output event"
-    );
-}
-
-#[test]
-fn mixed_live_work_has_status_markers_and_hanging_wrap() {
-    use rustcode::controller::LiveToolCall;
-    let running = LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo build --workspace",
-    );
-    let mut queued = LiveToolCall::new(
-        "mcp",
-        None,
-        "mcp__mail__search",
-        "mail.Search",
-        "日本語の長い検索文字列",
-    );
-    queued.execution_started = false;
-    let child = LiveToolCall::new("child", None, "spawn_agent", "SpawnAgent", "inspect build");
-    for width in [24, 80] {
-        let rendered = super::history_cell::render_live_tool_cell(
-            &[running.clone(), queued.clone(), child.clone()],
-            width,
-            false,
-        );
-        let text = rendered
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.starts_with("• Running"), "{text}");
-        assert!(text.contains("├ • Bash"), "{text}");
-        assert!(text.contains("├ ◦ mail.Search"), "{text}");
-        assert!(text.contains("· queued"), "{text}");
-        assert!(text.contains("└ • SpawnAgent"), "{text}");
-        assert_eq!(text.matches("Running").count(), 1, "{text}");
-        assert!(
-            !text.contains('│') && !text.contains('●') && !text.contains('○'),
-            "{text}"
-        );
-        assert!(!text.contains("no output yet"), "{text}");
-        assert!(
-            rendered
-                .iter()
-                .all(|line| line.width() <= usize::from(width)),
-            "{text}"
-        );
-    }
-}
-
-#[test]
 fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
     use rustcode::controller::{ToolResultRecord, Verbosity};
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.verbosity = Verbosity::High;
     for (name, success, error, pending) in [
         ("get_time", true, None, false),
@@ -11294,10 +10582,11 @@ fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
             .collect::<Vec<_>>()
             .join("\n");
         // Markers must be anchored to child rows, not matched anywhere in the
-        // text: each child starts with a tree connector followed by its marker.
+        // text: each child is indented under the heading and leads with its
+        // marker; a wrapped row continues four columns in.
         let children = text
             .lines()
-            .filter(|line| line.starts_with('├') || line.starts_with('└'))
+            .filter(|line| line.starts_with("  ") && !line.starts_with("    "))
             .collect::<Vec<_>>();
         assert_eq!(children.len(), 4, "{text}");
         for child in children {
@@ -11309,111 +10598,13 @@ fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
             );
         }
         assert!(text.contains("cancelled"), "{text}");
-        // Tree connectors point at each child (High verbosity renders no
-        // bodies, so no side spine here; Low-verbosity spine coverage lives in
-        // tool_group_tree_connectors_and_continuous_spine_at_narrow_widths).
-        assert!(text.contains('├'), "{text}");
-        assert!(text.contains('└'), "{text}");
+        assert!(text.contains("· background"), "{text}");
+        assert!(!text.contains('├') && !text.contains('└'), "{text}");
         assert!(
             lines.iter().all(|line| line.width() <= usize::from(width)),
             "{text}"
         );
     }
-}
-
-#[test]
-fn explicit_active_work_states_override_model_and_clear_on_completion() {
-    use rustcode::controller::{BackgroundResultDisplay, LiveToolCall, TaskDisplay};
-    let mut state = RenderState::new();
-    state.status = AppStatus::Streaming;
-    state.current_thought_started_at = Some(std::time::Instant::now());
-    state.live_tool_calls = std::sync::Arc::new(vec![LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo build",
-    )]);
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Running"
-    );
-    state.status = AppStatus::AwaitingToolConfirmation;
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Awaiting approval"
-    );
-    state.status = AppStatus::AwaitingQuestion;
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Awaiting input"
-    );
-    state.live_tool_calls = std::sync::Arc::new(Vec::new());
-    state.status = AppStatus::Idle;
-    state.background_tasks = vec![TaskDisplay {
-        id: "background-build".into(),
-        command: "cargo build".into(),
-        started_at: std::time::Instant::now(),
-        child_pid: Some(1234),
-    }];
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Background running"
-    );
-    state.background_tasks.clear();
-    state.pending_background_results = vec![BackgroundResultDisplay {
-        id: "background-build".into(),
-        command: "cargo build".into(),
-        success: true,
-        cancelled: false,
-        unread: true,
-        ended_at: std::time::Instant::now(),
-    }];
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Unread result"
-    );
-    let lines = super::background_command_lines(&render_snapshot(&state));
-    assert!(
-        lines
-            .iter()
-            .any(|line| { line.to_string() == "✓ cargo build · done" })
-    );
-    // A delivered result leaves the row: the transcript owns it from then on.
-    state.pending_background_results[0].unread = false;
-    assert!(super::background_command_lines(&render_snapshot(&state)).is_empty());
-    state.pending_background_results.clear();
-    assert_eq!(
-        super::activity_status_label(&render_snapshot(&state)),
-        "Idle"
-    );
-}
-
-#[test]
-fn quiet_mcp_call_stays_compact_then_shows_latest_bounded_output() {
-    use rustcode::controller::{LiveToolCall, LiveToolOutputChunk};
-    let mut call = LiveToolCall::new("mcp", None, "mcp__mail__search", "mail.Search", "query");
-    let render = |call| {
-        super::history_cell::render_live_tool_cell(&[call], 40, false)
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let quiet = render(call.clone());
-    // One state word on the heading; the child keeps only the elapsed clock.
-    assert!(quiet.contains("• Running mail.Search query"), "{quiet}");
-    assert!(!quiet.contains("running 0s"), "{quiet}");
-    assert!(!quiet.contains("no output yet"), "{quiet}");
-    assert_eq!(quiet.lines().count(), 1);
-    call.output.push_back(LiveToolOutputChunk {
-        stderr: false,
-        text: format!("old progress\nlatest {}\n", "日本語".repeat(20)),
-    });
-    let output = render(call);
-    assert!(output.contains("latest"), "{output}");
-    assert!(!output.contains("old progress"));
-    assert!(!output.contains("no output yet"));
 }
 
 #[test]
@@ -11452,259 +10643,13 @@ fn low_verbosity_command_batch_keeps_one_group_and_per_call_outcomes() {
         "{text}"
     );
     assert!(
-        text.contains("├ ✓ Bash cargo test --package package-0"),
+        text.contains("  ✓ Bash cargo test --package package-0"),
         "{text}"
     );
     assert!(
-        text.contains("└ × Bash cargo test --package package-1 · exit 1"),
+        text.contains("  × Bash cargo test --package package-1 · exit 1"),
         "{text}"
     );
-}
-
-#[test]
-fn out_of_order_live_completion_preserves_remaining_sibling_marker_and_identity() {
-    use rustcode::controller::LiveToolCall;
-    let first = LiveToolCall::new("mcp", None, "mcp__mail__search", "mail.Search", "query");
-    let second = LiveToolCall::new("child", None, "spawn_agent", "SpawnAgent", "inspect tests");
-    let now = second.started_at;
-    let render = |calls: &[LiveToolCall]| {
-        super::history_cell::render_live_tool_cell_at(
-            calls,
-            80,
-            &rustcode::controller::Verbosity::Low,
-            false,
-            now,
-            None,
-        )
-        .iter()
-        .map(Line::to_string)
-        .collect::<Vec<_>>()
-    };
-    let before = render(&[first.clone(), second.clone()]);
-    assert_eq!(
-        before,
-        [
-            "• Running · esc interrupt",
-            "├ • mail.Search query",
-            "└ • SpawnAgent inspect tests"
-        ]
-    );
-    assert_eq!(
-        render(&[second]),
-        ["• Running SpawnAgent inspect tests · esc interrupt"]
-    );
-    assert_eq!(
-        render(&[first]),
-        ["• Running mail.Search query · esc interrupt"]
-    );
-    assert!(
-        render(&[]).is_empty(),
-        "completion removes the mutable running cell"
-    );
-}
-
-#[test]
-fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
-    use rustcode::controller::{BackgroundResultDisplay, TaskDisplay};
-    let mut state = RenderState::new();
-    state.background_tasks = vec![TaskDisplay {
-        id: "build".into(),
-        command: "日本語の長いコマンド".repeat(4),
-        started_at: std::time::Instant::now(),
-        child_pid: Some(4321),
-    }];
-    state.pending_background_results = vec![
-        BackgroundResultDisplay {
-            id: "mcp".into(),
-            command: "mcp child".into(),
-            success: false,
-            cancelled: false,
-            unread: true,
-            ended_at: std::time::Instant::now(),
-        },
-        BackgroundResultDisplay {
-            id: "child".into(),
-            command: "child command".into(),
-            success: false,
-            cancelled: true,
-            unread: true,
-            ended_at: std::time::Instant::now(),
-        },
-    ];
-    for width in [24, 80] {
-        let snapshot = render_snapshot(&state);
-        let lines = super::composer_render::background_command_lines_with_width(&snapshot, width);
-        assert!(
-            lines.iter().all(|line| line.width() <= usize::from(width)),
-            "{lines:?}"
-        );
-        let text = lines
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        for token in ["• ", "✗ ", "⊘ ", "failed", "cancelled"] {
-            assert!(text.contains(token), "{text}");
-        }
-        assert!(!text.contains("LIVE") && !text.contains("RECENT"), "{text}");
-        if width == 80 {
-            assert!(text.contains("✗ mcp child · failed"), "{text}");
-            assert!(text.contains("⊘ child command · cancelled"), "{text}");
-        }
-        assert!(!text.contains("pid") && !text.contains("4321"), "{text}");
-        assert!(!text.contains('│'), "{text}");
-    }
-    let snapshot = render_snapshot(&state);
-    assert_eq!(super::activity_status_label(&snapshot), "Unread result");
-}
-
-#[test]
-fn single_running_command_folds_into_one_indicator_row() {
-    use rustcode::controller::{LiveToolCall, Verbosity};
-    // #1725: a running foreground command rendered its state twice (a
-    // `• Running` heading plus a `●` child row). The heading now carries the
-    // state word, command, elapsed clock and cancel hint in a single row.
-    let call = LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test --workspace -- --nocapture",
-    );
-    let now = call.started_at + std::time::Duration::from_secs(12);
-    for width in [24u16, 40, 80] {
-        let rendered = super::history_cell::render_live_tool_cell_at(
-            &[call.clone()],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        )
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-        assert!(rendered[0].starts_with("• Running $ "), "{rendered:?}");
-        if width >= 80 {
-            assert!(rendered[0].contains("cargo"), "{rendered:?}");
-        }
-        assert!(
-            rendered.iter().any(|line| line.contains("12s")),
-            "{rendered:?}"
-        );
-        assert!(
-            !rendered.iter().any(|line| line.contains('●')),
-            "no duplicate child indicator: {rendered:?}"
-        );
-        assert!(
-            !rendered.iter().any(|line| line.contains(" · running ")),
-            "state word appears once: {rendered:?}"
-        );
-        assert!(
-            rendered[1..]
-                .iter()
-                .all(|line| line.starts_with("│ ") || line.starts_with("  ")),
-            "output hangs under the spine: {rendered:?}"
-        );
-        assert!(
-            rendered
-                .iter()
-                .all(|line| line_width(line) <= usize::from(width)),
-            "{rendered:?}"
-        );
-    }
-}
-
-#[test]
-fn foreground_bottom_indicator_omits_repeated_identity_and_caps_width() {
-    use rustcode::controller::LiveToolCall;
-    // #1725: the bottom row repeated the transcript cell's identity and clock.
-    // With live calls it keeps only the state word; without a live projection
-    // it stays the sole indicator and truncates to its single row.
-    let mut state = RenderState::new();
-    state.live_tool_calls = std::sync::Arc::new(vec![LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test --workspace -- --nocapture",
-    )]);
-    let snapshot = render_snapshot(&state);
-    let indicator = super::composer_render::active_work_indicator(&snapshot, 80, None)
-        .expect("foreground work");
-    assert!(
-        !indicator.to_string().contains("cargo test"),
-        "{indicator:?}"
-    );
-    assert!(!indicator.to_string().contains("Running"), "{indicator:?}");
-    assert!(indicator.to_string().contains('⠋'), "{indicator:?}");
-    // #1773: the row still says what is happening and on which model.
-    assert_eq!(
-        indicator.to_string(),
-        format!("⠋ Executing · {}", snapshot.model_name())
-    );
-
-    let mut state = RenderState::new();
-    state.status = AppStatus::Streaming;
-    state.running_tools.push("run_command".to_owned());
-    state
-        .running_tools
-        .push(format!("tool-{}", "x".repeat(200)));
-    for width in [18u16, 24, 40, 80] {
-        let snapshot = render_snapshot(&state);
-        let indicator = super::composer_render::active_work_indicator(&snapshot, width, None)
-            .expect("tool work");
-        let text = indicator.to_string();
-        assert!(line_width(&text) <= usize::from(width), "{text:?}");
-        if width <= 40 {
-            assert!(text.contains('…'), "long tool lists truncate: {text:?}");
-        }
-    }
-}
-
-#[test]
-fn tool_group_tree_connectors_and_continuous_spine_at_narrow_widths() {
-    use rustcode::controller::{ToolResultRecord, Verbosity};
-    // #1725: child rows lost their inward connectors and body rows showed a
-    // dangling gutter stub on the first wrapped row only. Every group row must
-    // stay within the viewport at narrow widths.
-    let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
-    state.history.push(
-        ChatMessage::new(
-            "tool",
-            "run_command: {\"data\": [1, 2, 3], \"board\": \"x\"}\nHTTP 201 Created",
-        )
-        .with_tool_result(ToolResultRecord {
-            tool_name: "run_command".into(),
-            success: true,
-            exit_code: Some(0),
-            ..Default::default()
-        }),
-    );
-    state.history.push(
-        ChatMessage::new("tool", "ask_question: User selected: Ads - Wecall").with_tool_result(
-            ToolResultRecord {
-                tool_name: "ask_question".into(),
-                success: true,
-                ..Default::default()
-            },
-        ),
-    );
-    for width in [18u16, 24, 32, 40, 80] {
-        let lines = super::render_committed_tool_result_group(&state, &[0, 1], width, false);
-        let text = lines
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains('├'), "{text}");
-        assert!(text.contains('└'), "{text}");
-        assert!(
-            lines.iter().all(|line| line.width() <= usize::from(width)),
-            "{text}"
-        );
-    }
 }
 
 #[test]
@@ -11739,47 +10684,6 @@ fn line_width(line: &str) -> usize {
 }
 
 #[test]
-fn later_tool_rounds_keep_the_downward_connector_under_a_committed_heading() {
-    use rustcode::controller::{ChatMessage, ToolResultRecord, Verbosity};
-    // #1725: a later tool-only round renders under a heading an earlier frame
-    // already committed, and terminal scrollback cannot be revised. Every
-    // continuation child therefore keeps the downward connector instead of
-    // claiming to be the final sibling.
-    let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
-    state.verbosity = Verbosity::High;
-    state.history.push(
-        ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
-            tool_name: "run_command".into(),
-            success: true,
-            exit_code: Some(0),
-            ..Default::default()
-        }),
-    );
-    state.history.push(
-        ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
-            tool_name: "run_command".into(),
-            success: true,
-            exit_code: Some(0),
-            ..Default::default()
-        }),
-    );
-    let lines = super::render_committed_tool_result_continuation_snapshot(
-        &render_snapshot(&state),
-        &[0],
-        80,
-        false,
-    )
-    .into_iter()
-    .map(|line| line.to_string())
-    .collect::<Vec<_>>();
-    assert!(
-        lines.iter().all(|line| line.starts_with('├')),
-        "continuation children keep the downward connector: {lines:?}"
-    );
-}
-
-#[test]
 fn command_body_spine_survives_blank_lines_and_stderr() {
     use rustcode::controller::Verbosity;
     // #1725: blank payload rows and stderr lines must not punch holes in the
@@ -11799,258 +10703,16 @@ fn command_body_spine_survives_blank_lines_and_stderr() {
         .iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(rows[0], "│ stdout first", "{rows:?}");
+    assert_eq!(rows[0], "  │ stdout first", "{rows:?}");
     assert!(
-        rows[1].trim_end() == "│",
+        rows[1].trim() == "│",
         "blank payload row keeps the spine: {rows:?}"
     );
     assert!(
-        rows[2].starts_with("│ ! stderr failed"),
+        rows[2].starts_with("  │ ! stderr failed"),
         "stderr keeps its marker under the spine: {rows:?}"
     );
     assert!(lines.iter().all(|line| line.width() <= 24), "{text}");
-}
-
-#[test]
-fn bottom_indicator_fits_wide_suffixes_for_every_work_state() {
-    use rustcode::controller::{BackgroundResultDisplay, LiveToolCall, TaskDisplay, TokenUsage};
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    // #1725: head + detail + token suffix share one terminal row. A wide
-    // provisional total must shrink the state word's detail, never clip the
-    // accounting away.
-    let usage = TokenUsage {
-        prompt_tokens: 9000,
-        completion_tokens: 1200,
-        total_tokens: 10_200,
-        ..Default::default()
-    };
-    let mut states = Vec::new();
-
-    let mut foreground = RenderState::new();
-    foreground.status = AppStatus::Streaming;
-    foreground.current_turn_token_usage = Some(usage.clone());
-    foreground.token_usage_in_flight = true;
-    foreground.live_tool_calls = std::sync::Arc::new(vec![LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test --workspace",
-    )]);
-    states.push(("foreground", foreground));
-
-    let mut background = RenderState::new();
-    background.current_turn_token_usage = Some(usage.clone());
-    background.background_tasks = vec![TaskDisplay {
-        id: "build".into(),
-        command: "cargo build --release --all-targets".into(),
-        started_at: std::time::Instant::now(),
-        child_pid: Some(4321),
-    }];
-    states.push(("background", background));
-
-    let mut ready = RenderState::new();
-    ready.current_turn_token_usage = Some(usage);
-    ready.pending_background_results = vec![BackgroundResultDisplay {
-        id: "build".into(),
-        command: "cargo build".into(),
-        success: true,
-        cancelled: false,
-        unread: true,
-        ended_at: std::time::Instant::now(),
-    }];
-    states.push(("results-ready", ready));
-
-    for (name, state) in states {
-        for width in [18u16, 24, 32, 40, 80] {
-            let snapshot = render_snapshot(&state);
-            let indicator = super::live_running_indicator(&snapshot, width)
-                .unwrap_or_else(|| panic!("{name} keeps an indicator at width {width}"));
-            let text = indicator.to_string();
-            assert!(
-                indicator.width() <= usize::from(width),
-                "{name} width {width}: {text:?}"
-            );
-            assert!(text.contains("tokens"), "{name} width {width}: {text:?}");
-        }
-    }
-}
-
-#[test]
-fn folded_running_row_reserves_space_for_clock_and_cancel_hint() {
-    use rustcode::controller::{LiveToolCall, Verbosity};
-    // #1725: the folded row shares its width between the command, the elapsed
-    // clock and the cancel hint. A `1m 05s` clock next to the short `esc` form
-    // used to push the affordance onto a second row.
-    let call = LiveToolCall::new(
-        "build",
-        None,
-        "run_command",
-        "Bash",
-        "cargo test --workspace",
-    );
-    let now = call.started_at + std::time::Duration::from_secs(65);
-    for width in [18u16, 24, 32, 40, 80] {
-        let rendered = super::history_cell::render_live_tool_cell_at(
-            &[call.clone()],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        );
-        let text = rendered
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if width >= 24 {
-            assert!(
-                text.contains("1m"),
-                "width {width} keeps the clock: {text:?}"
-            );
-        }
-        // When a hint is emitted it shares a row with the clock or the command:
-        // it must never wrap onto a row of its own or overflow the clock's row.
-        for row in &rendered {
-            let text = row.to_string();
-            if text.contains("esc") {
-                assert!(
-                    text.contains("1m") || text.contains("cargo"),
-                    "width {width}: orphaned cancel hint: {text:?}"
-                );
-            }
-        }
-        // A short command leaves room for the compact hint from 32 columns up;
-        // below that the command and clock genuinely fill the row.
-        let short = LiveToolCall::new("b", None, "run_command", "Bash", "ls");
-        let short_render = super::history_cell::render_live_tool_cell_at(
-            &[short],
-            width,
-            &Verbosity::Low,
-            false,
-            now,
-            None,
-        );
-        let short_text = short_render[0].to_string();
-        if width >= 32 {
-            assert!(
-                short_text.contains("esc"),
-                "width {width}: short command keeps the affordance: {short_text:?}"
-            );
-        }
-        assert!(
-            !short_text.contains("esc") || short_text.contains("esc interrupt") || width >= 32,
-            "width {width}: {short_text:?}"
-        );
-        assert!(
-            rendered
-                .iter()
-                .all(|line| line.width() <= usize::from(width)),
-            "width {width}: {text:?}"
-        );
-    }
-}
-
-#[test]
-fn compact_command_rows_preserve_distinguishing_tails() {
-    use rustcode::controller::{LiveToolCall, TaskDisplay, Verbosity};
-    let commands = ["cargo test --package alpha", "cargo test --package beta"];
-
-    let foreground = commands.map(|command| {
-        super::history_cell::render_live_tool_cell_at(
-            &[LiveToolCall::new(
-                "task",
-                None,
-                "run_command",
-                "Bash",
-                command,
-            )],
-            32,
-            &Verbosity::Low,
-            false,
-            std::time::Instant::now(),
-            None,
-        )[0]
-        .to_string()
-    });
-    assert!(foreground[0].contains("…ha"), "{:?}", foreground[0]);
-    assert!(foreground[1].contains("…ta"), "{:?}", foreground[1]);
-    assert_ne!(foreground[0], foreground[1]);
-    assert!(
-        foreground
-            .iter()
-            .all(|row| { row.contains("0s") && row.contains("esc") && line_width(row) <= 32 })
-    );
-
-    let mut state = RenderState::new();
-    state.background_tasks = commands
-        .map(|command| TaskDisplay {
-            id: command.to_owned(),
-            command: command.to_owned(),
-            started_at: std::time::Instant::now(),
-            child_pid: None,
-        })
-        .to_vec();
-    let background =
-        super::composer_render::background_command_lines_with_width(&render_snapshot(&state), 28)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-    assert_eq!(background.len(), 2);
-    assert!(background[0].contains("alpha"), "{:?}", background[0]);
-    assert!(background[1].contains("beta"), "{:?}", background[1]);
-    assert_ne!(background[0], background[1]);
-    assert!(
-        background
-            .iter()
-            .all(|row| { row.contains("0s") && line_width(row) <= 28 })
-    );
-}
-
-#[test]
-fn many_live_children_preserve_the_cap_and_omission_count() {
-    use rustcode::controller::LiveToolCall;
-    // #1725: a capped child list still ends with a downward connector only when
-    // nothing follows, so the omission row never sits under a closing `└`.
-    let calls = (0..12)
-        .map(|index| {
-            LiveToolCall::new(
-                format!("call-{index}"),
-                None,
-                "mcp__mail__search",
-                "mail.Search",
-                format!("query {index}"),
-            )
-        })
-        .collect::<Vec<_>>();
-    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-    let child_rows = rendered
-        .iter()
-        .filter(|line| line.starts_with("├ • "))
-        .count();
-    assert_eq!(child_rows, 8, "{rendered:?}");
-    assert_eq!(rendered[0], "• Running · esc interrupt");
-    assert_eq!(
-        rendered.last().map(String::as_str),
-        Some("└ … +4 more"),
-        "the omission row closes the tree: {rendered:?}"
-    );
-    assert!(
-        rendered.iter().any(|line| line.contains("query 7")),
-        "{rendered:?}"
-    );
-    assert!(
-        !rendered.iter().any(|line| line.contains("query 8")),
-        "{rendered:?}"
-    );
-    assert!(
-        rendered.iter().any(|line| line.contains("+4 more")),
-        "{rendered:?}"
-    );
 }
 
 #[test]
@@ -12128,60 +10790,6 @@ fn edit_diff_bands_span_the_row_and_keep_syntax_colors() {
 }
 
 #[test]
-fn queued_live_children_stay_on_one_row_with_contracted_paths() {
-    use rustcode::controller::LiveToolCall;
-    // #1728: a queued projection repeated absolute paths across several wrapped
-    // rows. Paths contract to `~` and keep their tail so the call is one row.
-    let mut call = LiveToolCall::new(
-        "call-1",
-        None,
-        "write_to_file",
-        "Writing",
-        "/Users/lagos/code/kompansamal/benchmark/omlx-qwen/benchmark-2/src/db.ts",
-    );
-    call.execution_started = false;
-    for width in [40u16, 80] {
-        let rendered = super::history_cell::render_live_tool_cell_with_verbosity(
-            &[call.clone()],
-            width,
-            &rustcode::controller::Verbosity::Low,
-            false,
-            Some("/Users/lagos"),
-        )
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-        assert_eq!(rendered.len(), 1, "{rendered:?}");
-        let child = &rendered[0];
-        assert_eq!(child.matches('\n').count(), 0, "{rendered:?}");
-        if width >= 80 {
-            assert!(
-                child.starts_with("• Queued Writing ~/code/"),
-                "queued child contracts the home directory: {child:?}"
-            );
-        } else {
-            // The budget cannot hold the contracted path, so it is truncated.
-            // What must never reappear is the raw absolute prefix.
-            assert!(!child.contains("/Users/"), "{child:?}");
-        }
-        assert!(
-            child.ends_with("src/db.ts"),
-            "queued child keeps its informative tail: {child:?}"
-        );
-        if width <= 40 {
-            // Too narrow for the whole path: the row must truncate rather than
-            // wrap, and must never show the raw absolute prefix.
-            assert!(child.contains('…'), "{child:?}");
-            assert!(!child.contains("/Users/lagos"), "{child:?}");
-        }
-        assert!(
-            child.width() <= usize::from(width),
-            "queued child fits the row: {child:?}"
-        );
-    }
-}
-
-#[test]
 fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
     use rustcode::controller::{LiveToolCall, RenderState, TaskDisplay};
     // #1728: the reserved row repeated `Queued` and the model while the
@@ -12207,8 +10815,6 @@ fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
         .to_string();
     assert_eq!(row.matches("Queued").count(), 0, "{row:?}");
 
-    // Without a live projection the bottom row stays the only indicator and
-    // keeps the model, so queued work is never unreported.
     let mut state = RenderState::new();
     state.background_tasks = vec![TaskDisplay {
         id: "build".into(),
@@ -12225,52 +10831,12 @@ fn bottom_indicator_stays_a_single_state_when_a_queued_cell_is_visible() {
         ended_at: std::time::Instant::now(),
     }];
     let snapshot = render_snapshot(&state);
-    let text = super::composer_render::active_work_indicator(&snapshot, 80, None)
-        .expect("background work keeps an indicator")
-        .to_string();
-    assert!(text.contains("Unread result"), "{text:?}");
-    assert!(text.contains("1 unread result"), "{text:?}");
-}
-
-#[test]
-fn background_list_keeps_terminal_results_when_running_rows_hit_the_cap() {
-    use rustcode::controller::{BackgroundResultDisplay, TaskDisplay};
-    // #1728: each background list is capped independently, so the closing `└`
-    // must follow the number of rows actually drawn, not the total. With one
-    // list at the cap and the other non-empty, every row used to be a `├`.
-    let mut state = RenderState::new();
-    for index in 0..3 {
-        state.background_tasks.push(TaskDisplay {
-            id: format!("build-{index}"),
-            command: format!("cargo build step {index}"),
-            started_at: std::time::Instant::now(),
-            child_pid: Some(1000 + index),
-        });
-    }
-    state
-        .pending_background_results
-        .push(BackgroundResultDisplay {
-            id: "mcp".into(),
-            command: "mcp child".into(),
-            success: true,
-            cancelled: false,
-            unread: true,
-            ended_at: std::time::Instant::now(),
-        });
-    let snapshot = render_snapshot(&state);
-    let text = super::composer_render::background_command_lines_with_width(&snapshot, 80)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    for step in 0..3 {
-        assert!(
-            text.contains(&format!("• cargo build step {step}")),
-            "{text}"
-        );
-    }
-    assert!(text.contains("✓ mcp child · done"), "{text}");
-    assert!(!text.contains('└') && !text.contains('├'), "{text}");
+    // Background tasks are not a state of the turn: the footer counts them.
+    assert!(super::composer_render::active_work_indicator(&snapshot, 80, None).is_none());
+    assert_eq!(
+        super::composer_render::tasks_chip_label(&snapshot).as_deref(),
+        Some("1 task · 1 done")
+    );
 }
 
 #[test]
@@ -12380,9 +10946,8 @@ fn committed_thought_is_not_repeated_while_an_mcp_call_is_still_invisible() {
 #[test]
 fn committed_mcp_row_names_the_kind_of_call() {
     use rustcode::controller::ToolResultRecord;
-    // #1770: `• Ran` over a bare `└ ✓ teams.list_chats` read as a broken row.
+    // #1770: `• Ran` over a bare `  ✓ teams.list_chats` read as a broken row.
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(
         ChatMessage::new("tool", "mcp__teams__list_chats: []").with_tool_result(ToolResultRecord {
             tool_name: "mcp__teams__list_chats".into(),
@@ -12395,18 +10960,17 @@ fn committed_mcp_row_names_the_kind_of_call() {
         .map(Line::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("└ ✓ MCP teams.list_chats"), "{text}");
+    assert!(text.contains("  ✓ MCP teams.list_chats"), "{text}");
 }
 
 #[test]
-fn tool_rounds_chain_under_one_heading_with_a_closed_tree() {
+fn tool_rounds_chain_under_one_heading() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
     // One-tool-per-round orchestration: each round is an empty assistant call
     // plus its result. Nothing visible sits between the rounds, so they share
     // one heading and the last child closes the tree.
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(ChatMessage::new("user", "look around"));
     for (round, path) in ["src/a.rs", "src/b.rs", "src/c.rs"].into_iter().enumerate() {
         let id = format!("call-{round}");
@@ -12431,15 +10995,15 @@ fn tool_rounds_chain_under_one_heading_with_a_closed_tree() {
     let tree = rendered
         .lines()
         .map(str::trim_end)
-        .filter(|line| line.starts_with('•') || line.starts_with('├') || line.starts_with('└'))
+        .filter(|line| line.starts_with('•') || line.starts_with("  ✓"))
         .collect::<Vec<_>>();
     assert_eq!(
         tree,
         [
-            "• Explored",
-            "├ ✓ Read src/a.rs",
-            "├ ✓ Read src/b.rs",
-            "└ ✓ Read src/c.rs"
+            "• Ran",
+            "  ✓ Read src/a.rs",
+            "  ✓ Read src/b.rs",
+            "  ✓ Read src/c.rs"
         ],
         "{rendered}"
     );
@@ -12479,7 +11043,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
             .lines()
             .map(str::trim_end)
             .filter(|line| {
-                ["• Explored", "• Ran", "├ ", "└ "]
+                ["• Ran", "  ✓ "]
                     .iter()
                     .any(|prefix| line.starts_with(prefix))
             })
@@ -12492,7 +11056,6 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
         "<think>Check the other file.</think>",
     ] {
         let mut state = RenderState::new();
-        state.tool_detail = rustcode::controller::ToolDetail::List;
         state.history.push(ChatMessage::new("user", "look around"));
         round(
             &mut state,
@@ -12510,18 +11073,12 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
         );
         assert_eq!(
             headings(&mut state),
-            [
-                "• Explored",
-                "└ ✓ Read src/a.rs",
-                "• Explored",
-                "└ ✓ Read src/b.rs"
-            ],
+            ["• Ran", "  ✓ Read src/a.rs", "• Ran", "  ✓ Read src/b.rs"],
             "{boundary}"
         );
     }
 
     let mut state = RenderState::new();
-    state.tool_detail = rustcode::controller::ToolDetail::List;
     state.history.push(ChatMessage::new("user", "look around"));
     round(
         &mut state,
@@ -12540,8 +11097,8 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
     let mixed = headings(&mut state);
     assert_eq!(mixed.len(), 3, "{mixed:?}");
     assert_eq!(mixed[0], "• Ran");
-    assert!(mixed[1].starts_with("├ ✓ Read src/a.rs"), "{mixed:?}");
-    assert!(mixed[2].starts_with("└ ✓ Bash cargo check"), "{mixed:?}");
+    assert!(mixed[1].starts_with("  ✓ Read src/a.rs"), "{mixed:?}");
+    assert!(mixed[2].starts_with("  ✓ Bash cargo check"), "{mixed:?}");
 }
 
 #[test]

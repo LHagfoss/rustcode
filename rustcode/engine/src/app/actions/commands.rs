@@ -4,8 +4,8 @@ use super::*;
 /// durable history (issues #1222, #1223): repeated `/ps` polls only differ
 /// by elapsed seconds, and mode toggles only flip Plan/Build.
 fn ephemeral_status_class(content: &str) -> Option<&'static str> {
-    if content.starts_with("No background terminals are running.")
-        || (content.contains("background terminal") && content.contains("running:"))
+    if content.starts_with("No tasks are running.")
+        || (content.contains(" task") && content.contains("running:"))
     {
         return Some("background-listing");
     }
@@ -35,34 +35,55 @@ pub fn push_ephemeral_status(state: &mut AppState, text: String) {
     state.set_notice(text);
 }
 
-pub(super) fn background_terminal_list(session_id: &str) -> String {
+/// The tasks panel: what is running first, then what finished this session.
+pub(crate) fn background_terminal_list(session_id: &str) -> String {
+    const MAX_LISTED_TASKS: usize = 20;
+    const MAX_LISTED_FINISHED: usize = 10;
     let tasks = crate::tools::background_task_snapshots(session_id);
-    if tasks.is_empty() {
-        return "No background terminals are running.".to_string();
+    let finished = crate::tools::recent_background_task_completions(session_id);
+    if tasks.is_empty() && finished.is_empty() {
+        return "No tasks are running.".to_string();
     }
 
-    let mut text = format!(
-        "{} background terminal{} running:",
-        tasks.len(),
-        if tasks.len() == 1 { "" } else { "s" }
-    );
-    const MAX_LISTED_TASKS: usize = 20;
+    let mut text = if tasks.is_empty() {
+        "No tasks are running.".to_string()
+    } else {
+        format!(
+            "{} task{} running:",
+            tasks.len(),
+            if tasks.len() == 1 { "" } else { "s" }
+        )
+    };
     let omitted = tasks.len().saturating_sub(MAX_LISTED_TASKS);
     for task in tasks.into_iter().take(MAX_LISTED_TASKS) {
-        let pid = task
-            .child_pid
-            .map(|pid| pid.to_string())
-            .unwrap_or_else(|| "starting".to_string());
         text.push_str(&format!(
-            "\n  • {} · {} · PID {} · {}",
-            task.id,
+            "\n  • {} · {} · {}",
+            crate::tools::background_command_label(&task.command, 80),
             rustcode_core::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
-            pid,
-            crate::tools::background_command_label(&task.command, 500)
+            task.id,
         ));
     }
     if omitted > 0 {
-        text.push_str(&format!("\n  … {omitted} more background terminals"));
+        text.push_str(&format!("\n  … {omitted} more tasks"));
+    }
+    if !finished.is_empty() {
+        text.push_str("\n\nFinished:");
+        for completion in finished.iter().rev().take(MAX_LISTED_FINISHED) {
+            use rustcode_tasks::TaskTerminalReason;
+            let (marker, outcome) = match &completion.reason {
+                TaskTerminalReason::Exited { success: true, .. } => ("✓", "done".to_owned()),
+                TaskTerminalReason::Exited {
+                    code: Some(code), ..
+                } => ("✗", format!("exit {code}")),
+                TaskTerminalReason::Cancelled => ("⊘", "stopped".to_owned()),
+                _ => ("✗", "failed".to_owned()),
+            };
+            text.push_str(&format!(
+                "\n  {marker} {} · {outcome} · {}",
+                crate::tools::background_command_label(&completion.command, 80),
+                completion.id,
+            ));
+        }
     }
     text
 }
@@ -70,18 +91,18 @@ pub(super) fn background_terminal_list(session_id: &str) -> String {
 pub(super) fn stop_background_terminals(session_id: &str) -> String {
     let result = crate::tools::stop_background_tasks(session_id);
     match (result.stopped, result.requested, result.failed) {
-        (0, 0, 0) => "No background terminals are running.".to_string(),
-        (1, 0, 0) => "Stopped 1 background terminal.".to_string(),
-        (stopped, 0, 0) => format!("Stopped {stopped} background terminals."),
-        (0, requested, 0) => format!(
-            "Stop requested for {requested} background terminal(s); they are still starting."
-        ),
-        (stopped, requested, 0) => format!(
-            "Stopped {stopped} background terminal(s); stop requested for {requested} still starting."
-        ),
-        (0, 0, failed) => format!("Failed to stop {failed} background terminal(s)."),
+        (0, 0, 0) => "No tasks are running.".to_string(),
+        (1, 0, 0) => "Stopped 1 task.".to_string(),
+        (stopped, 0, 0) => format!("Stopped {stopped} tasks."),
+        (0, requested, 0) => {
+            format!("Stop requested for {requested} task(s); they are still starting.")
+        }
+        (stopped, requested, 0) => {
+            format!("Stopped {stopped} task(s); stop requested for {requested} still starting.")
+        }
+        (0, 0, failed) => format!("Failed to stop {failed} task(s)."),
         (stopped, requested, failed) => format!(
-            "Stopped {stopped} background terminal(s); stop requested for {requested}; failed to stop {failed}. Use /ps to inspect the remaining tasks."
+            "Stopped {stopped} task(s); stop requested for {requested}; failed to stop {failed}. Use /ps to inspect the remaining tasks."
         ),
     }
 }
@@ -584,8 +605,8 @@ pub fn build_help_text() -> String {
                     "/prompt",
                     "Load a prompt template into the composer for review",
                 ),
-                ("/ps", "Show running background terminals"),
-                ("/stop", "Stop all running background terminals"),
+                ("/tasks", "Show running and finished tasks"),
+                ("/stop", "Stop all running tasks"),
                 ("/changelog", "Show recent changelog updates"),
             ],
         ),

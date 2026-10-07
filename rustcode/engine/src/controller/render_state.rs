@@ -143,7 +143,6 @@ pub struct RenderState {
     /// Transient notice, already filtered for expiry.
     pub transient_notice: Option<String>,
     pub verbosity: Verbosity,
-    pub tool_detail: rustcode_core::ToolDetail,
     pub delegation_active: bool,
     pub auto_confirm: bool,
     pub agent_mode: AgentMode,
@@ -354,7 +353,6 @@ pub fn render_state(state: &AppState) -> RenderState {
         last_copy_text: state.last_copy_text.clone(),
         transient_notice: state.active_transient_notice().map(str::to_owned),
         verbosity: state.verbosity.clone(),
-        tool_detail: state.tool_detail,
         delegation_active: state.delegation_active,
         auto_confirm: state.auto_confirm,
         agent_mode: state.agent_mode,

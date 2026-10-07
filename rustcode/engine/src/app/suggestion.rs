@@ -162,7 +162,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/ps",
-        desc: "Show running background terminals",
+        desc: "Alias for /tasks",
     },
     CommandInfo {
         name: "/quit",
@@ -190,7 +190,11 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/stop",
-        desc: "Stop all running background terminals",
+        desc: "Stop all running tasks",
+    },
+    CommandInfo {
+        name: "/tasks",
+        desc: "Show running and finished tasks",
     },
     CommandInfo {
         name: "/perf",

@@ -4,20 +4,28 @@ See [command panels](command-panels.md) for slash commands.
 
 ## Tool activity
 
-The TUI shows active foreground tools with elapsed time and a bounded output
-preview, including `no output yet` for quiet work. `Esc` interrupts foreground
-work. A running command gets one indicator row — `• Running $ <command> · 12s ·
-esc interrupt` — instead of repeating its state per line; the row above the
-composer keeps the current state, the model and the turn token total. Several
-live calls share one `• Running` (or `• Queued`) heading and hang beneath it as
-the same tree the finished `• Ran` group uses. Tool groups use `•` for running,
-`◦` for queued, `✓` for completed, `×` for failed, and `−` for cancelled work. Each child row carries a tree connector (`├` for a child with
-siblings below, `└` for the last one) and its output hangs under a continuous
-`│` side spine, so wrapped output keeps the same indentation. Background
-tasks keep their task IDs and process IDs visible; `/ps` lists them and `/stop`
-stops them. A completed background result withheld during a foreground turn is
-marked `result ready` until the turn consumes it. Approvals and questions have
-separate waiting states.
+Tool calls appear in the transcript as one kind of block. While a batch is in
+flight the block is headed `• Running`; once it finishes the same block is
+headed `• Ran`. Each call is a row under the heading that names what it was
+(`Bash cargo test`, `Read src/main.rs`, `Edit src/lib.rs (+12 -3)`) with its
+state behind it: elapsed time while it runs, `waiting` until it starts, and
+`exit 1`, `failed`, `cancelled` or `background` afterwards. Finished rows lead
+with `✓`, `×` or `−`. A call that finishes within 200 ms is never drawn as
+running. `Esc` interrupts foreground work.
+
+Output hangs under its row on a `│` spine. Verbosity only sets whether it starts
+open: `high` shows the rows alone, `low` shows a five-row preview. Hovering a
+block lights it and clicking it opens or closes that block's output; `ctrl+o`
+does the same for every block, and `ctrl+shift+o` steps one entry at a time.
+
+The row under the transcript names the state of the turn (`Generating`,
+`Thinking`, `Working`, `Queued`) with the model and the turn's token total. It
+never names a tool. Approvals and questions have separate waiting states.
+
+Background tasks are counted in the footer (`2 tasks · 1 done`), where `done`
+is a result the model has not read yet. Clicking the counter, or `/tasks`
+(`/ps`), opens the tasks panel: what is running first, then what finished this
+session. `/stop` stops every running task.
 
 ## Performance and agent threads
 

@@ -365,7 +365,6 @@ pub struct AppState {
     pub prompt_cache: PromptCache,
     pub verbosity: Verbosity,
     /// How far the expand key has opened tool batches at high verbosity.
-    pub tool_detail: rustcode_core::ToolDetail,
     pub expanded_thoughts: std::collections::HashSet<usize>,
     /// Message index the single-entry expand step is currently pointed at.
     ///
@@ -1208,7 +1207,6 @@ impl AppState {
             theme_picker_index: 0,
             theme_picker_initial: String::new(),
             verbosity,
-            tool_detail: rustcode_core::ToolDetail::default(),
             expanded_thoughts: std::collections::HashSet::new(),
             expanded_thought_focus: None,
             show_command_picker: false,

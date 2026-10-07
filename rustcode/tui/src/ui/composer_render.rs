@@ -521,12 +521,10 @@ enum ActiveWorkState {
     Idle,
     Generating,
     Thinking,
+    Working,
     Queued,
-    Foreground,
     Approval,
     Input,
-    Background,
-    ResultsReady,
 }
 
 impl ActiveWorkState {
@@ -535,53 +533,40 @@ impl ActiveWorkState {
             Self::Idle => "Idle",
             Self::Generating => "Generating",
             Self::Thinking => "Thinking",
+            Self::Working => "Working",
             Self::Queued => "Queued",
-            Self::Foreground => "Running",
             Self::Approval => "Awaiting approval",
             Self::Input => "Awaiting input",
-            Self::Background => "Background running",
-            Self::ResultsReady => "Unread result",
         }
     }
 }
 
+/// What the turn is doing, as far as the model is concerned. Which tools are
+/// running, and for how long, is the transcript's `Running` block; background
+/// tasks are counted in the footer.
 fn active_work_state(state: &RenderSnapshot) -> ActiveWorkState {
     match state.status() {
         AppStatus::AwaitingToolConfirmation => return ActiveWorkState::Approval,
         AppStatus::AwaitingQuestion => return ActiveWorkState::Input,
         _ => {}
     }
-    if !state.live_tool_calls().is_empty() {
-        return if state
-            .live_tool_calls()
-            .iter()
-            .any(|call| call.execution_started)
-        {
-            ActiveWorkState::Foreground
-        } else {
-            ActiveWorkState::Queued
-        };
+    if state
+        .live_tool_calls()
+        .iter()
+        .any(|call| call.execution_started)
+        || !state.running_tools().is_empty()
+    {
+        return ActiveWorkState::Working;
     }
-    if !state.running_tools().is_empty() {
-        return ActiveWorkState::Foreground;
-    }
-    if *state.status() == AppStatus::Streaming {
+    // A call that has not started is still being written by the model.
+    if *state.status() == AppStatus::Streaming || !state.live_tool_calls().is_empty() {
         return if state.current_thought_started_at().is_some() {
             ActiveWorkState::Thinking
         } else {
             ActiveWorkState::Generating
         };
     }
-    if state
-        .pending_background_results()
-        .iter()
-        .any(|result| result.unread)
-    {
-        return ActiveWorkState::ResultsReady;
-    }
-    if !state.background_tasks().is_empty() {
-        return ActiveWorkState::Background;
-    }
+    // The turn itself is waiting to start.
     if *state.status() == AppStatus::Queued {
         return ActiveWorkState::Queued;
     }
@@ -593,8 +578,8 @@ pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
     active_work_state(state).label().to_owned()
 }
 
-/// The persistent bottom row reports the work currently blocking progress.
-/// Actual tool start times and pending completion records drive this projection.
+/// The row under the transcript: the state of the turn, the model and the
+/// tokens it has produced. It never names a tool.
 pub(super) fn active_work_indicator(
     state: &RenderSnapshot,
     width: u16,
@@ -602,29 +587,9 @@ pub(super) fn active_work_indicator(
 ) -> Option<Line<'static>> {
     let work = active_work_state(state);
     let marker = match work {
+        ActiveWorkState::Idle => return None,
         ActiveWorkState::Approval | ActiveWorkState::Input => '!',
-        ActiveWorkState::ResultsReady => '✓',
         _ => running_spinner_char(state),
-    };
-    let live_state_is_named = matches!(work, ActiveWorkState::Foreground | ActiveWorkState::Queued)
-        && state
-            .live_tool_calls()
-            .iter()
-            .any(super::history_cell::is_live_tool_call_visible);
-    let short_background_head = matches!(work, ActiveWorkState::Background) && width <= 32;
-    let head = if live_state_is_named {
-        // The live cell already says `Running`/`Queued`; a distinct state word
-        // keeps this row readable without repeating it (#1773). A queued call
-        // is still being streamed by the model, a started one is executing.
-        if matches!(work, ActiveWorkState::Queued) {
-            format!("{marker} Generating")
-        } else {
-            format!("{marker} Executing")
-        }
-    } else if short_background_head {
-        format!("{marker} Background")
-    } else {
-        format!("{marker} {}", work.label())
     };
     let detail = match work {
         ActiveWorkState::Approval => state
@@ -633,70 +598,21 @@ pub(super) fn active_work_indicator(
             .map(|item| format!(" · {}", item.tool_name))
             .unwrap_or_default(),
         ActiveWorkState::Input => " · answer question".to_owned(),
-        ActiveWorkState::Foreground | ActiveWorkState::Queued => {
-            if state
-                .live_tool_calls()
-                .iter()
-                .any(super::history_cell::is_live_tool_call_visible)
-            {
-                // The transcript's live cell already names the state, the tools
-                // and their identity: repeating either here rendered the same
-                // information twice. The bottom row keeps only what the cell
-                // lacks (#1725, #1726): the model, so the row never collapses
-                // to a bare spinner beside the token total (#1773).
-                format!(" · {}", state.model_name())
-            } else if matches!(work, ActiveWorkState::Queued) {
-                // Queued with nothing started yet: keep the model visible so
-                // the running row stays findable; there is nothing to
-                // interrupt, so no cancel hint.
-                format!(" · {}", state.model_name())
-            } else {
-                // No live projection: the bottom row is the only indicator, so
-                // it keeps the running tool identity and cancel hint here.
-                format!(" · {} · esc interrupt", state.running_tools().join(", "))
-            }
-        }
-        ActiveWorkState::Background => {
-            let suffix_width = suffix.as_ref().map_or(0, |span| span.content.width());
-            let detail_width =
-                usize::from(width).saturating_sub(head.width() + suffix_width + " · ".width());
-            format!(
-                " · {}",
-                background_terminal_summary_for_width(state, detail_width)
-            )
-        }
-        ActiveWorkState::ResultsReady => {
-            let count = state
-                .pending_background_results()
-                .iter()
-                .filter(|result| result.unread)
-                .count();
-            format!(
-                " · {count} unread result{}",
-                if count == 1 { "" } else { "s" }
-            )
-        }
-        _ => return None,
+        _ => format!(" · {}", state.model_name()),
     };
     // The row owns exactly one terminal row and the caller appends the token
     // suffix afterwards, so head + detail + suffix must fit together. Shrink
     // the droppable detail first, then the state word; a clipped row must never
     // eat the cumulative token total (#1725).
-    let head_color = if matches!(work, ActiveWorkState::ResultsReady) {
-        Color::Green
-    } else {
-        COLOR_PRIMARY()
-    };
-    let head_span = Span::styled(
-        head,
-        get_themed_style(head_color, COLOR_BG(), Modifier::BOLD, false),
+    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    let marker_span = Span::styled(
+        format!("{marker} "),
+        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
     );
-    let detail_span = Span::styled(
-        detail,
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-    );
+    let head_span = Span::styled(work.label(), muted);
+    let detail_span = Span::styled(detail, muted);
     Some(Line::from(fit_indicator_row(
-        vec![head_span, detail_span],
+        vec![marker_span, head_span, detail_span],
         suffix,
         usize::from(width),
     )))
@@ -788,137 +704,29 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
     rustcode::controller::spinner_frame(elapsed)
 }
 
-pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
-    let mut tasks = state.background_tasks().iter().collect::<Vec<_>>();
-    tasks.sort_by_key(|task| task.started_at);
-    let elapsed = tasks
-        .iter()
-        .map(|task| task.started_at)
-        .next()
-        .map(|started| fmt_elapsed_compact(started.elapsed().as_secs()))
-        .unwrap_or_else(|| "0s".to_string());
-    let task_count = background_task_count_label(tasks.len());
-    format!("{task_count} · {elapsed} · /ps · /stop")
-}
-
-fn background_task_count_label(count: usize) -> String {
-    if count == 1 {
-        "1 task".to_owned()
-    } else {
-        format!("{count} tasks")
-    }
-}
-
-fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -> String {
-    let full = background_terminal_summary(state);
-    if full.width() <= width {
-        return full;
-    }
-
-    let task_count = background_task_count_label(state.background_tasks().len());
-    let compact = format!("{task_count} /ps /stop");
-    if compact.width() <= width {
-        compact
-    } else if "/ps /stop".width() <= width {
-        "/ps /stop".to_owned()
-    } else if "/ps".width() <= width {
-        "/ps".to_owned()
-    } else {
-        String::new()
-    }
-}
-
-#[cfg(test)]
-pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
-    background_command_lines_with_width(state, u16::MAX)
-}
-
-/// Quiet rows for background work above the composer: one muted row per
-/// running command and one per result the model has not consumed yet.
-///
-/// The indicator row already names the state and the task count, so this block
-/// carries no heading of its own, and a result leaves as soon as it is
-/// delivered: the transcript records the outcome from then on, and `/ps`
-/// keeps the full list.
-pub(super) fn background_command_lines_with_width(
-    state: &RenderSnapshot,
-    width: u16,
-) -> Vec<Line<'static>> {
-    const MAX_VISIBLE_COMMANDS: usize = 3;
-    let results = state
+/// The footer's task counter: how many background tasks are running, and how
+/// many finished without the model having read the result yet. `None` when
+/// there is nothing to count. `/tasks`, or a click on it, lists them.
+pub(super) fn tasks_chip_label(state: &RenderSnapshot) -> Option<String> {
+    let running = state.background_tasks().len();
+    let done = state
         .pending_background_results()
         .iter()
         .filter(|result| result.unread)
-        .collect::<Vec<_>>();
-    if state.background_tasks().is_empty() && results.is_empty() {
-        return Vec::new();
-    }
-    let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let mut lines = Vec::new();
-    for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
-        let command = rustcode::controller::background_command_label(&task.command, 240);
-        let elapsed = fmt_elapsed_compact(task.started_at.elapsed().as_secs());
-        let marker = "• ";
-        let available = usize::from(width).saturating_sub(marker.width());
-        let candidate_suffix = format!(" · {elapsed}");
-        let suffix = if available > candidate_suffix.width() {
-            candidate_suffix
+        .count();
+    let tasks = |count: usize| {
+        if count == 1 {
+            "1 task".to_owned()
         } else {
-            String::new()
-        };
-        let command_width = available.saturating_sub(suffix.width());
-        let command = super::modals::truncate_middle_to_width(&command, command_width);
-        lines.push(Line::from(vec![
-            Span::styled(
-                marker,
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), false),
-            ),
-            Span::styled(command, style),
-            Span::styled(suffix, style),
-        ]));
+            format!("{count} tasks")
+        }
+    };
+    match (running, done) {
+        (0, 0) => None,
+        (running, 0) => Some(tasks(running)),
+        (0, done) => Some(format!("{done} done")),
+        (running, done) => Some(format!("{} · {done} done", tasks(running))),
     }
-    for result in results.iter().take(MAX_VISIBLE_COMMANDS) {
-        let (marker, color, outcome) = if result.cancelled {
-            ("⊘ ", Color::DarkGray, " · cancelled")
-        } else if result.success {
-            ("✓ ", Color::Green, " · done")
-        } else {
-            ("✗ ", Color::Red, " · failed")
-        };
-        let available = usize::from(width).saturating_sub(marker.width());
-        let suffix = if available > outcome.width() {
-            outcome
-        } else {
-            ""
-        };
-        let command = rustcode::controller::background_command_label(&result.command, 240);
-        let label = super::modals::truncate_middle_to_width(
-            &command,
-            available.saturating_sub(suffix.width()),
-        );
-        lines.push(Line::from(vec![
-            Span::styled(
-                marker,
-                get_themed_style(color, COLOR_BG(), Modifier::empty(), false),
-            ),
-            Span::styled(label, style),
-            Span::styled(suffix, style),
-        ]));
-    }
-    let omitted = state
-        .background_tasks()
-        .len()
-        .saturating_sub(MAX_VISIBLE_COMMANDS)
-        + results.len().saturating_sub(MAX_VISIBLE_COMMANDS);
-    if omitted > 0 {
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![Span::styled(format!("  {omitted} more · /ps"), style)],
-            usize::from(width).max(1),
-            Some(Span::raw("  ")),
-        );
-    }
-    lines
 }
 
 pub(super) fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
@@ -1351,15 +1159,18 @@ pub(super) fn footer_location(state: &RenderSnapshot) -> String {
     format!("{branch} · {path}")
 }
 
+/// Paint the footer. Returns where the task counter was drawn, so the pointer
+/// can hover and click it.
 pub(super) fn render_composer_footer(
     f: &mut Frame,
     area: ratatui::layout::Rect,
     state: &RenderSnapshot,
     popup_hint: Option<&'static [&'static str]>,
     selection_active: bool,
-) {
+    tasks_hovered: bool,
+) -> Option<ratatui::layout::Rect> {
     if area.height == 0 || area.width == 0 {
-        return;
+        return None;
     }
 
     let used = super::context_usage::context_usage(state).used_tokens;
@@ -1435,6 +1246,11 @@ pub(super) fn render_composer_footer(
     // first and the context percentage yields when the two compete: degrade the
     // hint against the remaining space, and only drop the percentage when even
     // the leading clause no longer fits beside it (#1529).
+    let chip_label = tasks_chip_label(state).map(|label| format!(" {label} "));
+    let chip_reserve = chip_label
+        .as_ref()
+        .map_or(0, |chip| chip.width() + 2)
+        .min(row_width.saturating_sub(right_width) / 2);
     let (left, keep_right) = match hint_clauses {
         Some(clauses) => {
             let beside_right =
@@ -1449,8 +1265,12 @@ pub(super) fn render_composer_footer(
         }
         // Session metadata and one-shot notices stay clipped: they name the
         // model and workspace rather than offering a key the user can press.
+        // The task counter is something to click, so it keeps its columns.
         None => (
-            fit_to_width(&left_content, row_width.saturating_sub(right_width)),
+            fit_to_width(
+                &left_content,
+                row_width.saturating_sub(right_width + chip_reserve),
+            ),
             true,
         ),
     };
@@ -1459,14 +1279,43 @@ pub(super) fn render_composer_footer(
     } else {
         (String::new(), 0)
     };
-    let padding = row_width.saturating_sub(left.width() + right_width);
+    // The task counter sits left of the context figure and yields first.
+    let chip = chip_label
+        .filter(|chip| keep_right && left.width() + chip.width() + 2 + right_width <= row_width);
+    let chip_width = chip.as_ref().map_or(0, |chip| chip.width() + 2);
+    let padding = row_width.saturating_sub(left.width() + chip_width + right_width);
+    let mut spans = vec![
+        Span::styled(left, left_style),
+        Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
+    ];
+    let mut chip_area = None;
+    if let Some(chip) = chip {
+        let x = area.x + (row_width - right_width - chip_width) as u16;
+        chip_area = Some(ratatui::layout::Rect::new(
+            x,
+            area.y,
+            chip.width() as u16,
+            1,
+        ));
+        spans.push(Span::styled(
+            chip,
+            get_themed_style(
+                COLOR_PRIMARY(),
+                if tasks_hovered {
+                    COLOR_HOVER_BG()
+                } else {
+                    COLOR_BG()
+                },
+                Modifier::BOLD,
+                false,
+            ),
+        ));
+        spans.push(Span::styled("  ", Style::default().bg(COLOR_BG())));
+    }
+    spans.push(Span::styled(right, right_style));
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(left, left_style),
-            Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
-            Span::styled(right, right_style),
-        ]))
-        .style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_BG())),
         area,
     );
+    chip_area
 }

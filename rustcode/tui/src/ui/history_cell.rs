@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
-    highlight_shell_command, push_wrapped_with_continuation, tool_transcript::tool_preview_window,
+    push_wrapped_with_continuation, tool_transcript::tool_preview_window,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -71,14 +71,19 @@ pub(crate) struct TranscriptState {
     /// Whether the visible panel body responds to vertical scrolling.
     pub(crate) panel_selection_scrollable: bool,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
-    /// For each transcript line of the projection just built, whether it shows
-    /// tool calls. `None` while a selection pins the view: the rows painted
+    /// For each transcript line of the projection just built, the tool block
+    /// it belongs to. `None` while a selection pins the view: the rows painted
     /// before the press stay the click targets.
-    pub(super) tool_line_flags: Option<Vec<bool>>,
-    /// Painted transcript area and, per row, whether it shows tool calls.
-    tool_rows: (ratatui::layout::Rect, Vec<bool>),
-    /// A press on a tool row; releasing in place toggles the calls like ctrl+o.
-    pub(crate) tool_click: Option<(u16, u16)>,
+    pub(super) tool_line_flags: Option<Vec<Option<ToolBlock>>>,
+    /// Painted transcript area and, per row, the tool block shown there.
+    tool_rows: (ratatui::layout::Rect, Vec<Option<ToolBlock>>),
+    /// A press on a tool block; releasing in place opens or closes its output.
+    pub(crate) tool_click: Option<((u16, u16), ToolBlock)>,
+    /// The tool block under the pointer, lit so it reads as clickable.
+    hovered_tool_block: Option<ToolBlock>,
+    /// Where the footer's task counter was painted, if it was.
+    pub(crate) tasks_chip: Option<ratatui::layout::Rect>,
+    pub(crate) tasks_chip_hovered: bool,
     /// The running indicator last painted and when, see
     /// [`Self::settle_indicator`].
     held_indicator: Option<HeldIndicator>,
@@ -104,6 +109,10 @@ const INDICATOR_HOLD: std::time::Duration = std::time::Duration::ZERO;
 
 /// `(session, history revision, first index, end index, width, theme)`.
 type CommittedKey = (u64, u64, usize, usize, u16, u64);
+
+/// One tool block in the transcript: the history range `[first, end)` of the
+/// tool results it shows.
+pub(crate) type ToolBlock = (usize, usize);
 
 /// Rendered committed blocks kept for scrolling back through a long session.
 const COMMITTED_CACHE_BLOCKS: usize = 4096;
@@ -134,6 +143,9 @@ impl Default for TranscriptState {
             tool_line_flags: None,
             tool_rows: (ratatui::layout::Rect::default(), Vec::new()),
             tool_click: None,
+            hovered_tool_block: None,
+            tasks_chip: None,
+            tasks_chip_hovered: false,
             held_indicator: None,
         }
     }
@@ -243,18 +255,62 @@ impl TranscriptState {
         Some(INDICATOR_HOLD.saturating_sub(held.shown_at.elapsed()))
     }
 
-    pub(super) fn set_tool_rows(&mut self, area: ratatui::layout::Rect, rows: Vec<bool>) {
+    pub(super) fn set_tool_rows(
+        &mut self,
+        area: ratatui::layout::Rect,
+        rows: Vec<Option<ToolBlock>>,
+    ) {
+        // A block that scrolled away or was replaced is no longer hovered.
+        if self
+            .hovered_tool_block
+            .is_some_and(|hovered| !rows.contains(&Some(hovered)))
+        {
+            self.hovered_tool_block = None;
+        }
         self.tool_rows = (area, rows);
     }
 
-    /// Whether the last painted frame showed tool calls at this cell.
-    pub(crate) fn tool_row_at(&self, column: u16, row: u16) -> bool {
+    /// The tool block the last painted frame showed at this cell.
+    pub(crate) fn tool_block_at(&self, column: u16, row: u16) -> Option<ToolBlock> {
         let (area, rows) = &self.tool_rows;
-        area.contains(ratatui::layout::Position::new(column, row))
-            && rows
-                .get(usize::from(row - area.y))
-                .copied()
-                .unwrap_or(false)
+        if !area.contains(ratatui::layout::Position::new(column, row)) {
+            return None;
+        }
+        rows.get(usize::from(row - area.y)).copied().flatten()
+    }
+
+    /// Whether this cell is on the footer's task counter.
+    pub(crate) fn tasks_chip_at(&self, column: u16, row: u16) -> bool {
+        self.tasks_chip
+            .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
+    }
+
+    /// Move the hover to whatever clickable thing is at this cell. Returns
+    /// whether it changed, so pointer motion inside one target costs no frame.
+    pub(crate) fn hover_at(&mut self, column: u16, row: u16) -> bool {
+        let block = self.tool_block_at(column, row);
+        let chip = self.tasks_chip_at(column, row);
+        let changed = block != self.hovered_tool_block || chip != self.tasks_chip_hovered;
+        self.hovered_tool_block = block;
+        self.tasks_chip_hovered = chip;
+        changed
+    }
+
+    /// Light the hovered block's rows in the painted frame.
+    pub(super) fn highlight_hovered_tool_block(&self, buffer: &mut ratatui::buffer::Buffer) {
+        let Some(hovered) = self.hovered_tool_block else {
+            return;
+        };
+        let (area, rows) = &self.tool_rows;
+        for (offset, block) in rows.iter().enumerate() {
+            if *block != Some(hovered) {
+                continue;
+            }
+            let y = area.y + offset as u16;
+            for x in area.x..area.right() {
+                buffer[(x, y)].set_bg(super::COLOR_HOVER_BG());
+            }
+        }
     }
 
     pub(crate) fn scroll_rows(&self) -> usize {
@@ -433,7 +489,6 @@ impl TranscriptState {
         super::theme::active_palette().name.hash(&mut theme_hash);
         // Tool rows also depend on presentation settings outside history.
         state.verbosity().hash(&mut theme_hash);
-        state.tool_detail().hash(&mut theme_hash);
         state.home_path().hash(&mut theme_hash);
         for message in index..end.max(index + 1) {
             state
@@ -779,6 +834,20 @@ pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {
     call.execution_started || (!call.target.is_empty() && call.target != "?")
 }
 
+/// How long a call must have been in flight before it is drawn as running.
+/// A read or an edit finishes well inside this and goes straight to `Ran`;
+/// drawing it first made every fast call flash a `Running` block.
+pub(super) const LIVE_TOOL_CALL_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Whether a visible call has been in flight long enough to draw.
+pub(super) fn live_tool_call_is_settled(call: &LiveToolCall) -> bool {
+    // Rendering tests build calls and draw them in the same instant, and the
+    // frozen `/test` preview pins its calls to a start time in the future.
+    cfg!(test)
+        || call.started_at > std::time::Instant::now()
+        || call.started_at.elapsed() >= LIVE_TOOL_CALL_GRACE
+}
+
 /// Width-aware truncation shared with the indicator row so wide glyphs never
 /// overflow a narrow terminal row.
 fn truncate_to_width(text: &str, width: usize) -> String {
@@ -868,203 +937,35 @@ pub(super) fn render_live_tool_cell_at(
         return Vec::new();
     }
 
-    // Speculative calls are only projections of streamed model output; the
-    // compact generic rows avoid presenting those as an executing command.
-    let has_speculative = calls.iter().any(|call| !call.execution_started);
-
-    if !has_speculative && calls.len() == 1 && calls[0].tool_name == "run_command" {
-        let call = &calls[0];
-        let title_style =
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
-        let command = call.target.clone();
-        // One indicator row: the heading carries the state word, the command
-        // and the elapsed clock together, mirroring the committed
-        // `• Ran $ <cmd> · <status>` summary (#1725). A separate `●` child row
-        // repeating the same running state was the duplicate indicator.
-        let mut header = vec![
-            Span::styled("• ", title_style),
-            Span::styled("Running", title_style),
-        ];
-        let show_command = command.is_empty() || command == "?";
-        if show_command {
-            header.push(Span::styled(
-                " Bash",
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-        } else {
-            header.push(Span::styled(
-                " $ ",
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        let used: usize = header.iter().map(|span| span.content.width()).sum();
-        let elapsed =
-            super::fmt_elapsed_compact(now.saturating_duration_since(call.started_at).as_secs());
-        // The elapsed clock shares the row, so reserve its columns too.
-        let elapsed_suffix = format!(" · {elapsed}");
-        let elapsed_suffix = if usize::from(width) > used + elapsed_suffix.width() {
-            elapsed_suffix
-        } else {
-            String::new()
-        };
-        let room_after_elapsed = usize::from(width).saturating_sub(used + elapsed_suffix.width());
-        let cancel_hint = if room_after_elapsed >= " · esc interrupt".width() + 4 {
-            " · esc interrupt"
-        } else if room_after_elapsed >= " · esc".width() + 4 {
-            " · esc"
-        } else {
-            ""
-        };
-        if !show_command {
-            let command_width = usize::from(width)
-                .saturating_sub(used + elapsed_suffix.width() + cancel_hint.width());
-            let command = super::modals::truncate_middle_to_width(&command, command_width);
-            header.extend(
-                highlight_shell_command(&command, COLOR_BG(), show_picker)
-                    .into_iter()
-                    .next()
-                    .map(|line| line.spans)
-                    .unwrap_or_default(),
-            );
-        }
-        header.push(Span::styled(
-            format!("{elapsed_suffix}{cancel_hint}"),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        let mut lines = vec![fit_live_row(Line::from(header), usize::from(width))];
-        if let Some(cwd) = &call.cwd {
-            push_wrapped_with_continuation(
-                &mut lines,
-                vec![
-                    super::tool_transcript::tool_body_spine(show_picker),
-                    Span::styled(
-                        format!("cwd: {cwd}"),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-                    ),
-                ],
-                usize::from(width).max(1),
-                Some(super::tool_transcript::tool_body_spine(show_picker)),
-            );
-        }
-        // High verbosity never shows live output in this cell. Quiet calls
-        // also stay one row tall until output actually arrives.
-        if matches!(verbosity, Verbosity::High) {
-            return lines;
-        }
-
-        let mut output = Vec::<(String, bool)>::new();
-        for chunk in &call.output {
-            let clean = rustcode_tool_protocol::text::strip_ansi_escapes(&chunk.text);
-            output.extend(
-                clean
-                    .split('\n')
-                    .filter(|line| !line.is_empty())
-                    .map(|line| (line.to_owned(), chunk.stderr)),
-            );
-        }
-        let mut body = Vec::new();
-        for (text, stderr) in output {
-            let mut spans = vec![super::tool_transcript::tool_body_spine(show_picker)];
-            spans.push(Span::styled(
-                text,
-                get_themed_style(
-                    if stderr { COLOR_TIP() } else { COLOR_MUTED() },
-                    COLOR_BG(),
-                    if stderr {
-                        Modifier::empty()
-                    } else {
-                        Modifier::DIM
-                    },
-                    show_picker,
-                ),
-            ));
-            let continuation = super::tool_transcript::tool_body_spine(show_picker);
-            push_wrapped_with_continuation(
-                &mut body,
-                spans,
-                (width as usize).max(10),
-                Some(continuation),
-            );
-        }
-
-        let byte_note = (call.omitted_output_bytes > 0).then(|| {
-            if call.omitted_output_bytes >= 1024 {
-                format!("{}K", call.omitted_output_bytes.div_ceil(1024))
-            } else {
-                format!("{}B", call.omitted_output_bytes)
-            }
-        });
-        if let Some(window) = tool_preview_window(body.len(), byte_note.is_some()) {
-            let mut marker = match (window.omitted_rows > 0, byte_note) {
-                (true, Some(note)) => format!("… +{} lines · {note}", window.omitted_rows),
-                (true, None) => format!("… +{} lines", window.omitted_rows),
-                (false, Some(note)) => format!("… {note} omitted"),
-                (false, None) => String::new(),
-            };
-            marker = truncate_to_width(&marker, (width as usize).saturating_sub(2).max(1));
-            let marker = Line::from(vec![
-                super::tool_transcript::tool_body_spine(show_picker),
-                Span::styled(
-                    marker,
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_BG(),
-                        Modifier::ITALIC | Modifier::DIM,
-                        show_picker,
-                    ),
-                ),
-            ]);
-            let tail_start = body.len().saturating_sub(window.tail_rows);
-            let tail_rows = body.split_off(tail_start);
-            body.truncate(window.head_rows);
-            body.push(marker);
-            body.extend(tail_rows);
-        }
-        lines.extend(body);
-        return lines;
-    }
-
+    // One shape for every batch in flight: a `Running` heading with a row per
+    // call, the shape the committed `Ran` block takes once they finish, so the
+    // block changes its heading and row states instead of its layout.
     let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let detail_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
     let action_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
     let target_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker);
-    let mut lines = Vec::new();
-    // Several calls share one heading and hang beneath it as a tree, the shape
-    // the committed `• Ran` group takes once they finish. A lone call stays
-    // folded into its heading, like the committed single-command summary.
-    let grouped = calls.len() > 1;
+    let heading = "Running";
     let any_started = calls.iter().any(|call| call.execution_started);
-    let shown = calls.len().min(MAX_LIVE_CHILDREN);
-    let has_overflow = calls.len() > MAX_LIVE_CHILDREN;
-    if grouped {
-        let heading = if any_started { "Running" } else { "Queued" };
-        let hint = if any_started {
-            cancel_hint_suffix(width, 2 + heading.width())
-        } else {
-            ""
-        };
-        lines.push(fit_live_row(
-            Line::from(vec![
-                Span::styled("• ", title_style),
-                Span::styled(heading, title_style),
-                Span::styled(hint, detail_style),
-            ]),
-            usize::from(width),
-        ));
-    }
+    let hint = if any_started {
+        cancel_hint_suffix(width, 2 + heading.width())
+    } else {
+        ""
+    };
+    let mut lines = vec![fit_live_row(
+        Line::from(vec![
+            Span::styled("• ", title_style),
+            Span::styled(heading, title_style),
+            Span::styled(hint, detail_style),
+        ]),
+        usize::from(width),
+    )];
+    let lone_command = calls.len() == 1 && calls[0].tool_name == "run_command";
     for (call_index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
-        let status = if call.execution_started {
-            "Running"
-        } else {
-            "Queued"
-        };
         let target = super::tool_transcript::contract_home_path(&call.target, home_path);
         let target = if target.is_empty() || target == "?" {
             String::new()
-        } else if call.action == "Bash" && !grouped {
-            format!("$ {target}")
         } else {
-            target
+            target.split_whitespace().collect::<Vec<_>>().join(" ")
         };
         let matching = calls
             .iter()
@@ -1075,117 +976,86 @@ pub(super) fn render_live_tool_cell_at(
             .filter(|other| other.action == call.action && other.target == call.target)
             .count()
             + 1;
-        let duplicate_suffix = if matching > 1 {
+        let mut suffix = if matching > 1 {
             format!(" · {ordinal}/{matching}")
         } else {
             String::new()
         };
-        let elapsed_suffix = if call.execution_started {
+        // The state sits behind the call: how long it has run, or that it is
+        // still waiting its turn.
+        if call.execution_started {
             let elapsed = now.saturating_duration_since(call.started_at).as_secs();
-            (elapsed >= 5).then(|| format!(" · {}", super::fmt_elapsed_compact(elapsed)))
+            if elapsed >= 1 {
+                suffix.push_str(&format!(" · {}", super::fmt_elapsed_compact(elapsed)));
+            }
         } else {
-            None
+            suffix.push_str(" · waiting");
         }
-        .unwrap_or_default();
-        // The group heading names the running state once; a child only says
-        // so when it differs, i.e. it is still waiting its turn.
-        let state_suffix = if grouped && any_started && !call.execution_started {
-            " · queued"
-        } else {
-            ""
-        };
-        let is_last = call_index + 1 == shown && !has_overflow;
-        let prefix_width = if grouped {
-            4 + call.action.width()
-        } else {
-            2 + status.width() + 1 + call.action.width()
-        };
-        let target_space = usize::from(!target.is_empty());
-        let min_target = if target.is_empty() { 0 } else { 6 };
-        let suffix_width = duplicate_suffix.width() + elapsed_suffix.width() + state_suffix.width();
-        let interrupt_hint = if !grouped && call.execution_started {
-            cancel_hint_suffix(
-                width,
-                prefix_width + target_space + min_target + suffix_width,
-            )
-        } else {
-            ""
-        };
-        let fixed = prefix_width + target_space + suffix_width + interrupt_hint.width();
-        let mut spans = if grouped {
-            vec![
-                super::tool_transcript::tool_tree_prefix(is_last, show_picker),
-                Span::styled(
-                    if call.execution_started {
-                        "• "
-                    } else {
-                        "◦ "
-                    },
-                    detail_style,
-                ),
-                Span::styled(call.action.clone(), action_style),
-            ]
-        } else {
-            vec![
-                Span::styled("• ", title_style),
-                Span::styled(format!("{status} "), title_style),
-                Span::styled(call.action.clone(), action_style),
-            ]
-        };
+        let fixed = 2 + call.action.width() + usize::from(!target.is_empty()) + suffix.width();
+        let mut spans = vec![
+            Span::styled("  ", detail_style),
+            Span::styled(call.action.clone(), action_style),
+        ];
         if !target.is_empty() {
             let target_width = usize::from(width).saturating_sub(fixed);
             if target_width > 0 {
                 spans.push(Span::raw(" "));
-                spans.push(Span::styled(
-                    tail_to_width(&target, target_width),
-                    target_style,
-                ));
+                // A command is recognised by how it starts, a path by how it ends.
+                let shown = if call.tool_name == "run_command" {
+                    truncate_to_width(&target, target_width)
+                } else {
+                    tail_to_width(&target, target_width)
+                };
+                spans.push(Span::styled(shown, target_style));
             }
         }
-        if !duplicate_suffix.is_empty() {
-            spans.push(Span::styled(duplicate_suffix, detail_style));
-        }
-        if !elapsed_suffix.is_empty() {
-            spans.push(Span::styled(elapsed_suffix, detail_style));
-        }
-        if !state_suffix.is_empty() {
-            spans.push(Span::styled(state_suffix, detail_style));
-        }
-        if !interrupt_hint.is_empty() {
-            spans.push(Span::styled(interrupt_hint, detail_style));
+        if !suffix.is_empty() {
+            spans.push(Span::styled(suffix, detail_style));
         }
         lines.push(fit_live_row(Line::from(spans), usize::from(width)));
-        if call.execution_started && !matches!(verbosity, Verbosity::High) {
-            let latest = call
-                .output
-                .iter()
-                .flat_map(|chunk| chunk.text.lines())
-                .filter(|line| !line.trim().is_empty())
-                .next_back();
-            if let Some(latest) = latest {
-                // Output hangs under its own call: beside the spine while
-                // siblings follow, under the action once it is the last child.
-                let indent = match (grouped, is_last) {
-                    (false, _) => "  ",
-                    (true, true) => "    ",
-                    (true, false) => "│   ",
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(indent, detail_style),
+        if lone_command && let Some(cwd) = &call.cwd {
+            push_wrapped_with_continuation(
+                &mut lines,
+                vec![
+                    super::tool_transcript::tool_body_spine(show_picker),
                     Span::styled(
-                        truncate_to_width(
-                            &rustcode_tool_protocol::text::strip_ansi_escapes(latest),
-                            usize::from(width).saturating_sub(indent.width()).max(1),
-                        ),
-                        detail_style,
+                        format!("cwd: {cwd}"),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
                     ),
-                ]));
-            }
+                ],
+                usize::from(width).max(1),
+                Some(Span::styled("    ", detail_style)),
+            );
+        }
+        // High verbosity keeps output closed while a call runs, as it does
+        // once the call has finished.
+        if !call.execution_started || matches!(verbosity, Verbosity::High) {
+            continue;
+        }
+        if lone_command {
+            lines.extend(live_command_output(call, width, show_picker));
+        } else if let Some(latest) = call
+            .output
+            .iter()
+            .flat_map(|chunk| chunk.text.lines())
+            .filter(|line| !line.trim().is_empty())
+            .next_back()
+        {
+            lines.push(Line::from(vec![
+                super::tool_transcript::tool_body_spine(show_picker),
+                Span::styled(
+                    truncate_to_width(
+                        &rustcode_tool_protocol::text::strip_ansi_escapes(latest),
+                        usize::from(width).saturating_sub(4).max(1),
+                    ),
+                    detail_style,
+                ),
+            ]));
         }
     }
-    if has_overflow {
+    if calls.len() > MAX_LIVE_CHILDREN {
         lines.push(Line::from(vec![
-            super::tool_transcript::tool_tree_prefix(true, show_picker),
+            Span::styled("  ", detail_style),
             Span::styled(
                 truncate_to_width(
                     &format!("… +{} more", calls.len() - MAX_LIVE_CHILDREN),
@@ -1199,10 +1069,84 @@ pub(super) fn render_live_tool_cell_at(
     lines
 }
 
+/// The bounded window of a running command's output: its first and last rows
+/// around a count of what is left out.
+fn live_command_output(call: &LiveToolCall, width: u16, show_picker: bool) -> Vec<Line<'static>> {
+    let mut body = Vec::new();
+    for chunk in &call.output {
+        let clean = rustcode_tool_protocol::text::strip_ansi_escapes(&chunk.text);
+        for text in clean.split('\n').filter(|line| !line.is_empty()) {
+            let spans = vec![
+                super::tool_transcript::tool_body_spine(show_picker),
+                Span::styled(
+                    text.to_owned(),
+                    get_themed_style(
+                        if chunk.stderr {
+                            COLOR_TIP()
+                        } else {
+                            COLOR_MUTED()
+                        },
+                        COLOR_BG(),
+                        if chunk.stderr {
+                            Modifier::empty()
+                        } else {
+                            Modifier::DIM
+                        },
+                        show_picker,
+                    ),
+                ),
+            ];
+            push_wrapped_with_continuation(
+                &mut body,
+                spans,
+                (width as usize).max(10),
+                Some(Span::styled(
+                    "  │ ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+                )),
+            );
+        }
+    }
+    let byte_note = (call.omitted_output_bytes > 0).then(|| {
+        if call.omitted_output_bytes >= 1024 {
+            format!("{}K", call.omitted_output_bytes.div_ceil(1024))
+        } else {
+            format!("{}B", call.omitted_output_bytes)
+        }
+    });
+    if let Some(window) = tool_preview_window(body.len(), byte_note.is_some()) {
+        let mut marker = match (window.omitted_rows > 0, byte_note) {
+            (true, Some(note)) => format!("… +{} lines · {note}", window.omitted_rows),
+            (true, None) => format!("… +{} lines", window.omitted_rows),
+            (false, Some(note)) => format!("… {note} omitted"),
+            (false, None) => String::new(),
+        };
+        marker = truncate_to_width(&marker, (width as usize).saturating_sub(4).max(1));
+        let marker = Line::from(vec![
+            super::tool_transcript::tool_body_spine(show_picker),
+            Span::styled(
+                marker,
+                get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::ITALIC | Modifier::DIM,
+                    show_picker,
+                ),
+            ),
+        ]);
+        let tail_start = body.len().saturating_sub(window.tail_rows);
+        let tail_rows = body.split_off(tail_start);
+        body.truncate(window.head_rows);
+        body.push(marker);
+        body.extend(tail_rows);
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
-    use rustcode::controller::{ChatMessage, History, RenderState, Verbosity};
+    use rustcode::controller::{ChatMessage, History, RenderState};
 
     #[test]
     fn indicator_survives_a_short_gap_but_not_a_long_or_deliberate_one() {
@@ -1242,117 +1186,6 @@ mod tests {
                 .settle_indicator_at(None, false, after(510), hold)
                 .is_none()
         );
-    }
-
-    #[test]
-    fn live_tool_rows_keep_state_and_action_without_nested_decoration() {
-        let mut call = rustcode::controller::LiveToolCall::new(
-            "call-1",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        );
-        call.execution_started = true;
-        call.output
-            .push_back(rustcode::controller::LiveToolOutputChunk {
-                stderr: false,
-                text: "12 lines read".to_owned(),
-            });
-
-        let rendered = super::render_live_tool_cell(&[call], 80, false)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            rendered,
-            [
-                "• Running Read src/main.rs · esc interrupt",
-                "  12 lines read"
-            ]
-        );
-    }
-
-    #[test]
-    fn generic_running_rows_add_elapsed_only_after_five_seconds() {
-        let mut call = rustcode::controller::LiveToolCall::new(
-            "call-1",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        );
-        call.execution_started = true;
-        let now = call.started_at + std::time::Duration::from_secs(4);
-        let before_threshold =
-            super::render_live_tool_cell_at(&[call.clone()], 80, &Verbosity::Low, false, now, None)
-                .into_iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-        assert!(!before_threshold.contains("4s"), "{before_threshold}");
-
-        let now = call.started_at + std::time::Duration::from_secs(5);
-        let after_threshold =
-            super::render_live_tool_cell_at(&[call], 80, &Verbosity::Low, false, now, None)
-                .into_iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-        assert!(after_threshold.contains("· 5s"), "{after_threshold}");
-    }
-
-    #[test]
-    fn identical_live_rows_get_ordinals_and_one_interrupt_hint() {
-        let mut first = rustcode::controller::LiveToolCall::new(
-            "internal-1",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        );
-        first.execution_started = true;
-        let second = rustcode::controller::LiveToolCall::new(
-            "internal-2",
-            None,
-            "view_file",
-            "Read",
-            "src/main.rs",
-        );
-        let rendered = super::render_live_tool_cell(&[first, second], 80, false)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            rendered,
-            [
-                "• Running · esc interrupt",
-                "├ • Read src/main.rs · 1/2",
-                "└ • Read src/main.rs · 2/2"
-            ]
-        );
-        assert_eq!(
-            rendered.join("\n").matches("esc").count(),
-            1,
-            "{rendered:?}"
-        );
-        assert!(!rendered.join("\n").contains("internal-"));
-
-        let bash = rustcode::controller::LiveToolCall::new(
-            "internal-bash",
-            None,
-            "run_command",
-            "Bash",
-            "cargo test",
-        );
-        let rendered_bash = super::render_live_tool_cell(&[bash], 80, false)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(rendered_bash.matches("esc").count(), 1, "{rendered_bash}");
     }
 
     #[test]
@@ -1435,31 +1268,6 @@ mod tests {
                 .any(|line| line.to_string().contains("history block 000")),
             "{top:?}"
         );
-    }
-
-    #[test]
-    fn live_tool_preview_keeps_all_short_output_before_forced_byte_marker() {
-        let mut call = rustcode::controller::LiveToolCall::new(
-            "local:1",
-            None,
-            "run_command",
-            "Bash",
-            "echo ok",
-        );
-        call.output
-            .push_back(rustcode::controller::LiveToolOutputChunk {
-                stderr: false,
-                text: "visible output\n".to_owned(),
-            });
-        call.omitted_output_bytes = 1;
-
-        let rendered = super::render_live_tool_cell(&[call], 80, false)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(rendered.len(), 3, "{rendered:?}");
-        assert!(rendered[1].contains("visible output"), "{rendered:?}");
-        assert!(rendered[2].contains("1B omitted"), "{rendered:?}");
     }
 
     /// #1595: follow is a two-input state, not one flag. A reading offset or a
