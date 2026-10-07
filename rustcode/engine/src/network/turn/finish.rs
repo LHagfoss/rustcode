@@ -95,6 +95,8 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     if ctx.lifecycle.stop_reason.is_none() {
         ctx.lifecycle.stop_reason = Some(if ctx.lifecycle.task_completed {
             lifecycle::StopReason::Completed
+        } else if answered_without_recovery(&ctx) {
+            lifecycle::StopReason::Unverified
         } else {
             lifecycle::StopReason::RecoveryFailed
         });
@@ -337,6 +339,21 @@ fn has_verified_implicit_completion(ctx: &TurnContext) -> bool {
     }
 
     has_substantive_final_prose(&ctx.response.final_content)
+}
+
+/// A turn that ended on the model's own final answer without any recovery
+/// attempt did not fail a recovery: it only lacks verified completion. Keeping
+/// the two apart stops `recovery_failed` from describing a normal finish
+/// (#1774).
+fn answered_without_recovery(ctx: &TurnContext) -> bool {
+    let recovery = &ctx.recovery;
+    !recovery.force_final
+        && recovery.loop_recovery_attempts == 0
+        && recovery.reasoning_recovery_attempts == 0
+        && recovery.empty_response_recovery_attempts == 0
+        && recovery.stream_recovery_attempts == 0
+        && recovery.output_budget_recovery_attempts == 0
+        && has_substantive_final_prose(&ctx.response.final_content)
 }
 
 fn has_substantive_final_prose(content: &str) -> bool {
@@ -762,6 +779,36 @@ mod tests {
         let mut ctx = verified_edit_context("The work is complete.");
         ctx.recovery.force_final = true;
         assert!(!has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn a_final_answer_without_recovery_is_unverified_not_a_failed_recovery() {
+        // #1774: a turn that wrote a scratch file and then answered normally
+        // was reported as `recovery_failed` with zero recovery attempts.
+        let mut ctx = TurnContext::new();
+        ctx.progress.made_edits = true;
+        ctx.response.final_content = "Logged the four issues.".to_owned();
+        assert!(answered_without_recovery(&ctx));
+
+        ctx.recovery.reasoning_recovery_attempts = 1;
+        assert!(!answered_without_recovery(&ctx));
+
+        let mut forced = TurnContext::new();
+        forced.response.final_content = "Stopping here.".to_owned();
+        forced.recovery.force_final = true;
+        assert!(!answered_without_recovery(&forced));
+
+        let mut silent = TurnContext::new();
+        silent.response.final_content = "<think>still thinking</think>".to_owned();
+        assert!(!answered_without_recovery(&silent));
+
+        // An unverified finish still notifies as incomplete.
+        ctx.recovery.reasoning_recovery_attempts = 0;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Unverified);
+        assert_eq!(
+            finished_notification_status(&ctx, false),
+            crate::notifications::FinishedStatus::Incomplete
+        );
     }
 
     #[test]
