@@ -508,6 +508,32 @@ async fn handle_enter_inner(
                     crate::config::save_entire_config(&s.config);
                 }
             }
+            "/pi" => {
+                let enabled = match tokens.get(1) {
+                    None => Some(!s.config.prompt_improver),
+                    Some(&"on") => Some(true),
+                    Some(&"off") => Some(false),
+                    _ => {
+                        s.show_command_panel(
+                            "Prompt improver",
+                            "Invalid option. Use '/pi', '/pi on' or '/pi off'.",
+                        );
+                        None
+                    }
+                };
+                if let Some(enabled) = enabled {
+                    s.config.prompt_improver = enabled;
+                    crate::config::save_entire_config(&s.config);
+                    s.show_command_panel(
+                        "Prompt improver",
+                        if enabled {
+                            "On. Each prompt that starts a turn is rewritten by the active model first; the transcript shows the original and the rewrite. Short replies and slash commands are left alone."
+                        } else {
+                            "Off. Prompts are sent exactly as typed."
+                        },
+                    );
+                }
+            }
             "/thinking" => {
                 let url = s.api_base_url.clone();
                 let current = s

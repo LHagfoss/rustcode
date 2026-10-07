@@ -249,6 +249,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show or set model reasoning effort (low|medium|high|off)",
     },
     CommandInfo {
+        name: "/pi",
+        desc: "Toggle the prompt improver (on|off)",
+    },
+    CommandInfo {
         name: "/theme",
         desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
     },

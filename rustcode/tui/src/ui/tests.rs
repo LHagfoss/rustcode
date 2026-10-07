@@ -12464,3 +12464,33 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
     assert!(mixed[1].starts_with("├ ✓ Read src/a.rs"), "{mixed:?}");
     assert!(mixed[2].starts_with("└ ✓ Bash cargo check"), "{mixed:?}");
 }
+
+#[test]
+fn prompt_improver_notice_shows_the_original_and_the_rewrite() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new(
+        "system",
+        "Prompt improved by test-model · /pi off to disable\n\nBefore:\nfix teh parser\n\nAfter:\nFix the parser bug.",
+    ));
+    state
+        .history
+        .push(ChatMessage::new("user", "Fix the parser bug."));
+    let rendered = render_state_to_text(&mut state, 100, 30);
+    for expected in [
+        "Prompt improved by test-model",
+        "Before:",
+        "fix teh parser",
+        "After:",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected:?}: {rendered}"
+        );
+    }
+    assert_eq!(
+        rendered.matches("› Fix the parser bug.").count(),
+        1,
+        "{rendered}"
+    );
+}
