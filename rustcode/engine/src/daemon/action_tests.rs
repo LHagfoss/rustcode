@@ -257,6 +257,54 @@ read -r line
     global.lock().unwrap().remove(&config.name);
     interactive.shutdown().await;
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_mcp_tool_call_does_not_hold_the_registry_lock() {
+    let script = r#"
+read -r line
+printf '%s\n' '{"id":1,"result":{"capabilities":{}}}'
+read -r line
+read -r line
+printf '%s\n' '{"id":2,"result":{"tools":[{"name":"slow_probe","inputSchema":{}}]}}'
+read -r line
+sleep 2
+printf '%s\n' '{"id":3,"result":{"content":[{"type":"text","text":"slow-result"}]}}'
+read -r line
+"#;
+    let config = crate::config::McpServerConfig {
+        name: "slow-registry-lock".into(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), script.into()],
+        env: Default::default(),
+        url: None,
+        headers: Default::default(),
+        client_id: None,
+        enabled: true,
+        always_include: false,
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let client = crate::mcp::start_owned_server(&config, workspace.path())
+        .await
+        .unwrap();
+    let mut owned = crate::mcp::ScheduledServers::new();
+    owned.insert(client).unwrap();
+    let registry = owned.0.clone();
+    let call_registry = registry.clone();
+    let call = tokio::task::spawn_blocking(move || {
+        crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(call_registry, || {
+            crate::tools::execute_with_metadata("slow_probe", &json!({}))
+        })
+    });
+    // The UI thread locks this registry on every frame to label tool rows.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!call.is_finished(), "the stub must still be answering");
+    assert!(
+        registry.try_lock().is_ok(),
+        "an in-flight MCP tool call must not hold the registry lock"
+    );
+    let output = call.await.unwrap();
+    assert!(output.success);
+    assert!(output.content.contains("slow-result"));
+}
 fn context(action: JobAction) -> JobRunContext {
     let now = Utc::now();
     JobRunContext {
