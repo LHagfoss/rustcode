@@ -1,20 +1,23 @@
 name: Desktop CI
 
 on:
-    pull_request:
-        branches: [main]
-        paths:
-            - .github/workflows/desktop-ci.yml
-            - .cargo/**
-            - Cargo.toml
-            - Cargo.lock
-            - rust-toolchain*
-            - rustcode/desktop/Cargo.toml
-            - rustcode/desktop/build.rs
-            - rustcode/desktop/src/**
-            - rustcode/desktop/tests/**
-            - scripts/build-native-app.sh
-            - images/AppIcon.icon/**
+    # Paused: the native app build took about 16 minutes on every pull request
+    # that touched shared inputs. Run it by hand until the desktop app ships
+    # again, then restore the trigger below.
+    # pull_request:
+    #     branches: [main]
+    #     paths:
+    #         - .github/workflows/desktop-ci.yml
+    #         - .cargo/**
+    #         - Cargo.toml
+    #         - Cargo.lock
+    #         - rust-toolchain*
+    #         - rustcode/desktop/Cargo.toml
+    #         - rustcode/desktop/build.rs
+    #         - rustcode/desktop/src/**
+    #         - rustcode/desktop/tests/**
+    #         - scripts/build-native-app.sh
+    #         - images/AppIcon.icon/**
     workflow_dispatch:
 
 concurrency:
