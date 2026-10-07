@@ -55,6 +55,9 @@ use transcript::render_finalized_assistant_scrollback;
 use updates::{apply_update_decision, run_update_command};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
+/// Longest a frame is postponed while input keeps arriving, so a sustained
+/// burst still repaints at a steady rate instead of once at its end.
+const INPUT_COALESCE_WINDOW: Duration = Duration::from_millis(48);
 // Keep streaming frames at the same cadence as the event loop so a provider
 // chunk cannot sit in the live response buffer for a perceptible interval.
 const STREAM_FRAME_INTERVAL: Duration = EVENT_POLL_INTERVAL;

@@ -70,9 +70,35 @@ pub(crate) struct TranscriptState {
     pub(crate) panel_selection_area: Option<ratatui::layout::Rect>,
     /// Whether the visible panel body responds to vertical scrolling.
     pub(crate) panel_selection_scrollable: bool,
-    committed_cache:
-        Option<super::lru::LruCache<(u64, u64, usize, u16, u64), Arc<Vec<Line<'static>>>>>,
+    committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
+    /// The running indicator last painted and when, see
+    /// [`Self::settle_indicator`].
+    held_indicator: Option<HeldIndicator>,
 }
+
+struct HeldIndicator {
+    line: Line<'static>,
+    shown_at: std::time::Instant,
+    /// The state behind `line` is gone and only the hold keeps it painted.
+    stale: bool,
+}
+
+/// How long the running indicator outlives the state that produced it.
+///
+/// Between two tool rounds the turn briefly reports nothing running. The
+/// indicator owns two rows, so dropping it for those frames made the whole
+/// transcript jump down and back up on every round.
+#[cfg(not(test))]
+const INDICATOR_HOLD: std::time::Duration = std::time::Duration::from_millis(350);
+// Render tests assert the frame right after a state change.
+#[cfg(test)]
+const INDICATOR_HOLD: std::time::Duration = std::time::Duration::ZERO;
+
+/// `(session, history revision, first index, end index, width, theme)`.
+type CommittedKey = (u64, u64, usize, usize, u16, u64);
+
+/// Rendered committed blocks kept for scrolling back through a long session.
+const COMMITTED_CACHE_BLOCKS: usize = 4096;
 
 impl Default for TranscriptState {
     /// A transcript that has painted nothing yet is following: the newest row
@@ -97,6 +123,7 @@ impl Default for TranscriptState {
             panel_selection_area: None,
             panel_selection_scrollable: false,
             committed_cache: None,
+            held_indicator: None,
         }
     }
 }
@@ -130,9 +157,14 @@ pub(super) struct ReadingAnchor {
 /// Keyboard and edge-drag scrolling still advance one row at a time.
 pub(crate) const WHEEL_SCROLL_LINES: usize = 3;
 
+/// Upper bound on the reading offset between two frames. Each projection
+/// clamps the offset to the real transcript height, so this only stops a
+/// burst of wheel events from overflowing before the next frame.
+const MAX_SCROLL_ROWS: usize = 1_000_000;
+
 impl TranscriptState {
     pub(crate) fn scroll_up(&mut self, rows: usize) {
-        self.scroll_rows = self.scroll_rows.saturating_add(rows).min(10_000);
+        self.scroll_rows = self.scroll_rows.saturating_add(rows).min(MAX_SCROLL_ROWS);
     }
 
     pub(crate) fn scroll_down(&mut self, rows: usize) {
@@ -158,6 +190,54 @@ impl TranscriptState {
             return false;
         }
         true
+    }
+
+    /// Keep the running indicator steady across gaps shorter than
+    /// [`INDICATOR_HOLD`]. `hold_allowed` is false when the indicator is
+    /// hidden on purpose, such as behind an approval prompt.
+    pub(super) fn settle_indicator(
+        &mut self,
+        current: Option<Line<'static>>,
+        hold_allowed: bool,
+    ) -> Option<Line<'static>> {
+        self.settle_indicator_at(
+            current,
+            hold_allowed,
+            std::time::Instant::now(),
+            INDICATOR_HOLD,
+        )
+    }
+
+    fn settle_indicator_at(
+        &mut self,
+        current: Option<Line<'static>>,
+        hold_allowed: bool,
+        now: std::time::Instant,
+        hold: std::time::Duration,
+    ) -> Option<Line<'static>> {
+        if let Some(line) = current {
+            self.held_indicator = Some(HeldIndicator {
+                line: line.clone(),
+                shown_at: now,
+                stale: false,
+            });
+            return Some(line);
+        }
+        let mut held = self.held_indicator.take()?;
+        if hold_allowed && now.saturating_duration_since(held.shown_at) < hold {
+            held.stale = true;
+            let line = held.line.clone();
+            self.held_indicator = Some(held);
+            return Some(line);
+        }
+        None
+    }
+
+    /// Time left before a held indicator must be repainted away, so the
+    /// runtime can schedule that frame even when nothing else changes.
+    pub(crate) fn indicator_hold_remaining(&self) -> Option<std::time::Duration> {
+        let held = self.held_indicator.as_ref().filter(|held| held.stale)?;
+        Some(INDICATOR_HOLD.saturating_sub(held.shown_at.elapsed()))
     }
 
     pub(crate) fn scroll_rows(&self) -> usize {
@@ -282,31 +362,88 @@ impl TranscriptState {
         index: usize,
         width: u16,
     ) -> Arc<Vec<Line<'static>>> {
-        let mut theme_hash = std::collections::hash_map::DefaultHasher::new();
-        super::theme::active_palette().name.hash(&mut theme_hash);
-        let mut session_hash = std::collections::hash_map::DefaultHasher::new();
-        state.active_session_id().hash(&mut session_hash);
-        let key = (
-            session_hash.finish(),
-            state.history().revision(),
-            index,
-            width,
-            theme_hash.finish(),
-        );
-        let cache = self
-            .committed_cache
-            // Viewports showing more than ~4 messages thrashed a cap-4 cache:
-            // the suffix walk and the viewport loop read the same blocks, so
-            // keep enough entries for a tall viewport plus its suffix (#1582).
-            .get_or_insert_with(|| super::lru::LruCache::new(32));
-        if let Some(lines) = cache.get(&key) {
+        let key = self.committed_key(state, index, index, width);
+        if let Some(lines) = self.committed_cache().get(&key) {
             return Arc::clone(lines);
         }
         let lines = Arc::new(super::render_committed_history_block_snapshot(
             state, index, width,
         ));
-        cache.insert(key, Arc::clone(&lines));
+        self.committed_cache().insert(key, Arc::clone(&lines));
         lines
+    }
+
+    /// The committed tool chain `first..end`, including its trailing blank
+    /// row, cached like [`Self::committed_block`].
+    ///
+    /// A reader far up a long session walks every block between the newest row
+    /// and the viewport on each frame, so an uncached chain re-rendered its
+    /// whole output once per wheel tick.
+    pub(crate) fn committed_tool_group(
+        &mut self,
+        state: &super::RenderSnapshot,
+        first: usize,
+        end: usize,
+        width: u16,
+    ) -> Arc<Vec<Line<'static>>> {
+        let key = self.committed_key(state, first, end, width);
+        if let Some(lines) = self.committed_cache().get(&key) {
+            return Arc::clone(lines);
+        }
+        let indices = (first..end)
+            .filter(|&index| state.history()[index].role == "tool")
+            .collect::<Vec<_>>();
+        let mut block =
+            super::render_committed_tool_result_group_snapshot(state, &indices, width, false);
+        if !block.is_empty() {
+            block.push(Line::from(""));
+        }
+        let lines = Arc::new(block);
+        self.committed_cache().insert(key, Arc::clone(&lines));
+        lines
+    }
+
+    /// `end == index` names a single block; a tool chain uses its exclusive
+    /// end, which is always greater, so the two never share a key.
+    fn committed_key(
+        &self,
+        state: &super::RenderSnapshot,
+        index: usize,
+        end: usize,
+        width: u16,
+    ) -> CommittedKey {
+        let mut theme_hash = std::collections::hash_map::DefaultHasher::new();
+        super::theme::active_palette().name.hash(&mut theme_hash);
+        // Tool rows also depend on presentation settings outside history.
+        state.verbosity().hash(&mut theme_hash);
+        state.home_path().hash(&mut theme_hash);
+        for message in index..end.max(index + 1) {
+            state
+                .expanded_thoughts()
+                .contains(&message)
+                .hash(&mut theme_hash);
+        }
+        let mut session_hash = std::collections::hash_map::DefaultHasher::new();
+        state.active_session_id().hash(&mut session_hash);
+        (
+            session_hash.finish(),
+            state.history().revision(),
+            index,
+            end,
+            width,
+            theme_hash.finish(),
+        )
+    }
+
+    fn committed_cache(
+        &mut self,
+    ) -> &mut super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>> {
+        // The walk from the newest row to a deep reading position touches
+        // every block in between on each frame. A cache smaller than that span
+        // evicts what the next frame needs and re-renders the whole span per
+        // wheel tick, which is what froze fast scrolling in long sessions.
+        self.committed_cache
+            .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
     }
 
     #[cfg(test)]
@@ -1050,6 +1187,46 @@ mod tests {
     use rustcode::controller::{ChatMessage, History, RenderState, Verbosity};
 
     #[test]
+    fn indicator_survives_a_short_gap_but_not_a_long_or_deliberate_one() {
+        let hold = std::time::Duration::from_millis(350);
+        let start = std::time::Instant::now();
+        let after = |ms| start + std::time::Duration::from_millis(ms);
+        let mut transcript = TranscriptState::default();
+        let line = ratatui::text::Line::from("Executing");
+
+        assert!(
+            transcript
+                .settle_indicator_at(None, true, start, hold)
+                .is_none()
+        );
+        transcript.settle_indicator_at(Some(line.clone()), true, start, hold);
+        assert!(transcript.indicator_hold_remaining().is_none());
+
+        // A gap between two tool rounds keeps the row, so nothing jumps.
+        assert_eq!(
+            transcript.settle_indicator_at(None, true, after(100), hold),
+            Some(line.clone())
+        );
+        assert!(transcript.indicator_hold_remaining().is_some());
+
+        // The turn really ended: the row leaves once the hold runs out.
+        assert!(
+            transcript
+                .settle_indicator_at(None, true, after(400), hold)
+                .is_none()
+        );
+        assert!(transcript.indicator_hold_remaining().is_none());
+
+        // An approval prompt hides the indicator at once.
+        transcript.settle_indicator_at(Some(line), true, after(500), hold);
+        assert!(
+            transcript
+                .settle_indicator_at(None, false, after(510), hold)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn live_tool_rows_keep_state_and_action_without_nested_decoration() {
         let mut call = rustcode::controller::LiveToolCall::new(
             "call-1",
@@ -1191,6 +1368,55 @@ mod tests {
         );
         assert_eq!(visible.len(), 30);
         assert!(visible.iter().any(|line| line.to_string().contains("0999")));
+    }
+
+    #[test]
+    fn deep_scroll_reuses_every_block_between_the_tail_and_the_reader() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        // More blocks than the old 32-entry cache: walking back to the first
+        // one evicted the newest, so each frame re-rendered the whole span.
+        let mut state = RenderState::new();
+        for index in 0..200 {
+            state.history.push(ChatMessage::new(
+                "assistant",
+                format!("history block {index:03}"),
+            ));
+        }
+        let snapshot = crate::ui::render_snapshot::render_snapshot(&state);
+        let mut transcript = TranscriptState::default();
+
+        let first_pass = (0..200)
+            .rev()
+            .map(|index| transcript.committed_block(&snapshot, index, 80))
+            .collect::<Vec<_>>();
+        let second_pass = (0..200)
+            .rev()
+            .map(|index| transcript.committed_block(&snapshot, index, 80))
+            .collect::<Vec<_>>();
+        assert!(
+            first_pass
+                .iter()
+                .zip(&second_pass)
+                .all(|(first, second)| std::sync::Arc::ptr_eq(first, second))
+        );
+
+        // A burst of wheel events is clamped by the next frame, not by a fixed
+        // row cap that stops short of the first message.
+        transcript.scroll_up(50_000);
+        let top = crate::ui::render_visible_conversation_with_transcript(
+            &snapshot,
+            80,
+            30,
+            &mut transcript,
+        );
+        assert!(transcript.scroll_rows() < 50_000);
+        assert!(
+            top.iter()
+                .any(|line| line.to_string().contains("history block 000")),
+            "{top:?}"
+        );
     }
 
     #[test]
