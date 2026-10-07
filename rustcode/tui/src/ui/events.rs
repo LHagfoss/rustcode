@@ -46,13 +46,11 @@ impl TuiEventStream {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn pause(&mut self) {
         self.stream = None;
         self.paused = true;
     }
 
-    #[allow(dead_code)]
     pub(crate) fn resume(&mut self) {
         if self.paused {
             self.stream = Some(event::EventStream::new());

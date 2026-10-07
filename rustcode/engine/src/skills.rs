@@ -19,7 +19,6 @@ pub(crate) fn lock_skill_catalog_tests() -> MutexGuard<'static, ()> {
 
 pub struct SkillInfo {
     pub name: String,
-    #[allow(dead_code)]
     pub description: String,
     pub path: PathBuf,
     pub content: String,

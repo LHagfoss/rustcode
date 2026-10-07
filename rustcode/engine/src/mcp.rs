@@ -10,7 +10,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, Notify, mpsc};
 
-#[allow(dead_code)]
 pub struct McpClient {
     pub name: String,
     transport: Transport,

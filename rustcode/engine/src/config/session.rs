@@ -193,7 +193,6 @@ pub fn session_has_content(history: &[ChatMessage]) -> bool {
     SessionStore::session_has_content(history)
 }
 
-#[allow(dead_code)]
 pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
     SessionStore::session_is_resumable(history)
 }
@@ -613,7 +612,6 @@ pub fn start_session(config: &mut AppConfig) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     store()?.archive_session(history)
 }
@@ -681,7 +679,6 @@ pub fn save_session_workspace(
         .save_session_workspace(session_id, workspace)
 }
 
-#[allow(dead_code)]
 pub fn list_sessions() -> Vec<SessionMeta> {
     store().map_or_else(Vec::new, |session_store| session_store.list_sessions())
 }
@@ -701,7 +698,6 @@ pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
     })
 }
 
-#[allow(dead_code)]
 pub fn delete_session_file(path: &Path) {
     SessionStore::delete_session_file(path);
 }

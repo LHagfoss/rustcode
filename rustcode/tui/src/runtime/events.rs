@@ -102,11 +102,11 @@ impl AppRuntime {
     }
 }
 
-#[allow(dead_code)]
 /// Loop events. Several variants are matched defensively but never sent in
 /// production builds (prompt submit bypasses the queue via direct
 /// `handle_enter` calls); they remain for protocol stability and are
 /// constructed in tests.
+#[allow(dead_code)]
 pub enum AppEvent {
     /// Terminal input produced and consumed by the interactive frontend.
     Tui(TuiEvent),

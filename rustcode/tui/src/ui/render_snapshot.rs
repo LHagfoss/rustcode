@@ -180,7 +180,6 @@ impl OverlaySnapshot {
     }
 }
 
-#[allow(dead_code)]
 impl RenderSnapshot {
     pub(crate) fn new(view: &RenderState) -> Self {
         let selected_subagent =
@@ -334,6 +333,7 @@ impl RenderSnapshot {
                 .collect()
         })
     }
+    #[cfg(test)]
     pub(crate) fn active_history_display_start(&self) -> usize {
         if self.selected_subagent.is_some() {
             0
@@ -356,14 +356,8 @@ impl RenderSnapshot {
     pub(crate) fn current_round_token_usage(&self) -> Option<&TokenUsage> {
         self.current_round_token_usage.as_ref()
     }
-    pub(crate) fn current_round_estimated_input_tokens(&self) -> u32 {
-        self.current_round_estimated_input_tokens
-    }
     pub(crate) fn current_round_estimated_output_tokens(&self) -> u32 {
         self.current_round_estimated_output_tokens
-    }
-    pub(crate) fn current_provider_request_prompt_estimate(&self) -> u32 {
-        self.current_provider_request_prompt_estimate
     }
     pub(crate) fn current_turn_token_usage_is_estimated(&self) -> bool {
         self.current_turn_token_usage_is_estimated
@@ -386,9 +380,6 @@ impl RenderSnapshot {
     pub(crate) fn current_thought_started_at(&self) -> Option<std::time::Instant> {
         self.current_thought_started_at
     }
-    pub(crate) fn model_quota_remaining(&self) -> Option<f32> {
-        self.model_quota_remaining
-    }
     pub(crate) fn provider_rate_limits(&self) -> Option<&rustcode::controller::ProviderRateLimits> {
         self.provider_rate_limits.as_ref()
     }
@@ -398,15 +389,19 @@ impl RenderSnapshot {
     pub(crate) fn pending_steers(&self) -> &[String] {
         &self.pending_steers
     }
+    #[cfg(test)]
     pub(crate) fn draft_submit_mode(&self) -> rustcode::controller::DraftSubmitMode {
         self.draft_submit_mode
     }
+    #[cfg(test)]
     pub(crate) fn steering_interruptible(&self) -> bool {
         self.steering_interruptible
     }
+    #[cfg(test)]
     pub(crate) fn steering_escape_will_interrupt(&self) -> bool {
         self.steering_escape_will_interrupt
     }
+    #[cfg(test)]
     pub(crate) fn show_steer_mode_hint(&self) -> bool {
         self.steering_interruptible
             && !self.input_buffer.trim().is_empty()
@@ -451,6 +446,7 @@ impl RenderSnapshot {
     ) -> &[rustcode::controller::BackgroundResultDisplay] {
         &self.pending_background_results
     }
+    #[cfg(test)]
     pub(crate) fn waiting_for_background_terminal(&self) -> bool {
         self.waiting_for_background_terminal && !self.background_tasks.is_empty()
     }
@@ -601,9 +597,6 @@ impl RenderSnapshot {
     pub(crate) fn selected_subagent(&self) -> Option<&SelectedSubagentSnapshot> {
         self.selected_subagent.as_ref()
     }
-    pub(crate) fn last_copy_text(&self) -> Option<&(String, std::time::Instant)> {
-        self.last_copy_text.as_ref()
-    }
     pub(crate) fn expanded_thoughts(&self) -> &std::collections::HashSet<usize> {
         &self.expanded_thoughts
     }
@@ -624,9 +617,6 @@ impl RenderSnapshot {
     }
     pub(crate) fn active_tool_protocol(&self) -> rustcode::controller::ToolProtocol {
         self.active_tool_protocol
-    }
-    pub(crate) fn auto_confirm_status_text(&self) -> &'static str {
-        if self.auto_confirm { "ON" } else { "OFF" }
     }
     pub(crate) fn completion_identity(&self) -> Option<String> {
         if let Some(command) = rustcode::controller::command_token(&self.input_buffer) {
@@ -699,6 +689,7 @@ impl SubAgentSnapshot {
 }
 
 /// The selected child context rendered in place of the root conversation.
+#[allow(dead_code)]
 pub(crate) struct SelectedSubagentSnapshot {
     #[cfg(test)]
     id: u32,
@@ -726,6 +717,7 @@ impl SelectedSubagentSnapshot {
     pub(crate) fn active_turn(&self) -> bool {
         self.active_turn
     }
+    #[cfg(test)]
     pub(crate) fn parent_id(&self) -> Option<u32> {
         self.parent_id
     }

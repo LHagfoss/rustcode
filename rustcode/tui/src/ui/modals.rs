@@ -16,9 +16,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use rustcode::controller::{ApprovalDecision, PendingQuestion, QuestionAnswer, RenderState};
+#[cfg(test)]
+use rustcode::controller::RenderState;
+use rustcode::controller::{ApprovalDecision, PendingQuestion, QuestionAnswer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod advanced_settings;
@@ -49,10 +51,12 @@ pub(in crate::ui) use navigation::{
     render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
 };
 #[cfg(test)]
-pub(super) use panel::{COMMAND_PANEL_HEIGHT, render_panel_content};
+pub(super) use panel::COMMAND_PANEL_HEIGHT;
+#[cfg(test)]
+pub(in crate::ui) use panel::OVER_THRESHOLD_PCT;
 pub(in crate::ui) use panel::{
-    HIGH_USAGE_PCT, OVER_THRESHOLD_PCT, PanelEmphasis, context_category_colors, emphasis_for_share,
-    panel_line, panel_value_spans, render_command_panel,
+    HIGH_USAGE_PCT, PanelEmphasis, context_category_colors, emphasis_for_share, panel_line,
+    panel_value_spans, render_command_panel,
 };
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
@@ -535,7 +539,6 @@ pub(super) fn input_anchor_rect(
     ratatui::layout::Rect::new(x, y, width, height)
 }
 
-#[allow(dead_code)]
 fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     render_padded_panel_with_color(f, area, COLOR_PANEL())
 }

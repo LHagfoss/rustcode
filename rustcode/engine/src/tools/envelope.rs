@@ -11,7 +11,6 @@ pub struct ToolCallEnvelope {
     pub arguments: serde_json::Value,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolResultEnvelope {
     pub call_id: String,
@@ -31,10 +30,4 @@ pub struct ToolResultEnvelope {
     pub replayed: bool,
     pub inspection: Option<InspectionResultMetadata>,
     pub command_status: Option<CommandResultMetadata>,
-}
-
-#[allow(dead_code)]
-pub fn is_api_native(url: &str, protocol: crate::config::ToolProtocol) -> bool {
-    matches!(protocol, crate::config::ToolProtocol::ApiNative)
-        || crate::config::provider_supports_function_calling(url)
 }
