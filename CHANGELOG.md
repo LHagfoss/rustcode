@@ -1,3 +1,13 @@
+## [v0.57.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.13) - 2026-10-07
+
+### Fixes
+- Fix a TUI freeze when copying a composer selection (#1793).
+- Turn a pasted image file path into an `[Image #N]` attachment (#1793).
+- Print the exit wordmark in the active theme's colors (#1793).
+- Separate tool rounds in a tool chain with a spine row so tool-only turns stay readable (#1797).
+- Accept an empty `path` in `git_diff` (#1797).
+- Classify unseen line ranges of an already-read file as fresh reads (#1781).
+- Label a first command failure `failure`; keep `repeated_failure` for recurrences (#1782).
 ## [v0.57.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.12) - 2026-10-07
 
 ### Fixes
