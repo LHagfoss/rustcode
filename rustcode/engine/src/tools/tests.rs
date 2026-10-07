@@ -1218,6 +1218,45 @@ fn mcp_always_include_rejects_a_server_toolset_that_exceeds_the_schema_byte_budg
 }
 
 #[test]
+fn function_words_in_a_prompt_do_not_select_unrelated_mcp_tools() {
+    let tools = [
+        (
+            "mcp__snapchat__send_chat_message",
+            "Send a chat message to one of the friends of the account. You can attach media.",
+        ),
+        (
+            "take_heapsnapshot",
+            "Take a heap snapshot of the page and save it. Use it to find leaks.",
+        ),
+        (
+            "get_css_styles",
+            "Get the computed styles of an element and what rules they come from.",
+        ),
+        (
+            "disk_usage_report",
+            "Report how much space each directory takes on a volume.",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, description)| {
+        (
+            name.to_string(),
+            description.to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        )
+    })
+    .collect::<Vec<_>>();
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "check how much total disk space i have, what takes alot of disk usage and whan I can delete",
+    })];
+    let (selected, stats) =
+        select_mcp_tools_for_context_in_phase(&tools, &messages, ToolSchemaPhase::Bootstrap);
+    assert_eq!(stats.selected_names, ["disk_usage_report"]);
+    assert_eq!(selected.len(), 1);
+}
+
+#[test]
 fn bootstrap_mcp_selection_does_not_flood_empty_projects_with_discovery_tools() {
     let tools = (0..8)
         .map(|index| {
