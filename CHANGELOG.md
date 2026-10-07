@@ -1,3 +1,10 @@
+## [v0.57.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.12) - 2026-10-07
+
+### Fixes
+- Drop the LIVE and RECENT headings from background task rows; each task is one muted row, and a finished result leaves once the model has consumed it.
+- Keep scrolling fast far up a long session: committed blocks and tool chains stay cached, and queued wheel input is applied before a frame is painted.
+- Hold the running indicator across the gap between tool rounds so the transcript no longer jumps while the model works.
+- Add the catppuccin-mocha theme and make it the default for new configs; the previous default stays available as default.
 ## [v0.57.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.11) - 2026-10-07
 
 ### Features
