@@ -125,9 +125,9 @@ the bundled app to see its Dock and Finder icon.
 
 Build the terminal executable separately with `cargo build -p rustcode-tui`.
 
-Tagged releases publish the terminal binaries for Linux, macOS and Windows,
-plus `RustCode.app` for Apple Silicon (unsigned — right-click to open on
-first launch).
+Tagged releases publish the terminal binaries for Linux, macOS and Windows.
+The `RustCode.app` bundle is not published for now; build it locally with
+the script above.
 
 ## Keeping it upgraded
 
