@@ -1,3 +1,16 @@
+## [v0.57.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.16) - 2026-10-07
+
+### Fixes
+- Clear finished background commands from the block above the composer once the model has read them or the turn ends, instead of listing them as unread until the next prompt (#1810).
+- Wake the model for a background command that finishes mid-turn and was not waited on, and stop adding a result it already read through `manage_task` `wait` to history a second time (#1810).
+- Show the running tool call in the transcript again at high verbosity; the row by the composer carries only the state of the turn (#1810).
+- Click a tool row to toggle the calls like `ctrl+o` (#1810).
+- Stop walking a large workspace on every request: context preparation cost 1.3 to 5.9 seconds a round in a home directory or large monorepo (#1812).
+- Treat a path with an escaped space and `find -exec` of a plain inspection command (`du`, `ls`, `wc`) as read-only, so disk scans no longer count against the workspace-change limit (#1812).
+- Keep function words in a prompt ("and", "of", "can") from filling the MCP tool menu with unrelated tools (#1814).
+- Read each stored credential from the operating system store once per process instead of on every request, and allow 120 seconds for a password prompt before the turn fails (#1816).
+- Add `scripts/macos-stable-signature.sh`, which signs the binary with a local certificate so macOS Keychain stops asking for the login password after every update; `rustcode update` and `scripts/install.sh` reuse the certificate (#1816).
+- Correct the session directory path in `AGENTS.md` (#1817).
 ## [v0.57.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.15) - 2026-10-07
 
 ### Features
