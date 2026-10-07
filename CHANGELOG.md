@@ -1,3 +1,13 @@
+## [v0.57.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.10) - 2026-10-07
+
+### Fixes
+- Chain tool rounds with nothing visible between them under one heading, with a properly closed tree.
+- Preview the selected slash command as ghost text as soon as it is typed, and keep it in step with the arrow keys.
+- Report a normal but unverified finish as unverified instead of a failed recovery.
+- Tell the model that shell commands already start in the task working directory.
+- Log per-phase timings for request preparation.
+- Remove about 4,100 lines of dead code, orphaned source files and unused imports; the production build is warning-free.
+- Keep engine tests from writing into the checkout and fix a pid-file race in the subagent cancellation test.
 ## [v0.57.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.9) - 2026-10-06
 
 ### Fixes
