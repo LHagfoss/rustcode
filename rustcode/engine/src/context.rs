@@ -11,8 +11,93 @@ struct EnvironmentRevision {
     directory: String,
     date: String,
     environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    /// Zero for an exact revision. A held revision for a workspace that cannot
+    /// be cached exactly gets a fresh value each time it is re-measured.
+    held: u64,
 }
+
+/// A workspace whose revision takes longer than this to measure is too large
+/// to walk on every request.
+const SLOW_REVISION: std::time::Duration = std::time::Duration::from_millis(500);
+/// How long such a workspace keeps its last revision while nothing RustCode
+/// can see cheaply (its own writes, git state, the directory, the date) moved.
+const HELD_REVISION_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What can be read without walking the workspace.
+#[derive(Clone, PartialEq, Eq)]
+struct CheapRevision {
+    workspace: u64,
+    task: u64,
+    git: u64,
+    directory: String,
+    date: String,
+    environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
+fn cheap_revision(workspace: &Path, task: &Path) -> CheapRevision {
+    let mut environment: Vec<_> = std::env::vars_os().collect();
+    environment.sort();
+    CheapRevision {
+        workspace: crate::workspace_intelligence::known_generation(workspace),
+        task: crate::workspace_intelligence::known_generation(task),
+        git: crate::workspace_intelligence::git_revision(task),
+        directory: crate::workspace_intelligence::directory_revision(task),
+        date: chrono::Local::now().format("%A %Y-%m-%d").to_string(),
+        environment,
+    }
+}
+
+type HeldRevisions =
+    HashMap<(PathBuf, PathBuf), (CheapRevision, std::time::Instant, EnvironmentRevision)>;
+static HELD_REVISIONS: LazyLock<Mutex<HeldRevisions>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The environment revision, measured by walking the workspace. A workspace
+/// large enough to make that walk slow (a home directory, a monorepo) keeps
+/// its last revision for a short while instead: the walk ran twice per
+/// request and cost seconds each round. RustCode's own writes, git state and
+/// the task directory still invalidate it at once; an edit made outside
+/// RustCode is picked up when the hold expires.
 fn environment_revision(workspace: &Path, task: &Path) -> Option<EnvironmentRevision> {
+    let key = (workspace.to_path_buf(), task.to_path_buf());
+    {
+        let held = HELD_REVISIONS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cheap, measured, revision)) = held.get(&key)
+            && measured.elapsed() < HELD_REVISION_TTL
+            && *cheap == cheap_revision(workspace, task)
+        {
+            return Some(revision.clone());
+        }
+    }
+    let started = std::time::Instant::now();
+    let exact = exact_environment_revision(workspace, task);
+    let mut held = HELD_REVISIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if started.elapsed() < SLOW_REVISION {
+        held.remove(&key);
+        return exact;
+    }
+    // Measured after the walk, which advances the generation it reads.
+    let cheap = cheap_revision(workspace, task);
+    let revision = exact.unwrap_or_else(|| {
+        static HELD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        EnvironmentRevision {
+            workspace: cheap.workspace,
+            task: cheap.task,
+            git: cheap.git,
+            directory: cheap.directory.clone(),
+            date: cheap.date.clone(),
+            environment: cheap.environment.clone(),
+            held: HELD.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    });
+    if held.len() >= 64 {
+        held.clear();
+    }
+    held.insert(key, (cheap, std::time::Instant::now(), revision.clone()));
+    Some(revision)
+}
+
+fn exact_environment_revision(workspace: &Path, task: &Path) -> Option<EnvironmentRevision> {
     let snapshot = crate::workspace_intelligence::snapshot(workspace).ok()?;
     if !snapshot.cache_safe {
         return None;
@@ -36,6 +121,7 @@ fn environment_revision(workspace: &Path, task: &Path) -> Option<EnvironmentRevi
         directory: crate::workspace_intelligence::directory_revision(task),
         date: chrono::Local::now().format("%A %Y-%m-%d").to_string(),
         environment,
+        held: 0,
     })
 }
 type SnapshotCache = HashMap<(PathBuf, PathBuf), (EnvironmentRevision, ContextSnapshot)>;
@@ -497,6 +583,38 @@ fn load_agent_doc(cwd: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_revision_is_reused_until_rustcode_changes_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "first").unwrap();
+        let root = dir.path();
+        let exact = environment_revision(root, root).expect("a plain directory is cacheable");
+        assert_eq!(exact.held, 0);
+
+        // What a slow walk leaves behind.
+        let held = EnvironmentRevision {
+            held: u64::MAX,
+            ..exact.clone()
+        };
+        HELD_REVISIONS.lock().unwrap().insert(
+            (root.to_path_buf(), root.to_path_buf()),
+            (
+                cheap_revision(root, root),
+                std::time::Instant::now(),
+                held.clone(),
+            ),
+        );
+        // An edit made outside RustCode waits for the hold to expire.
+        std::fs::write(dir.path().join("lib.rs"), "edited elsewhere").unwrap();
+        assert_eq!(environment_revision(root, root), Some(held.clone()));
+
+        // RustCode's own write is seen at once.
+        crate::workspace_intelligence::invalidate(root);
+        let fresh = environment_revision(root, root).expect("still cacheable");
+        assert_ne!(fresh, held);
+        assert_ne!(fresh, exact);
+    }
 
     #[test]
     fn environment_cache_observes_external_instructions_and_tree_changes() {
