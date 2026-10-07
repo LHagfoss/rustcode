@@ -1,3 +1,12 @@
+## [v0.57.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.11) - 2026-10-07
+
+### Features
+- Add the opt-in /pi prompt improver: the active model rewrites each prompt that starts a turn, and the transcript shows the original and the rewrite.
+- Keep the TUI responsive during slow MCP tool calls by releasing the registry lock before awaiting the call.
+- Order typed slash-command completions alphabetically; a bare slash keeps the curated menu order.
+- Show the context window to the nearest thousand, such as 128k, instead of rounding to the nearest 100k.
+- Remove the old activity-row renderer and its tests.
+- Pause the desktop app build in releases and pull requests; releases publish the terminal binaries only.
 ## [v0.57.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.10) - 2026-10-07
 
 ### Fixes
