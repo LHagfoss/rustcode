@@ -47,6 +47,7 @@ impl AppRuntime {
         let update_exit;
         let mut last_progress_sent = std::time::Instant::now();
         let mut consecutive_skipped_frames = 0u32;
+        let mut last_frame_at = std::time::Instant::now();
         let composer = ui::Composer::new();
         loop {
             let active_session_id = app_state.lock().await.active_session_id.clone();
@@ -300,8 +301,25 @@ impl AppRuntime {
             }
             was_responding = response_active;
             let should_draw = needs_redraw || frame_stream.try_next().is_some();
+            // A wheel fling or a held key queues input faster than frames can
+            // paint. Painting once per event let the queue grow until the view
+            // trailed the gesture by seconds, so input that is already waiting
+            // is applied first and the frame is painted once it is drained,
+            // or after `INPUT_COALESCE_WINDOW` so a long burst still animates.
+            let mut prefetched_event = None;
+            if should_draw && last_frame_at.elapsed() < INPUT_COALESCE_WINDOW {
+                use futures_util::FutureExt as _;
+                prefetched_event = tui_events
+                    .next()
+                    .now_or_never()
+                    .filter(|event| !matches!(event, Ok(None)));
+            }
+            if prefetched_event.is_some() {
+                needs_redraw = true;
+            }
 
-            if should_draw {
+            if should_draw && prefetched_event.is_none() {
+                last_frame_at = std::time::Instant::now();
                 // A render panic must never kill the agent process or leave the
                 // terminal tweaked (#1631). The panic hook already restores raw
                 // modes; here we catch the unwind, keep the turn alive, and
@@ -369,9 +387,13 @@ impl AppRuntime {
                 needs_redraw = false;
             }
 
-            if let Ok(event_result) =
-                tokio::time::timeout(EVENT_POLL_INTERVAL, tui_events.next()).await
-            {
+            let event_result = match prefetched_event {
+                Some(event_result) => Some(event_result),
+                None => tokio::time::timeout(EVENT_POLL_INTERVAL, tui_events.next())
+                    .await
+                    .ok(),
+            };
+            if let Some(event_result) = event_result {
                 let Some(ev) = event_result? else {
                     continue;
                 };

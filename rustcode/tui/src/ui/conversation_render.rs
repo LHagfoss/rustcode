@@ -394,13 +394,10 @@ pub(crate) fn render_visible_conversation_with_transcript(
         let last = index - 1;
         let (block, next_index) = if state.history()[last].role == "tool" {
             let first = tool_chain_start(state, last, state.history_display_start());
-            let indices = tool_chain_indices(state, first, index);
-            let mut block =
-                render_committed_tool_result_group_snapshot(state, &indices, width, false);
-            if !block.is_empty() {
-                block.push(Line::from(""));
-            }
-            (Arc::new(block), first)
+            (
+                transcript.committed_tool_group(state, first, index, width),
+                first,
+            )
         } else {
             (transcript.committed_block(state, last, width), last)
         };
@@ -710,9 +707,9 @@ fn committed_suffix_rows(
         if history[index].role == "tool" {
             let first = index;
             index = tool_chain_end(state, first);
-            let indices = tool_chain_indices(state, first, index);
-            let block = render_committed_tool_result_group_snapshot(state, &indices, width, false);
-            rows += block.len() + usize::from(!block.is_empty());
+            rows += transcript
+                .committed_tool_group(state, first, index, width)
+                .len();
         } else {
             rows += transcript.committed_block(state, index, width).len();
             index += 1;

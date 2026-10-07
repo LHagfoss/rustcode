@@ -252,6 +252,10 @@ pub(super) async fn render_frame(
             ));
         })?;
     *frame_presented = presented;
+    // A held indicator has to be repainted away even when nothing else changes.
+    if let Some(remaining) = transcript_state.indicator_hold_remaining() {
+        frame_requester.schedule_frame_in(remaining);
+    }
     if !presented {
         // The terminal kept the last good frame; metrics from a skipped
         // frame must not overwrite the live layout.

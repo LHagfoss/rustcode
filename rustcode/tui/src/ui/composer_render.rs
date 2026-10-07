@@ -791,19 +791,22 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
 pub(super) fn background_terminal_summary(state: &RenderSnapshot) -> String {
     let mut tasks = state.background_tasks().iter().collect::<Vec<_>>();
     tasks.sort_by_key(|task| task.started_at);
-    let count = tasks.len();
     let elapsed = tasks
         .iter()
         .map(|task| task.started_at)
         .next()
         .map(|started| fmt_elapsed_compact(started.elapsed().as_secs()))
         .unwrap_or_else(|| "0s".to_string());
-    let task_count = if count == 1 {
+    let task_count = background_task_count_label(tasks.len());
+    format!("{task_count} · {elapsed} · /ps · /stop")
+}
+
+fn background_task_count_label(count: usize) -> String {
+    if count == 1 {
         "1 task".to_owned()
     } else {
         format!("{count} tasks")
-    };
-    format!("LIVE · {task_count} · {elapsed} · /ps · /stop")
+    }
 }
 
 fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -> String {
@@ -812,13 +815,8 @@ fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -
         return full;
     }
 
-    let count = state.background_tasks().len();
-    let task_count = if count == 1 {
-        "1 task".to_owned()
-    } else {
-        format!("{count} tasks")
-    };
-    let compact = format!("LIVE · {task_count} /ps /stop");
+    let task_count = background_task_count_label(state.background_tasks().len());
+    let compact = format!("{task_count} /ps /stop");
     if compact.width() <= width {
         compact
     } else if "/ps /stop".width() <= width {
@@ -835,29 +833,32 @@ pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'stat
     background_command_lines_with_width(state, u16::MAX)
 }
 
+/// Quiet rows for background work above the composer: one muted row per
+/// running command and one per result the model has not consumed yet.
+///
+/// The indicator row already names the state and the task count, so this block
+/// carries no heading of its own, and a result leaves as soon as it is
+/// delivered: the transcript records the outcome from then on, and `/ps`
+/// keeps the full list.
 pub(super) fn background_command_lines_with_width(
     state: &RenderSnapshot,
     width: u16,
 ) -> Vec<Line<'static>> {
     const MAX_VISIBLE_COMMANDS: usize = 3;
-    if state.background_tasks().is_empty() && state.pending_background_results().is_empty() {
+    let results = state
+        .pending_background_results()
+        .iter()
+        .filter(|result| result.unread)
+        .collect::<Vec<_>>();
+    if state.background_tasks().is_empty() && results.is_empty() {
         return Vec::new();
     }
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    let status_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
     let mut lines = Vec::new();
-    if !state.background_tasks().is_empty() {
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![Span::styled("LIVE", status_style)],
-            usize::from(width).max(1),
-            None,
-        );
-    }
     for task in state.background_tasks().iter().take(MAX_VISIBLE_COMMANDS) {
         let command = rustcode::controller::background_command_label(&task.command, 240);
         let elapsed = fmt_elapsed_compact(task.started_at.elapsed().as_secs());
-        let marker = "• Running ";
+        let marker = "• ";
         let available = usize::from(width).saturating_sub(marker.width());
         let candidate_suffix = format!(" · {elapsed}");
         let suffix = if available > candidate_suffix.width() {
@@ -868,75 +869,51 @@ pub(super) fn background_command_lines_with_width(
         let command_width = available.saturating_sub(suffix.width());
         let command = super::modals::truncate_middle_to_width(&command, command_width);
         lines.push(Line::from(vec![
-            Span::styled("• ", status_style),
-            Span::styled("Running ", status_style),
+            Span::styled(
+                marker,
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), false),
+            ),
             Span::styled(command, style),
             Span::styled(suffix, style),
         ]));
     }
-    let results = state.pending_background_results();
-    if !results.is_empty() {
-        let completed = results.iter().filter(|result| result.success).count();
-        let cancelled = results.iter().filter(|result| result.cancelled).count();
-        let failed = results.len().saturating_sub(completed + cancelled);
-        let task_count = if results.len() == 1 {
-            "1 task".to_owned()
-        } else {
-            format!("{} tasks", results.len())
-        };
-        let mut rollup =
-            format!("RECENT · {task_count} · {completed} done · {cancelled} cancelled");
-        if failed > 0 {
-            rollup.push_str(&format!(" · {failed} failed"));
-        }
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![Span::styled(rollup, status_style)],
-            usize::from(width).max(1),
-            None,
-        );
-    }
     for result in results.iter().take(MAX_VISIBLE_COMMANDS) {
-        let status = if result.cancelled {
-            ("⊘ Cancelled", Color::DarkGray)
+        let (marker, color, outcome) = if result.cancelled {
+            ("⊘ ", Color::DarkGray, " · cancelled")
         } else if result.success {
-            ("✓ Completed", Color::Green)
+            ("✓ ", Color::Green, " · done")
         } else {
-            ("✗ Failed", Color::Red)
+            ("✗ ", Color::Red, " · failed")
+        };
+        let available = usize::from(width).saturating_sub(marker.width());
+        let suffix = if available > outcome.width() {
+            outcome
+        } else {
+            ""
         };
         let command = rustcode::controller::background_command_label(&result.command, 240);
         let label = super::modals::truncate_middle_to_width(
             &command,
-            usize::from(width).saturating_sub(status.0.width() + 1),
+            available.saturating_sub(suffix.width()),
         );
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![
-                Span::styled(
-                    format!("{} ", status.0),
-                    get_themed_style(status.1, COLOR_BG(), Modifier::BOLD, false),
-                ),
-                Span::styled(label, style),
-            ],
-            usize::from(width).max(1),
-            Some(Span::raw("  ")),
-        );
+        lines.push(Line::from(vec![
+            Span::styled(
+                marker,
+                get_themed_style(color, COLOR_BG(), Modifier::empty(), false),
+            ),
+            Span::styled(label, style),
+            Span::styled(suffix, style),
+        ]));
     }
     let omitted = state
         .background_tasks()
         .len()
         .saturating_sub(MAX_VISIBLE_COMMANDS)
-        + state
-            .pending_background_results()
-            .len()
-            .saturating_sub(MAX_VISIBLE_COMMANDS);
+        + results.len().saturating_sub(MAX_VISIBLE_COMMANDS);
     if omitted > 0 {
         push_wrapped_with_continuation(
             &mut lines,
-            vec![
-                Span::styled("• ", status_style),
-                Span::styled(format!("{omitted} more · /ps"), style),
-            ],
+            vec![Span::styled(format!("  {omitted} more · /ps"), style)],
             usize::from(width).max(1),
             Some(Span::raw("  ")),
         );

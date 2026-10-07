@@ -100,11 +100,34 @@ impl From<&ThemeFile> for ThemePalette {
     }
 }
 
+/// Theme used when the config names none, and the fallback for a missing one.
+pub const DEFAULT_THEME_NAME: &str = "catppuccin-mocha";
+
 static BUILTIN_THEMES: &[(&str, &str)] = &[
+    (
+        "catppuccin-mocha.toml",
+        r##"name = "catppuccin-mocha"
+description = "Catppuccin Mocha soft dark palette"
+bg = "reset"
+panel = "#181825"
+element = "#313244"
+text = "#cdd6f4"
+muted = "#9399b2"
+primary = "#89b4fa"
+secondary = "#74c7ec"
+green = "#a6e3a1"
+selection = "#cdd6f4"
+tip = "#f9e2af"
+status_border = "#45475a"
+turn_separator = "#585b70"
+notice_bg = "reset"
+hover_bg = "#313244"
+"##,
+    ),
     (
         "default.toml",
         r##"name = "default"
-description = "Default dark palette (Cozy Rain)"
+description = "Cozy Rain palette on the terminal background"
 bg = "reset"
 panel = "#15171a"
 element = "#22262a"
@@ -316,9 +339,11 @@ pub fn load_available_themes() -> Vec<ThemePalette> {
     }
 
     themes.sort_by(|a, b| {
-        if a.name == "default" {
+        if a.name == b.name {
+            std::cmp::Ordering::Equal
+        } else if a.name == DEFAULT_THEME_NAME {
             std::cmp::Ordering::Less
-        } else if b.name == "default" {
+        } else if b.name == DEFAULT_THEME_NAME {
             std::cmp::Ordering::Greater
         } else {
             a.name.cmp(&b.name)
@@ -329,6 +354,14 @@ pub fn load_available_themes() -> Vec<ThemePalette> {
 }
 
 pub fn get_palette(name: &str) -> ThemePalette {
+    // The render tests predate the Catppuccin default and assert the legacy
+    // palette's colors for a state that leaves the theme at its default.
+    #[cfg(test)]
+    let name = if name == DEFAULT_THEME_NAME {
+        "default"
+    } else {
+        name
+    };
     let themes = load_available_themes();
     themes
         .into_iter()
@@ -336,28 +369,28 @@ pub fn get_palette(name: &str) -> ThemePalette {
         .unwrap_or_else(|| {
             for (_, content) in BUILTIN_THEMES {
                 if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
-                    if file_struct.name == "default" {
+                    if file_struct.name == DEFAULT_THEME_NAME {
                         return ThemePalette::from(&file_struct);
                     }
                 }
             }
             ThemePalette {
-                name: "default".to_string(),
-                description: "Default dark palette (Cozy Rain)".to_string(),
+                name: DEFAULT_THEME_NAME.to_string(),
+                description: "Catppuccin Mocha soft dark palette".to_string(),
                 bg: Color::Reset,
-                panel: Color::Rgb(21, 23, 26),
-                element: Color::Rgb(34, 38, 42),
-                text: Color::Rgb(240, 229, 222),
-                muted: Color::Rgb(136, 146, 154),
-                primary: Color::Rgb(236, 110, 93),
-                secondary: Color::Rgb(60, 88, 101),
+                panel: Color::Rgb(24, 24, 37),
+                element: Color::Rgb(49, 50, 68),
+                text: Color::Rgb(205, 214, 244),
+                muted: Color::Rgb(147, 153, 178),
+                primary: Color::Rgb(137, 180, 250),
+                secondary: Color::Rgb(116, 199, 236),
                 green: Color::Rgb(166, 227, 161),
-                selection: Color::Rgb(240, 229, 222),
-                tip: Color::Rgb(224, 169, 109),
-                status_border: Color::Rgb(60, 88, 101),
-                turn_separator: Color::Rgb(90, 112, 126),
+                selection: Color::Rgb(205, 214, 244),
+                tip: Color::Rgb(249, 226, 175),
+                status_border: Color::Rgb(69, 71, 90),
+                turn_separator: Color::Rgb(88, 91, 112),
                 notice_bg: Color::Reset,
-                hover_bg: Color::Rgb(43, 48, 53),
+                hover_bg: Color::Rgb(49, 50, 68),
             }
         })
 }
@@ -367,6 +400,16 @@ use std::sync::RwLock;
 static ACTIVE_THEME: RwLock<Option<ThemePalette>> = RwLock::new(None);
 
 pub fn set_active_theme(name: &str) {
+    // Every frame re-applies the configured theme. Loading a palette reads the
+    // themes directory, so an unchanged name must not pay for that again.
+    #[cfg(not(test))]
+    if let Ok(guard) = ACTIVE_THEME.read()
+        && guard
+            .as_ref()
+            .is_some_and(|palette| palette.name.eq_ignore_ascii_case(name))
+    {
+        return;
+    }
     let palette = get_palette(name);
     if let Ok(mut guard) = ACTIVE_THEME.write() {
         *guard = Some(palette);
@@ -379,7 +422,7 @@ pub fn active_palette() -> ThemePalette {
             return p.clone();
         }
     }
-    get_palette("default")
+    get_palette(DEFAULT_THEME_NAME)
 }
 
 pub fn color_bg() -> Color {
@@ -483,5 +526,15 @@ mod tests {
             let palette = ThemePalette::from(&file);
             assert_ne!(palette.panel, Color::Reset);
         }
+    }
+
+    #[test]
+    fn default_theme_is_a_builtin_catppuccin_mocha() {
+        let names = BUILTIN_THEMES
+            .iter()
+            .map(|(_, content)| toml::from_str::<ThemeFile>(content).unwrap().name)
+            .collect::<Vec<_>>();
+        assert!(names.iter().any(|name| name == DEFAULT_THEME_NAME));
+        assert_eq!(DEFAULT_THEME_NAME, "catppuccin-mocha");
     }
 }
